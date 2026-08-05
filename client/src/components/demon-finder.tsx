@@ -27,7 +27,10 @@ export function useDemons(trades: TradeWithTags[], tags: MistakeTag[]) {
 function StreakPips({ streak }: { streak: number }) {
   const filled = Math.min(streak, DEMON_STREAK_CRITICAL);
   return (
-    <div className="flex shrink-0 items-center gap-[3px]" aria-hidden="true">
+    <div
+      className="flex w-[4.25rem] shrink-0 items-center justify-center gap-[3px]"
+      title={`${streak} consecutive ${streak === 1 ? "trade" : "trades"}`}
+    >
       {Array.from({ length: DEMON_STREAK_CRITICAL }).map((_, i) => {
         const on = i < filled;
         const tone = !on
@@ -153,6 +156,12 @@ export function DemonFinderPanel({
         </div>
       ) : (
         <div className="space-y-1.5" data-testid="demon-list">
+          <div className="flex items-center gap-3 px-2.5 text-[10px] uppercase tracking-wider text-muted-foreground">
+            <span className="min-w-0 flex-1">Demon</span>
+            <span className="w-[4.25rem] shrink-0 text-center">Streak</span>
+            <span className="w-8 shrink-0 text-right">Total</span>
+            <span className="w-[4.5rem] shrink-0" />
+          </div>
           {tagged.map((d) => (
             <DemonRow key={d.id} d={d} />
           ))}

@@ -196,12 +196,11 @@ export class DatabaseStorage implements IStorage {
     t: UpdateTrade,
     tagIds?: number[],
   ): Promise<TradeWithTags | undefined> {
-    const row = db
-      .update(trades)
-      .set(t as any)
-      .where(eq(trades.id, id))
-      .returning()
-      .get();
+    // Drizzle throws on an empty SET clause, so a tags-only patch just reads.
+    const row =
+      Object.keys(t).length > 0
+        ? db.update(trades).set(t as any).where(eq(trades.id, id)).returning().get()
+        : db.select().from(trades).where(eq(trades.id, id)).get();
     if (!row) return undefined;
     if (tagIds) this.setTags(id, tagIds);
     return { ...row, mistakeTagIds: this.tagIdsFor(id) };
