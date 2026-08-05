@@ -374,7 +374,7 @@ export default function Dashboard() {
         </p>
       </div>
 
-      <DailyGuardCard trades={all} />
+      <DailyGuardCard trades={all} tags={tags} />
 
       <WeeklyReviewCard trades={all} tags={tags} />
 

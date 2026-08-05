@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Card } from "@/components/ui/card";
-import { Ban, ShieldAlert, ShieldCheck, Timer } from "lucide-react";
-import type { TradeWithTags } from "@shared/schema";
+import { Button } from "@/components/ui/button";
+import { Ban, ShieldAlert, ShieldCheck, Skull, Timer } from "lucide-react";
+import type { MistakeTag, TradeWithTags } from "@shared/schema";
+import { useMistakeTags, useTrades } from "@/lib/data";
 import {
   computeMetrics,
   fmtMoney,
@@ -10,6 +12,60 @@ import {
   LOSS_STREAK_LIMIT,
   COOLDOWN_SECONDS,
 } from "@shared/metrics";
+import { DEMON_GUARDRAIL_STREAK, demonStats, type DemonStat } from "@shared/demons";
+
+/* ------------------------- demon guardrail state ------------------------ */
+
+/**
+ * The guardrail can be tripped two ways now:
+ *   1. the original R / $ loss rules (daily stop, loss streak), and
+ *   2. the same demon logged on N consecutive trades (DEMON_GUARDRAIL_STREAK).
+ * Both produce the same locked "stop trading" state. The demon lock clears
+ * only when the trader explicitly acknowledges it; a longer streak (or a
+ * different demon) trips it again, because the ack key includes the streak.
+ */
+const AckCtx = createContext<{
+  acked: string | null;
+  acknowledge: (key: string) => void;
+}>({ acked: null, acknowledge: () => {} });
+
+export function GuardrailProvider({ children }: { children: React.ReactNode }) {
+  const [acked, setAcked] = useState<string | null>(null);
+  return (
+    <AckCtx.Provider value={{ acked, acknowledge: setAcked }}>{children}</AckCtx.Provider>
+  );
+}
+
+export function useDemonGuard(
+  tradesIn?: TradeWithTags[],
+  tagsIn?: MistakeTag[],
+): {
+  demon: DemonStat | null;
+  locked: boolean;
+  ackKey: string | null;
+  acknowledge: () => void;
+} {
+  const { data: fetchedTrades = [] } = useTrades();
+  const { data: fetchedTags = [] } = useMistakeTags();
+  const trades = tradesIn ?? fetchedTrades;
+  const tags = tagsIn ?? fetchedTags;
+  const { acked, acknowledge } = useContext(AckCtx);
+
+  const demon = useMemo(() => {
+    const worst = demonStats(trades, tags).find(
+      (d) => d.currentStreak >= DEMON_GUARDRAIL_STREAK,
+    );
+    return worst ?? null;
+  }, [trades, tags]);
+
+  const ackKey = demon ? `${demon.id}:${demon.currentStreak}` : null;
+  return {
+    demon,
+    locked: demon != null && acked !== ackKey,
+    ackKey,
+    acknowledge: () => ackKey && acknowledge(ackKey),
+  };
+}
 
 function isToday(iso: string | null) {
   if (!iso) return false;
@@ -66,8 +122,15 @@ export function useDailyStats(trades: TradeWithTags[]) {
   }, [trades]);
 }
 
-export function DailyGuardCard({ trades }: { trades: TradeWithTags[] }) {
+export function DailyGuardCard({
+  trades,
+  tags,
+}: {
+  trades: TradeWithTags[];
+  tags?: MistakeTag[];
+}) {
   const s = useDailyStats(trades);
+  const guard = useDemonGuard(trades, tags);
   const [remaining, setRemaining] = useState(0);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -86,7 +149,7 @@ export function DailyGuardCard({ trades }: { trades: TradeWithTags[] }) {
   }, [s.isLossStreakHalt, s.lastExit]);
 
   const cooling = s.isLossStreakHalt && remaining > 0;
-  const tone = s.isDailyStopHit
+  const tone = s.isDailyStopHit || guard.locked
     ? "border-destructive/60 bg-destructive/10"
     : cooling || s.isLossStreakHalt
       ? "border-primary/40 bg-primary/5"
@@ -98,7 +161,7 @@ export function DailyGuardCard({ trades }: { trades: TradeWithTags[] }) {
     <Card className={`p-3.5 sm:p-4 ${tone}`} data-testid="card-daily-guard">
       <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
         <div className="flex items-center gap-2">
-          {s.isDailyStopHit ? (
+          {s.isDailyStopHit || guard.locked ? (
             <Ban className="h-4 w-4 text-destructive" />
           ) : s.isDailyWarning || s.isLossStreakHalt ? (
             <ShieldAlert className="h-4 w-4 text-amber-500" />
@@ -127,6 +190,30 @@ export function DailyGuardCard({ trades }: { trades: TradeWithTags[] }) {
           tone={s.isDailyStopHit ? "down" : undefined}
         />
       </div>
+
+      {guard.locked && guard.demon && (
+        <div
+          className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-border/60 pt-2.5"
+          data-testid="banner-demon-guardrail"
+        >
+          <p className="flex min-w-0 flex-1 items-start gap-1.5 text-[11px] font-semibold text-destructive">
+            <Skull className="mt-px h-3.5 w-3.5 shrink-0" />
+            <span>
+              Stop trading — “{guard.demon.name}” on {guard.demon.currentStreak} trades in a
+              row. Fix the rule before the next entry.
+            </span>
+          </p>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 shrink-0 text-[11px]"
+            onClick={guard.acknowledge}
+            data-testid="button-acknowledge-demon"
+          >
+            I acknowledge
+          </Button>
+        </div>
+      )}
 
       {(s.isDailyStopHit || s.isLossStreakHalt || s.isDailyWarning) && (
         <div className="mt-3 border-t border-border/60 pt-2.5">

@@ -36,6 +36,11 @@ export const DEMON_LEGACY_ALIASES: Record<string, string> = {
 export const DEMON_STREAK_WARNING = 3;
 /** Tom Dante's rule: eight of the same demon in a row is a serious problem. */
 export const DEMON_STREAK_CRITICAL = 8;
+/**
+ * Hitting the same demon this many trades in a row locks the guardrail (the
+ * same stop-trading state the R-loss rules produce) until acknowledged.
+ */
+export const DEMON_GUARDRAIL_STREAK = 3;
 
 export interface DemonStat {
   id: number;

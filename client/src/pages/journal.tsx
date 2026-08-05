@@ -26,6 +26,7 @@ import { useToast } from "@/hooks/use-toast";
 import {
   ArrowDownRight,
   ArrowUpRight,
+  Ban,
   Camera,
   CheckCircle2,
   Eye,
@@ -52,7 +53,7 @@ import {
   fmtR,
   EXIT_REASON_LABELS,
 } from "@shared/metrics";
-import { DailyGuardCard } from "@/components/daily-guard";
+import { DailyGuardCard, useDemonGuard } from "@/components/daily-guard";
 
 /* ============================== helpers ============================== */
 
@@ -260,6 +261,8 @@ function NewTradeCard() {
   const [exitReason, setExitReason] = useState<string | null>(null);
   const [selectedDemons, setSelectedDemons] = useState<number[]>([]);
   const { data: demons = [] } = useMistakeTags();
+  // Same lock the R-loss guardrail produces — a repeated demon blocks new entries.
+  const guard = useDemonGuard();
 
   const form = useForm<SetupForm>({
     resolver: zodResolver(setupFormSchema) as any,
@@ -708,13 +711,17 @@ function NewTradeCard() {
             <Button
               type="submit"
               className="h-9 flex-1 min-w-[9rem] text-xs font-semibold"
-              disabled={createTrade.isPending || analyzingRationale}
+              disabled={createTrade.isPending || analyzingRationale || guard.locked}
               data-testid="button-save-trade"
             >
               {(createTrade.isPending || analyzingRationale) && (
                 <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
               )}
-              {closedMode ? "Log closed trade" : "Open trade"}
+              {guard.locked
+                ? "Locked — acknowledge the demon"
+                : closedMode
+                  ? "Log closed trade"
+                  : "Open trade"}
             </Button>
             {preview && (
               <div
@@ -738,6 +745,18 @@ function NewTradeCard() {
               </div>
             )}
           </div>
+
+          {guard.locked && guard.demon && (
+            <p
+              className="flex items-start gap-1.5 rounded-md border border-destructive/50 bg-destructive/10 px-2.5 py-2 text-[11px] font-semibold leading-snug text-destructive"
+              data-testid="text-new-trade-locked"
+            >
+              <Ban className="mt-px h-3.5 w-3.5 shrink-0" />
+              New entries are blocked: “{guard.demon.name}” has hit{" "}
+              {guard.demon.currentStreak} trades in a row. Acknowledge it on the guard card
+              above to unlock.
+            </p>
+          )}
         </form>
       </Form>
     </Card>
@@ -1782,7 +1801,7 @@ export default function Journal() {
         </p>
       </div>
 
-      <DailyGuardCard trades={trades ?? []} />
+      <DailyGuardCard trades={trades ?? []} tags={tags} />
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
         <NewTradeCard />
