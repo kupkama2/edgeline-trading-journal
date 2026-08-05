@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -27,6 +27,7 @@ import {
   ArrowDownRight,
   ArrowUpRight,
   Camera,
+  Eye,
   Loader2,
   Sparkles,
   Trash2,
@@ -40,6 +41,7 @@ import {
   useDeleteTrade,
   parseScreenshot,
   fileToDataUrl,
+  analyzeRationale,
 } from "@/lib/data";
 import type { TradeWithTags } from "@shared/schema";
 import {
@@ -65,6 +67,32 @@ function toIso(local: string) {
   return local ? new Date(local).toISOString() : new Date().toISOString();
 }
 
+function parseTags(json: string | null | undefined): string[] {
+  if (!json) return [];
+  try {
+    const arr = JSON.parse(json);
+    return Array.isArray(arr) ? arr.filter((t) => typeof t === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function RationaleTags({ tags }: { tags: string[] }) {
+  if (!tags.length) return null;
+  return (
+    <div className="mt-2 flex flex-wrap gap-1">
+      {tags.map((tag) => (
+        <span
+          key={tag}
+          className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] leading-tight text-emerald-400"
+        >
+          {tag}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 /* ========================= screenshot dropzone ======================== */
 
 function Dropzone({
@@ -85,11 +113,37 @@ function Dropzone({
   testId: string;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const [over, setOver] = useState(false);
+
+  useEffect(() => {
+    function onPaste(e: ClipboardEvent) {
+      if (image || busy) return;
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      let file: File | null = null;
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].type.startsWith("image/")) {
+          file = items[i].getAsFile();
+          break;
+        }
+      }
+      if (!file) return;
+      // If a dialog is open, only the dropzone inside it should claim the paste.
+      const openDialog = document.querySelector('[role="dialog"]');
+      if (openDialog && containerRef.current && !openDialog.contains(containerRef.current)) {
+        return;
+      }
+      e.preventDefault();
+      onFile(file);
+    }
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, [image, busy, onFile]);
 
   if (image) {
     return (
-      <div className="relative overflow-hidden rounded-lg border border-border/70">
+      <div ref={containerRef} className="relative overflow-hidden rounded-lg border border-border/70">
         <img src={image} alt={label} className="max-h-52 w-full object-contain bg-black/30" />
         {busy && (
           <div className="absolute inset-0 flex items-center justify-center gap-2 bg-background/75 text-xs font-medium">
@@ -116,6 +170,7 @@ function Dropzone({
 
   return (
     <div
+      ref={containerRef}
       onDragOver={(e) => {
         e.preventDefault();
         setOver(true);
@@ -126,6 +181,20 @@ function Dropzone({
         setOver(false);
         const f = e.dataTransfer.files?.[0];
         if (f) onFile(f);
+      }}
+      onPaste={(e) => {
+        const items = e.clipboardData?.items;
+        if (!items) return;
+        for (let i = 0; i < items.length; i++) {
+          if (items[i].type.startsWith("image/")) {
+            const f = items[i].getAsFile();
+            if (f) {
+              e.preventDefault();
+              onFile(f);
+            }
+            break;
+          }
+        }
       }}
       onClick={() => inputRef.current?.click()}
       role="button"
@@ -140,7 +209,7 @@ function Dropzone({
     >
       <Camera className="h-5 w-5 text-muted-foreground" />
       <p className="text-xs font-medium">{label}</p>
-      <p className="text-[11px] leading-snug text-muted-foreground">{hint}</p>
+      <p className="text-[11px] leading-snug text-muted-foreground">{hint} You can also press Ctrl+V (or Cmd+V) anywhere here to paste from your clipboard.</p>
       <input
         ref={inputRef}
         type="file"
@@ -168,6 +237,7 @@ const setupFormSchema = z.object({
   initialTarget: z.coerce.number(),
   entryTime: z.string().min(1),
   notes: z.string().optional(),
+  rationale: z.string().optional(),
 });
 type SetupForm = z.input<typeof setupFormSchema>;
 
@@ -189,6 +259,7 @@ function NewTradeCard() {
       initialTarget: "" as any,
       entryTime: localNow(),
       notes: "",
+      rationale: "",
     },
   });
 
@@ -245,8 +316,17 @@ function NewTradeCard() {
     }
   }
 
+  const [analyzingRationale, setAnalyzingRationale] = useState(false);
+
   const onSubmit = form.handleSubmit(async (values) => {
     const data = setupFormSchema.parse(values);
+    let rationaleTags: string[] = [];
+    const rationale = data.rationale?.trim() || "";
+    if (rationale) {
+      setAnalyzingRationale(true);
+      rationaleTags = await analyzeRationale(rationale);
+      setAnalyzingRationale(false);
+    }
     await createTrade.mutateAsync({
       trade: {
         symbol: data.symbol.toUpperCase(),
@@ -259,6 +339,8 @@ function NewTradeCard() {
         status: "open",
         setupScreenshot: image,
         notes: data.notes || null,
+        rationale: rationale || null,
+        rationaleTags: rationaleTags.length ? JSON.stringify(rationaleTags) : null,
       },
     });
     toast({ title: "Trade open", description: `${data.symbol.toUpperCase()} logged.` });
@@ -271,6 +353,7 @@ function NewTradeCard() {
       initialTarget: "" as any,
       entryTime: localNow(),
       notes: "",
+      rationale: "",
     });
     setImage(null);
     setParsed(false);
@@ -336,6 +419,29 @@ function NewTradeCard() {
 
       <Form {...form}>
         <form onSubmit={onSubmit} className="mt-4 space-y-4">
+          <FormField
+            control={form.control}
+            name="rationale"
+            render={({ field }) => (
+              <FormItem className="space-y-1">
+                <FormLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  Quick rationale
+                </FormLabel>
+                <FormControl>
+                  <Input
+                    {...field}
+                    placeholder="vah, 786 retest, bla bla…"
+                    className="h-9 text-sm"
+                    data-testid="input-rationale"
+                  />
+                </FormControl>
+                <p className="text-[10px] leading-snug text-muted-foreground">
+                  Type it however you'd say it — tags get pulled out automatically on save.
+                </p>
+              </FormItem>
+            )}
+          />
+
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <FormField
               control={form.control}
@@ -426,10 +532,12 @@ function NewTradeCard() {
             <Button
               type="submit"
               className="h-9 flex-1 min-w-[9rem] text-xs font-semibold"
-              disabled={createTrade.isPending}
+              disabled={createTrade.isPending || analyzingRationale}
               data-testid="button-save-trade"
             >
-              {createTrade.isPending && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
+              {(createTrade.isPending || analyzingRationale) && (
+                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              )}
               Open trade
             </Button>
             {preview && (
@@ -842,60 +950,94 @@ function CloseTradeDialog({
 function OpenTradeRow({
   t,
   onSelect,
+  onView,
 }: {
   t: TradeWithTags;
   onSelect: () => void;
+  onView: () => void;
 }) {
   const risk = Math.abs(t.entryPrice - t.initialStop);
   const rr = risk ? Math.abs(t.initialTarget - t.entryPrice) / risk : 0;
+  const rationaleTags = parseTags(t.rationaleTags);
   return (
-    <button
-      onClick={onSelect}
+    <div
       data-testid={`card-open-trade-${t.id}`}
-      className="w-full rounded-lg border border-card-border bg-card p-3 text-left transition-colors hover:border-primary/50 hover-elevate"
+      className="relative w-full rounded-lg border border-card-border bg-card p-3 text-left transition-colors hover:border-primary/50 hover-elevate"
     >
-      <div className="flex items-center gap-2">
-        <span
-          className={`flex h-6 w-6 items-center justify-center rounded ${
-            t.direction === "long" ? "bg-emerald-500/15 text-emerald-400" : "bg-primary/15 text-primary"
-          }`}
+      {(t.setupScreenshot || t.outcomeScreenshot) && (
+        <Button
+          type="button"
+          size="icon"
+          variant="ghost"
+          className="absolute right-1.5 top-1.5 h-6 w-6 text-muted-foreground hover:text-foreground"
+          onClick={(e) => {
+            e.stopPropagation();
+            onView();
+          }}
+          aria-label="View screenshots"
+          data-testid={`button-view-${t.id}`}
         >
-          {t.direction === "long" ? (
-            <ArrowUpRight className="h-3.5 w-3.5" />
-          ) : (
-            <ArrowDownRight className="h-3.5 w-3.5" />
-          )}
-        </span>
-        <span className="truncate font-mono text-sm font-semibold">{t.symbol}</span>
-        <span className="ml-auto shrink-0 rounded bg-secondary px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
-          {t.size} @ {num(t.entryPrice)}
-        </span>
-      </div>
-      <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 font-mono text-[11px] text-muted-foreground">
-        <span>
-          SL <span className="text-primary">{num(t.initialStop)}</span>
-        </span>
-        <span>
-          TP <span className="text-emerald-400">{num(t.initialTarget)}</span>
-        </span>
-        <span>R:R {num(rr, 1)}</span>
-        <span className="ml-auto">
-          {new Date(t.entryTime).toLocaleString(undefined, {
-            month: "short",
-            day: "numeric",
-            hour: "2-digit",
-            minute: "2-digit",
-          })}
-        </span>
-      </div>
-    </button>
+          <Eye className="h-3.5 w-3.5" />
+        </Button>
+      )}
+      <button
+        type="button"
+        onClick={onSelect}
+        className="block w-full text-left"
+      >
+        <div className="flex items-center gap-2 pr-7">
+          <span
+            className={`flex h-6 w-6 items-center justify-center rounded ${
+              t.direction === "long" ? "bg-emerald-500/15 text-emerald-400" : "bg-primary/15 text-primary"
+            }`}
+          >
+            {t.direction === "long" ? (
+              <ArrowUpRight className="h-3.5 w-3.5" />
+            ) : (
+              <ArrowDownRight className="h-3.5 w-3.5" />
+            )}
+          </span>
+          <span className="truncate font-mono text-sm font-semibold">{t.symbol}</span>
+          <span className="ml-auto shrink-0 rounded bg-secondary px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+            {t.size} @ {num(t.entryPrice)}
+          </span>
+        </div>
+        <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 font-mono text-[11px] text-muted-foreground">
+          <span>
+            SL <span className="text-primary">{num(t.initialStop)}</span>
+          </span>
+          <span>
+            TP <span className="text-emerald-400">{num(t.initialTarget)}</span>
+          </span>
+          <span>R:R {num(rr, 1)}</span>
+          <span className="ml-auto">
+            {new Date(t.entryTime).toLocaleString(undefined, {
+              month: "short",
+              day: "numeric",
+              hour: "2-digit",
+              minute: "2-digit",
+            })}
+          </span>
+        </div>
+        <RationaleTags tags={rationaleTags} />
+      </button>
+    </div>
   );
 }
 
-function ClosedTradeRow({ t, tagNames }: { t: TradeWithTags; tagNames: Record<number, string> }) {
+function ClosedTradeRow({
+  t,
+  tagNames,
+  onView,
+}: {
+  t: TradeWithTags;
+  tagNames: Record<number, string>;
+  onView: () => void;
+}) {
   const m = computeMetrics(t);
   const del = useDeleteTrade();
   const win = (m.actualR ?? 0) >= 0;
+  const rationaleTags = parseTags(t.rationaleTags);
   return (
     <div
       className="rounded-lg border border-card-border bg-card p-3"
@@ -919,6 +1061,18 @@ function ClosedTradeRow({ t, tagNames }: { t: TradeWithTags; tagNames: Record<nu
         >
           {fmtMoney(m.actualPnL)}
         </span>
+        {(t.setupScreenshot || t.outcomeScreenshot) && (
+          <Button
+            size="icon"
+            variant="ghost"
+            className="h-6 w-6 shrink-0 text-muted-foreground hover:text-foreground"
+            onClick={onView}
+            aria-label="View screenshots"
+            data-testid={`button-view-${t.id}`}
+          >
+            <Eye className="h-3 w-3" />
+          </Button>
+        )}
         <Button
           size="icon"
           variant="ghost"
@@ -960,7 +1114,110 @@ function ClosedTradeRow({ t, tagNames }: { t: TradeWithTags; tagNames: Record<nu
           ))}
         </div>
       )}
+      <RationaleTags tags={rationaleTags} />
     </div>
+  );
+}
+
+function TradeDetailDialog({
+  trade,
+  onClose,
+}: {
+  trade: TradeWithTags | null;
+  onClose: () => void;
+}) {
+  const open = trade != null;
+  const rationaleTags = parseTags(trade?.rationaleTags);
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-h-[92vh] max-w-lg overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-base">
+            {trade?.symbol}
+            {trade && (
+              <Badge
+                variant="outline"
+                className={`text-[10px] uppercase ${
+                  trade.direction === "long" ? "text-emerald-400" : "text-primary"
+                }`}
+              >
+                {trade.direction}
+              </Badge>
+            )}
+          </DialogTitle>
+        </DialogHeader>
+
+        {trade && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-3 gap-2 rounded-md border border-border/60 bg-secondary/30 p-2.5 text-center font-mono text-xs">
+              <div>
+                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Entry</p>
+                <p>{num(trade.entryPrice)}</p>
+              </div>
+              <div>
+                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Stop</p>
+                <p className="text-primary">{num(trade.initialStop)}</p>
+              </div>
+              <div>
+                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Target</p>
+                <p className="text-emerald-400">{num(trade.initialTarget)}</p>
+              </div>
+            </div>
+
+            {trade.rationale && (
+              <div>
+                <p className="mb-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+                  Rationale
+                </p>
+                <p className="text-xs">{trade.rationale}</p>
+                <RationaleTags tags={rationaleTags} />
+              </div>
+            )}
+
+            {trade.setupScreenshot && (
+              <div>
+                <p className="mb-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
+                  Setup screenshot
+                </p>
+                <img
+                  src={trade.setupScreenshot}
+                  alt="Setup screenshot"
+                  className="w-full rounded-lg border border-border/70 bg-black/30 object-contain"
+                  data-testid={`img-setup-${trade.id}`}
+                />
+              </div>
+            )}
+
+            {trade.outcomeScreenshot && (
+              <div>
+                <p className="mb-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
+                  Outcome screenshot
+                </p>
+                <img
+                  src={trade.outcomeScreenshot}
+                  alt="Outcome screenshot"
+                  className="w-full rounded-lg border border-border/70 bg-black/30 object-contain"
+                  data-testid={`img-outcome-${trade.id}`}
+                />
+              </div>
+            )}
+
+            {!trade.setupScreenshot && !trade.outcomeScreenshot && (
+              <p className="text-xs text-muted-foreground">
+                No screenshots attached to this trade.
+              </p>
+            )}
+
+            {trade.notes && (
+              <div>
+                <p className="mb-1 text-[10px] uppercase tracking-wider text-muted-foreground">Notes</p>
+                <p className="text-xs">{trade.notes}</p>
+              </div>
+            )}
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -970,6 +1227,7 @@ export default function Journal() {
   const { data: trades, isLoading } = useTrades();
   const { data: tags = [] } = useMistakeTags();
   const [closing, setClosing] = useState<TradeWithTags | null>(null);
+  const [viewing, setViewing] = useState<TradeWithTags | null>(null);
 
   const tagNames = useMemo(
     () => Object.fromEntries(tags.map((t) => [t.id, t.name])),
@@ -1014,7 +1272,12 @@ export default function Journal() {
           ) : (
             <div className="space-y-2">
               {open.map((t) => (
-                <OpenTradeRow key={t.id} t={t} onSelect={() => setClosing(t)} />
+                <OpenTradeRow
+                  key={t.id}
+                  t={t}
+                  onSelect={() => setClosing(t)}
+                  onView={() => setViewing(t)}
+                />
               ))}
             </div>
           )}
@@ -1037,13 +1300,19 @@ export default function Journal() {
         ) : (
           <div className="grid gap-2 md:grid-cols-2">
             {closed.map((t) => (
-              <ClosedTradeRow key={t.id} t={t} tagNames={tagNames} />
+              <ClosedTradeRow
+                key={t.id}
+                t={t}
+                tagNames={tagNames}
+                onView={() => setViewing(t)}
+              />
             ))}
           </div>
         )}
       </div>
 
       <CloseTradeDialog trade={closing} onClose={() => setClosing(null)} />
+      <TradeDetailDialog trade={viewing} onClose={() => setViewing(null)} />
     </div>
   );
 }

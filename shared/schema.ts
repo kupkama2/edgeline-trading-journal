@@ -23,6 +23,8 @@ export const trades = sqliteTable("trades", {
   setupScreenshot: text("setup_screenshot"),
   outcomeScreenshot: text("outcome_screenshot"),
   notes: text("notes"),
+  rationale: text("rationale"), // raw quick-entry comment, e.g. "vah, 786 retest"
+  rationaleTags: text("rationale_tags"), // JSON string[] — AI-normalized setup concepts
 });
 
 export const directionEnum = z.enum(["long", "short"]);
@@ -120,6 +122,16 @@ export const parseScreenshotSchema = z.object({
     })
     .optional(),
 });
+
+export const analyzeRationaleSchema = z.object({
+  text: z.string().min(1),
+});
+
+export type AnalyzeRationaleRequest = z.infer<typeof analyzeRationaleSchema>;
+
+export interface AnalyzeRationaleResult {
+  tags: string[];
+}
 
 export type ParseScreenshotRequest = z.infer<typeof parseScreenshotSchema>;
 

@@ -43,7 +43,9 @@ CREATE TABLE IF NOT EXISTS trades (
   no_management_outcome TEXT,
   setup_screenshot TEXT,
   outcome_screenshot TEXT,
-  notes TEXT
+  notes TEXT,
+  rationale TEXT,
+  rationale_tags TEXT
 );
 CREATE TABLE IF NOT EXISTS mistake_tags (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -63,6 +65,16 @@ CREATE TABLE IF NOT EXISTS weekly_reviews (
   submitted_at TEXT NOT NULL
 );
 `);
+
+/* Lightweight migration for columns added after the table already existed. */
+function ensureColumn(table: string, column: string, ddl: string) {
+  const cols = sqlite.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  if (!cols.some((c) => c.name === column)) {
+    sqlite.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+  }
+}
+ensureColumn("trades", "rationale", "rationale TEXT");
+ensureColumn("trades", "rationale_tags", "rationale_tags TEXT");
 
 const DEFAULT_TAGS = [
   "Poor Risk/Reward Trade",

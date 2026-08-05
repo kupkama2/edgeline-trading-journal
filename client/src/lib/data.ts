@@ -123,6 +123,16 @@ export async function parseScreenshot(
   return json.result;
 }
 
+export async function analyzeRationale(text: string): Promise<string[]> {
+  try {
+    const res = await apiRequest("POST", "/api/analyze-rationale", { text });
+    const json = await res.json();
+    return Array.isArray(json.tags) ? json.tags : [];
+  } catch {
+    return [];
+  }
+}
+
 export function fileToDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
