@@ -76,6 +76,7 @@ function ensureColumn(table: string, column: string, ddl: string) {
 }
 ensureColumn("trades", "rationale", "rationale TEXT");
 ensureColumn("trades", "rationale_tags", "rationale_tags TEXT");
+ensureColumn("trades", "playbook", "playbook TEXT");
 
 /**
  * Demons (mistake tags). The fixed taxonomy lives in shared/demons.ts; these

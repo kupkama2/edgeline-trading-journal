@@ -25,7 +25,40 @@ export const trades = sqliteTable("trades", {
   notes: text("notes"),
   rationale: text("rationale"), // raw quick-entry comment, e.g. "vah, 786 retest"
   rationaleTags: text("rationale_tags"), // JSON string[] — AI-normalized setup concepts
+  playbook: text("playbook"), // JSON TradePlaybook — optional setup/edge checklist
 });
+
+/* ------------------------------- playbook ------------------------------ */
+
+/**
+ * Optional "edge checklist" captured when logging a trade. Stored as a JSON
+ * text column (same convention as rationaleTags, since SQLite has no object
+ * type). Every field is optional — logging a trade fast must stay possible.
+ */
+export const playbookSchema = z.object({
+  setupName: z.string().optional(),
+  stopLogic: z.string().optional(),
+  targetLogic: z.string().optional(),
+  confidence: z.number().int().min(1).max(5).optional(),
+  standAside: z.string().optional(),
+});
+
+export type TradePlaybook = z.infer<typeof playbookSchema>;
+
+export function parsePlaybook(json: string | null | undefined): TradePlaybook | null {
+  if (!json) return null;
+  try {
+    const parsed = playbookSchema.safeParse(JSON.parse(json));
+    if (!parsed.success) return null;
+    const p = parsed.data;
+    const hasAny = Object.values(p).some(
+      (v) => v != null && String(v).trim() !== "",
+    );
+    return hasAny ? p : null;
+  } catch {
+    return null;
+  }
+}
 
 export const directionEnum = z.enum(["long", "short"]);
 export const statusEnum = z.enum(["open", "closed"]);

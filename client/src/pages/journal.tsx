@@ -29,6 +29,8 @@ import {
   Ban,
   Camera,
   CheckCircle2,
+  ChevronDown,
+  ClipboardList,
   Eye,
   Loader2,
   Pencil,
@@ -46,7 +48,7 @@ import {
   fileToDataUrl,
   analyzeRationale,
 } from "@/lib/data";
-import type { TradeWithTags } from "@shared/schema";
+import { parsePlaybook, type TradeWithTags } from "@shared/schema";
 import {
   computeMetrics,
   fmtMoney,
@@ -261,6 +263,25 @@ function NewTradeCard() {
   const [exitReason, setExitReason] = useState<string | null>(null);
   const [selectedDemons, setSelectedDemons] = useState<number[]>([]);
   const { data: demons = [] } = useMistakeTags();
+
+  /* Optional playbook / edge checklist — never required. */
+  const [showPlaybook, setShowPlaybook] = useState(false);
+  const [pb, setPb] = useState<{
+    setupName: string;
+    stopLogic: string;
+    targetLogic: string;
+    confidence: number | null;
+    standAside: string;
+  }>({ setupName: "", stopLogic: "", targetLogic: "", confidence: null, standAside: "" });
+  const { data: allTrades = [] } = useTrades();
+  const knownSetups = useMemo(() => {
+    const names = new Set<string>();
+    for (const t of allTrades) {
+      const p = parsePlaybook(t.playbook);
+      if (p?.setupName?.trim()) names.add(p.setupName.trim());
+    }
+    return Array.from(names).sort();
+  }, [allTrades]);
   // Same lock the R-loss guardrail produces — a repeated demon blocks new entries.
   const guard = useDemonGuard();
 
@@ -361,6 +382,17 @@ function NewTradeCard() {
       rationaleTags = await analyzeRationale(rationale);
       setAnalyzingRationale(false);
     }
+    const playbookPayload = {
+      setupName: pb.setupName.trim() || undefined,
+      stopLogic: pb.stopLogic.trim() || undefined,
+      targetLogic: pb.targetLogic.trim() || undefined,
+      confidence: pb.confidence ?? undefined,
+      standAside: pb.standAside.trim() || undefined,
+    };
+    const playbookJson = Object.values(playbookPayload).some((v) => v !== undefined)
+      ? JSON.stringify(playbookPayload)
+      : null;
+
     const loggingClosed = closedMode && exitPrice !== "" && isFinite(Number(exitPrice));
     if (closedMode && !loggingClosed) {
       toast({ title: "Exit price required", variant: "destructive" });
@@ -380,6 +412,7 @@ function NewTradeCard() {
         notes: data.notes || null,
         rationale: rationale || null,
         rationaleTags: rationaleTags.length ? JSON.stringify(rationaleTags) : null,
+        playbook: playbookJson,
         ...(loggingClosed
           ? {
               status: "closed" as const,
@@ -405,6 +438,7 @@ function NewTradeCard() {
     setExitTime(localNow());
     setExitReason(null);
     setSelectedDemons([]);
+    setPb({ setupName: "", stopLogic: "", targetLogic: "", confidence: null, standAside: "" });
     form.reset({
       symbol: "",
       direction: "long",
@@ -519,6 +553,111 @@ function NewTradeCard() {
               </FormItem>
             )}
           />
+
+          {/* Optional playbook / edge checklist — collapsed by default so a
+              trade can still be logged in seconds. */}
+          <div>
+            <button
+              type="button"
+              onClick={() => setShowPlaybook((s) => !s)}
+              className="flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+              data-testid="button-toggle-playbook"
+              aria-expanded={showPlaybook}
+            >
+              <ClipboardList className="h-3.5 w-3.5" />
+              Playbook · optional
+              <ChevronDown
+                className={`h-3.5 w-3.5 transition-transform ${showPlaybook ? "rotate-180" : ""}`}
+              />
+            </button>
+
+            {showPlaybook && (
+              <div
+                className="mt-2 space-y-3 rounded-lg border border-border/60 bg-secondary/20 p-3"
+                data-testid="section-playbook"
+              >
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="space-y-1">
+                    <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                      Trigger / setup name
+                    </label>
+                    <Input
+                      list="playbook-setups"
+                      value={pb.setupName}
+                      onChange={(e) => setPb((p) => ({ ...p, setupName: e.target.value }))}
+                      placeholder="e.g. VAH rejection"
+                      className="h-9 text-sm"
+                      data-testid="input-playbook-setup"
+                    />
+                    <datalist id="playbook-setups">
+                      {knownSetups.map((s) => (
+                        <option key={s} value={s} />
+                      ))}
+                    </datalist>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                      Stop-placement logic
+                    </label>
+                    <Input
+                      value={pb.stopLogic}
+                      onChange={(e) => setPb((p) => ({ ...p, stopLogic: e.target.value }))}
+                      placeholder="e.g. above the swing high"
+                      className="h-9 text-sm"
+                      data-testid="input-playbook-stop"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                      Target logic
+                    </label>
+                    <Input
+                      value={pb.targetLogic}
+                      onChange={(e) => setPb((p) => ({ ...p, targetLogic: e.target.value }))}
+                      placeholder="e.g. prior day VAL"
+                      className="h-9 text-sm"
+                      data-testid="input-playbook-target"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                      Stand-aside condition
+                    </label>
+                    <Input
+                      value={pb.standAside}
+                      onChange={(e) => setPb((p) => ({ ...p, standAside: e.target.value }))}
+                      placeholder="e.g. skip if CPI within 15m"
+                      className="h-9 text-sm"
+                      data-testid="input-playbook-stand-aside"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <p className="mb-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
+                    Confidence
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {[1, 2, 3, 4, 5].map((n) => (
+                      <Button
+                        key={n}
+                        type="button"
+                        size="sm"
+                        variant={pb.confidence === n ? "default" : "outline"}
+                        className="h-8 w-9 p-0 font-mono text-[11px]"
+                        onClick={() =>
+                          setPb((p) => ({ ...p, confidence: p.confidence === n ? null : n }))
+                        }
+                        data-testid={`button-playbook-confidence-${n}`}
+                      >
+                        {n}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
 
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <FormField
@@ -1506,7 +1645,7 @@ function OpenTradeRow({
       data-testid={`card-open-trade-${t.id}`}
       className="relative w-full rounded-lg border border-card-border bg-card p-3 text-left transition-colors hover:border-primary/50 hover-elevate"
     >
-      {(t.setupScreenshot || t.outcomeScreenshot) && (
+      {(
         <Button
           type="button"
           size="icon"
@@ -1516,7 +1655,7 @@ function OpenTradeRow({
             e.stopPropagation();
             onView();
           }}
-          aria-label="View screenshots"
+          aria-label="View trade details"
           data-testid={`button-view-${t.id}`}
         >
           <Eye className="h-3.5 w-3.5" />
@@ -1605,18 +1744,16 @@ function ClosedTradeRow({
         >
           {fmtMoney(m.actualPnL)}
         </span>
-        {(t.setupScreenshot || t.outcomeScreenshot) && (
-          <Button
-            size="icon"
-            variant="ghost"
-            className="h-6 w-6 shrink-0 text-muted-foreground hover:text-foreground"
-            onClick={onView}
-            aria-label="View screenshots"
-            data-testid={`button-view-${t.id}`}
-          >
-            <Eye className="h-3 w-3" />
-          </Button>
-        )}
+        <Button
+          size="icon"
+          variant="ghost"
+          className="h-6 w-6 shrink-0 text-muted-foreground hover:text-foreground"
+          onClick={onView}
+          aria-label="View trade details"
+          data-testid={`button-view-${t.id}`}
+        >
+          <Eye className="h-3 w-3" />
+        </Button>
         <Button
           size="icon"
           variant="ghost"
@@ -1682,6 +1819,16 @@ function TradeDetailDialog({
 }) {
   const open = trade != null;
   const rationaleTags = parseTags(trade?.rationaleTags);
+  const playbook = parsePlaybook(trade?.playbook);
+  const playbookRows: [string, string][] = playbook
+    ? ([
+        ["Setup", playbook.setupName],
+        ["Stop logic", playbook.stopLogic],
+        ["Target logic", playbook.targetLogic],
+        ["Confidence", playbook.confidence ? `${playbook.confidence} / 5` : undefined],
+        ["Stand aside if", playbook.standAside],
+      ].filter(([, v]) => v && String(v).trim()) as [string, string][])
+    : [];
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-h-[92vh] max-w-lg overflow-y-auto">
@@ -1725,6 +1872,23 @@ function TradeDetailDialog({
                 </p>
                 <p className="text-xs">{trade.rationale}</p>
                 <RationaleTags tags={rationaleTags} />
+              </div>
+            )}
+
+            {playbookRows.length > 0 && (
+              <div data-testid="detail-playbook">
+                <p className="mb-1.5 flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
+                  <ClipboardList className="h-3 w-3" />
+                  Playbook
+                </p>
+                <dl className="space-y-1 rounded-md border border-border/60 bg-secondary/20 p-2.5">
+                  {playbookRows.map(([k, v]) => (
+                    <div key={k} className="flex gap-2 text-xs">
+                      <dt className="w-28 shrink-0 text-muted-foreground">{k}</dt>
+                      <dd className="min-w-0 flex-1 break-words">{v}</dd>
+                    </div>
+                  ))}
+                </dl>
               </div>
             )}
 
