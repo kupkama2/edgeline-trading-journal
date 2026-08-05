@@ -139,7 +139,7 @@ export function demonCountsInRange(
       acc.set(id, (acc.get(id) ?? 0) + 1);
     }
   }
-  return [...acc.entries()]
+  return Array.from(acc.entries())
     .map(([id, count]) => ({ id, name: names.get(id) ?? "Unknown", count }))
     .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
 }
