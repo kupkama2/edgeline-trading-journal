@@ -26,6 +26,7 @@ import {
   useSubmitWeeklyReview,
 } from "@/lib/data";
 import { DailyGuardCard } from "@/components/daily-guard";
+import { DemonFinderPanel, WeeklyReviewCard } from "@/components/demon-finder";
 import {
   aggregate,
   computeMetrics,
@@ -375,6 +376,8 @@ export default function Dashboard() {
 
       <DailyGuardCard trades={all} />
 
+      <WeeklyReviewCard trades={all} tags={tags} />
+
       {/* stat strip */}
       <Card className="border-card-border bg-card p-4" data-testid="card-stat-strip">
         <div className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-4 lg:grid-cols-8">
@@ -462,6 +465,8 @@ export default function Dashboard() {
           </div>
         )}
       </ChartCard>
+
+      <DemonFinderPanel trades={all} tags={tags} />
 
       <div className="grid gap-4 lg:grid-cols-2">
         {/* mistake cost leaderboard */}

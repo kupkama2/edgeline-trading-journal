@@ -258,6 +258,8 @@ function NewTradeCard() {
   const [exitPrice, setExitPrice] = useState("");
   const [exitTime, setExitTime] = useState(localNow());
   const [exitReason, setExitReason] = useState<string | null>(null);
+  const [selectedDemons, setSelectedDemons] = useState<number[]>([]);
+  const { data: demons = [] } = useMistakeTags();
 
   const form = useForm<SetupForm>({
     resolver: zodResolver(setupFormSchema) as any,
@@ -384,6 +386,7 @@ function NewTradeCard() {
             }
           : { status: "open" as const }),
       },
+      mistakeTagIds: loggingClosed ? selectedDemons : [],
     });
     toast(
       loggingClosed
@@ -398,6 +401,7 @@ function NewTradeCard() {
     setExitPrice("");
     setExitTime(localNow());
     setExitReason(null);
+    setSelectedDemons([]);
     form.reset({
       symbol: "",
       direction: "long",
@@ -660,6 +664,36 @@ function NewTradeCard() {
                       {EXIT_REASON_LABELS[r]}
                     </Button>
                   ))}
+                </div>
+              </div>
+
+              <div>
+                <p className="mb-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
+                  Demons on this trade
+                </p>
+                <div className="flex flex-wrap gap-1.5">
+                  {demons.map((d) => {
+                    const on = selectedDemons.includes(d.id);
+                    return (
+                      <button
+                        key={d.id}
+                        type="button"
+                        onClick={() =>
+                          setSelectedDemons((s) =>
+                            on ? s.filter((x) => x !== d.id) : [...s, d.id],
+                          )
+                        }
+                        data-testid={`chip-new-demon-${d.id}`}
+                        className={`rounded-full border px-2.5 py-1 text-[11px] leading-tight transition-colors ${
+                          on
+                            ? "border-primary/60 bg-primary/15 text-primary"
+                            : "border-border text-muted-foreground hover:border-primary/40 hover:text-foreground"
+                        }`}
+                      >
+                        {d.name}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 

@@ -60,15 +60,16 @@ export default function Settings() {
       <div>
         <h1 className="text-xl font-bold tracking-tight">Settings</h1>
         <p className="mt-0.5 text-xs text-muted-foreground">
-          Your mistake tags and the risk guardrails that halt trading.
+          Your demons (named mistakes) and the risk guardrails that halt trading.
         </p>
       </div>
 
       <Card className="border-card-border bg-card p-4 sm:p-5">
-        <h2 className="text-sm font-semibold tracking-tight">Mistake tags</h2>
+        <h2 className="text-sm font-semibold tracking-tight">Demons</h2>
         <p className="mt-0.5 text-[11px] text-muted-foreground">
-          These are the one-tap chips shown when you close a trade. Prestige rises every 10 trades
-          a tag is attached to — the more prestige, the more dangerous the habit.
+          The fixed nine come from Tom Dante's Demon Finder; add your own below. These are the
+          one-tap chips shown when you close a trade. Prestige rises every 10 trades a demon is
+          attached to — the more prestige, the more dangerous the habit.
         </p>
 
         <div className="mt-4 flex gap-2">
@@ -78,7 +79,7 @@ export default function Settings() {
             onKeyDown={(e) => {
               if (e.key === "Enter") add();
             }}
-            placeholder="New mistake tag…"
+            placeholder="New custom demon…"
             className="h-9 text-sm"
             data-testid="input-new-tag"
           />

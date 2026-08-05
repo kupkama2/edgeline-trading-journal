@@ -14,6 +14,7 @@ import type {
   WeeklyReview,
   InsertWeeklyReview,
 } from "@shared/schema";
+import { DEMON_TAXONOMY, DEMON_LEGACY_ALIASES } from "@shared/demons";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import Database from "better-sqlite3";
 import { eq, desc, and } from "drizzle-orm";
@@ -76,16 +77,13 @@ function ensureColumn(table: string, column: string, ddl: string) {
 ensureColumn("trades", "rationale", "rationale TEXT");
 ensureColumn("trades", "rationale_tags", "rationale_tags TEXT");
 
-const DEFAULT_TAGS = [
-  "Poor Risk/Reward Trade",
-  "Entered Too Soon",
-  "Entered Too Late",
-  "Exited Too Soon",
-  "Exited Too Late",
-  "Trade Not In Trading Plan",
+/**
+ * Demons (mistake tags). The fixed taxonomy lives in shared/demons.ts; these
+ * extras were seeded before the taxonomy existed and are kept as "custom"
+ * demons so historical tagging isn't lost.
+ */
+const LEGACY_EXTRA_TAGS = [
   "Incorrect Stop Placement",
-  "Wrong Position Size",
-  "Didn't Take Planned Trade",
   "Moved Stop Early",
   "Revenge Trade",
   "FOMO Entry",
@@ -109,10 +107,48 @@ export interface IStorage {
 
 export class DatabaseStorage implements IStorage {
   constructor() {
+    this.seedDemons();
+  }
+
+  /**
+   * Idempotently reconcile the mistake_tags table with the demon taxonomy:
+   * rename legacy names onto their canonical demon (preserving tag ids, so
+   * existing trade links survive), then insert any canonical demon that is
+   * still missing. Custom demons the user added are left untouched.
+   */
+  private seedDemons() {
     const existing = db.select().from(mistakeTags).all();
+
+    for (const tag of existing) {
+      const canonical = DEMON_LEGACY_ALIASES[tag.name];
+      if (canonical && !existing.some((t) => t.name === canonical)) {
+        db.update(mistakeTags)
+          .set({ name: canonical })
+          .where(eq(mistakeTags.id, tag.id))
+          .run();
+        tag.name = canonical;
+      }
+    }
+
+    const present = new Set(existing.map((t) => t.name));
+    DEMON_TAXONOMY.forEach((name, i) => {
+      if (present.has(name)) {
+        // Keep taxonomy demons in canonical order at the top of the list.
+        const row = existing.find((t) => t.name === name)!;
+        if (row.sortOrder !== i) {
+          db.update(mistakeTags).set({ sortOrder: i }).where(eq(mistakeTags.id, row.id)).run();
+        }
+        return;
+      }
+      db.insert(mistakeTags).values({ name, sortOrder: i, color: "red" }).run();
+    });
+
+    // Seed the pre-taxonomy extras only on a completely fresh database.
     if (existing.length === 0) {
-      DEFAULT_TAGS.forEach((name, i) => {
-        db.insert(mistakeTags).values({ name, sortOrder: i, color: "red" }).run();
+      LEGACY_EXTRA_TAGS.forEach((name, i) => {
+        db.insert(mistakeTags)
+          .values({ name, sortOrder: DEMON_TAXONOMY.length + i, color: "red" })
+          .run();
       });
     }
   }
