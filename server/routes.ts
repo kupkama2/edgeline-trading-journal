@@ -35,13 +35,20 @@ const SETUP_PROMPT = `You are reading a screenshot to fill in a new trade's setu
 - initialStop: the Stop Price (or Stop Loss column) of the "Stop Loss" type row tied to the same symbol/entry — use it even if that row's Status is "Filled" (it still reflects the ORIGINAL planned stop) or "Cancelled".
 - initialTarget: the Limit Price (or Take Profit column) of the "Take Profit" type row tied to the same symbol/entry — use it even if its Status is "Cancelled" (a cancelled take-profit still tells you the original target).
 
+CLOSED-TRADE DETECTION (applies to both A and B): decide whether the screenshot shows a trade that is ALREADY FINISHED, i.e. an exit is visible — not just a plan.
+- In a broker order log (B), the position is CLOSED whenever a closing fill is visible. Concretely: if the "Stop Loss" row OR the "Take Profit" row tied to the entry has Status "Filled", the trade is closed — that filled protective order IS the exit. A second plain entry-type row on the same symbol with the OPPOSITE Side, Filled for the same quantity, also closes it. Note the double duty here: a Filled "Stop Loss" row supplies BOTH initialStop (the planned stop level) AND the exit (isClosed true, exitPrice = its Avg Fill Price, falling back to Stop Price / Limit Price; exitTime = its Update Time). Rows with Status "Cancelled" or "Working" do NOT close the trade.
+- On a chart (A), the position is closed when BOTH an entry marker AND an exit/close marker are drawn (e.g. a completed position tool showing where the trade was closed, a "closed" P&L readout, or an explicit exit label/arrow at a later bar). A plain position tool showing only entry + stop + target with no exit marker is NOT closed.
+- If it is closed, also set exitReason to the best fit: "target" (closed at/near the take-profit), "stop" (closed at/near the stop loss), "breakeven" (closed at/near entry), "trailed" (closed at a trailed stop between entry and target), "manual_early" (closed in profit well before target), "manual_late" (closed after giving back a large part of the move), or "other" if you cannot tell.
+- If NOTHING in the image shows an exit, set isClosed to false and leave exitPrice, exitTime and exitReason null. Never invent an exit.
+
 Symbol normalization (applies to both A and B): report the CANONICAL ROOT instrument, not the specific dated contract. Micro and full-size futures on the same underlying are the same instrument: MNQ = NQ (Micro E-mini Nasdaq-100), MES = ES (Micro E-mini S&P 500). Also strip any trailing month/year contract code (a single letter from FGHJKMNQUVXZ followed by 1-2 digits) before applying that mapping — e.g. "MNQU6" -> "NQ", "ESZ5" -> "ES", "MNQ" -> "NQ". For any symbol/ticker that isn't a recognized futures alias (stocks, crypto, forex, etc.), just return it as printed.
 
 Respond with STRICT JSON only, no prose, no markdown fences:
-{"symbol": string|null, "direction": "long"|"short"|null, "entryPrice": number|null, "initialStop": number|null, "initialTarget": number|null, "entryTime": string|null, "size": number|null}
+{"symbol": string|null, "direction": "long"|"short"|null, "entryPrice": number|null, "initialStop": number|null, "initialTarget": number|null, "entryTime": string|null, "size": number|null, "isClosed": boolean, "exitPrice": number|null, "exitTime": string|null, "exitReason": "target"|"stop"|"trailed"|"manual_early"|"manual_late"|"breakeven"|"other"|null}
 
 Rules:
-- entryTime must be an ISO 8601 string if a date/time is legible, otherwise null.
+- Output ONLY the JSON object. Do not wrap it in markdown code fences, do not add explanations, citations or any prose before or after it.
+- entryTime and exitTime must be ISO 8601 strings if a date/time is legible, otherwise null.
 - Use null for anything that is not clearly legible or not applicable. Never guess wildly.
 - Numbers must be plain JSON numbers (no currency symbols, no thousands separators, no commas).`;
 
@@ -286,8 +293,16 @@ export async function registerRoutes(
         { mediaType, data },
       );
       const json = extractJson(text);
-      if (kind === "setup" && json.symbol) {
-        json.symbol = normalizeSymbol(json.symbol);
+      if (kind === "setup") {
+        if (json.symbol) json.symbol = normalizeSymbol(json.symbol);
+        // A screenshot only counts as a closed trade if a usable exit price came
+        // back with it — otherwise fall back to the normal open-trade flow.
+        if (json.isClosed !== true || typeof json.exitPrice !== "number") {
+          json.isClosed = false;
+          json.exitPrice = null;
+          json.exitTime = null;
+          json.exitReason = null;
+        }
       }
       res.json({ ok: true, kind, result: json });
     } catch (err: any) {

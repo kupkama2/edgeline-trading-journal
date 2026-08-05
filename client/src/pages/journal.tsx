@@ -27,6 +27,7 @@ import {
   ArrowDownRight,
   ArrowUpRight,
   Camera,
+  CheckCircle2,
   Eye,
   Loader2,
   Sparkles,
@@ -248,6 +249,15 @@ function NewTradeCard() {
   const [parsing, setParsing] = useState(false);
   const [parsed, setParsed] = useState(false);
 
+  /* One-step closed-trade logging: when the screenshot already shows an exit
+     (or the user flips the toggle) we skip CloseTradeDialog entirely and write
+     the trade straight to the log with status="closed". */
+  const [closedMode, setClosedMode] = useState(false);
+  const [autoClosed, setAutoClosed] = useState(false);
+  const [exitPrice, setExitPrice] = useState("");
+  const [exitTime, setExitTime] = useState(localNow());
+  const [exitReason, setExitReason] = useState<string | null>(null);
+
   const form = useForm<SetupForm>({
     resolver: zodResolver(setupFormSchema) as any,
     defaultValues: {
@@ -300,10 +310,28 @@ function NewTradeCard() {
           form.setValue("entryTime", d.toISOString().slice(0, 16));
         }
       }
+
+      const detectedClosed = r.isClosed === true && r.exitPrice != null;
+      if (detectedClosed) {
+        setClosedMode(true);
+        setAutoClosed(true);
+        setExitPrice(String(r.exitPrice));
+        setExitReason(r.exitReason ?? "other");
+        if (r.exitTime) {
+          const d = new Date(r.exitTime);
+          if (!isNaN(d.getTime())) {
+            d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+            setExitTime(d.toISOString().slice(0, 16));
+          }
+        }
+      }
+
       setParsed(true);
       toast({
-        title: "Chart read",
-        description: "Check the pre-filled numbers, then confirm.",
+        title: detectedClosed ? "Completed trade read" : "Chart read",
+        description: detectedClosed
+          ? "An exit was visible — this will be logged as a closed trade."
+          : "Check the pre-filled numbers, then confirm.",
       });
     } catch (e: any) {
       toast({
@@ -327,6 +355,12 @@ function NewTradeCard() {
       rationaleTags = await analyzeRationale(rationale);
       setAnalyzingRationale(false);
     }
+    const loggingClosed = closedMode && exitPrice !== "" && isFinite(Number(exitPrice));
+    if (closedMode && !loggingClosed) {
+      toast({ title: "Exit price required", variant: "destructive" });
+      return;
+    }
+
     await createTrade.mutateAsync({
       trade: {
         symbol: data.symbol.toUpperCase(),
@@ -336,14 +370,33 @@ function NewTradeCard() {
         initialStop: data.initialStop,
         initialTarget: data.initialTarget,
         entryTime: toIso(data.entryTime),
-        status: "open",
         setupScreenshot: image,
         notes: data.notes || null,
         rationale: rationale || null,
         rationaleTags: rationaleTags.length ? JSON.stringify(rationaleTags) : null,
+        ...(loggingClosed
+          ? {
+              status: "closed" as const,
+              exitPrice: Number(exitPrice),
+              exitTime: toIso(exitTime),
+              exitReason: (exitReason as any) ?? "other",
+            }
+          : { status: "open" as const }),
       },
     });
-    toast({ title: "Trade open", description: `${data.symbol.toUpperCase()} logged.` });
+    toast(
+      loggingClosed
+        ? {
+            title: "Closed trade logged",
+            description: `${data.symbol.toUpperCase()} recorded end-to-end.`,
+          }
+        : { title: "Trade open", description: `${data.symbol.toUpperCase()} logged.` },
+    );
+    setClosedMode(false);
+    setAutoClosed(false);
+    setExitPrice("");
+    setExitTime(localNow());
+    setExitReason(null);
     form.reset({
       symbol: "",
       direction: "long",
@@ -397,11 +450,28 @@ function NewTradeCard() {
           <Sparkles className="h-4 w-4 text-primary" />
           <h2 className="text-sm font-semibold tracking-tight">Log a setup</h2>
         </div>
-        {parsed && (
-          <Badge variant="secondary" className="text-[10px]" data-testid="badge-ai-prefill">
-            AI pre-filled · verify
-          </Badge>
-        )}
+        <div className="flex items-center gap-2">
+          {parsed && (
+            <Badge variant="secondary" className="text-[10px]" data-testid="badge-ai-prefill">
+              AI pre-filled · verify
+            </Badge>
+          )}
+          <Button
+            type="button"
+            size="sm"
+            variant={closedMode ? "default" : "outline"}
+            className="h-7 gap-1.5 px-2 text-[11px]"
+            onClick={() => {
+              setClosedMode((c) => !c);
+              setAutoClosed(false);
+            }}
+            data-testid="button-toggle-closed"
+            aria-pressed={closedMode}
+          >
+            <CheckCircle2 className="h-3.5 w-3.5" />
+            Already closed
+          </Button>
+        </div>
       </div>
 
       <Dropzone
@@ -528,6 +598,77 @@ function NewTradeCard() {
             />
           </div>
 
+          {closedMode && (
+            <div
+              className="space-y-3 rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3"
+              data-testid="section-exit-fields"
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-400" />
+                <p className="text-[11px] font-semibold text-emerald-400">
+                  {autoClosed
+                    ? "Exit detected in the screenshot — logging as a closed trade"
+                    : "Logging a completed trade"}
+                </p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                    Exit price
+                  </label>
+                  <Input
+                    type="number"
+                    step="any"
+                    inputMode="decimal"
+                    value={exitPrice}
+                    onChange={(e) => setExitPrice(e.target.value)}
+                    className="h-9 font-mono text-sm"
+                    data-testid="input-new-exit-price"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                    Exit time
+                  </label>
+                  <Input
+                    type="datetime-local"
+                    value={exitTime}
+                    onChange={(e) => setExitTime(e.target.value)}
+                    className="h-9 font-mono text-xs"
+                    data-testid="input-new-exit-time"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <p className="mb-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
+                  How did it end?
+                </p>
+                <div className="flex flex-wrap gap-1.5">
+                  {EXIT_REASONS.map((r) => (
+                    <Button
+                      key={r}
+                      type="button"
+                      size="sm"
+                      variant={exitReason === r ? "default" : "outline"}
+                      className="h-8 text-[11px]"
+                      onClick={() => setExitReason(exitReason === r ? null : r)}
+                      data-testid={`button-new-exit-${r}`}
+                    >
+                      {EXIT_REASON_LABELS[r]}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+
+              <p className="text-[10px] leading-snug text-muted-foreground">
+                MAE / MFE and the no-management verdict stay optional — add them later
+                from the trade's Edit dialog if you want the full scorecard.
+              </p>
+            </div>
+          )}
+
           <div className="flex flex-wrap items-center gap-3">
             <Button
               type="submit"
@@ -538,7 +679,7 @@ function NewTradeCard() {
               {(createTrade.isPending || analyzingRationale) && (
                 <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
               )}
-              Open trade
+              {closedMode ? "Log closed trade" : "Open trade"}
             </Button>
             {preview && (
               <div

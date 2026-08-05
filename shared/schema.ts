@@ -143,6 +143,19 @@ export interface SetupParseResult {
   initialTarget: number | null;
   entryTime: string | null;
   size: number | null;
+  /** True when the screenshot already shows the trade as completed/closed. */
+  isClosed?: boolean | null;
+  exitPrice?: number | null;
+  exitTime?: string | null;
+  exitReason?:
+    | "target"
+    | "stop"
+    | "trailed"
+    | "manual_early"
+    | "manual_late"
+    | "breakeven"
+    | "other"
+    | null;
 }
 
 export interface OutcomeParseResult {
