@@ -4,31 +4,67 @@ import { Button } from "@/components/ui/button";
 import {
   BarChart3,
   CalendarDays,
+  Check,
   LineChart,
-  Moon,
   NotebookPen,
+  Palette,
   Settings2,
-  Sun,
 } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 /* --------------------------------- theme -------------------------------- */
 
-const ThemeCtx = createContext<{ dark: boolean; toggle: () => void }>({
-  dark: true,
-  toggle: () => {},
+/**
+ * Themes are token sets in index.css, selected by a data-theme attribute; this
+ * provider only decides which one is on. The choice persists — a trader who
+ * picked Terminal yesterday should not be handed Ember every morning.
+ */
+export const THEMES = [
+  { id: "ember", name: "Ember", dark: true, swatch: "hsl(6 85% 57%)" },
+  { id: "terminal", name: "Terminal", dark: true, swatch: "hsl(145 75% 44%)" },
+  { id: "midnight", name: "Midnight", dark: true, swatch: "hsl(213 95% 60%)" },
+  { id: "paper", name: "Paper", dark: false, swatch: "hsl(220 12% 87%)" },
+] as const;
+
+export type ThemeId = (typeof THEMES)[number]["id"];
+
+const THEME_KEY = "edgeline.theme";
+
+function storedTheme(): ThemeId {
+  const raw = localStorage.getItem(THEME_KEY);
+  return THEMES.some((t) => t.id === raw) ? (raw as ThemeId) : "ember";
+}
+
+const ThemeCtx = createContext<{ theme: ThemeId; setTheme: (t: ThemeId) => void }>({
+  theme: "ember",
+  setTheme: () => {},
 });
 
 export const useTheme = () => useContext(ThemeCtx);
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [dark, setDark] = useState(true);
+  const [theme, setTheme] = useState<ThemeId>(storedTheme);
+
   useEffect(() => {
-    document.documentElement.classList.toggle("dark", dark);
-  }, [dark]);
+    const root = document.documentElement;
+    const def = THEMES.find((t) => t.id === theme)!;
+    // One beat of cross-fade around the swap, then remove it — a permanent
+    // global transition would make every hover feel gluey.
+    root.classList.add("theme-anim");
+    root.classList.toggle("dark", def.dark);
+    root.dataset.theme = theme;
+    localStorage.setItem(THEME_KEY, theme);
+    const t = setTimeout(() => root.classList.remove("theme-anim"), 300);
+    return () => clearTimeout(t);
+  }, [theme]);
+
   return (
-    <ThemeCtx.Provider value={{ dark, toggle: () => setDark((d) => !d) }}>
-      {children}
-    </ThemeCtx.Provider>
+    <ThemeCtx.Provider value={{ theme, setTheme }}>{children}</ThemeCtx.Provider>
   );
 }
 
@@ -75,9 +111,43 @@ const NAV = [
   { href: "/settings", label: "Settings", icon: Settings2 },
 ];
 
+function ThemePicker() {
+  const { theme, setTheme } = useTheme();
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="Choose theme"
+          data-testid="button-theme"
+        >
+          <Palette className="h-4 w-4" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-[9rem]">
+        {THEMES.map((t) => (
+          <DropdownMenuItem
+            key={t.id}
+            onClick={() => setTheme(t.id)}
+            data-testid={`theme-${t.id}`}
+            className="gap-2 text-xs"
+          >
+            <span
+              className="h-3 w-3 rounded-full border border-border"
+              style={{ background: t.swatch }}
+            />
+            {t.name}
+            {theme === t.id && <Check className="ml-auto h-3 w-3" />}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 export function Shell({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
-  const { dark, toggle } = useTheme();
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -112,15 +182,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
           </nav>
 
           <div className="ml-auto">
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={toggle}
-              aria-label="Toggle theme"
-              data-testid="button-theme"
-            >
-              {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-            </Button>
+            <ThemePicker />
           </div>
         </div>
       </header>
