@@ -354,21 +354,40 @@ export async function registerRoutes(
     const parsed = tradeUpdateBodySchema.safeParse(req.body);
     if (!parsed.success)
       return res.status(400).json({ message: "Invalid trade", issues: parsed.error.issues });
+    // The merged row is needed twice below — for the point value and for the
+    // stop/target rule — because a PATCH carries only what changed.
+    const existing = await storage.getTrade(Number(req.params.id));
+    if (!existing) return res.status(404).json({ message: "Trade not found" });
+
+    /*
+     * Point value must NOT be re-derived from an unchanged symbol.
+     *
+     * Only the normalized root is stored, so an MNQ trade reads back as "NQ".
+     * The edit form round-trips that stored value, and deriving from it would
+     * silently promote a micro to its full-size sibling — 2 → 20, a tenfold
+     * jump in every dollar figure, from merely opening a trade and saving it.
+     *
+     * Comparing normalized roots distinguishes the two cases exactly: a genuine
+     * instrument change (NQ → ES) differs and re-derives, while the ambiguous
+     * MNQ/NQ round-trip does not and keeps what was stored at creation.
+     */
+    const nextSymbol = parsed.data.trade.symbol
+      ? normalizeSymbol(parsed.data.trade.symbol)
+      : undefined;
+    const instrumentChanged = nextSymbol != null && nextSymbol !== existing.symbol;
+
     const trade = parsed.data.trade.symbol
       ? {
           ...parsed.data.trade,
-          // Re-derive when the symbol is edited: switching MNQ→NQ changes what
-          // a point is worth, and a stale multiplier is silently wrong.
-          pointValue:
-            parsed.data.trade.pointValue ?? pointValueFor(parsed.data.trade.symbol),
-          symbol: normalizeSymbol(parsed.data.trade.symbol),
+          ...(parsed.data.trade.pointValue != null
+            ? {}
+            : instrumentChanged
+              ? { pointValue: pointValueFor(parsed.data.trade.symbol) }
+              : {}),
+          symbol: nextSymbol!,
         }
       : parsed.data.trade;
 
-    // The "stop and target required once live" rule needs the merged row: a
-    // PATCH that only flips status to 'open' carries neither field itself.
-    const existing = await storage.getTrade(Number(req.params.id));
-    if (!existing) return res.status(404).json({ message: "Trade not found" });
     const merged = { ...existing, ...trade };
     if ((merged.status ?? "open") !== "pending") {
       const missing = (["initialStop", "initialTarget"] as const).filter(

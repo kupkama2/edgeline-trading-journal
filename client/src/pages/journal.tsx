@@ -67,6 +67,7 @@ import { DailyGuardCard, useDemonGuard } from "@/components/daily-guard";
 import { StyleChip, StyleSwitcher } from "@/components/style-switcher";
 import { pointValueFor } from "@shared/symbols";
 import { ImportTradesDialog } from "@/components/import-trades";
+import { ResolveTradeDialog } from "@/components/resolve-trade";
 
 /* ============================== helpers ============================== */
 
@@ -1773,10 +1774,14 @@ function OpenTradeRow({
   t,
   onSelect,
   onView,
+  onEdit,
+  onResolve,
 }: {
   t: TradeWithTags;
   onSelect: () => void;
   onView: () => void;
+  onEdit: () => void;
+  onResolve: () => void;
 }) {
   // Pending trades have no stop or target yet, so there is no R:R to show.
   const risk = t.initialStop == null ? 0 : Math.abs(t.entryPrice - t.initialStop);
@@ -1790,22 +1795,43 @@ function OpenTradeRow({
       data-testid={`card-open-trade-${t.id}`}
       className="relative w-full rounded-lg border border-card-border bg-card p-3 text-left transition-colors hover:border-primary/50 hover-elevate"
     >
-      {(
+      <div className="absolute right-1.5 top-1.5 flex gap-0.5">
         <Button
           type="button"
           size="icon"
           variant="ghost"
-          className="absolute right-1.5 top-1.5 h-6 w-6 text-muted-foreground hover:text-foreground"
-          onClick={(e) => {
-            e.stopPropagation();
-            onView();
-          }}
+          className="h-6 w-6 text-muted-foreground hover:text-foreground"
+          onClick={(e) => { e.stopPropagation(); onView(); }}
           aria-label="View trade details"
           data-testid={`button-view-${t.id}`}
         >
           <Eye className="h-3.5 w-3.5" />
         </Button>
-      )}
+        {/* Levels move while a position is live — editing must not require
+            closing it first. */}
+        <Button
+          type="button"
+          size="icon"
+          variant="ghost"
+          className="h-6 w-6 text-muted-foreground hover:text-foreground"
+          onClick={(e) => { e.stopPropagation(); onEdit(); }}
+          aria-label="Edit trade"
+          data-testid={`button-edit-open-${t.id}`}
+        >
+          <Pencil className="h-3.5 w-3.5" />
+        </Button>
+        <Button
+          type="button"
+          size="icon"
+          variant="ghost"
+          className="h-6 w-6 text-muted-foreground hover:text-destructive"
+          onClick={(e) => { e.stopPropagation(); onResolve(); }}
+          aria-label="Never became a position"
+          data-testid={`button-resolve-${t.id}`}
+        >
+          <X className="h-3.5 w-3.5" />
+        </Button>
+      </div>
       <button
         type="button"
         onClick={onSelect}
@@ -1860,9 +1886,11 @@ function OpenTradeRow({
 function PendingTradeRow({
   t,
   onEdit,
+  onResolve,
 }: {
   t: TradeWithTags;
   onEdit: () => void;
+  onResolve: () => void;
 }) {
   const updateTrade = useUpdateTrade();
   const { toast } = useToast();
@@ -1905,6 +1933,16 @@ function PendingTradeRow({
         >
           <Pencil className="mr-1 h-3 w-3" />
           Fill in
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7 text-muted-foreground hover:text-destructive"
+          onClick={onResolve}
+          aria-label="Never filled"
+          data-testid={`button-resolve-pending-${t.id}`}
+        >
+          <X className="h-3.5 w-3.5" />
         </Button>
       </div>
       <div className="mt-1.5 flex flex-wrap gap-1.5 pl-5">
@@ -2183,6 +2221,7 @@ export default function Journal() {
   const [viewing, setViewing] = useState<TradeWithTags | null>(null);
   const [editing, setEditing] = useState<TradeWithTags | null>(null);
   const [importing, setImporting] = useState(false);
+  const [resolving, setResolving] = useState<TradeWithTags | null>(null);
 
   const tagNames = useMemo(
     () => Object.fromEntries(tags.map((t) => [t.id, t.name])),
@@ -2196,6 +2235,7 @@ export default function Journal() {
   const pending = scoped.filter((t) => t.status === "pending");
   const open = scoped.filter((t) => t.status === "open");
   const closed = scoped.filter((t) => t.status === "closed");
+  const cancelled = scoped.filter((t) => t.status === "cancelled");
 
   return (
     <div className="space-y-6">
@@ -2250,6 +2290,8 @@ export default function Journal() {
                   t={t}
                   onSelect={() => setClosing(t)}
                   onView={() => setViewing(t)}
+                  onEdit={() => setEditing(t)}
+                  onResolve={() => setResolving(t)}
                 />
               ))}
             </div>
@@ -2272,7 +2314,12 @@ export default function Journal() {
           </div>
           <div className="grid gap-2 md:grid-cols-2">
             {pending.map((t) => (
-              <PendingTradeRow key={t.id} t={t} onEdit={() => setEditing(t)} />
+              <PendingTradeRow
+                key={t.id}
+                t={t}
+                onEdit={() => setEditing(t)}
+                onResolve={() => setResolving(t)}
+              />
             ))}
           </div>
         </div>
@@ -2306,10 +2353,51 @@ export default function Journal() {
         )}
       </div>
 
+      {cancelled.length > 0 && (
+        <details className="space-y-2" data-testid="section-cancelled">
+          <summary className="cursor-pointer text-sm font-semibold tracking-tight">
+            Never became positions
+            <span className="ml-2 font-mono text-[11px] font-normal text-muted-foreground">
+              {cancelled.length}
+              {cancelled.filter((t) => t.wouldHaveHitTarget).length > 0 &&
+                ` · ${cancelled.filter((t) => t.wouldHaveHitTarget).length} would have won`}
+            </span>
+          </summary>
+          <div className="mt-2 grid gap-2 md:grid-cols-2">
+            {cancelled.map((t) => (
+              <Card key={t.id} className="flex items-center gap-2 p-2.5">
+                <span className="font-mono text-xs">{t.symbol}</span>
+                <span className="font-mono text-[11px] text-muted-foreground">
+                  @ {num(t.entryPrice)}
+                </span>
+                <Badge variant="outline" className="text-[10px] font-normal">
+                  {(t.cancelReason ?? "cancelled").replace("_", " ")}
+                </Badge>
+                {t.wouldHaveHitTarget === true && (
+                  <Badge variant="secondary" className="text-[10px] font-normal">
+                    would have hit target
+                  </Badge>
+                )}
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="ml-auto h-6 w-6 text-muted-foreground"
+                  onClick={() => setViewing(t)}
+                  aria-label="View"
+                >
+                  <Eye className="h-3.5 w-3.5" />
+                </Button>
+              </Card>
+            ))}
+          </div>
+        </details>
+      )}
+
       <CloseTradeDialog trade={closing} onClose={() => setClosing(null)} />
       <TradeDetailDialog trade={viewing} onClose={() => setViewing(null)} />
       <EditTradeDialog trade={editing} onClose={() => setEditing(null)} />
       <ImportTradesDialog open={importing} onClose={() => setImporting(false)} />
+      <ResolveTradeDialog trade={resolving} onClose={() => setResolving(null)} />
     </div>
   );
 }

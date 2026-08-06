@@ -90,6 +90,8 @@ CREATE TABLE IF NOT EXISTS trades (
   exit_time TEXT,
   status TEXT NOT NULL DEFAULT 'open',
   exit_reason TEXT,
+  cancel_reason TEXT,
+  would_have_hit_target BOOLEAN,
   mae DOUBLE PRECISION,
   mfe DOUBLE PRECISION,
   no_management_outcome TEXT,
@@ -109,6 +111,10 @@ ALTER TABLE trades ADD COLUMN IF NOT EXISTS size_unit TEXT NOT NULL DEFAULT 'bas
 -- 1 is the correct default for existing rows: it reproduces the previous
 -- (unmultiplied) arithmetic exactly, so no historical figure silently shifts.
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS point_value DOUBLE PRECISION NOT NULL DEFAULT 1;
+-- A trade that never became a position: why, and (if it simply never filled)
+-- whether the target would have been reached anyway.
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS cancel_reason TEXT;
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS would_have_hit_target BOOLEAN;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS rationale TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS rationale_tags TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS playbook TEXT;

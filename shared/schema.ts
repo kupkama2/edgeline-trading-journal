@@ -3,6 +3,7 @@ import {
   text,
   integer,
   serial,
+  boolean,
   doublePrecision,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
@@ -64,6 +65,17 @@ export const trades = pgTable("trades", {
   exitTime: text("exit_time"),
   status: text("status").notNull().default("open"), // 'pending' | 'open' | 'closed'
   exitReason: text("exit_reason"), // 'target' | 'stop' | 'trailed' | 'manual_early' | 'manual_late' | 'breakeven' | 'other'
+  /**
+   * Why a trade ended without ever becoming a real position. Distinct from
+   * exitReason, which describes how a position that DID exist was closed.
+   */
+  cancelReason: text("cancel_reason"), // 'not_filled' | 'pulled' | 'changed_mind'
+  /**
+   * For an order that never filled: would the target have been reached anyway?
+   * This is the counterfactual that makes "Didn't Take Planned Trade" costly
+   * rather than merely annoying — missing a winner is the expensive half.
+   */
+  wouldHaveHitTarget: boolean("would_have_hit_target"),
   mae: doublePrecision("mae"),
   mfe: doublePrecision("mfe"),
   noManagementOutcome: text("no_management_outcome"), // 'target_first' | 'stop_first' | 'undetermined'
@@ -116,7 +128,10 @@ export const sizeUnitEnum = z.enum(["base", "quote"]);
  * risk yet, so it is excluded from every P&L, demon and guardrail calculation
  * (all of which key off 'closed').
  */
-export const statusEnum = z.enum(["pending", "open", "closed"]);
+export const statusEnum = z.enum(["pending", "open", "closed", "cancelled"]);
+
+/** Why a trade never became a position. */
+export const cancelReasonEnum = z.enum(["not_filled", "pulled", "changed_mind"]);
 export const exitReasonEnum = z.enum([
   "target",
   "stop",
@@ -143,6 +158,8 @@ const tradeFields = createInsertSchema(trades)
     initialStop: z.number().nullable().optional(),
     initialTarget: z.number().nullable().optional(),
     exitReason: exitReasonEnum.nullable().optional(),
+    cancelReason: cancelReasonEnum.nullable().optional(),
+    wouldHaveHitTarget: z.boolean().nullable().optional(),
     noManagementOutcome: noManagementOutcomeEnum.nullable().optional(),
   });
 
@@ -155,7 +172,8 @@ function requireRiskOnceLive(
   v: { status?: string | null; initialStop?: number | null; initialTarget?: number | null },
   ctx: z.RefinementCtx,
 ) {
-  if ((v.status ?? "open") === "pending") return;
+  const st = v.status ?? "open";
+  if (st === "pending" || st === "cancelled") return;
   for (const field of ["initialStop", "initialTarget"] as const) {
     if (v[field] == null) {
       ctx.addIssue({
