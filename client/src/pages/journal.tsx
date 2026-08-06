@@ -68,7 +68,7 @@ import { StyleChip, StyleSwitcher } from "@/components/style-switcher";
 import { pointValueFor } from "@shared/symbols";
 import { ImportTradesDialog } from "@/components/import-trades";
 import { ResolveTradeDialog } from "@/components/resolve-trade";
-import type { ImportCandidate } from "@shared/import-parse";
+import { dropBracketLegs, type ImportCandidate } from "@shared/import-parse";
 
 /* ============================== helpers ============================== */
 
@@ -381,14 +381,18 @@ function NewTradeCard({
 
       if (r.looksLikeOrdersTable) {
         const asOrders = await parseScreenshot(dataUrl, "orders").catch(() => null);
-        const many = (asOrders?.orders ?? []).filter(
-          (o) => o.entryPrice != null && o.direction,
-        );
-        // Two or more rows is a batch; one row is just a trade, and the setup
-        // read already in hand describes it better than a re-parse would.
-        if (many.length >= 2) {
-          onOrdersDetected(
-            many.map((o) => ({
+        /*
+         * Count trades, not rows. A working-orders table draws ONE bracketed
+         * order as three rows — the parent plus its inactive take-profit and
+         * stop-loss children — and reading that as a batch of three sent a
+         * single trade down the wrong path entirely. The prompt asks the model
+         * to collapse them; this drops any it still hands back, so the decision
+         * does not rest on the model getting it right.
+         */
+        const many = dropBracketLegs(
+          (asOrders?.orders ?? [])
+            .filter((o) => o.entryPrice != null && o.direction)
+            .map((o) => ({
               symbol: o.symbol ?? "",
               direction: o.direction as "long" | "short",
               size: o.size,
@@ -399,11 +403,16 @@ function NewTradeCard({
               entryTime: o.entryTime ?? null,
               source: "binance-orders" as const,
               raw: "(from screenshot)",
-              warnings: o.initialStop == null
-                ? ["No stop in the screenshot — add it when it fills."]
-                : [],
+              warnings:
+                o.initialStop == null
+                  ? ["No stop in the screenshot — add it when it fills."]
+                  : [],
             })),
-          );
+        );
+        // Two or more distinct orders is a batch; one is just a trade, and the
+        // setup read already in hand describes it better than a re-parse would.
+        if (many.length >= 2) {
+          onOrdersDetected(many);
           setImage(null);
           setParsing(false);
           return;

@@ -38,6 +38,14 @@ const SETUP_PROMPT = `You are reading a screenshot to fill in a new trade's setu
 - Direction from colour/position: if the blue entry marker/line has its shaded zone extending UPWARD from the entry price (blue is up), the trade is a LONG. If the blue marker/zone extends DOWNWARD from entry (blue is down), the trade is a SHORT. Cross-check with the standard convention where the profit zone is green and the loss zone is red/pink — green above entry confirms long, green below entry confirms short.
 - Also look for the ticker/symbol label and any position size / quantity readout on the chart.
 
+(C) A TradingView chart showing LIVE BROKER ORDER LINES — not a drawn position tool. This looks different from (A): each line is the broker's own working order, drawn edge to edge with a small badge on it, and usually an "×" button to cancel it. There are no shaded profit/loss zones.
+- The ENTRY is the line whose badge names an order type in words: "Sell Limit", "Buy Limit", "Sell Stop", "Buy Stop", "Sell Market", "Buy Market". Its wording gives the direction outright — "Sell …" is a SHORT, "Buy …" is a LONG. Do not infer direction from colour here.
+- The other two lines are its bracket, and each badge shows a PROJECTED PROFIT OR LOSS in currency, like "+204.50 USD" or "−54.00 USD". The sign is the reliable discriminator: the line whose amount is POSITIVE is the take profit (initialTarget), the line whose amount is NEGATIVE is the stop (initialStop). Use the sign, not the position on screen and not the colour — for a short the target sits BELOW the entry and the stop ABOVE, which is the reverse of a long, and the right-axis badges are often coloured by proximity to price rather than by role. A green axis badge does NOT mean take profit.
+- Read each of the three prices from the number on the RIGHT-HAND price axis at that line's height.
+- The leading number in a badge (e.g. the "1" in "1 | −54.00 USD") is the QUANTITY in contracts, not a price. Use it for size.
+- These are RESTING orders, so the trade has not happened yet: isClosed is false, and exitPrice/exitTime/exitReason stay null. A separate highlighted band on the axis is just the live market price — never an entry, a stop or a target.
+- If no ticker is printed anywhere on the image, set symbol to null rather than guessing from the price level.
+
 (B) A broker order log / order history table with columns such as Symbol, Side, Type, Qty, Remaining Qty, Filled Qty, Limit Price, Stop Price, Take Profit, Stop Loss, Avg Fill Price, Status, Update Time, Order ID, Expiry.
 - Find the order that OPENED the position: the row with Status "Filled" whose Type is a plain entry type ("Limit", "Market", "Stop") — NOT a "Stop Loss" or "Take Profit" type row. If several symbols/trades appear, use the entry order that is chronologically most recent (latest Update Time) unless context makes another one clearly intended.
 - direction: "long" if that entry order's Side is "Buy", "short" if "Sell".
@@ -55,7 +63,9 @@ CLOSED-TRADE DETECTION (applies to both A and B): decide whether the screenshot 
 
 Symbol: report the ticker EXACTLY as printed on the screenshot — "MNQU6", not "NQ". Do not roll a micro up to its full-size sibling and do not strip the month/year contract code. The application does that rollup itself, and it needs the contract as written to tell a micro apart from an e-mini: they are the same instrument for grouping but differ tenfold in dollars per point.
 
-ALSO REPORT whether this image is an orders TABLE (many resting orders, one per row) rather than a single chart or a single position. Set looksLikeOrdersTable true only for a multi-row list of orders — a chart, or a log describing one position, is false.
+ALSO REPORT whether this image is an orders TABLE listing SEVERAL DIFFERENT trades, rather than a chart or a single position. Set looksLikeOrdersTable true only when the table holds MORE THAN ONE distinct order — that is, more than one entry price.
+
+Count orders, not rows. A single bracketed order occupies three rows in a working-orders table: the parent (Status "Working", Type "Limit") plus its Take Profit and Stop Loss children (Status "Inactive", opposite Side, same Qty and Symbol). That is ONE trade, so looksLikeOrdersTable is FALSE and you should report it as the single order it is — the parent's Limit Price is entryPrice, its Take Profit column (or the Take Profit child's price) is initialTarget, its Stop Loss column (or the Stop Loss child's price) is initialStop, and the parent's Side gives the direction.
 
 Respond with STRICT JSON only, no prose, no markdown fences:
 {"symbol": string|null, "direction": "long"|"short"|null, "entryPrice": number|null, "initialStop": number|null, "initialTarget": number|null, "entryTime": string|null, "size": number|null, "isClosed": boolean, "exitPrice": number|null, "exitTime": string|null, "exitReason": "target"|"stop"|"trailed"|"manual_early"|"manual_late"|"breakeven"|"other"|null, "looksLikeOrdersTable": boolean}
@@ -79,7 +89,9 @@ const ORDERS_PROMPT = `You are reading a screenshot from a trading venue showing
 
 Common shapes:
 (A) Crypto exchange (Binance and similar): columns like Time, Symbol, Type, Side, Price, Amount, Filled, Reduce Only. Side reads "Open Long"/"Open Short" or "Buy"/"Sell". Amount is usually quote notional such as "37,177.47 USDT". This view typically has NO stop loss or take profit — leave them null, do not invent them.
-(B) Futures broker / DOM: columns like Symbol, Side, Type, Qty, Remaining Qty, Filled Qty, Limit Price, Stop Price, Take Profit, Stop Loss, Avg Fill Price, Update Time. Qty is contracts. Take Profit maps to initialTarget and Stop Loss to initialStop.
+(B) Futures broker / DOM (TradingView and most DOMs): columns like Symbol, Side, Type, Qty, Remaining Qty, Filled Qty, Limit Price, Stop Price, Take Profit, Stop Loss, Avg Fill Price, Status, Update Time. Qty is contracts. Take Profit maps to initialTarget and Stop Loss to initialStop.
+
+  CRITICAL — one bracketed order occupies THREE rows in this view, and it is ONE order, not three. The parent row has Type "Limit" (or "Stop", "Market") and Status "Working". Directly beneath it sit its two children: Type "Take Profit" and Type "Stop Loss", each with Status "Inactive", the OPPOSITE Side to the parent, and the same Qty and Symbol. Return ONLY the parent. Read the children's prices into the parent's initialTarget and initialStop if the parent's own Take Profit / Stop Loss columns are blank; if those columns are already filled, the children are duplicates and add nothing. Never emit a row whose Type is "Take Profit" or "Stop Loss" as an order of its own — its Limit Price is an exit level, and returning it invents a trade that does not exist.
 (C) A bracket / OTOCO / "Take Profit Stop Loss" confirmation dialog for ONE order. It lists legs rather than columns: Order A is the entry (its Price is entryPrice, its Side gives the direction, its Amount is the size), Order B is the take profit and Order C is the stop loss. Both B and C label their level "Stop Price" — tell them apart by which order block they sit in, NOT by the number. Return exactly ONE order for a dialog like this, carrying entryPrice, initialTarget from B and initialStop from C. These dialogs usually do not name the instrument: if no ticker is visible, set symbol to null rather than guessing one — a wrong ticker attaches the levels to the wrong trade.
 
 For every order:
@@ -92,7 +104,7 @@ For every order:
 - symbol: the ticker as printed, minus any "Perp" badge.
 
 Rules:
-- Return EVERY data row. Do not skip duplicates — two rows on the same symbol at different prices are two separate orders.
+- Return every DISTINCT order. Two rows on the same symbol at different entry prices are two separate orders and both must be returned. But a parent and its own Take Profit / Stop Loss children are one order — count orders, not rows.
 - Ignore header rows, totals, and any row that is clearly a filled/closed position rather than a resting order.
 - entryPrice is the identity of an order: it is what lets a shape (C) dialog be matched to the row it brackets, so read it exactly, to every decimal shown.
 - Output ONLY this JSON object, no prose and no markdown fences:

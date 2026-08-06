@@ -14,6 +14,7 @@ import { useToast } from "@/hooks/use-toast";
 import { ArrowDownRight, ArrowUpRight, Camera, ClipboardPaste, Loader2 } from "lucide-react";
 import {
   candidateKey,
+  dropBracketLegs,
   mergeCandidates,
   parseImport,
   pruneWarnings,
@@ -59,11 +60,20 @@ export function ImportTradesDialog({
   // wipe them.
   const [shotRows, setShotRows] = useState<ImportCandidate[]>([]);
   const [scanning, setScanning] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
   // Keyed by the order's identity rather than its row position: pasting a second
   // screen re-merges the list, and an index-keyed edit would slide onto the
   // neighbouring trade when a row folds away.
   const [edits, setEdits] = useState<Record<string, Partial<Row>>>({});
   const [excluded, setExcluded] = useState<Record<string, boolean>>({});
+  /*
+   * What is currently TYPED in a level field, which is not the same as the
+   * number it parses to. An input bound straight to the number can never accept
+   * a decimal: "59." parses to 59, the field re-renders as "59", and the point
+   * you just typed is gone before you can type the 3. The draft holds the text
+   * until blur, at which point the canonical number takes over ("59.30" → 59.3).
+   */
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
   const { toast } = useToast();
   const importTrades = useImportTrades();
   // Imported trades join whichever book you are currently looking at.
@@ -77,6 +87,44 @@ export function ImportTradesDialog({
       setExcluded({});
     }
   }, [open, seedRows]);
+
+  /**
+   * Ctrl+V anywhere in the dialog reads a screenshot off the clipboard.
+   *
+   * The journal has its own window-level paste handler, but it deliberately
+   * stands down while any dialog is open — "only the dropzone inside it should
+   * claim the paste" — so without this, Ctrl+V in here hit nothing at all.
+   *
+   * Only image items are claimed. A text paste falls through untouched, which
+   * is what keeps the textarea below working: the two are the same keystroke.
+   */
+  useEffect(() => {
+    if (!open) return;
+
+    function onPaste(e: ClipboardEvent) {
+      if (scanning) return;
+      const items = e.clipboardData?.items;
+      if (!items) return;
+
+      let file: File | null = null;
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].type.startsWith("image/")) {
+          file = items[i].getAsFile();
+          break;
+        }
+      }
+      if (!file) return;
+
+      e.preventDefault();
+      scanImage(file);
+    }
+
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+    // scanImage closes over nothing that changes between renders; `scanning` is
+    // in here so a second paste cannot queue a scan on top of one in flight.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, scanning]);
 
   const parsed = useMemo(() => parseImport(text), [text]);
 
@@ -111,6 +159,7 @@ export function ImportTradesDialog({
     setShotRows([]);
     setEdits({});
     setExcluded({});
+    setDrafts({});
   }
 
   /**
@@ -127,26 +176,30 @@ export function ImportTradesDialog({
     setScanning(true);
     try {
       const res = await parseScreenshot(await fileToDownscaledDataUrl(file), "orders");
-      const mapped: ImportCandidate[] = (res.orders ?? [])
-        .filter((o) => o.entryPrice != null && o.direction)
-        .map((o) => ({
-          symbol: o.symbol ?? "",
-          direction: o.direction as "long" | "short",
-          size: o.size,
-          sizeUnit: o.sizeUnit === "quote" ? "quote" : "base",
-          entryPrice: o.entryPrice as number,
-          initialStop: o.initialStop ?? null,
-          initialTarget: o.initialTarget ?? null,
-          entryTime: o.entryTime ?? null,
-          source: "binance-orders",
-          raw: "(from screenshot)",
-          warnings: [
-            ...(o.initialStop == null
-              ? ["No stop in this screenshot — type one, or drop the TP/SL screen."]
-              : []),
-            ...(o.symbol ? [] : ["Symbol unreadable — set it before importing."]),
-          ],
-        }));
+      // A bracketed order comes back as its parent plus two exit legs; listing
+      // the legs would offer to import the take profit as a trade of its own.
+      const mapped: ImportCandidate[] = dropBracketLegs(
+        (res.orders ?? [])
+          .filter((o) => o.entryPrice != null && o.direction)
+          .map((o) => ({
+            symbol: o.symbol ?? "",
+            direction: o.direction as "long" | "short",
+            size: o.size,
+            sizeUnit: o.sizeUnit === "quote" ? "quote" : "base",
+            entryPrice: o.entryPrice as number,
+            initialStop: o.initialStop ?? null,
+            initialTarget: o.initialTarget ?? null,
+            entryTime: o.entryTime ?? null,
+            source: "binance-orders" as const,
+            raw: "(from screenshot)",
+            warnings: [
+              ...(o.initialStop == null
+                ? ["No stop in this screenshot — type one, or drop the TP/SL screen."]
+                : []),
+              ...(o.symbol ? [] : ["Symbol unreadable — set it before importing."]),
+            ],
+          })),
+      );
       setShotRows((prev) => [...prev, ...mapped]);
       if (!mapped.length) {
         toast({
@@ -216,9 +269,24 @@ export function ImportTradesDialog({
         </DialogHeader>
 
         <div className="space-y-4">
+          {/* Three ways in, because a screenshot arrives three ways: dropped,
+              pasted with Ctrl+V, or picked through the file dialog. */}
           <label
-            className="flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-border p-3 text-[11px] text-muted-foreground transition-colors hover:border-primary/50"
+            className={`flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed p-3 text-[11px] text-muted-foreground transition-colors ${
+              dragOver ? "border-primary bg-primary/5" : "border-border hover:border-primary/50"
+            }`}
             data-testid="label-import-screenshot"
+            onDragOver={(e) => {
+              e.preventDefault();
+              setDragOver(true);
+            }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setDragOver(false);
+              const f = e.dataTransfer.files?.[0];
+              if (f?.type.startsWith("image/")) scanImage(f);
+            }}
           >
             {scanning ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -228,8 +296,8 @@ export function ImportTradesDialog({
             {scanning
               ? "Reading orders…"
               : shotRows.length
-                ? "Drop another screen — a TP/SL dialog attaches to its order"
-                : "Drop a screenshot of your orders table"}
+                ? "Drop or paste another screen — a TP/SL dialog attaches to its order"
+                : "Drop or paste (Ctrl+V) a screenshot of your orders table"}
             <input
               type="file"
               accept="image/*"
@@ -339,29 +407,42 @@ export function ImportTradesDialog({
                           ["initialStop", "stop"],
                           ["initialTarget", "target"],
                         ] as const
-                      ).map(([field, label]) => (
+                      ).map(([field, label]) => {
+                        const draftKey = `${key}:${field}`;
+                        return (
                         <label key={field} className="flex items-center gap-1">
                           <span className="text-[10px] text-muted-foreground">{label}</span>
                           <Input
-                            value={r[field] ?? ""}
+                            value={drafts[draftKey] ?? (r[field] == null ? "" : String(r[field]))}
                             onChange={(e) => {
-                              const v = e.target.value.trim();
-                              const n = Number(v);
+                              const typed = e.target.value;
+                              setDrafts((p) => ({ ...p, [draftKey]: typed }));
+                              // A half-typed number ("59.", "-") is not yet a
+                              // level, so the row holds null until it parses —
+                              // which also keeps it out of the import.
+                              const n = Number(typed.trim());
                               setEdits((p) => ({
                                 ...p,
                                 [key]: {
                                   ...p[key],
-                                  [field]: v === "" || !isFinite(n) ? null : n,
+                                  [field]: typed.trim() === "" || !isFinite(n) ? null : n,
                                 },
                               }));
                             }}
+                            onBlur={() =>
+                              setDrafts((p) => {
+                                const { [draftKey]: _, ...rest } = p;
+                                return rest;
+                              })
+                            }
                             placeholder="—"
                             inputMode="decimal"
                             className="h-7 w-24 font-mono text-[11px]"
                             data-testid={`input-${field}-${i}`}
                           />
                         </label>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
 

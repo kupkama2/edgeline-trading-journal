@@ -225,6 +225,42 @@ function parseBinanceRow(cols: string[], raw: string): ImportCandidate | null {
 }
 
 /**
+ * One half of a bracket, listed as its own row.
+ *
+ * A working-orders table shows a bracketed trade as THREE rows: the parent
+ * entry, then an inactive Take Profit child and an inactive Stop Loss child,
+ * both on the opposite side. They are one intention, and counting them as three
+ * trades is what made a single order look like a batch.
+ */
+interface ProtectiveLeg {
+  symbol: string;
+  kind: "stop" | "target";
+  /** The leg's side — always opposite the entry it protects. */
+  direction: "long" | "short";
+  price: number;
+}
+
+/** Reads the Type column: a leg names itself there, an entry never does. */
+function legKind(type: string): "stop" | "target" | null {
+  const s = type.toLowerCase();
+  if (/take\s*profit|^tp\b/.test(s)) return "target";
+  if (/stop\s*loss|^stop\b|^sl\b/.test(s)) return "stop";
+  return null;
+}
+
+function parseFuturesLeg(cols: string[]): ProtectiveLeg | null {
+  const kind = legKind(cols[2] ?? "");
+  if (!kind) return null;
+  const direction = directionFrom(cols[1] ?? "");
+  if (!direction) return null;
+  // A profit leg prices off Limit, a stop leg off Stop — take whichever the row
+  // actually filled in rather than assuming which column it lands in.
+  const price = parseNum(cols[6]) ?? parseNum(cols[7]);
+  if (price == null) return null;
+  return { symbol: cleanSymbol(cols[0] ?? ""), kind, direction, price };
+}
+
+/**
  * Futures broker working orders:
  *   Symbol | Side | Type | Qty | Remaining | Filled | Limit | Stop | TP | SL | Avg | Time
  * Empty middle columns are normal, so this indexes positionally rather than
@@ -232,6 +268,9 @@ function parseBinanceRow(cols: string[], raw: string): ImportCandidate | null {
  */
 function parseFuturesRow(cols: string[], raw: string): ImportCandidate | null {
   if (cols.length < 10) return null;
+  // A protective leg is not an order to enter anything, and its Limit Price
+  // would otherwise be read as an entry — inventing a trade at the take profit.
+  if (legKind(cols[2] ?? "")) return null;
   const direction = directionFrom(cols[1] ?? "");
   if (!direction) return null;
 
@@ -420,6 +459,35 @@ export function mergeCandidates(candidates: ImportCandidate[]): {
 }
 
 /**
+ * Discard rows that are really the bracket of another row in the same set.
+ *
+ * The text parser spots these from the Type column, but a screenshot arrives as
+ * plain rows with no Type at all — a vision model reading a working-orders table
+ * hands back the parent AND its two "Inactive" children, and three rows on one
+ * instrument then look like a batch of three trades instead of the single
+ * bracketed order they are.
+ *
+ * A leg is recognised by what it is: an order to EXIT at a level some other
+ * order is already protecting itself with. So it sits on the opposite side, at
+ * exactly that order's stop or target, and carries no protection of its own —
+ * an exit needs none. All three must hold, which leaves a genuine
+ * stop-and-reverse entry alone as long as it was logged with its own bracket.
+ */
+export function dropBracketLegs(rows: ImportCandidate[]): ImportCandidate[] {
+  return rows.filter((leg) => {
+    if (leg.initialStop != null || leg.initialTarget != null) return true;
+    return !rows.some(
+      (parent) =>
+        parent !== leg &&
+        parent.symbol === leg.symbol &&
+        parent.direction !== leg.direction &&
+        ((parent.initialStop != null && samePrice(parent.initialStop, leg.entryPrice)) ||
+          (parent.initialTarget != null && samePrice(parent.initialTarget, leg.entryPrice))),
+    );
+  });
+}
+
+/**
  * A stable identity for a preview row, so manual edits stay attached to the
  * order they were typed against. Array position cannot do this job: pasting a
  * second screen re-parses and re-merges, and every index after a folded row
@@ -431,12 +499,21 @@ export function candidateKey(c: Pick<ImportCandidate, "direction" | "entryPrice"
 
 export function parseImport(text: string): ImportResult {
   const candidates: ImportCandidate[] = [];
+  const legs: ProtectiveLeg[] = [];
   const rejected: { raw: string; reason: string }[] = [];
 
   for (const line of text.split(/\r?\n/)) {
     if (isNoise(line)) continue;
     const cols = splitColumns(line);
     if (cols.length < 4) continue;
+
+    // Bracket children are collected, never listed. They are half of a trade
+    // that is already in the table, not a trade of their own.
+    const leg = parseFuturesLeg(cols);
+    if (leg) {
+      legs.push(leg);
+      continue;
+    }
 
     const parsed = parseBinanceRow(cols, line) ?? parseFuturesRow(cols, line);
     if (parsed) {
@@ -448,6 +525,29 @@ export function parseImport(text: string): ImportResult {
     } else {
       rejected.push({ raw: line, reason: "Did not match a known order format" });
     }
+  }
+
+  /*
+   * Attach each bracket child to the entry it protects: same instrument,
+   * opposite side (a short is protected by buys), and missing that level.
+   *
+   * Most of the time this changes nothing — a working-orders table prints the
+   * same numbers in the parent's own Take Profit / Stop Loss columns, so the
+   * children are pure duplicates and simply disappear. The fold matters for the
+   * venues that leave the parent's columns blank and put the levels only in the
+   * child rows, where dropping them would lose the trade's risk entirely.
+   */
+  for (const leg of legs) {
+    const parent = candidates.find(
+      (c) =>
+        c.symbol === leg.symbol &&
+        c.direction !== leg.direction &&
+        (leg.kind === "stop" ? c.initialStop == null : c.initialTarget == null),
+    );
+    if (!parent) continue;
+    if (leg.kind === "stop") parent.initialStop = leg.price;
+    else parent.initialTarget = leg.price;
+    parent.warnings = pruneWarnings(parent);
   }
 
   /*
