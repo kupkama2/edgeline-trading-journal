@@ -73,8 +73,13 @@ CREATE TABLE IF NOT EXISTS trading_styles (
   id SERIAL PRIMARY KEY,
   name TEXT NOT NULL,
   color TEXT NOT NULL DEFAULT 'slate',
-  sort_order INTEGER NOT NULL DEFAULT 0
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  session_start TEXT,
+  session_end TEXT
 );
+-- The hours each book is supposed to trade; NULL means "no window set".
+ALTER TABLE trading_styles ADD COLUMN IF NOT EXISTS session_start TEXT;
+ALTER TABLE trading_styles ADD COLUMN IF NOT EXISTS session_end TEXT;
 CREATE TABLE IF NOT EXISTS trades (
   id SERIAL PRIMARY KEY,
   style_id INTEGER,

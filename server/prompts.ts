@@ -1,0 +1,166 @@
+/**
+ * Every instruction the app sends to a vision or language model, in one place.
+ *
+ * These are product surface, not plumbing: most of the bugs this project has
+ * shipped were sentences in these strings (a normalisation rule that destroyed
+ * the micro/e-mini distinction, a table shape the model was never told about).
+ * Keeping them out of routes.ts means a prompt edit is reviewable as what it
+ * is, and the transport code stays boring.
+ */
+export const SETUP_PROMPT = `You are reading a screenshot to fill in a new trade's setup. The screenshot will be EITHER of two things — figure out which one it is first.
+
+(A) A TradingView-style chart with a plotted long/short position tool.
+- The entry price, stop-loss price, and take-profit price are almost always printed as exact numeric labels on the RIGHT-HAND price axis (the right edge of the chart), each sitting next to its own coloured horizontal line. Read those right-axis numeric labels directly for entryPrice/initialStop/initialTarget — they are far more reliable than estimating off gridlines.
+- Direction from colour/position: if the blue entry marker/line has its shaded zone extending UPWARD from the entry price (blue is up), the trade is a LONG. If the blue marker/zone extends DOWNWARD from entry (blue is down), the trade is a SHORT. Cross-check with the standard convention where the profit zone is green and the loss zone is red/pink — green above entry confirms long, green below entry confirms short.
+- Also look for the ticker/symbol label and any position size / quantity readout on the chart.
+
+(C) A TradingView chart showing LIVE BROKER ORDER LINES — not a drawn position tool. This looks different from (A): each line is the broker's own working order, drawn edge to edge with a small badge on it, and usually an "×" button to cancel it. There are no shaded profit/loss zones.
+- The ENTRY is the line whose badge names an order type in words: "Sell Limit", "Buy Limit", "Sell Stop", "Buy Stop", "Sell Market", "Buy Market". Its wording gives the direction outright — "Sell …" is a SHORT, "Buy …" is a LONG. Do not infer direction from colour here.
+- The other two lines are its bracket, and each badge shows a PROJECTED PROFIT OR LOSS in currency, like "+204.50 USD" or "−54.00 USD". The sign is the reliable discriminator: the line whose amount is POSITIVE is the take profit (initialTarget), the line whose amount is NEGATIVE is the stop (initialStop). Use the sign, not the position on screen and not the colour — for a short the target sits BELOW the entry and the stop ABOVE, which is the reverse of a long, and the right-axis badges are often coloured by proximity to price rather than by role. A green axis badge does NOT mean take profit.
+- Read each of the three prices from the number on the RIGHT-HAND price axis at that line's height.
+- The leading number in a badge (e.g. the "1" in "1 | −54.00 USD") is the QUANTITY in contracts, not a price. Use it for size.
+- These are RESTING orders, so the trade has not happened yet: isClosed is false, and exitPrice/exitTime/exitReason stay null. A separate highlighted band on the axis is just the live market price — never an entry, a stop or a target.
+- If no ticker is printed anywhere on the image, set symbol to null rather than guessing from the price level.
+
+(B) A broker order log / order history table with columns such as Symbol, Side, Type, Qty, Remaining Qty, Filled Qty, Limit Price, Stop Price, Take Profit, Stop Loss, Avg Fill Price, Status, Update Time, Order ID, Expiry.
+- Find the order that OPENED the position: the row with Status "Filled" whose Type is a plain entry type ("Limit", "Market", "Stop") — NOT a "Stop Loss" or "Take Profit" type row. If several symbols/trades appear, use the entry order that is chronologically most recent (latest Update Time) unless context makes another one clearly intended.
+- direction: "long" if that entry order's Side is "Buy", "short" if "Sell".
+- entryPrice: that entry order's Avg Fill Price (fall back to its Limit Price, then Stop Price, if Avg Fill Price is blank).
+- size: that entry order's Filled Qty (fall back to Qty).
+- entryTime: that entry order's Update Time.
+- initialStop: the Stop Price (or Stop Loss column) of the "Stop Loss" type row tied to the same symbol/entry — use it even if that row's Status is "Filled" (it still reflects the ORIGINAL planned stop) or "Cancelled".
+- initialTarget: the Limit Price (or Take Profit column) of the "Take Profit" type row tied to the same symbol/entry — use it even if its Status is "Cancelled" (a cancelled take-profit still tells you the original target).
+
+CLOSED-TRADE DETECTION (applies to both A and B): decide whether the screenshot shows a trade that is ALREADY FINISHED, i.e. an exit is visible — not just a plan.
+- In a broker order log (B), the position is CLOSED whenever a closing fill is visible. Concretely: if the "Stop Loss" row OR the "Take Profit" row tied to the entry has Status "Filled", the trade is closed — that filled protective order IS the exit. A second plain entry-type row on the same symbol with the OPPOSITE Side, Filled for the same quantity, also closes it. Note the double duty here: a Filled "Stop Loss" row supplies BOTH initialStop (the planned stop level) AND the exit (isClosed true, exitPrice = its Avg Fill Price, falling back to Stop Price / Limit Price; exitTime = its Update Time). Rows with Status "Cancelled" or "Working" do NOT close the trade.
+- On a chart (A), the position is closed when BOTH an entry marker AND an exit/close marker are drawn (e.g. a completed position tool showing where the trade was closed, a "closed" P&L readout, or an explicit exit label/arrow at a later bar). A plain position tool showing only entry + stop + target with no exit marker is NOT closed.
+- If it is closed, also set exitReason to the best fit: "target" (closed at/near the take-profit), "stop" (closed at/near the stop loss), "breakeven" (closed at/near entry), "trailed" (closed at a trailed stop between entry and target), "manual_early" (closed in profit well before target), "manual_late" (closed after giving back a large part of the move), or "other" if you cannot tell.
+- If NOTHING in the image shows an exit, set isClosed to false and leave exitPrice, exitTime and exitReason null. Never invent an exit.
+
+Symbol: report the ticker EXACTLY as printed on the screenshot — "MNQU6", not "NQ". Do not roll a micro up to its full-size sibling and do not strip the month/year contract code. The application does that rollup itself, and it needs the contract as written to tell a micro apart from an e-mini: they are the same instrument for grouping but differ tenfold in dollars per point.
+
+ALSO REPORT whether this image is an orders TABLE listing SEVERAL DIFFERENT trades, rather than a chart or a single position. Set looksLikeOrdersTable true only when the table holds MORE THAN ONE distinct order — that is, more than one entry price.
+
+Count orders, not rows. A single bracketed order occupies three rows in a working-orders table: the parent (Status "Working", Type "Limit") plus its Take Profit and Stop Loss children (Status "Inactive", opposite Side, same Qty and Symbol). That is ONE trade, so looksLikeOrdersTable is FALSE and you should report it as the single order it is — the parent's Limit Price is entryPrice, its Take Profit column (or the Take Profit child's price) is initialTarget, its Stop Loss column (or the Stop Loss child's price) is initialStop, and the parent's Side gives the direction.
+
+Respond with STRICT JSON only, no prose, no markdown fences:
+{"symbol": string|null, "direction": "long"|"short"|null, "entryPrice": number|null, "initialStop": number|null, "initialTarget": number|null, "entryTime": string|null, "size": number|null, "isClosed": boolean, "exitPrice": number|null, "exitTime": string|null, "exitReason": "target"|"stop"|"trailed"|"manual_early"|"manual_late"|"breakeven"|"other"|null, "looksLikeOrdersTable": boolean}
+
+Rules:
+- Output ONLY the JSON object. Do not wrap it in markdown code fences, do not add explanations, citations or any prose before or after it.
+- entryTime and exitTime must be ISO 8601 strings if a date/time is legible, otherwise null.
+- Use null for anything that is not clearly legible or not applicable. Never guess wildly.
+- Numbers must be plain JSON numbers (no currency symbols, no thousands separators, no commas).`;
+
+/**
+ * Reads an orders table screenshot as MANY resting orders, not one position.
+ *
+ * SETUP_PROMPT deliberately hunts for the single order that opened a position;
+ * this is the opposite job — a venue's open-orders list, every row of which is
+ * a trade that could still open. Kept as a separate prompt because merging the
+ * two would make both worse: "find the one that matters" and "return all of
+ * them" pull in opposite directions.
+ */
+export const ORDERS_PROMPT = `You are reading a screenshot from a trading venue showing resting/open orders that have not been filled yet. Extract EVERY order you can read.
+
+Common shapes:
+(A) Crypto exchange (Binance and similar): columns like Time, Symbol, Type, Side, Price, Amount, Filled, Reduce Only. Side reads "Open Long"/"Open Short" or "Buy"/"Sell". Amount is usually quote notional such as "37,177.47 USDT". This view typically has NO stop loss or take profit — leave them null, do not invent them.
+(B) Futures broker / DOM (TradingView and most DOMs): columns like Symbol, Side, Type, Qty, Remaining Qty, Filled Qty, Limit Price, Stop Price, Take Profit, Stop Loss, Avg Fill Price, Status, Update Time. Qty is contracts. Take Profit maps to initialTarget and Stop Loss to initialStop.
+
+  CRITICAL — one bracketed order occupies THREE rows in this view, and it is ONE order, not three. The parent row has Type "Limit" (or "Stop", "Market") and Status "Working". Directly beneath it sit its two children: Type "Take Profit" and Type "Stop Loss", each with Status "Inactive", the OPPOSITE Side to the parent, and the same Qty and Symbol. Return ONLY the parent. Read the children's prices into the parent's initialTarget and initialStop if the parent's own Take Profit / Stop Loss columns are blank; if those columns are already filled, the children are duplicates and add nothing. Never emit a row whose Type is "Take Profit" or "Stop Loss" as an order of its own — its Limit Price is an exit level, and returning it invents a trade that does not exist.
+(C) A bracket / OTOCO / "Take Profit Stop Loss" confirmation dialog for ONE order. It lists legs rather than columns: Order A is the entry (its Price is entryPrice, its Side gives the direction, its Amount is the size), Order B is the take profit and Order C is the stop loss. Both B and C label their level "Stop Price" — tell them apart by which order block they sit in, NOT by the number. Return exactly ONE order for a dialog like this, carrying entryPrice, initialTarget from B and initialStop from C. These dialogs usually do not name the instrument: if no ticker is visible, set symbol to null rather than guessing one — a wrong ticker attaches the levels to the wrong trade.
+
+For every order:
+- direction: "long" for Buy / Open Long, "short" for Sell / Open Short.
+- entryPrice: the limit/entry price for that order (Price, or Limit Price).
+- size: the position size as printed.
+- sizeUnit: "quote" when the size is a currency amount (e.g. "4,655.18 USDT" — a USD/USDT notional), "base" when it is a contract or coin count (e.g. Qty 2).
+- initialStop / initialTarget: only if the screenshot actually shows them; otherwise null.
+- entryTime: the row's timestamp as ISO 8601 if legible, otherwise null.
+- symbol: the ticker as printed, minus any "Perp" badge.
+
+Rules:
+- Return every DISTINCT order. Two rows on the same symbol at different entry prices are two separate orders and both must be returned. But a parent and its own Take Profit / Stop Loss children are one order — count orders, not rows.
+- Ignore header rows, totals, and any row that is clearly a filled/closed position rather than a resting order.
+- entryPrice is the identity of an order: it is what lets a shape (C) dialog be matched to the row it brackets, so read it exactly, to every decimal shown.
+- Output ONLY this JSON object, no prose and no markdown fences:
+{"orders": [{"symbol": string|null, "direction": "long"|"short"|null, "size": number|null, "sizeUnit": "base"|"quote"|null, "entryPrice": number|null, "initialStop": number|null, "initialTarget": number|null, "entryTime": string|null}]}
+- Numbers must be plain JSON numbers: no currency symbols, no thousands separators.
+- If you cannot read a field, use null rather than guessing.
+- If the image shows no resting orders at all, return {"orders": []}.`;
+
+/**
+ * Reads a week of written reflections against the week's numbers.
+ *
+ * The value here is the cross-reference, not the summary: the trader already
+ * knows what they wrote and can already see the stats. What neither shows on its
+ * own is whether the story in the notes matches the record — hence the explicit
+ * instruction to report where they disagree, and the ban on inventing a pattern
+ * from a single trade.
+ */
+export const WEEKLY_INSIGHTS_PROMPT = `You are reviewing one week of a trader's journal. You get two things: their own written reflections on individual trades, and the computed statistics for the same week.
+
+The reflections are where they wrote what they would have done differently, or what the "perfect version" of the trade looked like. Those are self-diagnoses. The statistics are the record. Your job is to find what is TRUE ACROSS the week — not to summarise trade by trade, which they can already read.
+
+The writing comes in two forms and both count as reflections for every rule below: per-trade notes (in "reflections", each tied to one trade's outcome) and end-of-day reviews (in "dayNotes", free-form, written about the whole session). A theme may draw its evidence from either or both. Day notes often contain what the per-trade notes omit — state of mind, what they skipped, plans for tomorrow — and a plan written on Monday that the rest of the week's data shows was not followed is exactly the kind of contradiction to report.
+
+Produce four things:
+
+1. themes — recurring ideas that appear in MULTIPLE reflections. A theme needs at least two trades behind it; one trade is an anecdote, not a pattern. For each, give the theme in the trader's own vocabulary where possible, how many trades it appeared in, and up to two short verbatim fragments as evidence. If nothing recurs, return an empty list rather than padding it.
+
+2. focus — the single most correctable pattern to work on next week, and one sentence on why that one. Prefer a pattern that is both frequent AND expensive over one that is merely annoying. Exactly one.
+
+3. oneChange — one concrete, checkable action for next week. It must be something they could verify they did or did not do ("wait for a 5m close beyond the level before entering"), not an attitude ("be more patient").
+
+4. contradictions — places the reflections and the numbers DISAGREE. This is the most valuable output. Examples: notes repeatedly blame exiting too early while the capture ratio is high; notes describe good discipline while the same demon fired five times; notes never mention size while the losses cluster in the largest positions. If there is no genuine disagreement, return an empty list — do not manufacture one.
+
+Rules:
+- Ground every claim in the data you were given. Never infer trades, prices, or events that are not present.
+- A negative totalDeltaR means their management LOST money versus leaving the trade alone; positive means it gained.
+- Do not moralise, and do not give generic trading advice. Say only what this week's evidence supports.
+- Write in second person, plainly, no preamble.
+- Output ONLY this JSON object, no prose and no markdown fences:
+{"themes": [{"theme": string, "occurrences": number, "evidence": [string]}], "focus": {"name": string, "why": string}, "oneChange": string, "contradictions": [string]}
+
+Here is the week:
+{{BUNDLE}}`;
+
+export function outcomePrompt(ctx: {
+  symbol?: string;
+  direction?: string;
+  entryPrice?: number;
+  initialStop?: number;
+  initialTarget?: number;
+}) {
+  return `You are reading a TradingView-style chart screenshot taken AFTER a trade closed. It shows the full price path following the entry.
+
+When prices are printed as exact numeric labels on the RIGHT-HAND price axis (the right edge of the chart) next to their coloured lines, read those labels directly for the clearest, most exact values — they are more reliable than estimating off gridlines or candle wicks.
+
+The trade's ORIGINAL plan was:
+- symbol: ${ctx.symbol ?? "unknown"}
+- direction: ${ctx.direction ?? "unknown"}
+- entry price: ${ctx.entryPrice ?? "unknown"}
+- original stop loss: ${ctx.initialStop ?? "unknown"}
+- original target: ${ctx.initialTarget ?? "unknown"}
+
+Determine, from the visible price path AFTER entry:
+1. mae — the worst price reached against the position (lowest low for a long, highest high for a short).
+2. mfe — the best price reached in favour of the position (highest high for a long, lowest low for a short).
+3. noManagementOutcome — if the ORIGINAL stop and target levels above had been left untouched, which level would price have crossed FIRST? "target_first", "stop_first", or "undetermined" if the visible path never reaches either level or it is not legible.
+
+Respond with STRICT JSON only, no prose, no markdown fences:
+{"mae": number|null, "mfe": number|null, "noManagementOutcome": "target_first"|"stop_first"|"undetermined"|null}
+
+Numbers must be plain JSON numbers. Use null when a value is not legible.`;
+}
+
+export const RATIONALE_PROMPT = `You are a trading journal assistant. A trader jotted a quick, shorthand comment explaining WHY they took a trade — they typed fast and did not bother with full sentences or proper labeling.
+
+Common shorthand you should recognize and expand: VAH / VAL / POC (volume profile Value Area High / Low / Point of Control), fib retracement levels written as bare numbers like "786", ".786", "618" (meaning the 78.6% / 61.8% Fibonacci retracement), "retest", "reject"/"rejection", OB (order block), FVG (fair value gap), liquidity sweep/grab, breakout, breakdown, EMA/VWAP bounce or reject, trendline break, supply/demand zone, higher-high/higher-low (HH/HL) or lower-high/lower-low (LH/LL) structure, news/FOMC, open range, gap fill.
+
+Turn the comment into a short list of clean, standardized setup tags (Title Case, 2-5 words each) that capture the trader's stated reasoning — do not invent reasoning that isn't implied by the comment, and do not add generic tags like "Trade" or "Setup". If the comment contains no recognizable setup language, return an empty list rather than guessing.
+
+Comment: "{{TEXT}}"
+
+Respond with STRICT JSON only, no prose, no markdown fences:
+{"tags": string[]}`;

@@ -153,8 +153,19 @@ export interface AggregateStats {
   totalDeltaR: number;
 }
 
+/**
+ * Trades with a realised outcome — the only ones any statistic may speak
+ * about. A pending order has no result, and an open one has not finished
+ * being wrong. Owned here because every consumer (aggregates, breakdowns,
+ * simulations) must agree on it, and three inlined copies of the filter is
+ * how they stop agreeing.
+ */
+export function closedTrades<T extends Trade>(trades: T[]): T[] {
+  return trades.filter((t) => t.status === "closed" && t.exitPrice != null);
+}
+
 export function aggregate(trades: Trade[]): AggregateStats {
-  const closed = trades.filter((t) => t.status === "closed" && t.exitPrice != null);
+  const closed = closedTrades(trades);
   const rows = closed.map((t) => ({ t, m: computeMetrics(t) }));
   const rs = rows.map((r) => r.m.actualR ?? 0);
   const pnls = rows.map((r) => r.m.actualPnL ?? 0);

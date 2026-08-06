@@ -11,6 +11,7 @@ import { LoginGate } from "@/components/login-gate";
 import NotFound from "@/pages/not-found";
 import Journal from "@/pages/journal";
 import Dashboard from "@/pages/dashboard";
+import Analysis from "@/pages/analysis";
 import Daily from "@/pages/daily";
 import Settings from "@/pages/settings";
 
@@ -20,6 +21,7 @@ function AppRouter() {
       <Route path="/" component={Journal} />
       <Route path="/daily" component={Daily} />
       <Route path="/dashboard" component={Dashboard} />
+      <Route path="/analysis" component={Analysis} />
       <Route path="/settings" component={Settings} />
       <Route component={NotFound} />
     </Switch>

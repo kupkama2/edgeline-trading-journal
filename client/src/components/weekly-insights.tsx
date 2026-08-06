@@ -9,7 +9,7 @@ import {
   buildInsightsBundle,
   type WeeklyInsights,
 } from "@shared/weekly-insights";
-import { useWeeklyInsights, useWeeklyReviews } from "@/lib/data";
+import { useDailyNotes, useWeeklyInsights, useWeeklyReviews } from "@/lib/data";
 
 /**
  * The written half of the weekly review.
@@ -35,11 +35,16 @@ export function WeeklyInsightsCard({
   const [insights, setInsights] = useState<WeeklyInsights | null>(null);
   const generate = useWeeklyInsights();
   const { data: reviews = [] } = useWeeklyReviews();
+  const { data: dailyNotes = [] } = useDailyNotes();
   const { toast } = useToast();
 
   // Built locally so the card can say exactly how much material exists before
   // anything is sent — and stay honest when the answer is "none yet".
-  const bundle = useMemo(() => buildInsightsBundle(trades, tags), [trades, tags]);
+  const bundle = useMemo(
+    () => buildInsightsBundle(trades, tags, undefined, dailyNotes),
+    [trades, tags, dailyNotes],
+  );
+  const hasMaterial = bundle.reflectionCount > 0 || bundle.dayNotes.length > 0;
 
   // A previously generated week survives a reload without re-spending a call.
   const stored = useMemo(() => {
@@ -70,9 +75,18 @@ export function WeeklyInsightsCard({
         <div className="min-w-0 flex-1">
           <h3 className="text-sm font-semibold tracking-tight">What your notes say</h3>
           <p className="mt-0.5 text-[11px] text-muted-foreground">
-            {bundle.reflectionCount > 0
-              ? `${bundle.reflectionCount} of ${bundle.closedCount} trades this week carry a note.`
-              : "Write what you'd have done differently on a trade and this has something to read."}
+            {hasMaterial
+              ? [
+                  bundle.reflectionCount > 0
+                    ? `${bundle.reflectionCount} of ${bundle.closedCount} trades carry a note`
+                    : null,
+                  bundle.dayNotes.length > 0
+                    ? `${bundle.dayNotes.length} daily ${bundle.dayNotes.length === 1 ? "review" : "reviews"}`
+                    : null,
+                ]
+                  .filter(Boolean)
+                  .join(" · ") + " this week."
+              : "Write on a trade or in the daily page and this has something to read."}
           </p>
         </div>
         <Button
@@ -80,7 +94,7 @@ export function WeeklyInsightsCard({
           variant={shown ? "ghost" : "default"}
           className="h-7 shrink-0 text-[11px]"
           onClick={() => run(Boolean(shown))}
-          disabled={generate.isPending || bundle.reflectionCount === 0}
+          disabled={generate.isPending || !hasMaterial}
           data-testid="button-generate-insights"
         >
           {generate.isPending && <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />}

@@ -163,6 +163,38 @@ function StylesCard() {
                       ))}
                     </div>
 
+                    {/* The hours this book trades. Typed as HH:MM; clearing
+                        either field removes the window and its warnings. */}
+                    <div className="flex shrink-0 items-center gap-1">
+                      <input
+                        type="time"
+                        defaultValue={s.sessionStart ?? ""}
+                        onBlur={(e) =>
+                          updateStyle.mutate({
+                            id: s.id,
+                            sessionStart: e.target.value || null,
+                          })
+                        }
+                        className="h-7 rounded border border-border bg-transparent px-1 font-mono text-[10px] text-muted-foreground"
+                        title="Session start — entries before this warn"
+                        data-testid={`input-session-start-${s.id}`}
+                      />
+                      <span className="text-[10px] text-muted-foreground">–</span>
+                      <input
+                        type="time"
+                        defaultValue={s.sessionEnd ?? ""}
+                        onBlur={(e) =>
+                          updateStyle.mutate({
+                            id: s.id,
+                            sessionEnd: e.target.value || null,
+                          })
+                        }
+                        className="h-7 rounded border border-border bg-transparent px-1 font-mono text-[10px] text-muted-foreground"
+                        title="Session end — entries after this warn"
+                        data-testid={`input-session-end-${s.id}`}
+                      />
+                    </div>
+
                     <span className="w-16 shrink-0 text-right font-mono text-[11px] text-muted-foreground">
                       {used} {used === 1 ? "trade" : "trades"}
                     </span>

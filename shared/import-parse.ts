@@ -71,16 +71,17 @@ export function parseNum(raw: string | undefined | null): number | null {
 
 /**
  * Venue timestamps are "2026-08-05 21:30:51" in the viewer's local zone with no
- * offset. Treating that as UTC is a deliberate, documented choice: the app
- * stores ISO strings and a wrong-by-hours entry time is far less damaging than
- * refusing the import outright. The preview surfaces it as a warning.
+ * offset, so they are read as LOCAL time. This matters beyond display: the
+ * daily calendar, the hour-of-day breakdown and the CSV importer all bucket by
+ * the local clock, and a paste read as UTC would put an evening scalp on the
+ * wrong day and in the wrong session for anyone west of Greenwich.
  */
 export function parseVenueTime(raw: string | undefined | null): string | null {
   if (!raw) return null;
   const m = /(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/.exec(raw);
   if (!m) return null;
   const [, y, mo, d, h, mi, s] = m;
-  return `${y}-${mo}-${d}T${h}:${mi}:${s ?? "00"}Z`;
+  return new Date(+y, +mo - 1, +d, +h, +mi, +(s ?? "0")).toISOString();
 }
 
 /** Browser copies are tab-separated; hand-pasted text degrades to run of spaces. */

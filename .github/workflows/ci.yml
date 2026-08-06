@@ -1,11 +1,17 @@
 name: CI
 
 # Render auto-deploys main, so main going red means production goes red.
-# These are the two checks that would actually have caught it.
+# These are the checks that would actually have caught it.
+#
+# Push and dispatch triggers exist alongside pull_request because the three
+# arrive through different pipelines on GitHub's side, and 2026-08-06 proved
+# they fail independently: pull_request runs stopped being created for hours
+# while push runs sailed through. Belt, braces, and a hand on the waistband.
 on:
   pull_request:
+  workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, "claude/**"]
 
 jobs:
   check:
@@ -25,6 +31,11 @@ jobs:
 
       - name: Typecheck
         run: npx tsc --noEmit
+
+      # The shared modules are the app's arithmetic — R, point values, parsing,
+      # drawdown. These tests encode every regression found so far.
+      - name: Test
+        run: npm test
 
       # Runs the real build script, so a broken vite/esbuild config fails here
       # rather than on Render.

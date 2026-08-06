@@ -22,11 +22,25 @@ export const tradingStyles = pgTable("trading_styles", {
   name: text("name").notNull(),
   color: text("color").notNull().default("slate"),
   sortOrder: integer("sort_order").notNull().default(0),
+  /**
+   * The hours this book is supposed to trade, "HH:MM" local, both optional.
+   * The hour-of-day breakdown can show that 14:00 loses money; the window is
+   * how that finding becomes enforcement — logging an entry outside it gets a
+   * warning at the moment the decision is being made, not in next week's stats.
+   */
+  sessionStart: text("session_start"),
+  sessionEnd: text("session_end"),
 });
+
+const hhmm = z
+  .string()
+  .regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Use HH:MM (24h)")
+  .nullable()
+  .optional();
 
 export const insertTradingStyleSchema = createInsertSchema(tradingStyles)
   .omit({ id: true })
-  .extend({ name: z.string().min(1) });
+  .extend({ name: z.string().min(1), sessionStart: hhmm, sessionEnd: hhmm });
 
 export type InsertTradingStyle = z.infer<typeof insertTradingStyleSchema>;
 export type TradingStyle = typeof tradingStyles.$inferSelect;
@@ -130,8 +144,20 @@ export const sizeUnitEnum = z.enum(["base", "quote"]);
  */
 export const statusEnum = z.enum(["pending", "open", "closed", "cancelled"]);
 
-/** Why a trade never became a position. */
-export const cancelReasonEnum = z.enum(["not_filled", "pulled", "changed_mind"]);
+/**
+ * Why a trade never became a position.
+ *
+ * 'never_placed' is the missed trade: the setup was seen and the order was
+ * never sent. It is kept in the same table as everything else on purpose — a
+ * trade you talked yourself out of is a decision with a price, and the only way
+ * to put a number on it is to store the plan next to the trades you did take.
+ */
+export const cancelReasonEnum = z.enum([
+  "not_filled",
+  "pulled",
+  "changed_mind",
+  "never_placed",
+]);
 export const exitReasonEnum = z.enum([
   "target",
   "stop",
