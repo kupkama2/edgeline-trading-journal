@@ -3,7 +3,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Ban, ShieldAlert, ShieldCheck, Skull, Timer } from "lucide-react";
 import type { MistakeTag, TradeWithTags } from "@shared/schema";
-import { useMistakeTags, useTrades } from "@/lib/data";
+import { useMistakeTags, useStyles, useTrades } from "@/lib/data";
 import {
   computeMetrics,
   fmtMoney,
@@ -13,6 +13,7 @@ import {
   COOLDOWN_SECONDS,
 } from "@shared/metrics";
 import { DEMON_GUARDRAIL_STREAK, demonStats, type DemonStat } from "@shared/demons";
+import { filterByStyle, styleName } from "@/lib/style-filter";
 
 /* ------------------------- demon guardrail state ------------------------ */
 
@@ -23,45 +24,80 @@ import { DEMON_GUARDRAIL_STREAK, demonStats, type DemonStat } from "@shared/demo
  * Both produce the same locked "stop trading" state. The demon lock clears
  * only when the trader explicitly acknowledges it; a longer streak (or a
  * different demon) trips it again, because the ack key includes the streak.
+ *
+ * Streaks are measured per trading style. A scalping spiral must not lock the
+ * swing book, so both the streak and the acknowledgement are keyed by style.
+ * Several styles can therefore be locked independently at the same time.
  */
 const AckCtx = createContext<{
-  acked: string | null;
+  acked: Set<string>;
   acknowledge: (key: string) => void;
-}>({ acked: null, acknowledge: () => {} });
+}>({ acked: new Set(), acknowledge: () => {} });
 
 export function GuardrailProvider({ children }: { children: React.ReactNode }) {
-  const [acked, setAcked] = useState<string | null>(null);
-  return (
-    <AckCtx.Provider value={{ acked, acknowledge: setAcked }}>{children}</AckCtx.Provider>
+  const [acked, setAcked] = useState<Set<string>>(() => new Set());
+  const value = useMemo(
+    () => ({
+      acked,
+      acknowledge: (key: string) => setAcked((prev) => new Set(prev).add(key)),
+    }),
+    [acked],
   );
+  return <AckCtx.Provider value={value}>{children}</AckCtx.Provider>;
 }
 
-export function useDemonGuard(
-  tradesIn?: TradeWithTags[],
-  tagsIn?: MistakeTag[],
-): {
+export interface DemonGuard {
   demon: DemonStat | null;
+  /** Which style tripped it — relevant when viewing "All styles". */
+  styleId: number | null;
   locked: boolean;
   ackKey: string | null;
   acknowledge: () => void;
-} {
+}
+
+/**
+ * @param styleId the style to guard, or null to report the worst breach across
+ * every style (an overview — the per-style locks themselves stay independent).
+ */
+export function useDemonGuard(
+  styleId: number | null,
+  tradesIn?: TradeWithTags[],
+  tagsIn?: MistakeTag[],
+): DemonGuard {
   const { data: fetchedTrades = [] } = useTrades();
   const { data: fetchedTags = [] } = useMistakeTags();
-  const trades = tradesIn ?? fetchedTrades;
+  const allTrades = tradesIn ?? fetchedTrades;
   const tags = tagsIn ?? fetchedTags;
   const { acked, acknowledge } = useContext(AckCtx);
 
-  const demon = useMemo(() => {
-    const worst = demonStats(trades, tags).find(
-      (d) => d.currentStreak >= DEMON_GUARDRAIL_STREAK,
-    );
-    return worst ?? null;
-  }, [trades, tags]);
+  const breach = useMemo(() => {
+    const worstFor = (id: number | null) => {
+      const scoped = filterByStyle(allTrades, id);
+      const d = demonStats(scoped, tags).find(
+        (s) => s.currentStreak >= DEMON_GUARDRAIL_STREAK,
+      );
+      return d ? { demon: d, styleId: id } : null;
+    };
 
-  const ackKey = demon ? `${demon.id}:${demon.currentStreak}` : null;
+    if (styleId != null) return worstFor(styleId);
+
+    // "All styles" — never pool trades across books; check each independently.
+    const ids = Array.from(new Set(allTrades.map((t) => t.styleId)));
+    const hits = ids.map(worstFor).filter((h): h is NonNullable<typeof h> => h != null);
+    if (!hits.length) return null;
+    return hits.reduce((a, b) =>
+      b.demon.currentStreak > a.demon.currentStreak ? b : a,
+    );
+  }, [allTrades, tags, styleId]);
+
+  const ackKey = breach
+    ? `${breach.styleId ?? "none"}:${breach.demon.id}:${breach.demon.currentStreak}`
+    : null;
+
   return {
-    demon,
-    locked: demon != null && acked !== ackKey,
+    demon: breach?.demon ?? null,
+    styleId: breach?.styleId ?? null,
+    locked: ackKey != null && !acked.has(ackKey),
     ackKey,
     acknowledge: () => ackKey && acknowledge(ackKey),
   };
@@ -125,12 +161,16 @@ export function useDailyStats(trades: TradeWithTags[]) {
 export function DailyGuardCard({
   trades,
   tags,
+  styleId = null,
 }: {
+  /** Already scoped to `styleId` by the caller. */
   trades: TradeWithTags[];
   tags?: MistakeTag[];
+  styleId?: number | null;
 }) {
   const s = useDailyStats(trades);
-  const guard = useDemonGuard(trades, tags);
+  const guard = useDemonGuard(styleId, trades, tags);
+  const { data: styles = [] } = useStyles();
   const [remaining, setRemaining] = useState(0);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -199,8 +239,9 @@ export function DailyGuardCard({
           <p className="flex min-w-0 flex-1 items-start gap-1.5 text-[11px] font-semibold text-destructive">
             <Skull className="mt-px h-3.5 w-3.5 shrink-0" />
             <span>
-              Stop trading — “{guard.demon.name}” on {guard.demon.currentStreak} trades in a
-              row. Fix the rule before the next entry.
+              Stop trading {styleId == null && `${styleName(styles, guard.styleId)} `}— “
+              {guard.demon.name}” on {guard.demon.currentStreak} trades in a row. Fix the rule
+              before the next entry.
             </span>
           </p>
           <Button

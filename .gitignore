@@ -12,6 +12,9 @@ data.db-journal
 .env.*
 !.env.example
 
+# Machine-local Claude Code permissions
+.claude/settings.local.json
+
 *.log
 .DS_Store
 

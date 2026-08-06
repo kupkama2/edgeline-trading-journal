@@ -3,9 +3,9 @@ import {
   mistakeTags,
   tradeMistakes,
   weeklyReviews,
+  tradingStyles,
 } from "@shared/schema";
 import type {
-  Trade,
   InsertTrade,
   UpdateTrade,
   MistakeTag,
@@ -13,70 +13,89 @@ import type {
   TradeWithTags,
   WeeklyReview,
   InsertWeeklyReview,
+  TradingStyle,
+  InsertTradingStyle,
 } from "@shared/schema";
 import { DEMON_TAXONOMY, DEMON_LEGACY_ALIASES } from "@shared/demons";
-import { drizzle } from "drizzle-orm/better-sqlite3";
-import Database from "better-sqlite3";
-import { eq, desc, and } from "drizzle-orm";
+import { drizzle } from "drizzle-orm/postgres-js";
+import postgres from "postgres";
+import { eq, desc } from "drizzle-orm";
 
-const sqlite = new Database("data.db");
-sqlite.pragma("journal_mode = WAL");
+const DATABASE_URL = process.env.DATABASE_URL;
+if (!DATABASE_URL) {
+  throw new Error(
+    "DATABASE_URL is not set. Copy .env.example to .env and add your Postgres connection string.",
+  );
+}
 
-export const db = drizzle(sqlite);
+/* Neon's pooled endpoint is PgBouncer in transaction mode, which can't hold
+   prepared statements across checkouts — hence `prepare: false`. */
+const sql = postgres(DATABASE_URL, { prepare: false });
 
-/* Bootstrap tables (no migration tooling needed for a single-user local DB). */
-sqlite.exec(`
+export const db = drizzle(sql);
+
+/**
+ * Bootstrap tables. Postgres supports IF NOT EXISTS on both tables and columns,
+ * so this stays a single idempotent statement — no migration tooling needed for
+ * a single-user database, and no separate ensureColumn() helper.
+ */
+export async function initSchema() {
+  await sql.unsafe(`
+CREATE TABLE IF NOT EXISTS trading_styles (
+  id SERIAL PRIMARY KEY,
+  name TEXT NOT NULL,
+  color TEXT NOT NULL DEFAULT 'slate',
+  sort_order INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS trades (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
+  style_id INTEGER,
   symbol TEXT NOT NULL,
   direction TEXT NOT NULL,
-  size REAL NOT NULL,
-  entry_price REAL NOT NULL,
-  initial_stop REAL NOT NULL,
-  initial_target REAL NOT NULL,
+  size DOUBLE PRECISION NOT NULL,
+  entry_price DOUBLE PRECISION NOT NULL,
+  initial_stop DOUBLE PRECISION NOT NULL,
+  initial_target DOUBLE PRECISION NOT NULL,
   entry_time TEXT NOT NULL,
-  exit_price REAL,
+  exit_price DOUBLE PRECISION,
   exit_time TEXT,
   status TEXT NOT NULL DEFAULT 'open',
   exit_reason TEXT,
-  mae REAL,
-  mfe REAL,
+  mae DOUBLE PRECISION,
+  mfe DOUBLE PRECISION,
   no_management_outcome TEXT,
   setup_screenshot TEXT,
   outcome_screenshot TEXT,
   notes TEXT,
   rationale TEXT,
-  rationale_tags TEXT
+  rationale_tags TEXT,
+  playbook TEXT
 );
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS rationale TEXT;
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS rationale_tags TEXT;
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS playbook TEXT;
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS style_id INTEGER;
 CREATE TABLE IF NOT EXISTS mistake_tags (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   name TEXT NOT NULL,
   sort_order INTEGER NOT NULL DEFAULT 0,
   color TEXT NOT NULL DEFAULT 'red'
 );
 CREATE TABLE IF NOT EXISTS trade_mistakes (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   trade_id INTEGER NOT NULL,
   mistake_tag_id INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS weekly_reviews (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   week_start TEXT NOT NULL,
   plans TEXT NOT NULL,
   submitted_at TEXT NOT NULL
 );
 `);
 
-/* Lightweight migration for columns added after the table already existed. */
-function ensureColumn(table: string, column: string, ddl: string) {
-  const cols = sqlite.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
-  if (!cols.some((c) => c.name === column)) {
-    sqlite.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
-  }
+  await storage.seed();
 }
-ensureColumn("trades", "rationale", "rationale TEXT");
-ensureColumn("trades", "rationale_tags", "rationale_tags TEXT");
-ensureColumn("trades", "playbook", "playbook TEXT");
 
 /**
  * Demons (mistake tags). The fixed taxonomy lives in shared/demons.ts; these
@@ -90,7 +109,23 @@ const LEGACY_EXTRA_TAGS = [
   "FOMO Entry",
 ];
 
+/** Starting points only — renameable and deletable like any other style. */
+const DEFAULT_STYLES: { name: string; color: string }[] = [
+  { name: "NQ Scalps", color: "amber" },
+  { name: "Crypto Swings", color: "violet" },
+];
+
 export interface IStorage {
+  seed(): Promise<void>;
+
+  listTradingStyles(): Promise<TradingStyle[]>;
+  createTradingStyle(s: InsertTradingStyle): Promise<TradingStyle>;
+  updateTradingStyle(
+    id: number,
+    s: Partial<InsertTradingStyle>,
+  ): Promise<TradingStyle | undefined>;
+  deleteTradingStyle(id: number): Promise<void>;
+
   listTrades(): Promise<TradeWithTags[]>;
   getTrade(id: number): Promise<TradeWithTags | undefined>;
   createTrade(t: InsertTrade, tagIds?: number[]): Promise<TradeWithTags>;
@@ -107,8 +142,10 @@ export interface IStorage {
 }
 
 export class DatabaseStorage implements IStorage {
-  constructor() {
-    this.seedDemons();
+  /** Runs once at boot, after the tables exist. Idempotent. */
+  async seed() {
+    await this.seedDemons();
+    await this.seedStyles();
   }
 
   /**
@@ -117,62 +154,100 @@ export class DatabaseStorage implements IStorage {
    * existing trade links survive), then insert any canonical demon that is
    * still missing. Custom demons the user added are left untouched.
    */
-  private seedDemons() {
-    const existing = db.select().from(mistakeTags).all();
+  private async seedDemons() {
+    const existing = await db.select().from(mistakeTags);
 
     for (const tag of existing) {
       const canonical = DEMON_LEGACY_ALIASES[tag.name];
       if (canonical && !existing.some((t) => t.name === canonical)) {
-        db.update(mistakeTags)
+        await db
+          .update(mistakeTags)
           .set({ name: canonical })
-          .where(eq(mistakeTags.id, tag.id))
-          .run();
+          .where(eq(mistakeTags.id, tag.id));
         tag.name = canonical;
       }
     }
 
     const present = new Set(existing.map((t) => t.name));
-    DEMON_TAXONOMY.forEach((name, i) => {
+    for (let i = 0; i < DEMON_TAXONOMY.length; i++) {
+      const name = DEMON_TAXONOMY[i];
       if (present.has(name)) {
         // Keep taxonomy demons in canonical order at the top of the list.
         const row = existing.find((t) => t.name === name)!;
         if (row.sortOrder !== i) {
-          db.update(mistakeTags).set({ sortOrder: i }).where(eq(mistakeTags.id, row.id)).run();
+          await db.update(mistakeTags).set({ sortOrder: i }).where(eq(mistakeTags.id, row.id));
         }
-        return;
+        continue;
       }
-      db.insert(mistakeTags).values({ name, sortOrder: i, color: "red" }).run();
-    });
+      await db.insert(mistakeTags).values({ name, sortOrder: i, color: "red" });
+    }
 
     // Seed the pre-taxonomy extras only on a completely fresh database.
     if (existing.length === 0) {
-      LEGACY_EXTRA_TAGS.forEach((name, i) => {
-        db.insert(mistakeTags)
-          .values({ name, sortOrder: DEMON_TAXONOMY.length + i, color: "red" })
-          .run();
-      });
+      for (let i = 0; i < LEGACY_EXTRA_TAGS.length; i++) {
+        await db.insert(mistakeTags).values({
+          name: LEGACY_EXTRA_TAGS[i],
+          sortOrder: DEMON_TAXONOMY.length + i,
+          color: "red",
+        });
+      }
     }
   }
 
-  private tagIdsFor(tradeId: number): number[] {
-    return db
-      .select()
-      .from(tradeMistakes)
-      .where(eq(tradeMistakes.tradeId, tradeId))
-      .all()
-      .map((r) => r.mistakeTagId);
+  /** Give a brand-new database something to log against; never overwrite. */
+  private async seedStyles() {
+    const existing = await db.select().from(tradingStyles);
+    if (existing.length > 0) return;
+    for (let i = 0; i < DEFAULT_STYLES.length; i++) {
+      await db.insert(tradingStyles).values({ ...DEFAULT_STYLES[i], sortOrder: i });
+    }
   }
 
-  private setTags(tradeId: number, tagIds: number[]) {
-    db.delete(tradeMistakes).where(eq(tradeMistakes.tradeId, tradeId)).run();
+  async listTradingStyles(): Promise<TradingStyle[]> {
+    return db.select().from(tradingStyles).orderBy(tradingStyles.sortOrder);
+  }
+
+  async createTradingStyle(s: InsertTradingStyle): Promise<TradingStyle> {
+    const [row] = await db.insert(tradingStyles).values(s as any).returning();
+    return row;
+  }
+
+  async updateTradingStyle(
+    id: number,
+    s: Partial<InsertTradingStyle>,
+  ): Promise<TradingStyle | undefined> {
+    const [row] = await db
+      .update(tradingStyles)
+      .set(s as any)
+      .where(eq(tradingStyles.id, id))
+      .returning();
+    return row;
+  }
+
+  /** Deleting a style orphans its trades rather than destroying trade history. */
+  async deleteTradingStyle(id: number): Promise<void> {
+    await db.update(trades).set({ styleId: null }).where(eq(trades.styleId, id));
+    await db.delete(tradingStyles).where(eq(tradingStyles.id, id));
+  }
+
+  private async tagIdsFor(tradeId: number): Promise<number[]> {
+    const rows = await db
+      .select()
+      .from(tradeMistakes)
+      .where(eq(tradeMistakes.tradeId, tradeId));
+    return rows.map((r) => r.mistakeTagId);
+  }
+
+  private async setTags(tradeId: number, tagIds: number[]) {
+    await db.delete(tradeMistakes).where(eq(tradeMistakes.tradeId, tradeId));
     for (const mistakeTagId of tagIds) {
-      db.insert(tradeMistakes).values({ tradeId, mistakeTagId }).run();
+      await db.insert(tradeMistakes).values({ tradeId, mistakeTagId });
     }
   }
 
   async listTrades(): Promise<TradeWithTags[]> {
-    const rows = db.select().from(trades).orderBy(desc(trades.entryTime)).all();
-    const links = db.select().from(tradeMistakes).all();
+    const rows = await db.select().from(trades).orderBy(desc(trades.entryTime));
+    const links = await db.select().from(tradeMistakes);
     return rows.map((t) => ({
       ...t,
       mistakeTagIds: links.filter((l) => l.tradeId === t.id).map((l) => l.mistakeTagId),
@@ -180,14 +255,14 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getTrade(id: number): Promise<TradeWithTags | undefined> {
-    const t = db.select().from(trades).where(eq(trades.id, id)).get();
+    const [t] = await db.select().from(trades).where(eq(trades.id, id));
     if (!t) return undefined;
-    return { ...t, mistakeTagIds: this.tagIdsFor(id) };
+    return { ...t, mistakeTagIds: await this.tagIdsFor(id) };
   }
 
   async createTrade(t: InsertTrade, tagIds: number[] = []): Promise<TradeWithTags> {
-    const row = db.insert(trades).values(t as any).returning().get();
-    if (tagIds.length) this.setTags(row.id, tagIds);
+    const [row] = await db.insert(trades).values(t as any).returning();
+    if (tagIds.length) await this.setTags(row.id, tagIds);
     return { ...row, mistakeTagIds: tagIds };
   }
 
@@ -197,59 +272,65 @@ export class DatabaseStorage implements IStorage {
     tagIds?: number[],
   ): Promise<TradeWithTags | undefined> {
     // Drizzle throws on an empty SET clause, so a tags-only patch just reads.
-    const row =
+    const [row] =
       Object.keys(t).length > 0
-        ? db.update(trades).set(t as any).where(eq(trades.id, id)).returning().get()
-        : db.select().from(trades).where(eq(trades.id, id)).get();
+        ? await db.update(trades).set(t as any).where(eq(trades.id, id)).returning()
+        : await db.select().from(trades).where(eq(trades.id, id));
     if (!row) return undefined;
-    if (tagIds) this.setTags(id, tagIds);
-    return { ...row, mistakeTagIds: this.tagIdsFor(id) };
+    if (tagIds) await this.setTags(id, tagIds);
+    return { ...row, mistakeTagIds: await this.tagIdsFor(id) };
   }
 
   async deleteTrade(id: number): Promise<void> {
-    db.delete(tradeMistakes).where(eq(tradeMistakes.tradeId, id)).run();
-    db.delete(trades).where(eq(trades.id, id)).run();
+    await db.delete(tradeMistakes).where(eq(tradeMistakes.tradeId, id));
+    await db.delete(trades).where(eq(trades.id, id));
   }
 
   async listMistakeTags(): Promise<MistakeTag[]> {
-    return db.select().from(mistakeTags).orderBy(mistakeTags.sortOrder).all();
+    return db.select().from(mistakeTags).orderBy(mistakeTags.sortOrder);
   }
 
   async createMistakeTag(t: InsertMistakeTag): Promise<MistakeTag> {
-    return db.insert(mistakeTags).values(t as any).returning().get();
+    const [row] = await db.insert(mistakeTags).values(t as any).returning();
+    return row;
   }
 
   async updateMistakeTag(
     id: number,
     t: Partial<InsertMistakeTag>,
   ): Promise<MistakeTag | undefined> {
-    return db.update(mistakeTags).set(t as any).where(eq(mistakeTags.id, id)).returning().get();
+    const [row] = await db
+      .update(mistakeTags)
+      .set(t as any)
+      .where(eq(mistakeTags.id, id))
+      .returning();
+    return row;
   }
 
   async deleteMistakeTag(id: number): Promise<void> {
-    db.delete(tradeMistakes).where(eq(tradeMistakes.mistakeTagId, id)).run();
-    db.delete(mistakeTags).where(eq(mistakeTags.id, id)).run();
+    await db.delete(tradeMistakes).where(eq(tradeMistakes.mistakeTagId, id));
+    await db.delete(mistakeTags).where(eq(mistakeTags.id, id));
   }
 
   async listWeeklyReviews(): Promise<WeeklyReview[]> {
-    return db.select().from(weeklyReviews).orderBy(desc(weeklyReviews.weekStart)).all();
+    return db.select().from(weeklyReviews).orderBy(desc(weeklyReviews.weekStart));
   }
 
   async createWeeklyReview(r: InsertWeeklyReview): Promise<WeeklyReview> {
-    const existing = db
+    const [existing] = await db
       .select()
       .from(weeklyReviews)
-      .where(eq(weeklyReviews.weekStart, r.weekStart))
-      .get();
+      .where(eq(weeklyReviews.weekStart, r.weekStart));
     if (existing) {
-      return db
+      const [row] = await db
         .update(weeklyReviews)
         .set(r as any)
         .where(eq(weeklyReviews.id, existing.id))
-        .returning()
-        .get();
+        .returning();
+      return row;
     }
-    return db.insert(weeklyReviews).values(r as any).returning().get();
+    const [row] = await db.insert(weeklyReviews).values(r as any).returning();
+    return row;
   }
 }
 

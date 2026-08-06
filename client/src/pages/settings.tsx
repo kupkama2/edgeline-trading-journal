@@ -12,7 +12,12 @@ import {
   useUpdateTag,
   useDeleteTag,
   useTrades,
+  useStyles,
+  useCreateStyle,
+  useUpdateStyle,
+  useDeleteStyle,
 } from "@/lib/data";
+import { STYLE_COLOR_NAMES, styleColor } from "@/lib/style-filter";
 import {
   DAILY_LOSS_ALERT,
   DAILY_LOSS_STOP,
@@ -22,6 +27,199 @@ import {
   fmtMoney,
   mistakeCostLeaderboard,
 } from "@shared/metrics";
+
+function StylesCard() {
+  const { toast } = useToast();
+  const { data: styles = [], isLoading } = useStyles();
+  const { data: trades = [] } = useTrades();
+  const createStyle = useCreateStyle();
+  const updateStyle = useUpdateStyle();
+  const deleteStyle = useDeleteStyle();
+
+  const [newName, setNewName] = useState("");
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editName, setEditName] = useState("");
+  const [confirmingId, setConfirmingId] = useState<number | null>(null);
+
+  const counts = useMemo(() => {
+    const acc: Record<number, number> = {};
+    for (const t of trades) {
+      if (t.styleId != null) acc[t.styleId] = (acc[t.styleId] ?? 0) + 1;
+    }
+    return acc;
+  }, [trades]);
+
+  async function add() {
+    const name = newName.trim();
+    if (!name) return;
+    const color = STYLE_COLOR_NAMES[styles.length % STYLE_COLOR_NAMES.length];
+    await createStyle.mutateAsync({ name, color, sortOrder: styles.length });
+    setNewName("");
+    toast({ title: "Style added", description: name });
+  }
+
+  return (
+    <Card className="border-card-border bg-card p-4 sm:p-5">
+      <h2 className="text-sm font-semibold tracking-tight">Trading styles</h2>
+      <p className="mt-0.5 text-[11px] text-muted-foreground">
+        Each style is its own book — stats, demon streaks and the guardrail lock are tracked
+        separately, so a losing run in one never halts the other. Deleting a style keeps its
+        trades and marks them unassigned.
+      </p>
+
+      <div className="mt-4 flex gap-2">
+        <Input
+          value={newName}
+          onChange={(e) => setNewName(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") add();
+          }}
+          placeholder="New style — e.g. NQ scalps…"
+          className="h-9 text-sm"
+          data-testid="input-new-style"
+        />
+        <Button
+          onClick={add}
+          disabled={!newName.trim() || createStyle.isPending}
+          className="h-9 shrink-0 gap-1 text-xs"
+          data-testid="button-add-style"
+        >
+          <Plus className="h-3.5 w-3.5" /> Add
+        </Button>
+      </div>
+
+      <div className="mt-4 space-y-1.5">
+        {isLoading ? (
+          <>
+            <Skeleton className="h-11 w-full" />
+            <Skeleton className="h-11 w-full" />
+          </>
+        ) : styles.length === 0 ? (
+          <p className="rounded-md border border-dashed border-border/70 px-3 py-4 text-center text-[11px] text-muted-foreground">
+            No styles yet. Add one above to start separating your books.
+          </p>
+        ) : (
+          styles.map((s) => {
+            const editing = editingId === s.id;
+            const c = styleColor(s.color);
+            const used = counts[s.id] ?? 0;
+            return (
+              <div
+                key={s.id}
+                className="flex items-center gap-2 rounded-md border border-border/70 bg-secondary/25 px-3 py-2"
+                data-testid={`row-style-${s.id}`}
+              >
+                {editing ? (
+                  <>
+                    <Input
+                      value={editName}
+                      onChange={(e) => setEditName(e.target.value)}
+                      className="h-8 text-sm"
+                      data-testid={`input-edit-style-${s.id}`}
+                    />
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="h-7 w-7 shrink-0 text-emerald-400"
+                      onClick={async () => {
+                        if (editName.trim())
+                          await updateStyle.mutateAsync({ id: s.id, name: editName.trim() });
+                        setEditingId(null);
+                      }}
+                      data-testid={`button-save-style-${s.id}`}
+                      aria-label="Save style"
+                    >
+                      <Check className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="h-7 w-7 shrink-0"
+                      onClick={() => setEditingId(null)}
+                      aria-label="Cancel"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <span className={`h-2 w-2 shrink-0 rounded-full ${c.dot}`} />
+                    <span className="min-w-0 flex-1 truncate text-sm">{s.name}</span>
+
+                    <div className="flex shrink-0 items-center gap-1">
+                      {STYLE_COLOR_NAMES.map((name) => (
+                        <button
+                          key={name}
+                          type="button"
+                          aria-label={`Colour ${name}`}
+                          onClick={() => updateStyle.mutate({ id: s.id, color: name })}
+                          className={`h-3 w-3 rounded-full ${styleColor(name).dot} ${
+                            s.color === name
+                              ? "ring-2 ring-foreground/60 ring-offset-1 ring-offset-background"
+                              : "opacity-40 hover:opacity-100"
+                          }`}
+                          data-testid={`button-style-color-${s.id}-${name}`}
+                        />
+                      ))}
+                    </div>
+
+                    <span className="w-16 shrink-0 text-right font-mono text-[11px] text-muted-foreground">
+                      {used} {used === 1 ? "trade" : "trades"}
+                    </span>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="h-7 w-7 shrink-0 text-muted-foreground"
+                      onClick={() => {
+                        setEditingId(s.id);
+                        setEditName(s.name);
+                      }}
+                      data-testid={`button-edit-style-${s.id}`}
+                      aria-label="Rename style"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </Button>
+                    {confirmingId === s.id ? (
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        className="h-7 shrink-0 text-[11px]"
+                        onClick={async () => {
+                          await deleteStyle.mutateAsync(s.id);
+                          setConfirmingId(null);
+                          toast({
+                            title: "Style deleted",
+                            description: used
+                              ? `${used} ${used === 1 ? "trade is" : "trades are"} now unassigned.`
+                              : s.name,
+                          });
+                        }}
+                        data-testid={`button-confirm-delete-style-${s.id}`}
+                      >
+                        Delete?
+                      </Button>
+                    ) : (
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-7 w-7 shrink-0 text-muted-foreground hover:text-destructive"
+                        onClick={() => setConfirmingId(s.id)}
+                        data-testid={`button-delete-style-${s.id}`}
+                        aria-label="Delete style"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    )}
+                  </>
+                )}
+              </div>
+            );
+          })
+        )}
+      </div>
+    </Card>
+  );
+}
 
 export default function Settings() {
   const { toast } = useToast();
@@ -63,6 +261,8 @@ export default function Settings() {
           Your demons (named mistakes) and the risk guardrails that halt trading.
         </p>
       </div>
+
+      <StylesCard />
 
       <Card className="border-card-border bg-card p-4 sm:p-5">
         <h2 className="text-sm font-semibold tracking-tight">Demons</h2>
