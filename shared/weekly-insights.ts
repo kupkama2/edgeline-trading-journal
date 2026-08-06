@@ -14,6 +14,7 @@
 import type { MistakeTag, TradeWithTags } from "./schema";
 import { aggregate, computeMetrics, mistakeCostLeaderboard } from "./metrics";
 import { demonCountsInRange } from "./demons";
+import { dayKey } from "./daily";
 
 /** Monday 00:00 local, as the canonical start of a trading week. */
 export function startOfWeek(now = new Date()): Date {
@@ -23,10 +24,10 @@ export function startOfWeek(now = new Date()): Date {
   return d;
 }
 
+/** The week's canonical key is just its Monday's day-key — one formatter owns
+    yyyy-MM-dd, so the calendar and the weekly review can never disagree. */
 export function weekStartKey(d = startOfWeek()): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
-    d.getDate(),
-  ).padStart(2, "0")}`;
+  return dayKey(d);
 }
 
 /** One trade's written reflection, paired with how it actually went. */

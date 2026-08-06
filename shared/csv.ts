@@ -13,6 +13,8 @@
  */
 import type { Trade, TradeWithTags, MistakeTag } from "./schema";
 import { computeMetrics } from "./metrics";
+import { parseNum } from "./import-parse";
+import { dayKey } from "./daily";
 
 /* ------------------------------- writing ------------------------------- */
 
@@ -101,13 +103,12 @@ export function tradesToCsv(
   return rows.map((r) => r.map(cell).join(",")).join("\n");
 }
 
-const pad = (n: number) => String(n).padStart(2, "0");
-
-function localDate(d: Date): string {
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
+// The date column reuses the calendar's own key so a CSV grouped by `date`
+// always matches what the daily page shows for the same day.
+const localDate = dayKey;
 
 function localTime(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
   return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
@@ -228,14 +229,9 @@ export interface CsvParseResult {
   missingFields: string[];
 }
 
-function num(raw: string | undefined): number | null {
-  if (raw == null) return null;
-  // Strips currency, thousands separators and a trailing unit ("0.5 BTC").
-  const cleaned = raw.replace(/[^0-9.\-]/g, "");
-  if (cleaned === "" || cleaned === "-" || cleaned === ".") return null;
-  const n = Number(cleaned);
-  return isFinite(n) ? n : null;
-}
+// Number cleaning is shared with the paste importer — both read the same
+// venue formats ("37,177.47 USDT"), and two copies of that regex WILL drift.
+const num = parseNum;
 
 function toIso(raw: string | undefined): string | null {
   if (!raw) return null;

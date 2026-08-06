@@ -12,8 +12,12 @@
  * the client renders it without a round trip, and an export can reuse it.
  */
 import type { MistakeTag, TradeWithTags } from "./schema";
-import { computeMetrics } from "./metrics";
-import { dayKeyOfIso } from "./daily";
+import { closedTrades, computeMetrics } from "./metrics";
+import { summarizeDays } from "./daily";
+
+// Re-exported so slice consumers keep one import site for "trades stats may
+// speak about"; the definition lives with the rest of the metric vocabulary.
+export { closedTrades };
 
 /** One bucket of trades, already reduced to the numbers worth showing. */
 export interface Slice {
@@ -32,14 +36,6 @@ export interface Slice {
 }
 
 const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
-
-/**
- * Trades a breakdown can speak about: closed, with a realised outcome.
- * A pending order has no result, and an open one has not finished being wrong.
- */
-export function closedTrades(trades: TradeWithTags[]): TradeWithTags[] {
-  return trades.filter((t) => t.status === "closed" && t.exitPrice != null);
-}
 
 /**
  * Bucket trades by an arbitrary key.
@@ -163,19 +159,12 @@ export interface DayResult {
 }
 
 export function dailyResults(trades: TradeWithTags[]): DayResult[] {
-  const byDay = new Map<string, DayResult>();
-  for (const t of closedTrades(trades)) {
-    // Realised P&L belongs to the day it was realised, which is the convention
-    // every broker statement uses. Falls back to entry for a same-day trade
-    // whose exit time was never recorded.
-    const day = dayKeyOfIso(t.exitTime) ?? dayKeyOfIso(t.entryTime);
-    if (!day) continue;
-    const m = computeMetrics(t);
-    const row = byDay.get(day) ?? { day, r: 0, pnl: 0, trades: 0 };
-    row.r += m.actualR ?? 0;
-    row.pnl += m.actualPnL ?? 0;
-    row.trades += 1;
-    byDay.set(day, row);
-  }
-  return Array.from(byDay.values()).sort((a, b) => a.day.localeCompare(b.day));
+  // One fold owns "which day does a result belong to": summarizeDays, which the
+  // calendar already uses. Deriving from it (rather than re-implementing the
+  // exit-day attribution here) means the equity curve, the drawdown figures and
+  // the calendar can never disagree about what a day made.
+  return Array.from(summarizeDays(trades).values())
+    .filter((s) => s.closed > 0)
+    .map((s) => ({ day: s.day, r: s.totalR, pnl: s.totalPnL, trades: s.closed }))
+    .sort((a, b) => a.day.localeCompare(b.day));
 }

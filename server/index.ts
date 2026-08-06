@@ -103,15 +103,15 @@ app.use((req, res, next) => {
   // this serves both the API and the client.
   // It is the only port that is not firewalled.
   const port = parseInt(process.env.PORT || "5000", 10);
-  httpServer.listen(
-    {
-      port,
-      host: "0.0.0.0",
-      // Windows sockets reject SO_REUSEPORT with ENOTSUP.
-      reusePort: process.platform !== "win32",
-    },
-    () => {
-      log(`serving on port ${port}`);
-    },
-  );
+  /*
+   * Deliberately NOT reusePort. SO_REUSEPORT lets a second copy of the server
+   * bind the same port, and the kernel then load-balances between them — so a
+   * stale process serves half of all requests and an updated build appears
+   * randomly broken. This app runs as exactly one process everywhere it is
+   * deployed; if the port is taken, the right outcome is a loud EADDRINUSE,
+   * not silently split traffic.
+   */
+  httpServer.listen({ port, host: "0.0.0.0" }, () => {
+    log(`serving on port ${port}`);
+  });
 })();

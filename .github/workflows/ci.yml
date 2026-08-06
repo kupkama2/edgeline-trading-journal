@@ -26,6 +26,11 @@ jobs:
       - name: Typecheck
         run: npx tsc --noEmit
 
+      # The shared modules are the app's arithmetic — R, point values, parsing,
+      # drawdown. These tests encode every regression found so far.
+      - name: Test
+        run: npm test
+
       # Runs the real build script, so a broken vite/esbuild config fails here
       # rather than on Render.
       - name: Build
