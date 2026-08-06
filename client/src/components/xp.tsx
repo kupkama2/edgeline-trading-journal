@@ -38,39 +38,67 @@ const SEEN_KEY = "edgeline.xp.seen";
 export function XpToaster() {
   const p = useProgression();
   const { toast } = useToast();
-  const [burst, setBurst] = useState(false);
-  const seeded = useRef(false);
-  const prev = useRef<{ xp: number; level: number } | null>(null);
+  const [burst, setBurst] = useState<null | "level" | "clean">(null);
+  const prev = useRef<{ ids: Set<string>; level: number } | null>(null);
 
   useEffect(() => {
-    if (!seeded.current) {
-      seeded.current = true;
-      prev.current = { xp: p.level.totalXp, level: p.level.level };
+    const ids = new Set(p.events.map((e) => e.id));
+    if (!prev.current) {
+      // First render absorbs the backlog silently — opening the app after a
+      // week of entries must not detonate a pile of toasts.
+      prev.current = { ids, level: p.level.level };
       localStorage.setItem(SEEN_KEY, String(p.level.totalXp));
       return;
     }
-    const last = prev.current!;
-    if (p.level.totalXp > last.xp) {
-      const gained = p.level.totalXp - last.xp;
-      if (p.level.level > last.level) {
-        setBurst(true);
-        setTimeout(() => setBurst(false), 1400);
-        toast({
-          title: `Level ${p.level.level} — ${p.level.title}`,
-          description: "Earned by process, not P&L. Keep writing.",
-        });
-      } else {
-        toast({ title: `+${gained} XP`, description: "The journal noticed." });
-      }
-      localStorage.setItem(SEEN_KEY, String(p.level.totalXp));
+
+    // Diffing event IDs rather than totals is what makes the reward
+    // INFORMATIONAL (the SDT rule): the toast can say which acts earned,
+    // not just how much arrived.
+    const fresh = p.events.filter((e) => !prev.current!.ids.has(e.id));
+    const lastLevel = prev.current.level;
+    prev.current = { ids, level: p.level.level };
+    if (!fresh.length) return;
+
+    const gained = fresh.reduce((a, e) => a + e.points, 0);
+    const itemised = fresh
+      .slice(0, 4)
+      .map((e) => `${e.label} +${e.points}`)
+      .join(" · ");
+    const clean = fresh.some((e) => e.id.endsWith(":clean"));
+
+    const fire = (kind: "level" | "clean") => {
+      setBurst(kind);
+      setTimeout(() => setBurst(null), 1400);
+    };
+
+    if (p.level.level > lastLevel) {
+      fire("level");
+      toast({
+        title: `Level ${p.level.level} — ${p.level.title}`,
+        description: itemised || "Earned by process, not P&L. Keep writing.",
+      });
+    } else if (clean) {
+      // The one moment that gets its own flourish besides levelling: a close
+      // with no demons on it. Not because it won — the toast would fire the
+      // same on a stopped-out trade — but because nothing went wrong that
+      // you did to yourself.
+      fire("clean");
+      toast({ title: `Clean close · +${gained} XP`, description: itemised });
+    } else {
+      toast({ title: `+${gained} XP`, description: itemised });
     }
-    prev.current = { xp: p.level.totalXp, level: p.level.level };
-  }, [p.level.totalXp, p.level.level, p.level.title, toast]);
+    localStorage.setItem(SEEN_KEY, String(p.level.totalXp));
+  }, [p.events, p.level.totalXp, p.level.level, p.level.title, toast]);
 
   if (!burst) return null;
   return (
-    <div className="xp-burst pointer-events-none fixed inset-0 z-[100]" aria-hidden>
-      {Array.from({ length: 18 }, (_, i) => (
+    <div
+      className={`xp-burst pointer-events-none fixed inset-0 z-[100] ${
+        burst === "clean" ? "xp-burst--clean" : ""
+      }`}
+      aria-hidden
+    >
+      {Array.from({ length: burst === "clean" ? 10 : 18 }, (_, i) => (
         <span key={i} style={{ ["--i" as any]: i }} />
       ))}
     </div>
