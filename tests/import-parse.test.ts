@@ -43,8 +43,13 @@ describe("primitives", () => {
     expect(parseNum("n/a")).toBeNull();
   });
 
-  it("reads venue timestamps", () => {
-    expect(parseVenueTime("2026-08-05 21:30:51")).toBe("2026-08-05T21:30:51Z");
+  it("reads venue timestamps as LOCAL time", () => {
+    // The venue prints the trader's wall clock; whatever the zone, 21:30 on
+    // the paste must stay 21:30 on the clock every breakdown buckets by.
+    const iso = parseVenueTime("2026-08-05 21:30:51")!;
+    const d = new Date(iso);
+    expect(d.getHours()).toBe(21);
+    expect(d.getMinutes()).toBe(30);
     expect(parseVenueTime("junk")).toBeNull();
   });
 });

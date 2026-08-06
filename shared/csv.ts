@@ -13,7 +13,7 @@
  */
 import type { Trade, TradeWithTags, MistakeTag } from "./schema";
 import { computeMetrics } from "./metrics";
-import { parseNum } from "./import-parse";
+import { parseNum, parseVenueTime } from "./import-parse";
 import { dayKey } from "./daily";
 
 /* ------------------------------- writing ------------------------------- */
@@ -235,15 +235,12 @@ const num = parseNum;
 
 function toIso(raw: string | undefined): string | null {
   if (!raw) return null;
-  const s = raw.trim();
-  // "2026-08-05 21:30:51" and friends: no zone, so read as local rather than
-  // silently shifting a morning trade into the previous evening.
-  const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/.exec(s);
-  if (m) {
-    const [, y, mo, d, h, mi, sec] = m;
-    return new Date(+y, +mo - 1, +d, +h, +mi, +(sec ?? 0)).toISOString();
-  }
-  const parsed = new Date(s);
+  // Naive venue timestamps ("2026-08-05 21:30:51") share one reader with the
+  // paste importer, which treats them as LOCAL time. Anything else — an ISO
+  // string with a zone, a locale date — falls through to the Date parser.
+  const venue = parseVenueTime(raw);
+  if (venue) return venue;
+  const parsed = new Date(raw.trim());
   return isNaN(parsed.getTime()) ? null : parsed.toISOString();
 }
 
