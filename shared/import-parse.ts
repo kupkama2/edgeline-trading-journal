@@ -28,10 +28,14 @@ export type ImportSource =
 export interface ImportCandidate {
   symbol: string;
   direction: "long" | "short";
-  /** Position size in base units (contracts, or coins for crypto). */
+  /** The size as the venue reported it — interpret with `sizeUnit`. */
   size: number | null;
-  /** Quote-currency notional when the venue reported it that way. */
-  notional: number | null;
+  /**
+   * 'base' for futures contracts, 'quote' for the USD(T) notional crypto venues
+   * report. Kept rather than converted: notional is how a crypto position is
+   * actually decided, so the number entered should be the number shown.
+   */
+  sizeUnit: "base" | "quote";
   entryPrice: number;
   initialStop: number | null;
   initialTarget: number | null;
@@ -150,13 +154,6 @@ function parseOtoco(text: string): ImportCandidate | null {
   const stop = parseNum(find(/\bStop Price\s*[:\s]*\s*([\d.,]+)/i, c));
 
   const warnings: string[] = [];
-  let size: number | null = null;
-  if (notional != null && entryPrice > 0) {
-    size = notional / entryPrice;
-    warnings.push(
-      `Size converted from ${notional} quote units at ${entryPrice} → ${size.toFixed(6)}`,
-    );
-  }
 
   // The dialog names no instrument, so the symbol is only recoverable if the
   // paste happened to include it. The preview asks for it when it is missing
@@ -169,8 +166,8 @@ function parseOtoco(text: string): ImportCandidate | null {
   return {
     symbol,
     direction,
-    size,
-    notional,
+    size: notional,
+    sizeUnit: "quote",
     entryPrice,
     initialStop: stop,
     initialTarget: target,
@@ -198,22 +195,18 @@ function parseBinanceRow(cols: string[], raw: string): ImportCandidate | null {
   const entryPrice = parseNum(cols[4]);
   if (!direction || entryPrice == null) return null;
 
+  // Binance reports the order in quote notional ("37,177.47 USDT"), which is
+  // how the position was actually sized — so it is kept verbatim.
   const notional = parseNum(cols[5]);
-  const warnings: string[] = [];
-  let size: number | null = null;
-  if (notional != null && entryPrice > 0) {
-    size = notional / entryPrice;
-    warnings.push(
-      `Size converted from ${notional} quote units at ${entryPrice} → ${size.toFixed(6)}`,
-    );
-  }
-  warnings.push("No stop or target in this view — add them when it fills.");
+  const warnings: string[] = [
+    "No stop or target in this view — add them when it fills.",
+  ];
 
   return {
     symbol: cleanSymbol(cols[1] ?? ""),
     direction,
-    size,
-    notional,
+    size: notional,
+    sizeUnit: "quote",
     entryPrice,
     initialStop: null,
     initialTarget: null,
@@ -251,7 +244,7 @@ function parseFuturesRow(cols: string[], raw: string): ImportCandidate | null {
     symbol: cleanSymbol(cols[0] ?? ""),
     direction,
     size,
-    notional: null,
+    sizeUnit: "base", // futures Qty is contracts
     entryPrice,
     initialStop: stop,
     initialTarget: target,

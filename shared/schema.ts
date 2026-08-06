@@ -38,6 +38,14 @@ export const trades = pgTable("trades", {
   symbol: text("symbol").notNull(),
   direction: text("direction").notNull(), // 'long' | 'short'
   size: doublePrecision("size").notNull(),
+  /**
+   * How `size` is denominated. Futures are sized in contracts ("base"); crypto
+   * is usually sized by USD notional ("quote"), which is how the venues report
+   * it and how it is actually decided. Storing the unit beats converting on the
+   * way in — the number you typed is the number you see.
+   * Defaults to "base" so every pre-existing row keeps its meaning.
+   */
+  sizeUnit: text("size_unit").notNull().default("base"), // 'base' | 'quote'
   entryPrice: doublePrecision("entry_price").notNull(),
   // Nullable because a PENDING trade is just a resting limit order — it has an
   // entry and nothing else yet. Both become required the moment it fills; see
@@ -93,6 +101,8 @@ export function parsePlaybook(json: string | null | undefined): TradePlaybook | 
 }
 
 export const directionEnum = z.enum(["long", "short"]);
+/** 'base' = contracts/coins, 'quote' = USD(T) notional. */
+export const sizeUnitEnum = z.enum(["base", "quote"]);
 /**
  * 'pending' is a resting limit order that has not filled — logged so you can
  * see how many positions could open, with rationale added later. It carries no
@@ -122,6 +132,7 @@ const tradeFields = createInsertSchema(trades)
     styleId: z.number().int().nullable().optional(),
     direction: directionEnum,
     status: statusEnum.optional(),
+    sizeUnit: sizeUnitEnum.optional(),
     initialStop: z.number().nullable().optional(),
     initialTarget: z.number().nullable().optional(),
     exitReason: exitReasonEnum.nullable().optional(),

@@ -17,19 +17,33 @@ export interface TradeMetrics {
   dollarsLeftOnTable: number | null;
 }
 
+/**
+ * Position size in base units (contracts or coins), whatever unit it was
+ * entered in. A crypto trade sized as "4,655 USDT" holds 4655/entry coins, and
+ * every P&L and risk figure below is per-unit-of-price — so they all need base
+ * units, not the number the user typed.
+ */
+export function positionQty(t: Trade): number {
+  if (t.sizeUnit === "quote") {
+    return t.entryPrice > 0 ? t.size / t.entryPrice : 0;
+  }
+  return t.size;
+}
+
 export function computeMetrics(t: Trade): TradeMetrics {
   const sign = t.direction === "long" ? 1 : -1;
+  const qty = positionQty(t);
   // A pending trade has no stop yet, so it has no 1R. Guard explicitly: without
   // this, null coerces to 0 and every R figure silently becomes entry-relative
   // nonsense rather than being reported as unknown.
   const risk = t.initialStop == null ? 0 : Math.abs(t.entryPrice - t.initialStop);
-  const riskDollars = risk * t.size;
+  const riskDollars = risk * qty;
   const safe = risk > 0;
 
   const actualR =
     safe && t.exitPrice != null ? (sign * (t.exitPrice - t.entryPrice)) / risk : null;
   const actualPnL =
-    t.exitPrice != null ? sign * (t.exitPrice - t.entryPrice) * t.size : null;
+    t.exitPrice != null ? sign * (t.exitPrice - t.entryPrice) * qty : null;
   const mfeR = safe && t.mfe != null ? (sign * (t.mfe - t.entryPrice)) / risk : null;
   const maeR = safe && t.mae != null ? (sign * (t.mae - t.entryPrice)) / risk : null;
 
@@ -70,7 +84,7 @@ export function computeMetrics(t: Trade): TradeMetrics {
 
 export function rToDollars(r: number, t: Trade): number {
   if (t.initialStop == null) return 0; // no stop yet ⇒ no defined 1R to scale by
-  return r * Math.abs(t.entryPrice - t.initialStop) * t.size;
+  return r * Math.abs(t.entryPrice - t.initialStop) * positionQty(t);
 }
 
 /** $ cost attributable to poor management / left-on-table for a single trade. */

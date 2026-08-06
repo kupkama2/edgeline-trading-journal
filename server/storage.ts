@@ -79,6 +79,7 @@ CREATE TABLE IF NOT EXISTS trades (
   symbol TEXT NOT NULL,
   direction TEXT NOT NULL,
   size DOUBLE PRECISION NOT NULL,
+  size_unit TEXT NOT NULL DEFAULT 'base',
   entry_price DOUBLE PRECISION NOT NULL,
   -- Nullable: a pending trade is a resting order with no risk defined yet.
   initial_stop DOUBLE PRECISION,
@@ -102,6 +103,8 @@ CREATE TABLE IF NOT EXISTS trades (
 -- two columns had to lose NOT NULL. Both DDL statements are no-ops once applied.
 ALTER TABLE trades ALTER COLUMN initial_stop DROP NOT NULL;
 ALTER TABLE trades ALTER COLUMN initial_target DROP NOT NULL;
+-- Existing rows were all sized in contracts/coins, which is exactly 'base'.
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS size_unit TEXT NOT NULL DEFAULT 'base';
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS rationale TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS rationale_tags TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS playbook TEXT;

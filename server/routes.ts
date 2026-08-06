@@ -12,6 +12,7 @@ import {
   parseScreenshotSchema,
   analyzeRationaleSchema,
   directionEnum,
+  sizeUnitEnum,
 } from "@shared/schema";
 import { normalizeSymbol } from "@shared/symbols";
 import { z } from "zod";
@@ -132,6 +133,7 @@ const importBodySchema = z.object({
         symbol: z.string().min(1),
         direction: directionEnum,
         size: z.number().positive(),
+        sizeUnit: sizeUnitEnum.optional(),
         entryPrice: z.number(),
         initialStop: z.number().nullable().optional(),
         initialTarget: z.number().nullable().optional(),
@@ -369,6 +371,7 @@ export async function registerRoutes(
             symbol: normalizeSymbol(c.symbol),
             direction: c.direction,
             size: c.size,
+            sizeUnit: c.sizeUnit ?? "base",
             entryPrice: c.entryPrice,
             initialStop: c.initialStop ?? null,
             initialTarget: c.initialTarget ?? null,
