@@ -11,12 +11,14 @@ import { LoginGate } from "@/components/login-gate";
 import NotFound from "@/pages/not-found";
 import Journal from "@/pages/journal";
 import Dashboard from "@/pages/dashboard";
+import Daily from "@/pages/daily";
 import Settings from "@/pages/settings";
 
 function AppRouter() {
   return (
     <Switch>
       <Route path="/" component={Journal} />
+      <Route path="/daily" component={Daily} />
       <Route path="/dashboard" component={Dashboard} />
       <Route path="/settings" component={Settings} />
       <Route component={NotFound} />

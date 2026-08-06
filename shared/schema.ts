@@ -250,6 +250,30 @@ export const insertWeeklyReviewSchema = createInsertSchema(weeklyReviews)
 export type InsertWeeklyReview = z.infer<typeof insertWeeklyReviewSchema>;
 export type WeeklyReview = typeof weeklyReviews.$inferSelect;
 
+/* =========================== daily notes ============================ */
+
+/**
+ * One free-form file per trading day.
+ *
+ * This is deliberately a single text blob, not structured fields: the point is
+ * to be able to dump whatever happened — state of mind, what the market did,
+ * why a trade was skipped — at any moment of the day without a form in the way.
+ * Structure comes later, from reading it next to the day's computed numbers;
+ * the daily report derives everything quantitative from the trades themselves.
+ */
+export const dailyNotes = pgTable("daily_notes", {
+  id: serial("id").primaryKey(),
+  day: text("day").notNull().unique(), // yyyy-MM-dd, local trading day
+  body: text("body").notNull().default(""),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const upsertDailyNoteSchema = z.object({
+  body: z.string(),
+});
+
+export type DailyNote = typeof dailyNotes.$inferSelect;
+
 /* ===================== API payloads (screenshots) =================== */
 
 export const parseScreenshotSchema = z.object({
