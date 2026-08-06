@@ -80,8 +80,9 @@ CREATE TABLE IF NOT EXISTS trades (
   direction TEXT NOT NULL,
   size DOUBLE PRECISION NOT NULL,
   entry_price DOUBLE PRECISION NOT NULL,
-  initial_stop DOUBLE PRECISION NOT NULL,
-  initial_target DOUBLE PRECISION NOT NULL,
+  -- Nullable: a pending trade is a resting order with no risk defined yet.
+  initial_stop DOUBLE PRECISION,
+  initial_target DOUBLE PRECISION,
   entry_time TEXT NOT NULL,
   exit_price DOUBLE PRECISION,
   exit_time TEXT,
@@ -97,6 +98,10 @@ CREATE TABLE IF NOT EXISTS trades (
   rationale_tags TEXT,
   playbook TEXT
 );
+-- Pending trades are resting limit orders with no stop or target yet, so these
+-- two columns had to lose NOT NULL. Both DDL statements are no-ops once applied.
+ALTER TABLE trades ALTER COLUMN initial_stop DROP NOT NULL;
+ALTER TABLE trades ALTER COLUMN initial_target DROP NOT NULL;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS rationale TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS rationale_tags TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS playbook TEXT;

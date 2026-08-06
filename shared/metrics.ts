@@ -19,7 +19,10 @@ export interface TradeMetrics {
 
 export function computeMetrics(t: Trade): TradeMetrics {
   const sign = t.direction === "long" ? 1 : -1;
-  const risk = Math.abs(t.entryPrice - t.initialStop);
+  // A pending trade has no stop yet, so it has no 1R. Guard explicitly: without
+  // this, null coerces to 0 and every R figure silently becomes entry-relative
+  // nonsense rather than being reported as unknown.
+  const risk = t.initialStop == null ? 0 : Math.abs(t.entryPrice - t.initialStop);
   const riskDollars = risk * t.size;
   const safe = risk > 0;
 
@@ -32,7 +35,9 @@ export function computeMetrics(t: Trade): TradeMetrics {
 
   let potentialR: number | null = null;
   if (safe && t.noManagementOutcome === "target_first") {
-    potentialR = (sign * (t.initialTarget - t.entryPrice)) / risk;
+    if (t.initialTarget != null) {
+      potentialR = (sign * (t.initialTarget - t.entryPrice)) / risk;
+    }
   } else if (t.noManagementOutcome === "stop_first") {
     potentialR = -1;
   }
@@ -64,6 +69,7 @@ export function computeMetrics(t: Trade): TradeMetrics {
 }
 
 export function rToDollars(r: number, t: Trade): number {
+  if (t.initialStop == null) return 0; // no stop yet ⇒ no defined 1R to scale by
   return r * Math.abs(t.entryPrice - t.initialStop) * t.size;
 }
 

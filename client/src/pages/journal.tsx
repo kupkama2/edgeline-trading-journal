@@ -1694,8 +1694,12 @@ function OpenTradeRow({
   onSelect: () => void;
   onView: () => void;
 }) {
-  const risk = Math.abs(t.entryPrice - t.initialStop);
-  const rr = risk ? Math.abs(t.initialTarget - t.entryPrice) / risk : 0;
+  // Pending trades have no stop or target yet, so there is no R:R to show.
+  const risk = t.initialStop == null ? 0 : Math.abs(t.entryPrice - t.initialStop);
+  const rr =
+    risk && t.initialTarget != null
+      ? Math.abs(t.initialTarget - t.entryPrice) / risk
+      : 0;
   const rationaleTags = parseTags(t.rationaleTags);
   return (
     <div

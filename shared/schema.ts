@@ -39,12 +39,15 @@ export const trades = pgTable("trades", {
   direction: text("direction").notNull(), // 'long' | 'short'
   size: doublePrecision("size").notNull(),
   entryPrice: doublePrecision("entry_price").notNull(),
-  initialStop: doublePrecision("initial_stop").notNull(),
-  initialTarget: doublePrecision("initial_target").notNull(),
+  // Nullable because a PENDING trade is just a resting limit order — it has an
+  // entry and nothing else yet. Both become required the moment it fills; see
+  // insertTradeSchema's refinement.
+  initialStop: doublePrecision("initial_stop"),
+  initialTarget: doublePrecision("initial_target"),
   entryTime: text("entry_time").notNull(), // ISO
   exitPrice: doublePrecision("exit_price"),
   exitTime: text("exit_time"),
-  status: text("status").notNull().default("open"), // 'open' | 'closed'
+  status: text("status").notNull().default("open"), // 'pending' | 'open' | 'closed'
   exitReason: text("exit_reason"), // 'target' | 'stop' | 'trailed' | 'manual_early' | 'manual_late' | 'breakeven' | 'other'
   mae: doublePrecision("mae"),
   mfe: doublePrecision("mfe"),
@@ -90,7 +93,13 @@ export function parsePlaybook(json: string | null | undefined): TradePlaybook | 
 }
 
 export const directionEnum = z.enum(["long", "short"]);
-export const statusEnum = z.enum(["open", "closed"]);
+/**
+ * 'pending' is a resting limit order that has not filled — logged so you can
+ * see how many positions could open, with rationale added later. It carries no
+ * risk yet, so it is excluded from every P&L, demon and guardrail calculation
+ * (all of which key off 'closed').
+ */
+export const statusEnum = z.enum(["pending", "open", "closed"]);
 export const exitReasonEnum = z.enum([
   "target",
   "stop",
@@ -106,18 +115,48 @@ export const noManagementOutcomeEnum = z.enum([
   "undetermined",
 ]);
 
-export const insertTradeSchema = createInsertSchema(trades)
+const tradeFields = createInsertSchema(trades)
   .omit({ id: true })
   .extend({
     symbol: z.string().min(1),
     styleId: z.number().int().nullable().optional(),
     direction: directionEnum,
     status: statusEnum.optional(),
+    initialStop: z.number().nullable().optional(),
+    initialTarget: z.number().nullable().optional(),
     exitReason: exitReasonEnum.nullable().optional(),
     noManagementOutcome: noManagementOutcomeEnum.nullable().optional(),
   });
 
-export const updateTradeSchema = insertTradeSchema.partial();
+/**
+ * A pending trade may have no stop and no target — it is only a resting order.
+ * Once it is open or closed both are mandatory: 1R is defined as entry-to-stop,
+ * so a live position without a stop would silently poison every R-based metric.
+ */
+function requireRiskOnceLive(
+  v: { status?: string | null; initialStop?: number | null; initialTarget?: number | null },
+  ctx: z.RefinementCtx,
+) {
+  if ((v.status ?? "open") === "pending") return;
+  for (const field of ["initialStop", "initialTarget"] as const) {
+    if (v[field] == null) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [field],
+        message: `${field} is required once a trade is open or closed`,
+      });
+    }
+  }
+}
+
+export const insertTradeSchema = tradeFields.superRefine(requireRiskOnceLive);
+
+/**
+ * Partial updates can't be refined the same way — a PATCH that only sets tags
+ * carries no status, and the rule needs the merged row. Routes enforce it after
+ * merging instead; see assertRiskOnceLive in server/routes.ts.
+ */
+export const updateTradeSchema = tradeFields.partial();
 
 export type InsertTrade = z.infer<typeof insertTradeSchema>;
 export type UpdateTrade = z.infer<typeof updateTradeSchema>;

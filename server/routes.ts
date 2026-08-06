@@ -11,6 +11,7 @@ import {
   insertWeeklyReviewSchema,
   parseScreenshotSchema,
   analyzeRationaleSchema,
+  directionEnum,
 } from "@shared/schema";
 import { normalizeSymbol } from "@shared/symbols";
 import { z } from "zod";
@@ -120,6 +121,24 @@ const tradeBodySchema = z.object({
 const tradeUpdateBodySchema = z.object({
   trade: updateTradeSchema,
   mistakeTagIds: z.array(z.number()).optional(),
+});
+
+/** Confirmed import candidates. Stop and target stay optional — these land as pending. */
+const importBodySchema = z.object({
+  styleId: z.number().int().nullable().optional(),
+  trades: z
+    .array(
+      z.object({
+        symbol: z.string().min(1),
+        direction: directionEnum,
+        size: z.number().positive(),
+        entryPrice: z.number(),
+        initialStop: z.number().nullable().optional(),
+        initialTarget: z.number().nullable().optional(),
+        entryTime: z.string().nullable().optional(),
+      }),
+    )
+    .min(1),
 });
 
 /* ----------------------- Perplexity Sonar transport ----------------------- */
@@ -301,6 +320,25 @@ export async function registerRoutes(
     const trade = parsed.data.trade.symbol
       ? { ...parsed.data.trade, symbol: normalizeSymbol(parsed.data.trade.symbol) }
       : parsed.data.trade;
+
+    // The "stop and target required once live" rule needs the merged row: a
+    // PATCH that only flips status to 'open' carries neither field itself.
+    const existing = await storage.getTrade(Number(req.params.id));
+    if (!existing) return res.status(404).json({ message: "Trade not found" });
+    const merged = { ...existing, ...trade };
+    if ((merged.status ?? "open") !== "pending") {
+      const missing = (["initialStop", "initialTarget"] as const).filter(
+        (f) => merged[f] == null,
+      );
+      if (missing.length) {
+        return res.status(400).json({
+          message:
+            "A trade needs a stop and a target once it is open — 1R is measured entry-to-stop.",
+          issues: missing.map((f) => ({ path: ["trade", f], message: `${f} is required` })),
+        });
+      }
+    }
+
     const updated = await storage.updateTrade(
       Number(req.params.id),
       trade,
@@ -308,6 +346,40 @@ export async function registerRoutes(
     );
     if (!updated) return res.status(404).json({ message: "Trade not found" });
     res.json(updated);
+  });
+
+  /**
+   * Batch import of resting orders pasted from a venue. Parsing is shared with
+   * the client (shared/import-parse.ts) so the preview the user confirmed is
+   * exactly what gets re-derived here — the client sends candidates, never raw
+   * text it has already interpreted differently.
+   */
+  app.post("/api/trades/import", async (req, res) => {
+    const parsed = importBodySchema.safeParse(req.body);
+    if (!parsed.success)
+      return res.status(400).json({ message: "Invalid import", issues: parsed.error.issues });
+
+    const now = new Date().toISOString();
+    const created = [];
+    for (const c of parsed.data.trades) {
+      created.push(
+        await storage.createTrade(
+          {
+            styleId: parsed.data.styleId ?? null,
+            symbol: normalizeSymbol(c.symbol),
+            direction: c.direction,
+            size: c.size,
+            entryPrice: c.entryPrice,
+            initialStop: c.initialStop ?? null,
+            initialTarget: c.initialTarget ?? null,
+            entryTime: c.entryTime ?? now,
+            status: "pending",
+          },
+          [],
+        ),
+      );
+    }
+    res.status(201).json({ imported: created.length, trades: created });
   });
 
   app.delete("/api/trades/:id", async (req, res) => {
