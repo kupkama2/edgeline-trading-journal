@@ -28,7 +28,8 @@ if (!DATABASE_URL) {
   );
 }
 
-/* Supabase's pooler caps prepared statements, so disable them (`prepare: false`). */
+/* Neon's pooled endpoint is PgBouncer in transaction mode, which can't hold
+   prepared statements across checkouts — hence `prepare: false`. */
 const sql = postgres(DATABASE_URL, { prepare: false });
 
 export const db = drizzle(sql);

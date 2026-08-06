@@ -3,7 +3,10 @@ services:
     name: edgeline
     runtime: node
     plan: free
-    buildCommand: npm ci && npm run build
+    # --include=dev is load-bearing: NODE_ENV=production is set below, and npm
+    # omits devDependencies when it sees that. vite/esbuild/tsx all live in
+    # devDependencies, so without this the build has no build tools.
+    buildCommand: npm ci --include=dev && npm run build
     startCommand: npm start
     healthCheckPath: /
     envVars:
