@@ -15,6 +15,7 @@ import {
   useStyles,
   useCreateStyle,
   useUpdateStyle,
+  useStorageUsage,
   useDeleteStyle,
 } from "@/lib/data";
 import { STYLE_COLOR_NAMES, styleColor } from "@/lib/style-filter";
@@ -463,6 +464,41 @@ export default function Settings() {
           </li>
         </ul>
       </Card>
+
+      <StorageCard />
     </div>
+  );
+}
+
+/**
+ * Where the space goes. Screenshots are the only thing in this app that can
+ * meaningfully consume a 512 MB free-tier database, so their cost gets a
+ * gauge — storage problems should be watched approaching, not discovered.
+ */
+function StorageCard() {
+  const { data } = useStorageUsage();
+  if (!data) return null;
+  const mb = data.bytes / (1024 * 1024);
+  const budgetMb = 512; // Neon free tier
+  const pct = Math.min(100, (mb / budgetMb) * 100);
+  const avgKb = data.images ? data.bytes / data.images / 1024 : 0;
+  return (
+    <Card className="border-card-border bg-card p-4 sm:p-5" data-testid="card-storage">
+      <h2 className="text-sm font-semibold tracking-tight">Screenshot storage</h2>
+      <p className="mt-0.5 text-[11px] text-muted-foreground">
+        Images are recompressed to review quality before saving (~40–90 KB each) and load only
+        when a trade's detail is opened.
+      </p>
+      <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-secondary/60">
+        <div
+          className={`h-full rounded-full ${pct > 80 ? "bg-red-500" : pct > 50 ? "bg-amber-500" : "bg-primary"}`}
+          style={{ width: `${Math.max(pct, 0.5)}%` }}
+        />
+      </div>
+      <p className="mt-1.5 font-mono text-[11px] text-muted-foreground" data-testid="text-storage">
+        {data.images} {data.images === 1 ? "image" : "images"} · {mb.toFixed(1)} MB of ~
+        {budgetMb} MB free tier{data.images > 0 && ` · ~${Math.round(avgKb)} KB avg`}
+      </p>
+    </Card>
   );
 }

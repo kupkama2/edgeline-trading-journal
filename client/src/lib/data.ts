@@ -2,6 +2,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "./queryClient";
 import type {
   DailyNote,
+  TradeImage,
   InsertTrade,
   MistakeTag,
   TradeWithTags,
@@ -111,6 +112,51 @@ export function useImportCsv() {
       }[];
     }) => (await apiRequest("POST", "/api/trades/import-csv", v)).json(),
     onSuccess: invalidateTrades,
+  });
+}
+
+/** Fetched per trade, only when a detail view opens — never with the list. */
+export function useTradeImages(tradeId: number | null) {
+  return useQuery<TradeImage[]>({
+    queryKey: ["/api/trades", tradeId, "images"],
+    queryFn: async () =>
+      (await apiRequest("GET", `/api/trades/${tradeId}/images`)).json(),
+    enabled: tradeId != null,
+  });
+}
+
+export function useAddTradeImage() {
+  return useMutation({
+    mutationFn: async (v: { tradeId: number; kind?: "setup" | "outcome" | "other"; data: string }) =>
+      (
+        await apiRequest("POST", `/api/trades/${v.tradeId}/images`, {
+          kind: v.kind,
+          data: v.data,
+        })
+      ).json(),
+    onSuccess: (_d, v) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/trades", v.tradeId, "images"] });
+      invalidateTrades(); // the list's imageCount changed
+    },
+  });
+}
+
+export function useDeleteTradeImage() {
+  return useMutation({
+    mutationFn: async (v: { id: number; tradeId: number }) => {
+      await apiRequest("DELETE", `/api/images/${v.id}`);
+    },
+    onSuccess: (_d, v) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/trades", v.tradeId, "images"] });
+      invalidateTrades();
+    },
+  });
+}
+
+/** What the screenshots cost, in bytes, against the free tier's 512 MB. */
+export function useStorageUsage() {
+  return useQuery<{ images: number; bytes: number }>({
+    queryKey: ["/api/storage-usage"],
   });
 }
 
@@ -290,6 +336,43 @@ const MAX_UPLOAD_EDGE = 1280;
  * quality for nothing. Any failure falls back to the original — a larger upload
  * is a worse bill, but a failed parse is a worse product.
  */
+/**
+ * Re-encode an image for ARCHIVAL — the copy that lands in the database.
+ *
+ * Two qualities exist for two jobs. The parse copy (below) is PNG at full
+ * detail because a model reads axis digits off it, and it is thrown away
+ * after one request. This one is kept forever on a 512 MB Neon free tier, so
+ * it optimises for "readable on review": ≤1100 px wide, WebP at 0.72 (JPEG
+ * where the browser can't encode WebP). A dark chart lands around 40–90 KB —
+ * five-to-ten thousand screenshots before storage is a conversation, instead
+ * of a few hundred.
+ */
+export async function archiveDataUrl(dataUrl: string): Promise<string> {
+  const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const el = new Image();
+    el.onload = () => resolve(el);
+    el.onerror = reject;
+    el.src = dataUrl;
+  });
+
+  const MAX = 1100;
+  const scale = Math.min(1, MAX / Math.max(img.width, img.height, 1));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(img.width * scale);
+  canvas.height = Math.round(img.height * scale);
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return dataUrl;
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+  const webp = canvas.toDataURL("image/webp", 0.72);
+  // Browsers that can't encode WebP hand back PNG — fall through to JPEG.
+  const out = webp.startsWith("data:image/webp") ? webp : canvas.toDataURL("image/jpeg", 0.72);
+  // Never archive something LARGER than what came in.
+  return out.length < dataUrl.length ? out : dataUrl;
+}
+
 export async function fileToDownscaledDataUrl(file: File): Promise<string> {
   const original = await fileToDataUrl(file);
   try {

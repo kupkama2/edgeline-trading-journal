@@ -12,7 +12,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { ArrowDownRight, ArrowUpRight, Ban, CheckCircle2, ChevronDown, ClipboardList, Clock3, Loader2, Sparkles } from "lucide-react";
-import { useTrades, useMistakeTags, useStyles, useCreateTrade, parseScreenshot, fileToDownscaledDataUrl, analyzeRationale } from "@/lib/data";
+import { useTrades, useMistakeTags, useStyles, useCreateTrade, useAddTradeImage, archiveDataUrl, parseScreenshot, fileToDownscaledDataUrl, analyzeRationale } from "@/lib/data";
 import { styleColor, styleName, useStyleFilter } from "@/lib/style-filter";
 import { parsePlaybook } from "@shared/schema";
 import { EXIT_REASON_LABELS } from "@shared/metrics";
@@ -47,6 +47,7 @@ export function NewTradeCard({
 }) {
   const { toast } = useToast();
   const createTrade = useCreateTrade();
+  const addImage = useAddTradeImage();
   const [image, setImage] = useState<string | null>(null);
   const [parsing, setParsing] = useState(false);
   const [parsed, setParsed] = useState(false);
@@ -279,7 +280,7 @@ export function NewTradeCard({
       return;
     }
 
-    await createTrade.mutateAsync({
+    const created = await createTrade.mutateAsync({
       trade: {
         styleId,
         symbol: data.symbol.toUpperCase(),
@@ -309,6 +310,15 @@ export function NewTradeCard({
       },
       mistakeTagIds: loggingClosed ? selectedDemons : [],
     });
+
+    // Keep the parsed chart as the trade's setup screenshot — archival
+    // quality, lazy-loaded, never in the list payload. Best-effort: a failed
+    // attach must not un-save the trade.
+    if (image && created?.id) {
+      archiveDataUrl(image)
+        .then((data) => addImage.mutate({ tradeId: created.id, kind: "setup", data }))
+        .catch(() => {});
+    }
     toast(
       loggingClosed
         ? {

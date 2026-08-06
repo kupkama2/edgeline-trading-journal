@@ -5,6 +5,7 @@ import {
   weeklyReviews,
   tradingStyles,
   dailyNotes,
+  tradeImages,
 } from "@shared/schema";
 import type {
   InsertTrade,
@@ -17,11 +18,12 @@ import type {
   TradingStyle,
   InsertTradingStyle,
   DailyNote,
+  TradeImage,
 } from "@shared/schema";
 import { DEMON_TAXONOMY, DEMON_LEGACY_ALIASES } from "@shared/demons";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, sql as sqlx } from "drizzle-orm";
 
 const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) {
@@ -150,6 +152,15 @@ ALTER TABLE weekly_reviews ALTER COLUMN plans DROP NOT NULL;
 ALTER TABLE weekly_reviews ADD COLUMN IF NOT EXISTS insights TEXT;
 -- One free-form file per trading day; the day's numbers are derived from the
 -- trades at read time, so only the written half is stored.
+CREATE TABLE IF NOT EXISTS trade_images (
+  id SERIAL PRIMARY KEY,
+  trade_id INTEGER NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'other',
+  data TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+-- The one query pattern is "images for this trade" — index it.
+CREATE INDEX IF NOT EXISTS trade_images_trade_id ON trade_images (trade_id);
 CREATE TABLE IF NOT EXISTS daily_notes (
   id SERIAL PRIMARY KEY,
   day TEXT NOT NULL UNIQUE,
@@ -207,6 +218,11 @@ export interface IStorage {
 
   listDailyNotes(): Promise<DailyNote[]>;
   upsertDailyNote(day: string, body: string): Promise<DailyNote>;
+
+  listTradeImages(tradeId: number): Promise<TradeImage[]>;
+  imageUsage(): Promise<{ images: number; bytes: number }>;
+  addTradeImage(tradeId: number, kind: string, data: string): Promise<TradeImage>;
+  deleteTradeImage(id: number): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -316,22 +332,29 @@ export class DatabaseStorage implements IStorage {
   async listTrades(): Promise<TradeWithTags[]> {
     const rows = await db.select().from(trades).orderBy(desc(trades.entryTime));
     const links = await db.select().from(tradeMistakes);
+    // Counts only — the payloads stay in trade_images until a detail view asks.
+    const counts = await db
+      .select({ tradeId: tradeImages.tradeId, n: sqlx<number>`count(*)::int` })
+      .from(tradeImages)
+      .groupBy(tradeImages.tradeId);
+    const countFor = new Map(counts.map((c) => [c.tradeId, c.n]));
     return rows.map((t) => ({
       ...t,
       mistakeTagIds: links.filter((l) => l.tradeId === t.id).map((l) => l.mistakeTagId),
+      imageCount: countFor.get(t.id) ?? 0,
     }));
   }
 
   async getTrade(id: number): Promise<TradeWithTags | undefined> {
     const [t] = await db.select().from(trades).where(eq(trades.id, id));
     if (!t) return undefined;
-    return { ...t, mistakeTagIds: await this.tagIdsFor(id) };
+    return { ...t, mistakeTagIds: await this.tagIdsFor(id), imageCount: await this.imageCountFor(id) };
   }
 
   async createTrade(t: InsertTrade, tagIds: number[] = []): Promise<TradeWithTags> {
     const [row] = await db.insert(trades).values(t as any).returning();
     if (tagIds.length) await this.setTags(row.id, tagIds);
-    return { ...row, mistakeTagIds: tagIds };
+    return { ...row, mistakeTagIds: tagIds, imageCount: 0 };
   }
 
   async updateTrade(
@@ -346,12 +369,60 @@ export class DatabaseStorage implements IStorage {
         : await db.select().from(trades).where(eq(trades.id, id));
     if (!row) return undefined;
     if (tagIds) await this.setTags(id, tagIds);
-    return { ...row, mistakeTagIds: await this.tagIdsFor(id) };
+    return {
+      ...row,
+      mistakeTagIds: await this.tagIdsFor(id),
+      imageCount: await this.imageCountFor(id),
+    };
   }
 
   async deleteTrade(id: number): Promise<void> {
     await db.delete(tradeMistakes).where(eq(tradeMistakes.tradeId, id));
+    await db.delete(tradeImages).where(eq(tradeImages.tradeId, id));
     await db.delete(trades).where(eq(trades.id, id));
+  }
+
+  private async imageCountFor(tradeId: number): Promise<number> {
+    const [row] = await db
+      .select({ n: sqlx<number>`count(*)::int` })
+      .from(tradeImages)
+      .where(eq(tradeImages.tradeId, tradeId));
+    return row?.n ?? 0;
+  }
+
+  /**
+   * How much of the database the screenshots occupy. length(data) counts the
+   * base64 characters, which IS the stored size for a text column — the
+   * honest number to hold against Neon's free-tier 512 MB.
+   */
+  async imageUsage(): Promise<{ images: number; bytes: number }> {
+    const [row] = await db
+      .select({
+        images: sqlx<number>`count(*)::int`,
+        bytes: sqlx<number>`coalesce(sum(length(${tradeImages.data})), 0)::bigint`,
+      })
+      .from(tradeImages);
+    return { images: row?.images ?? 0, bytes: Number(row?.bytes ?? 0) };
+  }
+
+  async listTradeImages(tradeId: number): Promise<TradeImage[]> {
+    return db
+      .select()
+      .from(tradeImages)
+      .where(eq(tradeImages.tradeId, tradeId))
+      .orderBy(tradeImages.id);
+  }
+
+  async addTradeImage(tradeId: number, kind: string, data: string): Promise<TradeImage> {
+    const [row] = await db
+      .insert(tradeImages)
+      .values({ tradeId, kind, data, createdAt: new Date().toISOString() })
+      .returning();
+    return row;
+  }
+
+  async deleteTradeImage(id: number): Promise<void> {
+    await db.delete(tradeImages).where(eq(tradeImages.id, id));
   }
 
   async listMistakeTags(): Promise<MistakeTag[]> {
