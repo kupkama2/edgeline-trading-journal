@@ -28,9 +28,35 @@ if (!DATABASE_URL) {
   );
 }
 
+/**
+ * Drop query parameters that are libpq client options rather than server
+ * settings. postgres.js forwards anything it doesn't recognise as a startup
+ * parameter, and Postgres then refuses the connection outright:
+ *
+ *   unrecognized configuration parameter "channel_binding"
+ *
+ * Neon puts `channel_binding=require` in the connection string it gives you,
+ * so pasting that string in unedited would crash the server on boot. psql and
+ * node-postgres both tolerate it, which is why it only breaks here.
+ *
+ * Stripping is string-level on purpose — round-tripping through URL would
+ * re-encode a password containing reserved characters.
+ */
+const LIBPQ_ONLY_PARAMS = ["channel_binding"];
+
+function stripLibpqOnlyParams(url: string): string {
+  const q = url.indexOf("?");
+  if (q === -1) return url;
+  const kept = url
+    .slice(q + 1)
+    .split("&")
+    .filter((p) => !LIBPQ_ONLY_PARAMS.some((k) => p.toLowerCase().startsWith(`${k}=`)));
+  return kept.length ? `${url.slice(0, q)}?${kept.join("&")}` : url.slice(0, q);
+}
+
 /* Neon's pooled endpoint is PgBouncer in transaction mode, which can't hold
    prepared statements across checkouts — hence `prepare: false`. */
-const sql = postgres(DATABASE_URL, { prepare: false });
+const sql = postgres(stripLibpqOnlyParams(DATABASE_URL), { prepare: false });
 
 export const db = drizzle(sql);
 
