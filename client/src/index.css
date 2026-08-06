@@ -444,3 +444,45 @@ body {
     font-size: 16px !important;
   }
 }
+
+/* ============================ level-up burst ============================
+   Eighteen particles from screen centre, ~1.2s, once — only on level-up, and
+   a level only rises on process XP. This is the entire animation budget:
+   outcomes (P&L, wins) get nothing, on purpose. */
+.xp-burst span {
+  position: absolute;
+  left: 50%;
+  top: 42%;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: hsl(var(--primary));
+  opacity: 0;
+  animation: xp-pop 1.2s ease-out forwards;
+  animation-delay: calc(var(--i) * 12ms);
+  transform: rotate(calc(var(--i) * 20deg)) translateY(0);
+}
+@keyframes xp-pop {
+  0% {
+    opacity: 1;
+    transform: rotate(calc(var(--i) * 20deg)) translateY(0) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: rotate(calc(var(--i) * 20deg)) translateY(-180px) scale(0.4);
+  }
+}
+
+/* Motion is a preference, not a given. */
+@media (prefers-reduced-motion: reduce) {
+  .xp-burst {
+    display: none;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
