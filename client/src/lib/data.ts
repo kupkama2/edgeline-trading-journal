@@ -1,6 +1,7 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "./queryClient";
 import type {
+  DailyNote,
   InsertTrade,
   MistakeTag,
   TradeWithTags,
@@ -27,6 +28,19 @@ export function useMistakeTags() {
 
 export function useWeeklyReviews() {
   return useQuery<WeeklyReview[]>({ queryKey: ["/api/weekly-reviews"] });
+}
+
+export function useDailyNotes() {
+  return useQuery<DailyNote[]>({ queryKey: ["/api/daily-notes"] });
+}
+
+export function useSaveDailyNote() {
+  return useMutation({
+    mutationFn: async (v: { day: string; body: string }) =>
+      (await apiRequest("PUT", `/api/daily-notes/${v.day}`, { body: v.body })).json(),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ["/api/daily-notes"] }),
+  });
 }
 
 const invalidateTrades = () =>

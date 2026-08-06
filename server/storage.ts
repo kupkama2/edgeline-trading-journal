@@ -4,6 +4,7 @@ import {
   tradeMistakes,
   weeklyReviews,
   tradingStyles,
+  dailyNotes,
 } from "@shared/schema";
 import type {
   InsertTrade,
@@ -15,6 +16,7 @@ import type {
   InsertWeeklyReview,
   TradingStyle,
   InsertTradingStyle,
+  DailyNote,
 } from "@shared/schema";
 import { DEMON_TAXONOMY, DEMON_LEGACY_ALIASES } from "@shared/demons";
 import { drizzle } from "drizzle-orm/postgres-js";
@@ -141,6 +143,14 @@ CREATE TABLE IF NOT EXISTS weekly_reviews (
 -- required on its own.
 ALTER TABLE weekly_reviews ALTER COLUMN plans DROP NOT NULL;
 ALTER TABLE weekly_reviews ADD COLUMN IF NOT EXISTS insights TEXT;
+-- One free-form file per trading day; the day's numbers are derived from the
+-- trades at read time, so only the written half is stored.
+CREATE TABLE IF NOT EXISTS daily_notes (
+  id SERIAL PRIMARY KEY,
+  day TEXT NOT NULL UNIQUE,
+  body TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL
+);
 `);
 
   await storage.seed();
@@ -189,6 +199,9 @@ export interface IStorage {
   listWeeklyReviews(): Promise<WeeklyReview[]>;
   createWeeklyReview(r: InsertWeeklyReview): Promise<WeeklyReview>;
   upsertWeeklyInsights(weekStart: string, insights: string): Promise<WeeklyReview>;
+
+  listDailyNotes(): Promise<DailyNote[]>;
+  upsertDailyNote(day: string, body: string): Promise<DailyNote>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -404,6 +417,33 @@ export class DatabaseStorage implements IStorage {
     const [row] = await db
       .insert(weeklyReviews)
       .values({ weekStart, insights, submittedAt: new Date().toISOString() } as any)
+      .returning();
+    return row;
+  }
+
+  async listDailyNotes(): Promise<DailyNote[]> {
+    return db.select().from(dailyNotes).orderBy(desc(dailyNotes.day));
+  }
+
+  /**
+   * Last write wins, whole-body. The note is one file edited in one textarea,
+   * so field-level merging has nothing to merge — and an upsert keyed on the
+   * day means "save" never has to know whether today's file exists yet.
+   */
+  async upsertDailyNote(day: string, body: string): Promise<DailyNote> {
+    const updatedAt = new Date().toISOString();
+    const [existing] = await db.select().from(dailyNotes).where(eq(dailyNotes.day, day));
+    if (existing) {
+      const [row] = await db
+        .update(dailyNotes)
+        .set({ body, updatedAt })
+        .where(eq(dailyNotes.id, existing.id))
+        .returning();
+      return row;
+    }
+    const [row] = await db
+      .insert(dailyNotes)
+      .values({ day, body, updatedAt })
       .returning();
     return row;
   }

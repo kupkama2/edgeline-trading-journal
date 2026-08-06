@@ -9,6 +9,7 @@ import {
   insertMistakeTagSchema,
   insertTradingStyleSchema,
   insertWeeklyReviewSchema,
+  upsertDailyNoteSchema,
   parseScreenshotSchema,
   analyzeRationaleSchema,
   directionEnum,
@@ -667,6 +668,23 @@ export async function registerRoutes(
     if (!parsed.success)
       return res.status(400).json({ message: "Invalid review", issues: parsed.error.issues });
     res.status(201).json(await storage.createWeeklyReview(parsed.data));
+  });
+
+  /* ---------------------------- daily notes ----------------------------- */
+  // The list is returned whole: notes are one text per day and the client
+  // renders a calendar over them, so per-day fetches would just be N trips.
+  app.get("/api/daily-notes", async (_req, res) => {
+    res.json(await storage.listDailyNotes());
+  });
+
+  app.put("/api/daily-notes/:day", async (req, res) => {
+    const day = req.params.day;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day))
+      return res.status(400).json({ message: "Day must be yyyy-MM-dd" });
+    const parsed = upsertDailyNoteSchema.safeParse(req.body);
+    if (!parsed.success)
+      return res.status(400).json({ message: "Invalid note", issues: parsed.error.issues });
+    res.json(await storage.upsertDailyNote(day, parsed.data.body));
   });
 
   /* ------------------------ AI screenshot parsing ----------------------- */
