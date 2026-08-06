@@ -9,6 +9,7 @@ import type {
   WeeklyReview,
   SetupParseResult,
   OutcomeParseResult,
+  OrderRowParseResult,
 } from "@shared/schema";
 
 export function useTrades() {
@@ -163,6 +164,11 @@ export function useSubmitWeeklyReview() {
 
 export async function parseScreenshot(
   image: string,
+  kind: "orders",
+  context?: Record<string, unknown>,
+): Promise<{ orders: OrderRowParseResult[]; skipped: number }>;
+export async function parseScreenshot(
+  image: string,
   kind: "setup",
   context?: Record<string, unknown>,
 ): Promise<SetupParseResult>;
@@ -173,7 +179,7 @@ export async function parseScreenshot(
 ): Promise<OutcomeParseResult>;
 export async function parseScreenshot(
   image: string,
-  kind: "setup" | "outcome",
+  kind: "setup" | "outcome" | "orders",
   context?: Record<string, unknown>,
 ): Promise<any> {
   const res = await apiRequest("POST", "/api/parse-screenshot", {

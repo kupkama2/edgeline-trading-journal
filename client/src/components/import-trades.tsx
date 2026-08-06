@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -11,9 +11,9 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowDownRight, ArrowUpRight, ClipboardPaste, Loader2 } from "lucide-react";
+import { ArrowDownRight, ArrowUpRight, Camera, ClipboardPaste, Loader2 } from "lucide-react";
 import { parseImport, type ImportCandidate } from "@shared/import-parse";
-import { useImportTrades } from "@/lib/data";
+import { fileToDataUrl, parseScreenshot, useImportTrades } from "@/lib/data";
 import { useStyleFilter } from "@/lib/style-filter";
 
 /**
@@ -40,11 +40,19 @@ function num(v: number | null | undefined, dp = 2): string {
 export function ImportTradesDialog({
   open,
   onClose,
+  seedRows,
 }: {
   open: boolean;
   onClose: () => void;
+  /** Rows already read from a screenshot elsewhere (a paste on the journal). */
+  seedRows?: ImportCandidate[] | null;
 }) {
   const [text, setText] = useState("");
+  // Rows read from a screenshot. Kept beside the pasted-text rows rather than
+  // merged into it, because the paste is re-parsed on every keystroke and would
+  // wipe them.
+  const [shotRows, setShotRows] = useState<ImportCandidate[]>([]);
+  const [scanning, setScanning] = useState(false);
   const [edits, setEdits] = useState<Record<number, Partial<Row>>>({});
   const [excluded, setExcluded] = useState<Record<number, boolean>>({});
   const { toast } = useToast();
@@ -52,18 +60,27 @@ export function ImportTradesDialog({
   // Imported trades join whichever book you are currently looking at.
   const { activeStyleId } = useStyleFilter();
 
+  // Adopt rows handed in from a paste, replacing anything from a previous open.
+  useEffect(() => {
+    if (open && seedRows?.length) {
+      setShotRows(seedRows);
+      setEdits({});
+      setExcluded({});
+    }
+  }, [open, seedRows]);
+
   const parsed = useMemo(() => parseImport(text), [text]);
 
   // Manual corrections are keyed by index and layered over the parse, so
   // retyping the paste does not silently discard them mid-edit.
   const rows: Row[] = useMemo(
     () =>
-      parsed.candidates.map((c, i) => ({
+      [...shotRows, ...parsed.candidates].map((c, i) => ({
         ...c,
         ...edits[i],
         include: !excluded[i],
       })),
-    [parsed.candidates, edits, excluded],
+    [shotRows, parsed.candidates, edits, excluded],
   );
 
   const selected = rows.filter((r) => r.include);
@@ -73,8 +90,57 @@ export function ImportTradesDialog({
 
   function reset() {
     setText("");
+    setShotRows([]);
     setEdits({});
     setExcluded({});
+  }
+
+  /**
+   * Read an orders-table screenshot as many rows. The AI returns the same shape
+   * the text parser emits, so everything downstream — preview, per-row edits,
+   * commit — is shared.
+   */
+  async function scanImage(file: File) {
+    setScanning(true);
+    try {
+      const res = await parseScreenshot(await fileToDataUrl(file), "orders");
+      const mapped: ImportCandidate[] = (res.orders ?? [])
+        .filter((o) => o.entryPrice != null && o.direction)
+        .map((o) => ({
+          symbol: o.symbol ?? "",
+          direction: o.direction as "long" | "short",
+          size: o.size,
+          sizeUnit: o.sizeUnit === "quote" ? "quote" : "base",
+          entryPrice: o.entryPrice as number,
+          initialStop: o.initialStop ?? null,
+          initialTarget: o.initialTarget ?? null,
+          entryTime: o.entryTime ?? null,
+          source: "binance-orders",
+          raw: "(from screenshot)",
+          warnings: [
+            ...(o.initialStop == null ? ["No stop in the screenshot — add it when it fills."] : []),
+            ...(o.symbol ? [] : ["Symbol unreadable — set it before importing."]),
+          ],
+        }));
+      setShotRows(mapped);
+      if (!mapped.length) {
+        toast({
+          title: "No orders found in that image",
+          description: "Paste the table as text instead, or try a clearer screenshot.",
+          variant: "destructive",
+        });
+      } else {
+        toast({ title: `Read ${mapped.length} orders from the screenshot` });
+      }
+    } catch (err: any) {
+      toast({
+        title: "Couldn't read that screenshot",
+        description: String(err?.message ?? err).slice(0, 160),
+        variant: "destructive",
+      });
+    } finally {
+      setScanning(false);
+    }
   }
 
   async function commit() {
@@ -119,6 +185,27 @@ export function ImportTradesDialog({
         </DialogHeader>
 
         <div className="space-y-4">
+          <label
+            className="flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-border p-3 text-[11px] text-muted-foreground transition-colors hover:border-primary/50"
+            data-testid="label-import-screenshot"
+          >
+            {scanning ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Camera className="h-3.5 w-3.5" />
+            )}
+            {scanning ? "Reading orders…" : "Drop a screenshot of your orders table"}
+            <input
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) scanImage(f);
+              }}
+            />
+          </label>
+
           <Textarea
             value={text}
             onChange={(e) => setText(e.target.value)}
@@ -127,7 +214,7 @@ export function ImportTradesDialog({
             data-testid="input-import-paste"
           />
 
-          {text.trim() && (
+          {rows.length > 0 && (
             <div className="flex flex-wrap items-center gap-2 text-[11px]">
               <Badge variant="secondary" className="font-mono">
                 {ready.length} ready

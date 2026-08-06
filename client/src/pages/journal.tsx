@@ -68,6 +68,7 @@ import { StyleChip, StyleSwitcher } from "@/components/style-switcher";
 import { pointValueFor } from "@shared/symbols";
 import { ImportTradesDialog } from "@/components/import-trades";
 import { ResolveTradeDialog } from "@/components/resolve-trade";
+import type { ImportCandidate } from "@shared/import-parse";
 
 /* ============================== helpers ============================== */
 
@@ -258,7 +259,11 @@ const setupFormSchema = z.object({
 });
 type SetupForm = z.input<typeof setupFormSchema>;
 
-function NewTradeCard() {
+function NewTradeCard({
+  onOrdersDetected,
+}: {
+  onOrdersDetected: (rows: ImportCandidate[]) => void;
+}) {
   const { toast } = useToast();
   const createTrade = useCreateTrade();
   const [image, setImage] = useState<string | null>(null);
@@ -366,6 +371,40 @@ function NewTradeCard() {
     setParsing(true);
     setParsed(false);
     try {
+      /*
+       * An orders table and a single chart are different jobs, and the user
+       * should not have to say which they pasted. Ask for orders first: two or
+       * more rows means a table, and the whole paste becomes a batch of resting
+       * limits instead of one trade. Anything less falls through to the normal
+       * single-setup read, so charts behave exactly as before.
+       */
+      const asOrders = await parseScreenshot(dataUrl, "orders").catch(() => null);
+      const many = (asOrders?.orders ?? []).filter(
+        (o) => o.entryPrice != null && o.direction,
+      );
+      if (many.length >= 2) {
+        onOrdersDetected(
+          many.map((o) => ({
+            symbol: o.symbol ?? "",
+            direction: o.direction as "long" | "short",
+            size: o.size,
+            sizeUnit: o.sizeUnit === "quote" ? "quote" : "base",
+            entryPrice: o.entryPrice as number,
+            initialStop: o.initialStop ?? null,
+            initialTarget: o.initialTarget ?? null,
+            entryTime: o.entryTime ?? null,
+            source: "binance-orders" as const,
+            raw: "(from screenshot)",
+            warnings: o.initialStop == null
+              ? ["No stop in the screenshot — add it when it fills."]
+              : [],
+          })),
+        );
+        setImage(null);
+        setParsing(false);
+        return;
+      }
+
       const r = await parseScreenshot(dataUrl, "setup");
       if (r.symbol) form.setValue("symbol", r.symbol);
       if (r.direction) form.setValue("direction", r.direction);
@@ -1837,7 +1876,9 @@ function OpenTradeRow({
         onClick={onSelect}
         className="block w-full text-left"
       >
-        <div className="flex items-center gap-2 pr-7">
+        {/* Clears the three-icon action cluster pinned top-right. It was sized
+            for one icon, so the size/price badge slid underneath the others. */}
+        <div className="flex items-center gap-2 pr-[4.75rem]">
           <span
             className={`flex h-6 w-6 items-center justify-center rounded ${
               t.direction === "long" ? "bg-emerald-500/15 text-emerald-400" : "bg-primary/15 text-primary"
@@ -2213,6 +2254,66 @@ function TradeDetailDialog({
 
 /* ================================ page ================================ */
 
+type SortKey = "newest" | "oldest" | "symbol" | "risk";
+
+const SORT_LABELS: Record<SortKey, string> = {
+  newest: "Newest",
+  oldest: "Oldest",
+  symbol: "Symbol",
+  risk: "Risk",
+};
+
+/**
+ * Sort a trade list. "Risk" is 1R in dollars rather than stop distance in
+ * points, since points are not comparable across instruments — 40 points of NQ
+ * and 40 points of BTC are wildly different amounts of money.
+ */
+function sortTrades(list: TradeWithTags[], key: SortKey): TradeWithTags[] {
+  const out = [...list];
+  switch (key) {
+    case "oldest":
+      return out.sort((a, b) => a.entryTime.localeCompare(b.entryTime));
+    case "symbol":
+      return out.sort(
+        (a, b) => a.symbol.localeCompare(b.symbol) || b.entryTime.localeCompare(a.entryTime),
+      );
+    case "risk":
+      return out.sort(
+        (a, b) => computeMetrics(b).riskDollars - computeMetrics(a).riskDollars,
+      );
+    default:
+      return out.sort((a, b) => b.entryTime.localeCompare(a.entryTime));
+  }
+}
+
+function SortControl({
+  value,
+  onChange,
+}: {
+  value: SortKey;
+  onChange: (k: SortKey) => void;
+}) {
+  return (
+    <div className="flex gap-0.5">
+      {(Object.keys(SORT_LABELS) as SortKey[]).map((k) => (
+        <button
+          key={k}
+          type="button"
+          onClick={() => onChange(k)}
+          data-testid={`button-sort-${k}`}
+          className={`rounded px-1.5 py-0.5 text-[10px] transition-colors ${
+            value === k
+              ? "bg-primary/15 text-primary"
+              : "text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          {SORT_LABELS[k]}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export default function Journal() {
   const { data: trades, isLoading } = useTrades();
   const { data: tags = [] } = useMistakeTags();
@@ -2222,6 +2323,10 @@ export default function Journal() {
   const [editing, setEditing] = useState<TradeWithTags | null>(null);
   const [importing, setImporting] = useState(false);
   const [resolving, setResolving] = useState<TradeWithTags | null>(null);
+  // The server already returns newest-first; this re-sorts client-side so
+  // switching is instant and costs no round trip.
+  const [sortBy, setSortBy] = useState<SortKey>("newest");
+  const [importSeed, setImportSeed] = useState<ImportCandidate[] | null>(null);
 
   const tagNames = useMemo(
     () => Object.fromEntries(tags.map((t) => [t.id, t.name])),
@@ -2232,8 +2337,8 @@ export default function Journal() {
     () => filterByStyle(trades ?? [], activeStyleId),
     [trades, activeStyleId],
   );
-  const pending = scoped.filter((t) => t.status === "pending");
-  const open = scoped.filter((t) => t.status === "open");
+  const pending = sortTrades(scoped.filter((t) => t.status === "pending"), sortBy);
+  const open = sortTrades(scoped.filter((t) => t.status === "open"), sortBy);
   const closed = scoped.filter((t) => t.status === "closed");
   const cancelled = scoped.filter((t) => t.status === "cancelled");
 
@@ -2262,14 +2367,25 @@ export default function Journal() {
       <DailyGuardCard trades={scoped} tags={tags} styleId={activeStyleId} />
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
-        <NewTradeCard />
+        <NewTradeCard
+          onOrdersDetected={(rows) => {
+            setImportSeed(rows);
+            setImporting(true);
+          }}
+        />
 
         <div className="space-y-3">
           <div className="flex items-baseline justify-between">
             <h2 className="text-sm font-semibold tracking-tight">Open trades</h2>
-            <span className="font-mono text-[11px] text-muted-foreground" data-testid="text-open-count">
-              {open.length} open
-            </span>
+            <div className="flex items-center gap-2">
+              <SortControl value={sortBy} onChange={setSortBy} />
+              <span
+                className="font-mono text-[11px] text-muted-foreground"
+                data-testid="text-open-count"
+              >
+                {open.length} open
+              </span>
+            </div>
           </div>
           {isLoading ? (
             <div className="space-y-2">
@@ -2396,7 +2512,14 @@ export default function Journal() {
       <CloseTradeDialog trade={closing} onClose={() => setClosing(null)} />
       <TradeDetailDialog trade={viewing} onClose={() => setViewing(null)} />
       <EditTradeDialog trade={editing} onClose={() => setEditing(null)} />
-      <ImportTradesDialog open={importing} onClose={() => setImporting(false)} />
+      <ImportTradesDialog
+        open={importing}
+        seedRows={importSeed}
+        onClose={() => {
+          setImporting(false);
+          setImportSeed(null);
+        }}
+      />
       <ResolveTradeDialog trade={resolving} onClose={() => setResolving(null)} />
     </div>
   );
