@@ -122,12 +122,16 @@ function parseOtoco(text: string): ImportCandidate | null {
     return null;
   }
 
-  // Split on the "Order A/B/C" markers. The dialog's own explainer sentence
-  // ("If order A is filled partially or fully…") also matches, so a real order
-  // block is identified by carrying a Side line — the prose never does.
+  // Split on the "Order A/B/C" markers. Two things that are not order blocks
+  // survive that split and must be dropped:
+  //   · the dialog's own explainer ("If order A is filled partially or fully…"),
+  //     which mentions an order but lists no Side;
+  //   · everything pasted ABOVE the dialog — an orders table, say — which lands
+  //     in the leading fragment and does have a "Side" column header.
+  // A real block therefore both starts at its marker and carries a Side line.
   const blocks = text
     .split(/(?=Order\s*[ABC]\b)/i)
-    .filter((b) => /\bSide\b/i.test(b));
+    .filter((b) => /^\s*Order\s*[ABC]\b/i.test(b) && /\bSide\b/i.test(b));
   const find = (label: RegExp, within: string) => {
     const m = label.exec(within);
     return m ? m[1] : null;
@@ -158,7 +162,10 @@ function parseOtoco(text: string): ImportCandidate | null {
   // The dialog names no instrument, so the symbol is only recoverable if the
   // paste happened to include it. The preview asks for it when it is missing
   // rather than inventing one.
-  const symbol = cleanSymbol(find(/\b([A-Z0-9]{2,}USDT?)\b/, text) ?? "");
+  // Scoped to the dialog's own blocks, not the whole paste: when an orders
+  // table sits above it, a whole-text scan lifts the FIRST ticker in the table
+  // and the dialog then claims to describe a different order than it does.
+  const symbol = cleanSymbol(find(/\b([A-Z0-9]{2,}USDT?)\b/, blocks.join("\n")) ?? "");
   if (!symbol) warnings.push("No symbol in this dialog — choose one before importing.");
   if (stop == null) warnings.push("No stop leg (Order C) found.");
   if (target == null) warnings.push("No take-profit leg (Order B) found.");
@@ -268,14 +275,163 @@ function isNoise(line: string): boolean {
     !/\d+[.,]\d/.test(s);
 }
 
+/**
+ * Prices from the same venue should be byte-identical, but they arrive via OCR
+ * and float parsing, so match on a relative epsilon rather than equality.
+ */
+function samePrice(a: number, b: number): boolean {
+  if (a === b) return true;
+  const scale = Math.max(Math.abs(a), Math.abs(b));
+  return scale > 0 && Math.abs(a - b) / scale < 1e-6;
+}
+
+/**
+ * Do two candidates describe the same resting order?
+ *
+ * Limit price and side are the identity: they are the two things every view of
+ * an order agrees on, and neither is editable in the preview, so the answer does
+ * not change while the user is typing. Symbols are compared only when both sides
+ * know one — the OTOCO dialog never names its instrument, which is precisely the
+ * case this exists to serve.
+ *
+ * Two genuinely distinct orders resting at the same side and the same price to
+ * within 1e-6 would be folded together. That is close enough to exact equality
+ * that treating them as one order is the better guess: a ladder is built from
+ * different prices, and a venue that shows one price twice is showing one order.
+ */
+function sameOrder(a: ImportCandidate, b: ImportCandidate): boolean {
+  if (a.direction !== b.direction) return false;
+  if (!samePrice(a.entryPrice, b.entryPrice)) return false;
+  return !a.symbol || !b.symbol || a.symbol === b.symbol;
+}
+
+/**
+ * Drop warnings the row has since outgrown.
+ *
+ * Warnings say what was missing at parse time, and a row acquires the missing
+ * pieces two ways: matched from another screen, or typed in by hand. Either way
+ * "No stop or target in this view" must stop being shown, or the preview keeps
+ * nagging about a field the user is looking straight at.
+ *
+ * Only *absence* warnings are pruned — the ones this module writes as "No …".
+ * A note that merely mentions a stop ("Stop and target matched from a binance
+ * otoco paste") is a result, not a complaint, and has to survive the row
+ * acquiring the very field it is reporting on.
+ */
+export function pruneWarnings(c: ImportCandidate): string[] {
+  // One warning can name two fields ("No stop or target in this view"), so it
+  // only goes away once EVERY field it names has arrived — filling the stop
+  // alone must not silence the half of it that is still true.
+  const fields: [RegExp, boolean][] = [
+    [/\bstop\b/i, c.initialStop != null],
+    [/\btarget\b|take.profit/i, c.initialTarget != null],
+    [/\bsymbol\b/i, Boolean(c.symbol)],
+  ];
+
+  return c.warnings.filter((w) => {
+    if (!/^\s*No\b/i.test(w)) return true;
+    const named = fields.filter(([re]) => re.test(w));
+    return named.length === 0 || !named.every(([, present]) => present);
+  });
+}
+
+/** Fill everything `keep` is missing from `extra`, changing nothing it has. */
+function absorb(keep: ImportCandidate, extra: ImportCandidate): ImportCandidate {
+  const gainedStop = keep.initialStop == null && extra.initialStop != null;
+  const gainedTarget = keep.initialTarget == null && extra.initialTarget != null;
+  // Size and its unit travel together: a quote notional inherited as "base"
+  // would silently turn $37,177 of BTC into 37,177 coins.
+  const gainedSize = keep.size == null && extra.size != null;
+
+  const merged: ImportCandidate = {
+    ...keep,
+    symbol: keep.symbol || extra.symbol,
+    size: keep.size ?? extra.size,
+    sizeUnit: gainedSize ? extra.sizeUnit : keep.sizeUnit,
+    initialStop: keep.initialStop ?? extra.initialStop,
+    initialTarget: keep.initialTarget ?? extra.initialTarget,
+    entryTime: keep.entryTime ?? extra.entryTime,
+    warnings: keep.warnings,
+  };
+
+  // Re-derived against the union rather than carrying forward a "no stop" note
+  // that the merge has just made untrue.
+  merged.warnings = pruneWarnings(merged);
+  if (gainedStop || gainedTarget) {
+    const what = gainedStop && gainedTarget ? "Stop and target" : gainedStop ? "Stop" : "Target";
+    merged.warnings.push(`${what} matched from a ${extra.source.replace("-", " ")} paste.`);
+  }
+  return merged;
+}
+
+/**
+ * Collapse several views of the same order into one row.
+ *
+ * A venue splits one intention across two screens: the orders table lists the
+ * entry and no protective levels, while the Take Profit / Stop Loss dialog shows
+ * the stop and the target but never names the instrument. Pasting or scanning
+ * both should describe one trade, not two. The same fold also absorbs a table
+ * that was scanned twice, so dropping a second screenshot never duplicates the
+ * orders already listed.
+ *
+ * Earlier candidates win every field they have: what you pasted first is the
+ * list, and later screens only fill its gaps.
+ */
+export function mergeCandidates(candidates: ImportCandidate[]): {
+  rows: ImportCandidate[];
+  merged: number;
+} {
+  const rows: ImportCandidate[] = [];
+  let merged = 0;
+
+  for (const c of candidates) {
+    const at = rows.findIndex((r) => sameOrder(r, c));
+    if (at === -1) {
+      rows.push({ ...c });
+      continue;
+    }
+    rows[at] = absorb(rows[at], c);
+    merged += 1;
+  }
+
+  // A bracket that found nothing to attach to is the one failure worth naming:
+  // it was pasted to complete another row, and left alone it would import as a
+  // symbol-less trade of its own. Recognised by shape rather than by source, so
+  // it holds for a scanned dialog as well as a pasted one — and a bracket that
+  // DID match has taken the instrument's name from the row it merged with, which
+  // is exactly why the missing symbol is the reliable tell.
+  const stranded = (r: ImportCandidate) =>
+    !r.symbol && (r.initialStop != null || r.initialTarget != null);
+
+  return {
+    rows: rows.map((r) =>
+      candidates.length > 1 && stranded(r)
+        ? {
+            ...r,
+            warnings: [
+              ...r.warnings,
+              `No resting order here at ${r.entryPrice} — check the entry price, or name the symbol to import this on its own.`,
+            ],
+          }
+        : r,
+    ),
+    merged,
+  };
+}
+
+/**
+ * A stable identity for a preview row, so manual edits stay attached to the
+ * order they were typed against. Array position cannot do this job: pasting a
+ * second screen re-parses and re-merges, and every index after a folded row
+ * shifts by one — moving a hand-typed stop onto somebody else's trade.
+ */
+export function candidateKey(c: Pick<ImportCandidate, "direction" | "entryPrice">): string {
+  return `${c.direction}@${c.entryPrice}`;
+}
+
 export function parseImport(text: string): ImportResult {
   const candidates: ImportCandidate[] = [];
   const rejected: { raw: string; reason: string }[] = [];
-
-  // The OTOCO dialog describes one order across many lines, so try it whole
-  // before falling back to line-by-line table parsing.
-  const otoco = parseOtoco(text);
-  if (otoco) return { candidates: [otoco], rejected };
 
   for (const line of text.split(/\r?\n/)) {
     if (isNoise(line)) continue;
@@ -293,6 +449,22 @@ export function parseImport(text: string): ImportResult {
       rejected.push({ raw: line, reason: "Did not match a known order format" });
     }
   }
+
+  /*
+   * Both shapes can appear in one paste — an orders table with the Take Profit /
+   * Stop Loss dialog for one of its rows appended underneath — so parse for both
+   * rather than returning on the first match. (Returning early on the dialog
+   * silently dropped every table row pasted above it.)
+   *
+   * The dialog goes last on purpose: mergeCandidates keeps the earlier row, and
+   * the table row is the better keeper — it names the instrument, knows when the
+   * order was placed, and its `raw` is the one line the preview can show back.
+   * The dialog's own lines are label/value pairs, too narrow to be mistaken for
+   * table rows, so the loop above skipped them without complaint. (One dialog
+   * per paste: two would share a single Order A/B/C scan and interleave.)
+   */
+  const otoco = parseOtoco(text);
+  if (otoco) candidates.push(otoco);
 
   return { candidates, rejected };
 }

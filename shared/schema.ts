@@ -234,13 +234,18 @@ export type TradeMistake = typeof tradeMistakes.$inferSelect;
 export const weeklyReviews = pgTable("weekly_reviews", {
   id: serial("id").primaryKey(),
   weekStart: text("week_start").notNull(), // yyyy-MM-dd (Monday)
-  plans: text("plans").notNull(), // JSON: [{ tagId, tagName, plan }]
+  plans: text("plans"), // JSON: [{ tagId, tagName, plan }] — the manual "fix one" plan
+  /** JSON WeeklyInsights — AI reading of the week's notes against its numbers. */
+  insights: text("insights"),
   submittedAt: text("submitted_at").notNull(),
 });
 
-export const insertWeeklyReviewSchema = createInsertSchema(weeklyReviews).omit({
-  id: true,
-});
+export const insertWeeklyReviewSchema = createInsertSchema(weeklyReviews)
+  .omit({ id: true })
+  .extend({
+    plans: z.string().nullable().optional(),
+    insights: z.string().nullable().optional(),
+  });
 
 export type InsertWeeklyReview = z.infer<typeof insertWeeklyReviewSchema>;
 export type WeeklyReview = typeof weeklyReviews.$inferSelect;

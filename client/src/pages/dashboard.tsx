@@ -27,6 +27,7 @@ import {
 } from "@/lib/data";
 import { DailyGuardCard } from "@/components/daily-guard";
 import { DemonFinderPanel, WeeklyReviewCard } from "@/components/demon-finder";
+import { WeeklyInsightsCard } from "@/components/weekly-insights";
 import { StyleSwitcher } from "@/components/style-switcher";
 import { filterByStyle, useStyleFilter } from "@/lib/style-filter";
 import {
@@ -385,6 +386,8 @@ export default function Dashboard() {
       <DailyGuardCard trades={all} tags={tags} styleId={activeStyleId} />
 
       <WeeklyReviewCard trades={all} tags={tags} />
+
+      <WeeklyInsightsCard trades={all} tags={tags} />
 
       {/* stat strip */}
       <Card className="border-card-border bg-card p-4" data-testid="card-stat-strip">

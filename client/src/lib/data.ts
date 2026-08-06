@@ -11,6 +11,7 @@ import type {
   OutcomeParseResult,
   OrderRowParseResult,
 } from "@shared/schema";
+import type { InsightsBundle, WeeklyInsights } from "@shared/weekly-insights";
 
 export function useTrades() {
   return useQuery<TradeWithTags[]>({ queryKey: ["/api/trades"] });
@@ -189,6 +190,23 @@ export async function parseScreenshot(
   });
   const json = await res.json();
   return json.result;
+}
+
+/** Generate (or fetch the cached) AI reading of this week's notes vs its numbers. */
+export function useWeeklyInsights() {
+  return useMutation({
+    mutationFn: async (v: { weekStart?: string; force?: boolean } = {}) =>
+      (await apiRequest("POST", "/api/weekly-insights", v)).json() as Promise<{
+        ok: boolean;
+        cached?: boolean;
+        weekStart: string;
+        bundle?: InsightsBundle;
+        insights?: WeeklyInsights;
+        message?: string;
+      }>,
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ["/api/weekly-reviews"] }),
+  });
 }
 
 export async function analyzeRationale(text: string): Promise<string[]> {
