@@ -30,20 +30,30 @@ export function positionQty(t: Trade): number {
   return t.size;
 }
 
+/**
+ * What one point of price movement is worth across the whole position, in
+ * dollars. Futures need their contract multiplier here — 2 MNQ contracts move
+ * $4 a point, 2 NQ move $40 — while crypto and equities have a point value of
+ * 1 and reduce to plain quantity.
+ */
+function dollarsPerPoint(t: Trade): number {
+  return positionQty(t) * (t.pointValue ?? 1);
+}
+
 export function computeMetrics(t: Trade): TradeMetrics {
   const sign = t.direction === "long" ? 1 : -1;
-  const qty = positionQty(t);
+  const perPoint = dollarsPerPoint(t);
   // A pending trade has no stop yet, so it has no 1R. Guard explicitly: without
   // this, null coerces to 0 and every R figure silently becomes entry-relative
   // nonsense rather than being reported as unknown.
   const risk = t.initialStop == null ? 0 : Math.abs(t.entryPrice - t.initialStop);
-  const riskDollars = risk * qty;
+  const riskDollars = risk * perPoint;
   const safe = risk > 0;
 
   const actualR =
     safe && t.exitPrice != null ? (sign * (t.exitPrice - t.entryPrice)) / risk : null;
   const actualPnL =
-    t.exitPrice != null ? sign * (t.exitPrice - t.entryPrice) * qty : null;
+    t.exitPrice != null ? sign * (t.exitPrice - t.entryPrice) * perPoint : null;
   const mfeR = safe && t.mfe != null ? (sign * (t.mfe - t.entryPrice)) / risk : null;
   const maeR = safe && t.mae != null ? (sign * (t.mae - t.entryPrice)) / risk : null;
 
@@ -84,7 +94,7 @@ export function computeMetrics(t: Trade): TradeMetrics {
 
 export function rToDollars(r: number, t: Trade): number {
   if (t.initialStop == null) return 0; // no stop yet ⇒ no defined 1R to scale by
-  return r * Math.abs(t.entryPrice - t.initialStop) * positionQty(t);
+  return r * Math.abs(t.entryPrice - t.initialStop) * dollarsPerPoint(t);
 }
 
 /** $ cost attributable to poor management / left-on-table for a single trade. */

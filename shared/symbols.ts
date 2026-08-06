@@ -25,6 +25,34 @@ export const SYMBOL_ALIASES: Record<string, string> = {
   MCL: "CL",
 };
 
+/**
+ * Dollars per one point of price movement, per contract.
+ *
+ * This is deliberately keyed on the *specific* contract rather than the rolled-
+ * up root: MNQ and NQ are the same instrument for grouping purposes (which is
+ * why both normalize to "NQ"), but they are emphatically not the same size —
+ * $2 a point versus $20. Without this, a 10-point win on 2 micros and on 2
+ * e-minis record identical P&L, and the daily-loss guardrail fires at the wrong
+ * threshold.
+ *
+ * Anything absent here — crypto, equities, FX — is 1, i.e. price moves are
+ * already denominated in the quote currency and need no scaling.
+ */
+export const CONTRACT_POINT_VALUES: Record<string, number> = {
+  NQ: 20,
+  MNQ: 2,
+  ES: 50,
+  MES: 5,
+  YM: 5,
+  MYM: 0.5,
+  RTY: 50,
+  M2K: 5,
+  GC: 100,
+  MGC: 10,
+  CL: 1000,
+  MCL: 100,
+};
+
 // Standard CME futures month codes.
 const MONTH_CODES = "FGHJKMNQUVXZ";
 const CONTRACT_SUFFIX = new RegExp(`^[${MONTH_CODES}]\\d{1,2}$`);
@@ -54,4 +82,35 @@ export function normalizeSymbol(raw: string | null | undefined): string {
   }
 
   return s;
+}
+
+/**
+ * Resolve the contract root as *written* — "MNQU6" → "MNQ", not "NQ". This is
+ * the half of the symbol that normalizeSymbol deliberately throws away, and the
+ * half that determines what a point is worth.
+ */
+function contractRoot(raw: string): string | null {
+  const s = raw.trim().toUpperCase();
+  if (!s) return null;
+  if (CONTRACT_POINT_VALUES[s] != null) return s;
+
+  // Longest root first so "MNQ" wins over "NQ" on "MNQU6".
+  const roots = Object.keys(CONTRACT_POINT_VALUES).sort((a, b) => b.length - a.length);
+  for (const root of roots) {
+    if (s.startsWith(root) && CONTRACT_SUFFIX.test(s.slice(root.length))) {
+      return root;
+    }
+  }
+  return null;
+}
+
+/**
+ * Dollars per point for a raw symbol as the user typed it. Defaults to 1 for
+ * anything that isn't a known futures contract, which is correct: a crypto or
+ * equity price move is already in quote currency.
+ */
+export function pointValueFor(raw: string | null | undefined): number {
+  if (!raw) return 1;
+  const root = contractRoot(raw);
+  return root ? CONTRACT_POINT_VALUES[root] : 1;
 }

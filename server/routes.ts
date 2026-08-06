@@ -14,7 +14,7 @@ import {
   directionEnum,
   sizeUnitEnum,
 } from "@shared/schema";
-import { normalizeSymbol } from "@shared/symbols";
+import { normalizeSymbol, pointValueFor } from "@shared/symbols";
 import { z } from "zod";
 
 /**
@@ -309,7 +309,14 @@ export async function registerRoutes(
     const parsed = tradeBodySchema.safeParse(req.body);
     if (!parsed.success)
       return res.status(400).json({ message: "Invalid trade", issues: parsed.error.issues });
-    const trade = { ...parsed.data.trade, symbol: normalizeSymbol(parsed.data.trade.symbol) };
+    // Derive the point value from the symbol AS TYPED, before normalization
+    // collapses "MNQU6" into "NQ" — that collapse is what keeps the stats
+    // merged, and it is also what would otherwise lose the $2-vs-$20 distinction.
+    const trade = {
+      ...parsed.data.trade,
+      pointValue: parsed.data.trade.pointValue ?? pointValueFor(parsed.data.trade.symbol),
+      symbol: normalizeSymbol(parsed.data.trade.symbol),
+    };
     res.status(201).json(
       await storage.createTrade(trade, parsed.data.mistakeTagIds ?? []),
     );
@@ -320,7 +327,14 @@ export async function registerRoutes(
     if (!parsed.success)
       return res.status(400).json({ message: "Invalid trade", issues: parsed.error.issues });
     const trade = parsed.data.trade.symbol
-      ? { ...parsed.data.trade, symbol: normalizeSymbol(parsed.data.trade.symbol) }
+      ? {
+          ...parsed.data.trade,
+          // Re-derive when the symbol is edited: switching MNQ→NQ changes what
+          // a point is worth, and a stale multiplier is silently wrong.
+          pointValue:
+            parsed.data.trade.pointValue ?? pointValueFor(parsed.data.trade.symbol),
+          symbol: normalizeSymbol(parsed.data.trade.symbol),
+        }
       : parsed.data.trade;
 
     // The "stop and target required once live" rule needs the merged row: a
@@ -369,6 +383,7 @@ export async function registerRoutes(
           {
             styleId: parsed.data.styleId ?? null,
             symbol: normalizeSymbol(c.symbol),
+            pointValue: pointValueFor(c.symbol),
             direction: c.direction,
             size: c.size,
             sizeUnit: c.sizeUnit ?? "base",

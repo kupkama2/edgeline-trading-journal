@@ -46,6 +46,13 @@ export const trades = pgTable("trades", {
    * Defaults to "base" so every pre-existing row keeps its meaning.
    */
   sizeUnit: text("size_unit").notNull().default("base"), // 'base' | 'quote'
+  /**
+   * Dollars per point of price movement, per contract. Derived from the symbol
+   * as typed ("MNQU6" → 2) and stored on the trade, so history keeps the value
+   * that applied when it was logged even if the contract table changes later.
+   * 1 for crypto/equities, where price is already in quote currency.
+   */
+  pointValue: doublePrecision("point_value").notNull().default(1),
   entryPrice: doublePrecision("entry_price").notNull(),
   // Nullable because a PENDING trade is just a resting limit order — it has an
   // entry and nothing else yet. Both become required the moment it fills; see

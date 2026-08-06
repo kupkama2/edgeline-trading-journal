@@ -80,6 +80,7 @@ CREATE TABLE IF NOT EXISTS trades (
   direction TEXT NOT NULL,
   size DOUBLE PRECISION NOT NULL,
   size_unit TEXT NOT NULL DEFAULT 'base',
+  point_value DOUBLE PRECISION NOT NULL DEFAULT 1,
   entry_price DOUBLE PRECISION NOT NULL,
   -- Nullable: a pending trade is a resting order with no risk defined yet.
   initial_stop DOUBLE PRECISION,
@@ -105,6 +106,9 @@ ALTER TABLE trades ALTER COLUMN initial_stop DROP NOT NULL;
 ALTER TABLE trades ALTER COLUMN initial_target DROP NOT NULL;
 -- Existing rows were all sized in contracts/coins, which is exactly 'base'.
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS size_unit TEXT NOT NULL DEFAULT 'base';
+-- 1 is the correct default for existing rows: it reproduces the previous
+-- (unmultiplied) arithmetic exactly, so no historical figure silently shifts.
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS point_value DOUBLE PRECISION NOT NULL DEFAULT 1;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS rationale TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS rationale_tags TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS playbook TEXT;
