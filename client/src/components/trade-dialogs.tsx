@@ -734,6 +734,15 @@ export function EditTradeDialog({
               </div>
             )}
 
+            {/* Attach here too, not only from the read-only detail view: Edit
+                is where you reach to change a trade, and a screenshot added to
+                a trade closed weeks ago is a change like any other. Images save
+                on their own, so they survive whether or not "Save changes" is
+                pressed. */}
+            <div className="border-t border-border/60 pt-3">
+              <TradeImageGallery tradeId={trade.id} />
+            </div>
+
             <Button
               className="h-10 w-full text-xs font-semibold"
               onClick={save}
