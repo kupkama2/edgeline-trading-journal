@@ -27,6 +27,8 @@ import {
 } from "@/lib/data";
 import { DailyGuardCard } from "@/components/daily-guard";
 import { DemonFinderPanel, WeeklyReviewCard } from "@/components/demon-finder";
+import { StyleSwitcher } from "@/components/style-switcher";
+import { filterByStyle, useStyleFilter } from "@/lib/style-filter";
 import {
   aggregate,
   computeMetrics,
@@ -227,7 +229,11 @@ function WeeklyGate({
 export default function Dashboard() {
   const { data: trades, isLoading } = useTrades();
   const { data: tags = [] } = useMistakeTags();
-  const all = trades ?? [];
+  const { activeStyleId } = useStyleFilter();
+  const all = useMemo(
+    () => filterByStyle(trades ?? [], activeStyleId),
+    [trades, activeStyleId],
+  );
   const closed = useMemo(
     () =>
       all
@@ -374,7 +380,9 @@ export default function Dashboard() {
         </p>
       </div>
 
-      <DailyGuardCard trades={all} tags={tags} />
+      <StyleSwitcher />
+
+      <DailyGuardCard trades={all} tags={tags} styleId={activeStyleId} />
 
       <WeeklyReviewCard trades={all} tags={tags} />
 

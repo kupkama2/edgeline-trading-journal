@@ -1,24 +1,53 @@
-import { sqliteTable, text, integer, real } from "drizzle-orm/sqlite-core";
+import {
+  pgTable,
+  text,
+  integer,
+  serial,
+  doublePrecision,
+} from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
+/* ========================== tradingStyles =========================== */
+
+/**
+ * A trading style doubles as the account: "NQ scalps" and "crypto swings" are
+ * different books with different hold times and R profiles, so their stats,
+ * demon streaks and guardrails must never pool. Every trade belongs to at most
+ * one style (null = logged before styles existed, shown as "Unassigned").
+ */
+export const tradingStyles = pgTable("trading_styles", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull(),
+  color: text("color").notNull().default("slate"),
+  sortOrder: integer("sort_order").notNull().default(0),
+});
+
+export const insertTradingStyleSchema = createInsertSchema(tradingStyles)
+  .omit({ id: true })
+  .extend({ name: z.string().min(1) });
+
+export type InsertTradingStyle = z.infer<typeof insertTradingStyleSchema>;
+export type TradingStyle = typeof tradingStyles.$inferSelect;
+
 /* ============================== trades ============================== */
 
-export const trades = sqliteTable("trades", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
+export const trades = pgTable("trades", {
+  id: serial("id").primaryKey(),
+  styleId: integer("style_id"),
   symbol: text("symbol").notNull(),
   direction: text("direction").notNull(), // 'long' | 'short'
-  size: real("size").notNull(),
-  entryPrice: real("entry_price").notNull(),
-  initialStop: real("initial_stop").notNull(),
-  initialTarget: real("initial_target").notNull(),
+  size: doublePrecision("size").notNull(),
+  entryPrice: doublePrecision("entry_price").notNull(),
+  initialStop: doublePrecision("initial_stop").notNull(),
+  initialTarget: doublePrecision("initial_target").notNull(),
   entryTime: text("entry_time").notNull(), // ISO
-  exitPrice: real("exit_price"),
+  exitPrice: doublePrecision("exit_price"),
   exitTime: text("exit_time"),
   status: text("status").notNull().default("open"), // 'open' | 'closed'
   exitReason: text("exit_reason"), // 'target' | 'stop' | 'trailed' | 'manual_early' | 'manual_late' | 'breakeven' | 'other'
-  mae: real("mae"),
-  mfe: real("mfe"),
+  mae: doublePrecision("mae"),
+  mfe: doublePrecision("mfe"),
   noManagementOutcome: text("no_management_outcome"), // 'target_first' | 'stop_first' | 'undetermined'
   setupScreenshot: text("setup_screenshot"),
   outcomeScreenshot: text("outcome_screenshot"),
@@ -81,6 +110,7 @@ export const insertTradeSchema = createInsertSchema(trades)
   .omit({ id: true })
   .extend({
     symbol: z.string().min(1),
+    styleId: z.number().int().nullable().optional(),
     direction: directionEnum,
     status: statusEnum.optional(),
     exitReason: exitReasonEnum.nullable().optional(),
@@ -95,8 +125,8 @@ export type Trade = typeof trades.$inferSelect;
 
 /* ============================ mistakeTags =========================== */
 
-export const mistakeTags = sqliteTable("mistake_tags", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
+export const mistakeTags = pgTable("mistake_tags", {
+  id: serial("id").primaryKey(),
   name: text("name").notNull(),
   sortOrder: integer("sort_order").notNull().default(0),
   color: text("color").notNull().default("red"),
@@ -111,8 +141,8 @@ export type MistakeTag = typeof mistakeTags.$inferSelect;
 
 /* =========================== tradeMistakes ========================== */
 
-export const tradeMistakes = sqliteTable("trade_mistakes", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
+export const tradeMistakes = pgTable("trade_mistakes", {
+  id: serial("id").primaryKey(),
   tradeId: integer("trade_id").notNull(),
   mistakeTagId: integer("mistake_tag_id").notNull(),
 });
@@ -126,8 +156,8 @@ export type TradeMistake = typeof tradeMistakes.$inferSelect;
 
 /* ======================== weekly combat plans ======================= */
 
-export const weeklyReviews = sqliteTable("weekly_reviews", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
+export const weeklyReviews = pgTable("weekly_reviews", {
+  id: serial("id").primaryKey(),
   weekStart: text("week_start").notNull(), // yyyy-MM-dd (Monday)
   plans: text("plans").notNull(), // JSON: [{ tagId, tagName, plan }]
   submittedAt: text("submitted_at").notNull(),

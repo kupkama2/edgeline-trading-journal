@@ -41,6 +41,7 @@ import {
 import {
   useTrades,
   useMistakeTags,
+  useStyles,
   useCreateTrade,
   useUpdateTrade,
   useDeleteTrade,
@@ -48,6 +49,12 @@ import {
   fileToDataUrl,
   analyzeRationale,
 } from "@/lib/data";
+import {
+  filterByStyle,
+  styleColor,
+  styleName,
+  useStyleFilter,
+} from "@/lib/style-filter";
 import { parsePlaybook, type TradeWithTags } from "@shared/schema";
 import {
   computeMetrics,
@@ -56,6 +63,7 @@ import {
   EXIT_REASON_LABELS,
 } from "@shared/metrics";
 import { DailyGuardCard, useDemonGuard } from "@/components/daily-guard";
+import { StyleChip, StyleSwitcher } from "@/components/style-switcher";
 
 /* ============================== helpers ============================== */
 
@@ -282,8 +290,20 @@ function NewTradeCard() {
     }
     return Array.from(names).sort();
   }, [allTrades]);
-  // Same lock the R-loss guardrail produces — a repeated demon blocks new entries.
-  const guard = useDemonGuard();
+  /* Which book this trade belongs to. Falls back to the journal's active style,
+     then the first style, so logging stays one-click for a single-book day. */
+  const { data: styles = [] } = useStyles();
+  const { activeStyleId } = useStyleFilter();
+  const [pickedStyleId, setPickedStyleId] = useState<number | null>(null);
+  const styleId = pickedStyleId ?? activeStyleId ?? styles[0]?.id ?? null;
+
+  // Retarget the form when the page is scoped to a different book, otherwise a
+  // picked style would silently outlive the filter it was chosen under.
+  useEffect(() => setPickedStyleId(null), [activeStyleId]);
+
+  // Same lock the R-loss guardrail produces — a repeated demon blocks new
+  // entries, but only for the style that produced the streak.
+  const guard = useDemonGuard(styleId);
 
   const form = useForm<SetupForm>({
     resolver: zodResolver(setupFormSchema) as any,
@@ -401,6 +421,7 @@ function NewTradeCard() {
 
     await createTrade.mutateAsync({
       trade: {
+        styleId,
         symbol: data.symbol.toUpperCase(),
         direction: data.direction,
         size: data.size,
@@ -408,7 +429,10 @@ function NewTradeCard() {
         initialStop: data.initialStop,
         initialTarget: data.initialTarget,
         entryTime: toIso(data.entryTime),
-        setupScreenshot: image,
+        // Screenshots are parsed, not kept. A base64 chart is ~300x the size of
+        // the trade record it produces, and chart replay lives in Tradesly /
+        // Edgewonk. The column stays nullable so this can be revisited.
+        setupScreenshot: null,
         notes: data.notes || null,
         rationale: rationale || null,
         rationaleTags: rationaleTags.length ? JSON.stringify(rationaleTags) : null,
@@ -438,6 +462,7 @@ function NewTradeCard() {
     setExitTime(localNow());
     setExitReason(null);
     setSelectedDemons([]);
+    setPickedStyleId(null);
     setPb({ setupName: "", stopLogic: "", targetLogic: "", confidence: null, standAside: "" });
     form.reset({
       symbol: "",
@@ -658,6 +683,37 @@ function NewTradeCard() {
               </div>
             )}
           </div>
+
+          {styles.length > 0 && (
+            <div className="space-y-1" data-testid="section-style-picker">
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                Style
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {styles.map((s) => {
+                  const on = s.id === styleId;
+                  const c = styleColor(s.color);
+                  return (
+                    <button
+                      key={s.id}
+                      type="button"
+                      onClick={() => setPickedStyleId(s.id)}
+                      data-testid={`chip-style-${s.id}`}
+                      aria-pressed={on}
+                      className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] leading-tight transition-colors ${
+                        on
+                          ? c.chip
+                          : "border-border text-muted-foreground hover:border-primary/40 hover:text-foreground"
+                      }`}
+                    >
+                      <span className={`h-1.5 w-1.5 rounded-full ${c.dot}`} />
+                      {s.name}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <FormField
@@ -891,9 +947,9 @@ function NewTradeCard() {
               data-testid="text-new-trade-locked"
             >
               <Ban className="mt-px h-3.5 w-3.5 shrink-0" />
-              New entries are blocked: “{guard.demon.name}” has hit{" "}
-              {guard.demon.currentStreak} trades in a row. Acknowledge it on the guard card
-              above to unlock.
+              New {styleName(styles, styleId)} entries are blocked: “{guard.demon.name}” has
+              hit {guard.demon.currentStreak} trades in a row in this style. Acknowledge it on
+              the guard card above to unlock — your other styles are unaffected.
             </p>
           )}
         </form>
@@ -1016,7 +1072,8 @@ function CloseTradeDialog({
         mae: mae ? Number(mae) : null,
         mfe: mfe ? Number(mfe) : null,
         noManagementOutcome: (nmo as any) ?? null,
-        outcomeScreenshot: image,
+        // Parsed for MAE/MFE, then discarded — see the note on setupScreenshot.
+        outcomeScreenshot: null,
         notes: notes || trade.notes || null,
       },
       mistakeTagIds: selectedTags,
@@ -1679,6 +1736,7 @@ function OpenTradeRow({
             )}
           </span>
           <span className="truncate font-mono text-sm font-semibold">{t.symbol}</span>
+          <StyleChip styleId={t.styleId} />
           <span className="ml-auto shrink-0 rounded bg-secondary px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
             {t.size} @ {num(t.entryPrice)}
           </span>
@@ -1728,6 +1786,7 @@ function ClosedTradeRow({
     >
       <div className="flex items-center gap-2">
         <span className="truncate font-mono text-sm font-semibold">{t.symbol}</span>
+        <StyleChip styleId={t.styleId} />
         <Badge variant="outline" className="shrink-0 text-[10px] capitalize">
           {t.exitReason ? EXIT_REASON_LABELS[t.exitReason] : "—"}
         </Badge>
@@ -1944,6 +2003,7 @@ function TradeDetailDialog({
 export default function Journal() {
   const { data: trades, isLoading } = useTrades();
   const { data: tags = [] } = useMistakeTags();
+  const { activeStyleId } = useStyleFilter();
   const [closing, setClosing] = useState<TradeWithTags | null>(null);
   const [viewing, setViewing] = useState<TradeWithTags | null>(null);
   const [editing, setEditing] = useState<TradeWithTags | null>(null);
@@ -1953,8 +2013,12 @@ export default function Journal() {
     [tags],
   );
 
-  const open = (trades ?? []).filter((t) => t.status === "open");
-  const closed = (trades ?? []).filter((t) => t.status === "closed");
+  const scoped = useMemo(
+    () => filterByStyle(trades ?? [], activeStyleId),
+    [trades, activeStyleId],
+  );
+  const open = scoped.filter((t) => t.status === "open");
+  const closed = scoped.filter((t) => t.status === "closed");
 
   return (
     <div className="space-y-6">
@@ -1965,7 +2029,9 @@ export default function Journal() {
         </p>
       </div>
 
-      <DailyGuardCard trades={trades ?? []} tags={tags} />
+      <StyleSwitcher />
+
+      <DailyGuardCard trades={scoped} tags={tags} styleId={activeStyleId} />
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
         <NewTradeCard />

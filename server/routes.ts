@@ -2,10 +2,12 @@ import type { Express } from "express";
 import type { Server } from "node:http";
 import { storage } from "./storage";
 import { ProxyAgent, fetch as undiciFetch } from "undici";
+import Anthropic from "@anthropic-ai/sdk";
 import {
   insertTradeSchema,
   updateTradeSchema,
   insertMistakeTagSchema,
+  insertTradingStyleSchema,
   insertWeeklyReviewSchema,
   parseScreenshotSchema,
   analyzeRationaleSchema,
@@ -18,6 +20,9 @@ import { z } from "zod";
  * is OpenAI-chat-completions compatible.
  */
 const MODEL = "sonar-pro";
+
+/** Claude reads prices off a chart axis more reliably than sonar-pro. */
+const ANTHROPIC_MODEL = "claude-opus-5";
 
 const SETUP_PROMPT = `You are reading a screenshot to fill in a new trade's setup. The screenshot will be EITHER of two things — figure out which one it is first.
 
@@ -119,39 +124,103 @@ const tradeUpdateBodySchema = z.object({
 
 /* ----------------------- Perplexity Sonar transport ----------------------- */
 /**
- * The app talks to the Perplexity chat-completions API through ONE of two paths,
- * depending on where it is running. Both end up POSTing the exact same body to
+ * The app talks to the Perplexity chat-completions API through ONE of three
+ * paths, depending on where it is running. All three POST the exact same body to
  * `<base>/chat/completions` — only the base URL and the auth header differ.
  *
- *  1. PRODUCTION (published site). The user's custom credential is injected as
- *     two env vars. `CUSTOM_CRED_API_PERPLEXITY_AI_URL` is a proxy endpoint that
- *     forwards to the real Perplexity API with the secret key attached
- *     server-side; we authenticate to *it* with `x-api-key`. There is no
- *     outbound HTTPS proxy in production, so a plain direct request is correct.
+ *  1. STANDARD (local dev, Vercel, anywhere outside Perplexity Computer). Set
+ *     `PERPLEXITY_API_KEY` and we hit the real API directly with
+ *     `Authorization: Bearer <key>`. Takes precedence over the two paths below,
+ *     which are inert outside Perplexity's own platform.
  *
- *  2. DEV SANDBOX (`api_credentials=["custom-cred:api.perplexity.ai"]`). No
- *     custom-cred env vars are set, so we hit `https://api.perplexity.ai`
- *     directly and the sandbox's HTTPS_PROXY transparently injects the
- *     `Authorization: Bearer <key>` header. Node's built-in `fetch` does NOT
- *     honour HTTPS_PROXY, so we must route through undici's ProxyAgent
- *     explicitly — otherwise the request bypasses the proxy and 401s.
+ *  2. PERPLEXITY COMPUTER PRODUCTION (published site). The user's custom
+ *     credential is injected as two env vars.
+ *     `CUSTOM_CRED_API_PERPLEXITY_AI_URL` is a proxy endpoint that forwards to
+ *     the real Perplexity API with the secret key attached server-side; we
+ *     authenticate to *it* with `x-api-key`. There is no outbound HTTPS proxy in
+ *     production, so a plain direct request is correct.
+ *
+ *  3. PERPLEXITY COMPUTER DEV SANDBOX
+ *     (`api_credentials=["custom-cred:api.perplexity.ai"]`). No custom-cred env
+ *     vars are set, so we hit `https://api.perplexity.ai` directly and the
+ *     sandbox's HTTPS_PROXY transparently injects the `Authorization: Bearer
+ *     <key>` header. Node's built-in `fetch` does NOT honour HTTPS_PROXY, so we
+ *     must route through undici's ProxyAgent explicitly — otherwise the request
+ *     bypasses the proxy and 401s.
  */
+const PPLX_API_KEY = process.env.PERPLEXITY_API_KEY;
 const PPLX_PROXY_URL = process.env.CUSTOM_CRED_API_PERPLEXITY_AI_URL;
 const PPLX_PROXY_TOKEN = process.env.CUSTOM_CRED_API_PERPLEXITY_AI_TOKEN;
-const PPLX_BASE = (PPLX_PROXY_URL || "https://api.perplexity.ai").replace(/\/+$/, "");
+const PPLX_BASE = (
+  PPLX_API_KEY ? "https://api.perplexity.ai" : PPLX_PROXY_URL || "https://api.perplexity.ai"
+).replace(/\/+$/, "");
 
 /** Lazily-built dispatcher for the dev sandbox's credential-injecting proxy. */
 let proxyDispatcher: ProxyAgent | undefined;
 function sandboxDispatcher(): ProxyAgent | undefined {
   // Only relevant when we're calling api.perplexity.ai directly (dev sandbox).
-  if (PPLX_PROXY_URL) return undefined;
+  // A direct API key authenticates on its own, so never proxy in that case.
+  if (PPLX_API_KEY || PPLX_PROXY_URL) return undefined;
   const proxy = process.env.HTTPS_PROXY || process.env.https_proxy;
   if (!proxy) return undefined;
   if (!proxyDispatcher) proxyDispatcher = new ProxyAgent(proxy);
   return proxyDispatcher;
 }
 
+/* ---------------------------- Anthropic transport ---------------------------- */
+/**
+ * Preferred provider when ANTHROPIC_API_KEY is set. Claude is markedly better
+ * at reading exact prices off a chart's right-hand axis, which is the whole
+ * job of SETUP_PROMPT.
+ */
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+
+let anthropicClient: Anthropic | undefined;
+function anthropic(): Anthropic {
+  if (!anthropicClient) anthropicClient = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
+  return anthropicClient;
+}
+
+async function callAnthropic(
+  systemPrompt: string,
+  image?: { mediaType: string; data: string },
+) {
+  const content: Anthropic.ContentBlockParam[] = [];
+  if (image) {
+    content.push({
+      type: "image",
+      source: {
+        type: "base64",
+        media_type: image.mediaType as "image/png" | "image/jpeg" | "image/gif" | "image/webp",
+        data: image.data,
+      },
+    });
+  }
+  content.push({ type: "text", text: systemPrompt });
+
+  const res = await anthropic().messages.create({
+    model: ANTHROPIC_MODEL,
+    // Thinking is on by default and shares this budget with the reply, so keep
+    // headroom even though the reply itself is a small JSON object.
+    max_tokens: 8192,
+    output_config: { effort: "low" },
+    messages: [{ role: "user", content }],
+  });
+
+  const text = res.content
+    .filter((b): b is Anthropic.TextBlock => b.type === "text")
+    .map((b) => b.text)
+    .join("");
+  if (!text.trim()) throw new Error("Anthropic API returned no text content");
+  return text;
+}
+
 async function callLLM(systemPrompt: string, image?: { mediaType: string; data: string }) {
+  if (ANTHROPIC_API_KEY) return callAnthropic(systemPrompt, image);
+  return callPerplexity(systemPrompt, image);
+}
+
+async function callPerplexity(systemPrompt: string, image?: { mediaType: string; data: string }) {
   const content: any[] = [];
   if (image) {
     content.push({
@@ -162,9 +231,15 @@ async function callLLM(systemPrompt: string, image?: { mediaType: string; data: 
   content.push({ type: "text", text: systemPrompt });
 
   const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (PPLX_PROXY_URL) {
+  if (PPLX_API_KEY) {
+    headers["Authorization"] = `Bearer ${PPLX_API_KEY}`;
+  } else if (PPLX_PROXY_URL) {
     // Production credential proxy expects x-api-key; it attaches the real key.
     headers["x-api-key"] = PPLX_PROXY_TOKEN ?? "";
+  } else if (!sandboxDispatcher()) {
+    throw new Error(
+      "No AI credentials configured. Set ANTHROPIC_API_KEY (recommended) or PERPLEXITY_API_KEY in .env.",
+    );
   }
 
   const res = await undiciFetch(`${PPLX_BASE}/chat/completions`, {
@@ -237,6 +312,32 @@ export async function registerRoutes(
 
   app.delete("/api/trades/:id", async (req, res) => {
     await storage.deleteTrade(Number(req.params.id));
+    res.status(204).end();
+  });
+
+  /* --------------------------- trading styles --------------------------- */
+  app.get("/api/styles", async (_req, res) => {
+    res.json(await storage.listTradingStyles());
+  });
+
+  app.post("/api/styles", async (req, res) => {
+    const parsed = insertTradingStyleSchema.safeParse(req.body);
+    if (!parsed.success)
+      return res.status(400).json({ message: "Invalid style", issues: parsed.error.issues });
+    res.status(201).json(await storage.createTradingStyle(parsed.data));
+  });
+
+  app.patch("/api/styles/:id", async (req, res) => {
+    const parsed = insertTradingStyleSchema.partial().safeParse(req.body);
+    if (!parsed.success)
+      return res.status(400).json({ message: "Invalid style", issues: parsed.error.issues });
+    const updated = await storage.updateTradingStyle(Number(req.params.id), parsed.data);
+    if (!updated) return res.status(404).json({ message: "Style not found" });
+    res.json(updated);
+  });
+
+  app.delete("/api/styles/:id", async (req, res) => {
+    await storage.deleteTradingStyle(Number(req.params.id));
     res.status(204).end();
   });
 

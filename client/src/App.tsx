@@ -6,6 +6,8 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Shell, ThemeProvider } from "@/components/shell";
 import { GuardrailProvider } from "@/components/daily-guard";
+import { StyleFilterProvider } from "@/lib/style-filter";
+import { LoginGate } from "@/components/login-gate";
 import NotFound from "@/pages/not-found";
 import Journal from "@/pages/journal";
 import Dashboard from "@/pages/dashboard";
@@ -28,13 +30,17 @@ function App() {
       <ThemeProvider>
         <TooltipProvider>
           <Toaster />
-          <GuardrailProvider>
-            <Router hook={useHashLocation}>
-              <Shell>
-                <AppRouter />
-              </Shell>
-            </Router>
-          </GuardrailProvider>
+          <LoginGate>
+            <StyleFilterProvider>
+              <GuardrailProvider>
+                <Router hook={useHashLocation}>
+                  <Shell>
+                    <AppRouter />
+                  </Shell>
+                </Router>
+              </GuardrailProvider>
+            </StyleFilterProvider>
+          </LoginGate>
         </TooltipProvider>
       </ThemeProvider>
     </QueryClientProvider>

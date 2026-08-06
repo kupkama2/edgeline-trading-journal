@@ -2,6 +2,7 @@ import "dotenv/config";
 import express, { Response, NextFunction } from 'express';
 import type { Request } from 'express';
 import { registerRoutes } from "./routes";
+import { setupAuth, setupAuthStub } from "./auth";
 import { serveStatic } from "./static";
 import { createServer } from "node:http";
 
@@ -63,6 +64,15 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  // Tables must exist before any route can serve a query.
+  const { initSchema } = await import("./storage");
+  await initSchema();
+
+  // Must precede registerRoutes — the /api guard only protects routes
+  // registered after it.
+  setupAuth(app);
+  setupAuthStub(app);
+
   await registerRoutes(httpServer, app);
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
@@ -97,7 +107,8 @@ app.use((req, res, next) => {
     {
       port,
       host: "0.0.0.0",
-      reusePort: true,
+      // Windows sockets reject SO_REUSEPORT with ENOTSUP.
+      reusePort: process.platform !== "win32",
     },
     () => {
       log(`serving on port ${port}`);

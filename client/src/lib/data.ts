@@ -4,6 +4,7 @@ import type {
   InsertTrade,
   MistakeTag,
   TradeWithTags,
+  TradingStyle,
   UpdateTrade,
   WeeklyReview,
   SetupParseResult,
@@ -12,6 +13,10 @@ import type {
 
 export function useTrades() {
   return useQuery<TradeWithTags[]>({ queryKey: ["/api/trades"] });
+}
+
+export function useStyles() {
+  return useQuery<TradingStyle[]>({ queryKey: ["/api/styles"] });
 }
 
 export function useMistakeTags() {
@@ -56,6 +61,43 @@ export function useDeleteTrade() {
       await apiRequest("DELETE", `/api/trades/${id}`);
     },
     onSuccess: invalidateTrades,
+  });
+}
+
+const invalidateStyles = () =>
+  queryClient.invalidateQueries({ queryKey: ["/api/styles"] });
+
+export function useCreateStyle() {
+  return useMutation({
+    mutationFn: async (v: { name: string; color: string; sortOrder: number }) =>
+      (await apiRequest("POST", "/api/styles", v)).json(),
+    onSuccess: invalidateStyles,
+  });
+}
+
+export function useUpdateStyle() {
+  return useMutation({
+    mutationFn: async (v: { id: number; name?: string; color?: string }) =>
+      (
+        await apiRequest("PATCH", `/api/styles/${v.id}`, {
+          name: v.name,
+          color: v.color,
+        })
+      ).json(),
+    onSuccess: invalidateStyles,
+  });
+}
+
+export function useDeleteStyle() {
+  return useMutation({
+    mutationFn: async (id: number) => {
+      await apiRequest("DELETE", `/api/styles/${id}`);
+    },
+    onSuccess: () => {
+      invalidateStyles();
+      // Trades of a deleted style become unassigned.
+      invalidateTrades();
+    },
   });
 }
 
