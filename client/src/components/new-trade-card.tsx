@@ -897,6 +897,54 @@ export function NewTradeCard({
             </div>
           )}
 
+          {/* What THIS entry will earn, lighting up as the fields fill. The
+              reward is visible before the act completes — the goal-gradient
+              effect — and it doubles as a definition of "complete entry" that
+              never needs a manual. All process; none of it reads the P&L. */}
+          {(() => {
+            const hasNum = (x: unknown) => x !== "" && isFinite(Number(x));
+            const parts = [
+              { label: "the why", pts: 10, on: Boolean(v.rationale?.trim()) },
+              { label: "stop + target", pts: 5, on: hasNum(v.initialStop) && hasNum(v.initialTarget) },
+              { label: "chart", pts: 5, on: Boolean(image) },
+              ...(closedMode
+                ? [
+                    { label: "named exit", pts: 10, on: Boolean(exitReason) },
+                    {
+                      label: "clean — no demons",
+                      pts: 5,
+                      on: Boolean(exitReason) && selectedDemons.length === 0,
+                    },
+                  ]
+                : []),
+            ];
+            const earned = parts.filter((p) => p.on).reduce((a, p) => a + p.pts, 0);
+            return (
+              <div
+                className="flex flex-wrap items-center gap-1.5"
+                data-testid="meter-entry-xp"
+              >
+                <span className="font-mono text-[10px] text-muted-foreground">
+                  This entry: <span className="font-semibold text-foreground">+{earned} XP</span>
+                </span>
+                {parts.map((part) => (
+                  <span
+                    key={part.label}
+                    className={`rounded-full border px-1.5 py-0.5 text-[9px] transition-colors duration-300 ${
+                      part.on
+                        ? "border-primary/50 bg-primary/10 text-primary"
+                        : "border-border/60 text-muted-foreground/50"
+                    }`}
+                    data-testid={`xp-part-${part.label.split(" ")[0]}`}
+                  >
+                    {part.on ? "✓ " : ""}
+                    {part.label} +{part.pts}
+                  </span>
+                ))}
+              </div>
+            );
+          })()}
+
           <div className="flex flex-wrap items-center gap-3">
             <Button
               type="submit"

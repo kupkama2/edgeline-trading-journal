@@ -444,3 +444,59 @@ body {
     font-size: 16px !important;
   }
 }
+
+/* ============================ level-up burst ============================
+   Eighteen particles from screen centre, ~1.2s, once — only on level-up, and
+   a level only rises on process XP. This is the entire animation budget:
+   outcomes (P&L, wins) get nothing, on purpose. */
+.xp-burst span {
+  position: absolute;
+  left: 50%;
+  top: 42%;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: hsl(var(--primary));
+  opacity: 0;
+  animation: xp-pop 1.2s ease-out forwards;
+  animation-delay: calc(var(--i) * 12ms);
+  /* Spread is a variable so a variant with fewer particles still fans the
+     full circle. 18 × 20° = 10 × 36° = 360°. */
+  --spread: 20deg;
+  transform: rotate(calc(var(--i) * var(--spread))) translateY(0);
+}
+@keyframes xp-pop {
+  0% {
+    opacity: 1;
+    transform: rotate(calc(var(--i) * var(--spread))) translateY(0) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: rotate(calc(var(--i) * var(--spread))) translateY(-180px) scale(0.4);
+  }
+}
+
+/* Motion is a preference, not a given. */
+@media (prefers-reduced-motion: reduce) {
+  .xp-burst {
+    display: none;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Clean-close variant: emerald, fewer particles, shorter flight — a nod, not
+   a parade. Emerald is the app's "nothing went wrong" colour and stays
+   constant across themes. */
+.xp-burst--clean span {
+  --spread: 36deg;
+  background: rgb(16 185 129);
+  width: 6px;
+  height: 6px;
+  animation-duration: 0.9s;
+}

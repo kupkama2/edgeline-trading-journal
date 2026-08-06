@@ -10,6 +10,7 @@ import {
   Palette,
   Settings2,
 } from "lucide-react";
+import { XpChip, XpToaster } from "@/components/xp";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -181,13 +182,15 @@ export function Shell({ children }: { children: React.ReactNode }) {
             })}
           </nav>
 
-          <div className="ml-auto">
+          <div className="ml-auto flex items-center gap-2">
+            <XpChip />
             <ThemePicker />
           </div>
         </div>
       </header>
 
       <main className="mx-auto max-w-6xl px-4 py-6 sm:px-6 sm:py-8">{children}</main>
+      <XpToaster />
     </div>
   );
 }

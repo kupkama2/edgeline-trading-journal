@@ -29,6 +29,7 @@ import { DailyGuardCard } from "@/components/daily-guard";
 import { DemonFinderPanel, WeeklyReviewCard } from "@/components/demon-finder";
 import { WeeklyInsightsCard } from "@/components/weekly-insights";
 import { StyleSwitcher } from "@/components/style-switcher";
+import { ProgressionCard } from "@/components/xp";
 import { filterByStyle, useStyleFilter } from "@/lib/style-filter";
 import {
   aggregate,
@@ -382,6 +383,10 @@ export default function Dashboard() {
       </div>
 
       <StyleSwitcher />
+
+      {/* Account-level on purpose: process discipline doesn't reset when you
+          switch books, so this card ignores the style filter. */}
+      <ProgressionCard />
 
       <DailyGuardCard trades={all} tags={tags} styleId={activeStyleId} />
 
