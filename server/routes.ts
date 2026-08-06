@@ -59,6 +59,39 @@ Rules:
 - Use null for anything that is not clearly legible or not applicable. Never guess wildly.
 - Numbers must be plain JSON numbers (no currency symbols, no thousands separators, no commas).`;
 
+/**
+ * Reads an orders table screenshot as MANY resting orders, not one position.
+ *
+ * SETUP_PROMPT deliberately hunts for the single order that opened a position;
+ * this is the opposite job — a venue's open-orders list, every row of which is
+ * a trade that could still open. Kept as a separate prompt because merging the
+ * two would make both worse: "find the one that matters" and "return all of
+ * them" pull in opposite directions.
+ */
+const ORDERS_PROMPT = `You are reading a screenshot of a trading venue's ORDERS table — a list of resting/open orders that have not been filled yet. Extract EVERY order row you can read.
+
+Common shapes:
+(A) Crypto exchange (Binance and similar): columns like Time, Symbol, Type, Side, Price, Amount, Filled, Reduce Only. Side reads "Open Long"/"Open Short" or "Buy"/"Sell". Amount is usually quote notional such as "37,177.47 USDT". This view typically has NO stop loss or take profit — leave them null, do not invent them.
+(B) Futures broker / DOM: columns like Symbol, Side, Type, Qty, Remaining Qty, Filled Qty, Limit Price, Stop Price, Take Profit, Stop Loss, Avg Fill Price, Update Time. Qty is contracts. Take Profit maps to initialTarget and Stop Loss to initialStop.
+
+For every row:
+- direction: "long" for Buy / Open Long, "short" for Sell / Open Short.
+- entryPrice: the limit/entry price for that order (Price, or Limit Price).
+- size: the position size as printed.
+- sizeUnit: "quote" when the size is a currency amount (e.g. "4,655.18 USDT" — a USD/USDT notional), "base" when it is a contract or coin count (e.g. Qty 2).
+- initialStop / initialTarget: only if the table actually shows them; otherwise null.
+- entryTime: the row's timestamp as ISO 8601 if legible, otherwise null.
+- symbol: the ticker as printed, minus any "Perp" badge.
+
+Rules:
+- Return EVERY data row. Do not skip duplicates — two rows on the same symbol at different prices are two separate orders.
+- Ignore header rows, totals, and any row that is clearly a filled/closed position rather than a resting order.
+- Output ONLY this JSON object, no prose and no markdown fences:
+{"orders": [{"symbol": string|null, "direction": "long"|"short"|null, "size": number|null, "sizeUnit": "base"|"quote"|null, "entryPrice": number|null, "initialStop": number|null, "initialTarget": number|null, "entryTime": string|null}]}
+- Numbers must be plain JSON numbers: no currency symbols, no thousands separators.
+- If you cannot read a field, use null rather than guessing.
+- If the image is not an orders table at all, return {"orders": []}.`;
+
 function outcomePrompt(ctx: {
   symbol?: string;
   direction?: string;
@@ -526,11 +559,38 @@ export async function registerRoutes(
     const { mediaType, data } = splitDataUrl(image);
 
     try {
-      const text = await callLLM(
-        kind === "setup" ? SETUP_PROMPT : outcomePrompt(context ?? {}),
-        { mediaType, data },
-      );
+      const prompt =
+        kind === "setup"
+          ? SETUP_PROMPT
+          : kind === "orders"
+            ? ORDERS_PROMPT
+            : outcomePrompt(context ?? {});
+      const text = await callLLM(prompt, { mediaType, data });
       const json = extractJson(text);
+
+      if (kind === "orders") {
+        // Drop rows the model couldn't read the essentials of rather than
+        // surfacing half-rows the user then has to spot and delete.
+        const rows = Array.isArray(json?.orders) ? json.orders : [];
+        const usable = rows
+          .filter(
+            (o: any) =>
+              o &&
+              typeof o.entryPrice === "number" &&
+              (o.direction === "long" || o.direction === "short"),
+          )
+          .map((o: any) => ({
+            ...o,
+            symbol: o.symbol ? normalizeSymbol(o.symbol) : null,
+            sizeUnit: o.sizeUnit === "quote" ? "quote" : "base",
+          }));
+        return res.json({
+          ok: true,
+          kind,
+          result: { orders: usable, skipped: rows.length - usable.length },
+        });
+      }
+
       if (kind === "setup") {
         if (json.symbol) json.symbol = normalizeSymbol(json.symbol);
         // A screenshot only counts as a closed trade if a usable exit price came

@@ -249,7 +249,7 @@ export type WeeklyReview = typeof weeklyReviews.$inferSelect;
 
 export const parseScreenshotSchema = z.object({
   image: z.string().min(1), // data URL or raw base64
-  kind: z.enum(["setup", "outcome"]),
+  kind: z.enum(["setup", "outcome", "orders"]),
   context: z
     .object({
       symbol: z.string().optional(),
@@ -272,6 +272,21 @@ export interface AnalyzeRationaleResult {
 }
 
 export type ParseScreenshotRequest = z.infer<typeof parseScreenshotSchema>;
+
+/**
+ * One row from an orders-table screenshot. Same shape the text importer emits,
+ * so a screenshot and a paste feed the identical preview and commit path.
+ */
+export interface OrderRowParseResult {
+  symbol: string | null;
+  direction: "long" | "short" | null;
+  size: number | null;
+  sizeUnit: "base" | "quote" | null;
+  entryPrice: number | null;
+  initialStop: number | null;
+  initialTarget: number | null;
+  entryTime: string | null;
+}
 
 export interface SetupParseResult {
   symbol: string | null;
