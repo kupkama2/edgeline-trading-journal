@@ -130,8 +130,20 @@ export const sizeUnitEnum = z.enum(["base", "quote"]);
  */
 export const statusEnum = z.enum(["pending", "open", "closed", "cancelled"]);
 
-/** Why a trade never became a position. */
-export const cancelReasonEnum = z.enum(["not_filled", "pulled", "changed_mind"]);
+/**
+ * Why a trade never became a position.
+ *
+ * 'never_placed' is the missed trade: the setup was seen and the order was
+ * never sent. It is kept in the same table as everything else on purpose — a
+ * trade you talked yourself out of is a decision with a price, and the only way
+ * to put a number on it is to store the plan next to the trades you did take.
+ */
+export const cancelReasonEnum = z.enum([
+  "not_filled",
+  "pulled",
+  "changed_mind",
+  "never_placed",
+]);
 export const exitReasonEnum = z.enum([
   "target",
   "stop",

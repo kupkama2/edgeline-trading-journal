@@ -1,7 +1,15 @@
 import { useEffect, useState, createContext, useContext } from "react";
 import { Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
-import { Moon, Sun, LineChart, NotebookPen, CalendarDays, Settings2 } from "lucide-react";
+import {
+  BarChart3,
+  CalendarDays,
+  LineChart,
+  Moon,
+  NotebookPen,
+  Settings2,
+  Sun,
+} from "lucide-react";
 
 /* --------------------------------- theme -------------------------------- */
 
@@ -63,6 +71,7 @@ const NAV = [
   { href: "/", label: "Journal", icon: NotebookPen },
   { href: "/daily", label: "Daily", icon: CalendarDays },
   { href: "/dashboard", label: "Dashboard", icon: LineChart },
+  { href: "/analysis", label: "Analysis", icon: BarChart3 },
   { href: "/settings", label: "Settings", icon: Settings2 },
 ];
 

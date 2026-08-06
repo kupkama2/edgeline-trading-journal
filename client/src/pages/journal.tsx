@@ -33,6 +33,7 @@ import {
   ClipboardList,
   ClipboardPaste,
   Eye,
+  EyeOff,
   Loader2,
   Pencil,
   Sparkles,
@@ -67,6 +68,7 @@ import { DailyGuardCard, useDemonGuard } from "@/components/daily-guard";
 import { StyleChip, StyleSwitcher } from "@/components/style-switcher";
 import { pointValueFor } from "@shared/symbols";
 import { ImportTradesDialog } from "@/components/import-trades";
+import { MissedTradeDialog } from "@/components/missed-trade";
 import { ResolveTradeDialog } from "@/components/resolve-trade";
 import { dropBracketLegs, type ImportCandidate } from "@shared/import-parse";
 
@@ -2334,6 +2336,7 @@ export default function Journal() {
   const [viewing, setViewing] = useState<TradeWithTags | null>(null);
   const [editing, setEditing] = useState<TradeWithTags | null>(null);
   const [importing, setImporting] = useState(false);
+  const [loggingMissed, setLoggingMissed] = useState(false);
   const [resolving, setResolving] = useState<TradeWithTags | null>(null);
   // The server already returns newest-first; this re-sorts client-side so
   // switching is instant and costs no round trip.
@@ -2363,15 +2366,26 @@ export default function Journal() {
             Drop a chart, confirm the numbers, move on. Everything else is computed.
           </p>
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => setImporting(true)}
-          data-testid="button-open-import"
-        >
-          <ClipboardPaste className="mr-1.5 h-3.5 w-3.5" />
-          Import orders
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setLoggingMissed(true)}
+            data-testid="button-open-missed"
+          >
+            <EyeOff className="mr-1.5 h-3.5 w-3.5" />
+            Didn't take
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setImporting(true)}
+            data-testid="button-open-import"
+          >
+            <ClipboardPaste className="mr-1.5 h-3.5 w-3.5" />
+            Import orders
+          </Button>
+        </div>
       </div>
 
       <StyleSwitcher />
@@ -2533,6 +2547,7 @@ export default function Journal() {
         }}
       />
       <ResolveTradeDialog trade={resolving} onClose={() => setResolving(null)} />
+      <MissedTradeDialog open={loggingMissed} onClose={() => setLoggingMissed(false)} />
     </div>
   );
 }

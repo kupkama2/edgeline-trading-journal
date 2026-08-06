@@ -91,6 +91,29 @@ export function useImportTrades() {
   });
 }
 
+/** Backfill from a broker CSV. Rows carrying an exit land as closed history. */
+export function useImportCsv() {
+  return useMutation({
+    mutationFn: async (v: {
+      styleId?: number | null;
+      trades: {
+        symbol: string;
+        direction: "long" | "short";
+        size: number;
+        sizeUnit?: "base" | "quote";
+        entryPrice: number;
+        initialStop?: number | null;
+        initialTarget?: number | null;
+        exitPrice?: number | null;
+        entryTime: string;
+        exitTime?: string | null;
+        notes?: string | null;
+      }[];
+    }) => (await apiRequest("POST", "/api/trades/import-csv", v)).json(),
+    onSuccess: invalidateTrades,
+  });
+}
+
 export function useDeleteTrade() {
   return useMutation({
     mutationFn: async (id: number) => {

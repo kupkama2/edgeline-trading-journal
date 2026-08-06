@@ -16,6 +16,7 @@ import {
   sizeUnitEnum,
 } from "@shared/schema";
 import { normalizeSymbol, pointValueFor } from "@shared/symbols";
+import { tradesToCsv } from "@shared/csv";
 import {
   buildInsightsBundle,
   startOfWeek,
@@ -230,6 +231,35 @@ const importBodySchema = z.object({
       }),
     )
     .min(1),
+});
+
+/**
+ * Rows confirmed in the CSV import preview.
+ *
+ * Unlike the paste importer these land as history rather than resting orders,
+ * so an entry time is required — a backfilled trade with no timestamp would sit
+ * on today's calendar and quietly corrupt every time-of-day breakdown.
+ */
+const csvImportBodySchema = z.object({
+  styleId: z.number().int().nullable().optional(),
+  trades: z
+    .array(
+      z.object({
+        symbol: z.string().min(1),
+        direction: directionEnum,
+        size: z.number().positive(),
+        sizeUnit: sizeUnitEnum.optional(),
+        entryPrice: z.number(),
+        initialStop: z.number().nullable().optional(),
+        initialTarget: z.number().nullable().optional(),
+        exitPrice: z.number().nullable().optional(),
+        entryTime: z.string().min(1),
+        exitTime: z.string().nullable().optional(),
+        notes: z.string().nullable().optional(),
+      }),
+    )
+    .min(1)
+    .max(5000),
 });
 
 /* ----------------------- Perplexity Sonar transport ----------------------- */
@@ -539,6 +569,74 @@ export async function registerRoutes(
   app.delete("/api/trades/:id", async (req, res) => {
     await storage.deleteTrade(Number(req.params.id));
     res.status(204).end();
+  });
+
+  /**
+   * The whole journal as one CSV, metrics already computed.
+   *
+   * No set of built-in reports anticipates every question, and the answer to
+   * that is not more reports — it is handing over the data in a form a
+   * spreadsheet or a notebook can chew on. Derived columns are written out
+   * rather than left to the reader, because recreating R from size unit,
+   * contract point value and direction in a spreadsheet formula is exactly
+   * where an analysis quietly goes wrong.
+   */
+  app.get("/api/export.csv", async (_req, res) => {
+    const [trades, tags, styles] = await Promise.all([
+      storage.listTrades(),
+      storage.listMistakeTags(),
+      storage.listTradingStyles(),
+    ]);
+    const stamp = new Date().toISOString().slice(0, 10);
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="edgeline-${stamp}.csv"`);
+    res.send(tradesToCsv(trades, tags, styles));
+  });
+
+  /**
+   * Backfill history from a broker's CSV.
+   *
+   * The client parses the file and previews it, then sends rows — the same
+   * arrangement as the paste importer, so what was confirmed on screen is what
+   * lands. Rows arrive as CLOSED trades when they carry an exit and open ones
+   * otherwise, since a history export is by definition trades that already
+   * happened.
+   */
+  app.post("/api/trades/import-csv", async (req, res) => {
+    const parsed = csvImportBodySchema.safeParse(req.body);
+    if (!parsed.success)
+      return res.status(400).json({ message: "Invalid import", issues: parsed.error.issues });
+
+    const created = [];
+    for (const c of parsed.data.trades) {
+      const closed = c.exitPrice != null;
+      created.push(
+        await storage.createTrade(
+          {
+            styleId: parsed.data.styleId ?? null,
+            symbol: normalizeSymbol(c.symbol),
+            pointValue: pointValueFor(c.symbol),
+            direction: c.direction,
+            size: c.size,
+            sizeUnit: c.sizeUnit ?? "base",
+            entryPrice: c.entryPrice,
+            initialStop: c.initialStop ?? null,
+            initialTarget: c.initialTarget ?? null,
+            entryTime: c.entryTime,
+            exitPrice: c.exitPrice ?? null,
+            exitTime: c.exitTime ?? c.entryTime,
+            // An imported row has no stop unless the broker exported one, and
+            // R is undefined without it. That is recorded honestly as an
+            // "other" exit rather than guessed at from the P&L sign.
+            status: closed ? "closed" : "open",
+            exitReason: closed ? "other" : null,
+            notes: c.notes ?? null,
+          },
+          [],
+        ),
+      );
+    }
+    res.status(201).json({ imported: created.length });
   });
 
   /* --------------------------- trading styles --------------------------- */
