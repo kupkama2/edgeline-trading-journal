@@ -13,7 +13,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { ArrowDownRight, ArrowUpRight, Camera, ClipboardPaste, Loader2 } from "lucide-react";
 import { parseImport, type ImportCandidate } from "@shared/import-parse";
-import { fileToDataUrl, parseScreenshot, useImportTrades } from "@/lib/data";
+import { fileToDownscaledDataUrl, parseScreenshot, useImportTrades } from "@/lib/data";
 import { useStyleFilter } from "@/lib/style-filter";
 
 /**
@@ -103,7 +103,7 @@ export function ImportTradesDialog({
   async function scanImage(file: File) {
     setScanning(true);
     try {
-      const res = await parseScreenshot(await fileToDataUrl(file), "orders");
+      const res = await parseScreenshot(await fileToDownscaledDataUrl(file), "orders");
       const mapped: ImportCandidate[] = (res.orders ?? [])
         .filter((o) => o.entryPrice != null && o.direction)
         .map((o) => ({
