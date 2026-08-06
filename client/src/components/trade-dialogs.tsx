@@ -9,7 +9,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { ClipboardList, Loader2, Pencil } from "lucide-react";
-import { useMistakeTags, useUpdateTrade, parseScreenshot, fileToDownscaledDataUrl } from "@/lib/data";
+import { useMistakeTags, useUpdateTrade, useAddTradeImage, archiveDataUrl, parseScreenshot, fileToDownscaledDataUrl } from "@/lib/data";
+import { TradeImageGallery } from "@/components/trade-images";
 import { parsePlaybook, type TradeWithTags } from "@shared/schema";
 import { computeMetrics, fmtR, EXIT_REASON_LABELS } from "@shared/metrics";
 import { Dropzone, EXIT_REASONS, RationaleTags, localNow, num, parseTags, toIso } from "@/components/trade-shared";
@@ -26,6 +27,7 @@ export function CloseTradeDialog({
   const { toast } = useToast();
   const { data: tags = [] } = useMistakeTags();
   const updateTrade = useUpdateTrade();
+  const addImage = useAddTradeImage();
 
   const [image, setImage] = useState<string | null>(null);
   const [parsing, setParsing] = useState(false);
@@ -125,6 +127,14 @@ export function CloseTradeDialog({
       },
       mistakeTagIds: selectedTags,
     });
+    // The chart was parsed for MAE/MFE; keeping it costs one lazy-loaded row
+    // in trade_images and buys the visual record. Failure here must not block
+    // the close — the numbers are already saved.
+    if (image) {
+      archiveDataUrl(image).then((data) =>
+        addImage.mutate({ tradeId: trade.id, kind: "outcome", data }),
+      );
+    }
     toast({ title: "Trade closed", description: `${trade.symbol} recorded.` });
     reset();
     onClose();
@@ -823,39 +833,7 @@ export function TradeDetailDialog({
               </div>
             )}
 
-            {trade.setupScreenshot && (
-              <div>
-                <p className="mb-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
-                  Setup screenshot
-                </p>
-                <img
-                  src={trade.setupScreenshot}
-                  alt="Setup screenshot"
-                  className="w-full rounded-lg border border-border/70 bg-black/30 object-contain"
-                  data-testid={`img-setup-${trade.id}`}
-                />
-              </div>
-            )}
-
-            {trade.outcomeScreenshot && (
-              <div>
-                <p className="mb-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
-                  Outcome screenshot
-                </p>
-                <img
-                  src={trade.outcomeScreenshot}
-                  alt="Outcome screenshot"
-                  className="w-full rounded-lg border border-border/70 bg-black/30 object-contain"
-                  data-testid={`img-outcome-${trade.id}`}
-                />
-              </div>
-            )}
-
-            {!trade.setupScreenshot && !trade.outcomeScreenshot && (
-              <p className="text-xs text-muted-foreground">
-                No screenshots attached to this trade.
-              </p>
-            )}
+            <TradeImageGallery tradeId={trade.id} />
 
             {trade.notes && (
               <div>

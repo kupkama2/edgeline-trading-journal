@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowDownRight, ArrowUpRight, CheckCircle2, Eye, Pencil, Trash2, X } from "lucide-react";
+import { ArrowDownRight, ArrowUpRight, Camera, CheckCircle2, Eye, Pencil, Trash2, X } from "lucide-react";
 import { useUpdateTrade, useDeleteTrade } from "@/lib/data";
 import { type TradeWithTags } from "@shared/schema";
 import { computeMetrics, fmtMoney, fmtR, EXIT_REASON_LABELS } from "@shared/metrics";
@@ -259,6 +259,17 @@ export function ClosedTradeRow({
   const m = computeMetrics(t);
   const del = useDeleteTrade();
   const win = (m.actualR ?? 0) >= 0;
+  // A camera with a count says "there is a visual record" without paying to
+  // load it — the images themselves stay lazy until the detail opens.
+  const shots = t.imageCount > 0 && (
+    <span
+      className="flex items-center gap-0.5 font-mono text-[10px] text-muted-foreground"
+      data-testid={`badge-images-${t.id}`}
+    >
+      <Camera className="h-3 w-3" />
+      {t.imageCount}
+    </span>
+  );
   const rationaleTags = parseTags(t.rationaleTags);
   return (
     <div
@@ -268,6 +279,7 @@ export function ClosedTradeRow({
       <div className="flex items-center gap-2">
         <span className="truncate font-mono text-sm font-semibold">{t.symbol}</span>
         <StyleChip styleId={t.styleId} />
+        {shots}
         <Badge variant="outline" className="shrink-0 text-[10px] capitalize">
           {t.exitReason ? EXIT_REASON_LABELS[t.exitReason] : "—"}
         </Badge>

@@ -10,6 +10,7 @@ import {
   insertTradingStyleSchema,
   insertWeeklyReviewSchema,
   upsertDailyNoteSchema,
+  addTradeImageSchema,
   parseScreenshotSchema,
   analyzeRationaleSchema,
   directionEnum,
@@ -420,6 +421,42 @@ export async function registerRoutes(
 
   app.delete("/api/trades/:id", async (req, res) => {
     await storage.deleteTrade(Number(req.params.id));
+    res.status(204).end();
+  });
+
+  /* ----------------------------- trade images ----------------------------- */
+  /*
+   * Images live in their own table and their own endpoints so the trade list
+   * never carries payloads. GET here is the only place full image data leaves
+   * the server, and it is always scoped to one trade someone is looking at.
+   */
+  app.get("/api/trades/:id/images", async (req, res) => {
+    res.json(await storage.listTradeImages(Number(req.params.id)));
+  });
+
+  app.post("/api/trades/:id/images", async (req, res) => {
+    const parsed = addTradeImageSchema.safeParse(req.body);
+    if (!parsed.success)
+      return res.status(400).json({ message: "Invalid image", issues: parsed.error.issues });
+    const tradeId = Number(req.params.id);
+    if (!(await storage.getTrade(tradeId)))
+      return res.status(404).json({ message: "Trade not found" });
+    // A dozen shots tell a trade's whole story; an unbounded gallery is how a
+    // free-tier database quietly fills with near-duplicates.
+    if ((await storage.listTradeImages(tradeId)).length >= 12)
+      return res.status(400).json({ message: "This trade already has 12 screenshots — delete one first." });
+    res
+      .status(201)
+      .json(await storage.addTradeImage(tradeId, parsed.data.kind ?? "other", parsed.data.data));
+  });
+
+  /** Storage awareness: what the screenshots cost, against the 512 MB tier. */
+  app.get("/api/storage-usage", async (_req, res) => {
+    res.json(await storage.imageUsage());
+  });
+
+  app.delete("/api/images/:id", async (req, res) => {
+    await storage.deleteTradeImage(Number(req.params.id));
     res.status(204).end();
   });
 

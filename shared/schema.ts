@@ -300,6 +300,39 @@ export const upsertDailyNoteSchema = z.object({
 
 export type DailyNote = typeof dailyNotes.$inferSelect;
 
+/* ============================ trade images ============================ */
+
+/**
+ * Screenshots attached to a trade — the visual record, kept for review.
+ *
+ * A separate table, and that separation IS the feature: a base64 chart is
+ * ~300x the trade row it belongs to, and stored inline it would ride along in
+ * every /api/trades response forever. Here images are fetched only when a
+ * trade's detail is opened; the list endpoint carries a count and nothing
+ * else. This is why screenshots used to be parsed-then-discarded — the cost
+ * problem lived in the placement, not the keeping.
+ */
+export const tradeImages = pgTable("trade_images", {
+  id: serial("id").primaryKey(),
+  tradeId: integer("trade_id").notNull(),
+  /** What the shot shows: the plan, the aftermath, or anything else. */
+  kind: text("kind").notNull().default("other"), // 'setup' | 'outcome' | 'other'
+  /** Downscaled data-URL. The client shrinks before upload; the server caps size. */
+  data: text("data").notNull(),
+  createdAt: text("created_at").notNull(),
+});
+
+export const imageKindEnum = z.enum(["setup", "outcome", "other"]);
+
+export const addTradeImageSchema = z.object({
+  kind: imageKindEnum.optional(),
+  // ~2 MB of base64 ≈ a 1.5 MB image — far above what the client's downscale
+  // produces, low enough that nobody stores a screen recording in a row.
+  data: z.string().min(1).max(2_000_000),
+});
+
+export type TradeImage = typeof tradeImages.$inferSelect;
+
 /* ===================== API payloads (screenshots) =================== */
 
 export const parseScreenshotSchema = z.object({
@@ -378,4 +411,7 @@ export interface OutcomeParseResult {
 
 export interface TradeWithTags extends Trade {
   mistakeTagIds: number[];
+  /** How many screenshots are attached — the images themselves never ride in
+      the list; they're fetched per trade when the detail opens. */
+  imageCount: number;
 }

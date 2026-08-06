@@ -49,7 +49,7 @@ export function tradeXp(t: TradeWithTags): XpEvent[] {
   if (t.rationale?.trim()) add("rationale", "Wrote the why before the result", 10);
   if (t.initialStop != null && t.initialTarget != null)
     add("levels", "Entered with stop and target", 5);
-  if (t.setupScreenshot) add("chart", "Attached the chart", 5);
+  if (t.setupScreenshot || t.imageCount > 0) add("chart", "Attached the chart", 5);
 
   if (t.status === "closed") {
     if (t.exitReason) add("exit", "Closed with a named exit", 10);
