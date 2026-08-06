@@ -133,9 +133,14 @@ CREATE TABLE IF NOT EXISTS trade_mistakes (
 CREATE TABLE IF NOT EXISTS weekly_reviews (
   id SERIAL PRIMARY KEY,
   week_start TEXT NOT NULL,
-  plans TEXT NOT NULL,
+  plans TEXT,
+  insights TEXT,
   submitted_at TEXT NOT NULL
 );
+-- A review can now carry AI insights, a manual plan, or both, so neither is
+-- required on its own.
+ALTER TABLE weekly_reviews ALTER COLUMN plans DROP NOT NULL;
+ALTER TABLE weekly_reviews ADD COLUMN IF NOT EXISTS insights TEXT;
 `);
 
   await storage.seed();
@@ -183,6 +188,7 @@ export interface IStorage {
 
   listWeeklyReviews(): Promise<WeeklyReview[]>;
   createWeeklyReview(r: InsertWeeklyReview): Promise<WeeklyReview>;
+  upsertWeeklyInsights(weekStart: string, insights: string): Promise<WeeklyReview>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -374,6 +380,31 @@ export class DatabaseStorage implements IStorage {
       return row;
     }
     const [row] = await db.insert(weeklyReviews).values(r as any).returning();
+    return row;
+  }
+
+  /**
+   * Store the week's insights without touching its manual plan. Kept separate
+   * from createWeeklyReview because that one replaces the row wholesale, which
+   * would silently wipe a "fix one" plan the trader wrote by hand.
+   */
+  async upsertWeeklyInsights(weekStart: string, insights: string): Promise<WeeklyReview> {
+    const [existing] = await db
+      .select()
+      .from(weeklyReviews)
+      .where(eq(weeklyReviews.weekStart, weekStart));
+    if (existing) {
+      const [row] = await db
+        .update(weeklyReviews)
+        .set({ insights })
+        .where(eq(weeklyReviews.id, existing.id))
+        .returning();
+      return row;
+    }
+    const [row] = await db
+      .insert(weeklyReviews)
+      .values({ weekStart, insights, submittedAt: new Date().toISOString() } as any)
+      .returning();
     return row;
   }
 }

@@ -15,6 +15,11 @@ import {
   sizeUnitEnum,
 } from "@shared/schema";
 import { normalizeSymbol, pointValueFor } from "@shared/symbols";
+import {
+  buildInsightsBundle,
+  startOfWeek,
+  weekStartKey,
+} from "@shared/weekly-insights";
 import { z } from "zod";
 
 /**
@@ -93,6 +98,40 @@ Rules:
 - Numbers must be plain JSON numbers: no currency symbols, no thousands separators.
 - If you cannot read a field, use null rather than guessing.
 - If the image is not an orders table at all, return {"orders": []}.`;
+
+/**
+ * Reads a week of written reflections against the week's numbers.
+ *
+ * The value here is the cross-reference, not the summary: the trader already
+ * knows what they wrote and can already see the stats. What neither shows on its
+ * own is whether the story in the notes matches the record — hence the explicit
+ * instruction to report where they disagree, and the ban on inventing a pattern
+ * from a single trade.
+ */
+const WEEKLY_INSIGHTS_PROMPT = `You are reviewing one week of a trader's journal. You get two things: their own written reflections on individual trades, and the computed statistics for the same week.
+
+The reflections are where they wrote what they would have done differently, or what the "perfect version" of the trade looked like. Those are self-diagnoses. The statistics are the record. Your job is to find what is TRUE ACROSS the week — not to summarise trade by trade, which they can already read.
+
+Produce four things:
+
+1. themes — recurring ideas that appear in MULTIPLE reflections. A theme needs at least two trades behind it; one trade is an anecdote, not a pattern. For each, give the theme in the trader's own vocabulary where possible, how many trades it appeared in, and up to two short verbatim fragments as evidence. If nothing recurs, return an empty list rather than padding it.
+
+2. focus — the single most correctable pattern to work on next week, and one sentence on why that one. Prefer a pattern that is both frequent AND expensive over one that is merely annoying. Exactly one.
+
+3. oneChange — one concrete, checkable action for next week. It must be something they could verify they did or did not do ("wait for a 5m close beyond the level before entering"), not an attitude ("be more patient").
+
+4. contradictions — places the reflections and the numbers DISAGREE. This is the most valuable output. Examples: notes repeatedly blame exiting too early while the capture ratio is high; notes describe good discipline while the same demon fired five times; notes never mention size while the losses cluster in the largest positions. If there is no genuine disagreement, return an empty list — do not manufacture one.
+
+Rules:
+- Ground every claim in the data you were given. Never infer trades, prices, or events that are not present.
+- A negative totalDeltaR means their management LOST money versus leaving the trade alone; positive means it gained.
+- Do not moralise, and do not give generic trading advice. Say only what this week's evidence supports.
+- Write in second person, plainly, no preamble.
+- Output ONLY this JSON object, no prose and no markdown fences:
+{"themes": [{"theme": string, "occurrences": number, "evidence": [string]}], "focus": {"name": string, "why": string}, "oneChange": string, "contradictions": [string]}
+
+Here is the week:
+{{BUNDLE}}`;
 
 function outcomePrompt(ctx: {
   symbol?: string;
@@ -542,6 +581,71 @@ export async function registerRoutes(
   /* --------------------------- weekly reviews --------------------------- */
   app.get("/api/weekly-reviews", async (_req, res) => {
     res.json(await storage.listWeeklyReviews());
+  });
+
+  /**
+   * Generate (or return) the week's insights.
+   *
+   * The bundle is rebuilt server-side from stored trades rather than accepted
+   * from the client — the analysis is only worth anything if it reflects the
+   * record, not a payload someone assembled. Results are persisted per week so
+   * this costs one model call a week rather than one per page load.
+   */
+  app.post("/api/weekly-insights", async (req, res) => {
+    const weekStartInput =
+      typeof req.body?.weekStart === "string" ? req.body.weekStart : undefined;
+    const force = req.body?.force === true;
+
+    const weekDate = weekStartInput
+      ? startOfWeek(new Date(`${weekStartInput}T00:00:00`))
+      : startOfWeek();
+    const key = weekStartKey(weekDate);
+
+    const existing = (await storage.listWeeklyReviews()).find(
+      (r) => r.weekStart === key,
+    );
+    if (existing?.insights && !force) {
+      return res.json({ ok: true, cached: true, weekStart: key, insights: JSON.parse(existing.insights) });
+    }
+
+    const [trades, tags] = await Promise.all([
+      storage.listTrades(),
+      storage.listMistakeTags(),
+    ]);
+    const bundle = buildInsightsBundle(trades, tags, weekDate);
+
+    // Without written reflections there is nothing for this to read. Saying so
+    // beats spending a model call to produce a paraphrase of the stats.
+    if (bundle.reflectionCount === 0) {
+      return res.json({
+        ok: false,
+        weekStart: key,
+        bundle,
+        message:
+          bundle.closedCount === 0
+            ? "No closed trades this week yet."
+            : "No notes on this week's trades. Write what you'd have done differently and this gets something to work with.",
+      });
+    }
+
+    try {
+      const text = await callLLM(
+        WEEKLY_INSIGHTS_PROMPT.replace("{{BUNDLE}}", JSON.stringify(bundle, null, 1)),
+      );
+      const insights = extractJson(text);
+
+      await storage.upsertWeeklyInsights(key, JSON.stringify(insights));
+      res.json({ ok: true, cached: false, weekStart: key, bundle, insights });
+    } catch (err: any) {
+      console.error("weekly-insights failed:", err?.message || err);
+      res.status(502).json({
+        ok: false,
+        weekStart: key,
+        bundle,
+        message: "Could not generate insights right now.",
+        detail: String(err?.message || err),
+      });
+    }
   });
 
   app.post("/api/weekly-reviews", async (req, res) => {
