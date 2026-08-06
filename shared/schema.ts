@@ -289,6 +289,8 @@ export interface OrderRowParseResult {
 }
 
 export interface SetupParseResult {
+  /** True when the image was a multi-row orders table rather than one trade. */
+  looksLikeOrdersTable?: boolean;
   symbol: string | null;
   direction: "long" | "short" | null;
   entryPrice: number | null;

@@ -47,7 +47,7 @@ import {
   useUpdateTrade,
   useDeleteTrade,
   parseScreenshot,
-  fileToDataUrl,
+  fileToDownscaledDataUrl,
   analyzeRationale,
 } from "@/lib/data";
 import {
@@ -366,46 +366,49 @@ function NewTradeCard({
   }, [v.entryPrice, v.initialStop, v.initialTarget, v.size, v.symbol, sizeUnit]);
 
   async function handleFile(file: File) {
-    const dataUrl = await fileToDataUrl(file);
+    const dataUrl = await fileToDownscaledDataUrl(file);
     setImage(dataUrl);
     setParsing(true);
     setParsed(false);
     try {
       /*
-       * An orders table and a single chart are different jobs, and the user
-       * should not have to say which they pasted. Ask for orders first: two or
-       * more rows means a table, and the whole paste becomes a batch of resting
-       * limits instead of one trade. Anything less falls through to the normal
-       * single-setup read, so charts behave exactly as before.
+       * A single chart is the common paste, so it must cost one call. The setup
+       * read runs first and reports whether the image was actually an orders
+       * table; only then does the orders read run. Probing for orders first
+       * would put the extra call on the common path instead of the rare one.
        */
-      const asOrders = await parseScreenshot(dataUrl, "orders").catch(() => null);
-      const many = (asOrders?.orders ?? []).filter(
-        (o) => o.entryPrice != null && o.direction,
-      );
-      if (many.length >= 2) {
-        onOrdersDetected(
-          many.map((o) => ({
-            symbol: o.symbol ?? "",
-            direction: o.direction as "long" | "short",
-            size: o.size,
-            sizeUnit: o.sizeUnit === "quote" ? "quote" : "base",
-            entryPrice: o.entryPrice as number,
-            initialStop: o.initialStop ?? null,
-            initialTarget: o.initialTarget ?? null,
-            entryTime: o.entryTime ?? null,
-            source: "binance-orders" as const,
-            raw: "(from screenshot)",
-            warnings: o.initialStop == null
-              ? ["No stop in the screenshot — add it when it fills."]
-              : [],
-          })),
-        );
-        setImage(null);
-        setParsing(false);
-        return;
-      }
-
       const r = await parseScreenshot(dataUrl, "setup");
+
+      if (r.looksLikeOrdersTable) {
+        const asOrders = await parseScreenshot(dataUrl, "orders").catch(() => null);
+        const many = (asOrders?.orders ?? []).filter(
+          (o) => o.entryPrice != null && o.direction,
+        );
+        // Two or more rows is a batch; one row is just a trade, and the setup
+        // read already in hand describes it better than a re-parse would.
+        if (many.length >= 2) {
+          onOrdersDetected(
+            many.map((o) => ({
+              symbol: o.symbol ?? "",
+              direction: o.direction as "long" | "short",
+              size: o.size,
+              sizeUnit: o.sizeUnit === "quote" ? "quote" : "base",
+              entryPrice: o.entryPrice as number,
+              initialStop: o.initialStop ?? null,
+              initialTarget: o.initialTarget ?? null,
+              entryTime: o.entryTime ?? null,
+              source: "binance-orders" as const,
+              raw: "(from screenshot)",
+              warnings: o.initialStop == null
+                ? ["No stop in the screenshot — add it when it fills."]
+                : [],
+            })),
+          );
+          setImage(null);
+          setParsing(false);
+          return;
+        }
+      }
       if (r.symbol) form.setValue("symbol", r.symbol);
       if (r.direction) form.setValue("direction", r.direction);
       if (r.entryPrice != null) form.setValue("entryPrice", r.entryPrice as any);
@@ -1121,7 +1124,7 @@ function CloseTradeDialog({
 
   async function handleFile(file: File) {
     if (!trade) return;
-    const dataUrl = await fileToDataUrl(file);
+    const dataUrl = await fileToDownscaledDataUrl(file);
     setImage(dataUrl);
     setParsing(true);
     try {

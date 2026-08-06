@@ -209,3 +209,52 @@ export function fileToDataUrl(file: File): Promise<string> {
     reader.readAsDataURL(file);
   });
 }
+
+/**
+ * Longest edge, in pixels, that a screenshot is scaled down to before upload.
+ *
+ * Vision models bill by pixel count — Perplexity charges width×height/750 — so
+ * a 2560×1440 screenshot costs four times what the same chart costs at 1280×720
+ * while carrying no extra information: the numbers being read are axis labels,
+ * which stay legible well below native resolution. 1280 is the size of the QA
+ * chart the parser is tested against.
+ */
+const MAX_UPLOAD_EDGE = 1280;
+
+/**
+ * Scale an image down to MAX_UPLOAD_EDGE on its longest side. Images already at
+ * or under it are returned untouched rather than re-encoded, which would cost
+ * quality for nothing. Any failure falls back to the original — a larger upload
+ * is a worse bill, but a failed parse is a worse product.
+ */
+export async function fileToDownscaledDataUrl(file: File): Promise<string> {
+  const original = await fileToDataUrl(file);
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const el = new Image();
+      el.onload = () => resolve(el);
+      el.onerror = reject;
+      el.src = original;
+    });
+
+    const longest = Math.max(img.width, img.height);
+    if (!longest || longest <= MAX_UPLOAD_EDGE) return original;
+
+    const scale = MAX_UPLOAD_EDGE / longest;
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(img.width * scale);
+    canvas.height = Math.round(img.height * scale);
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return original;
+    // Chart text is thin; smoothing preserves it far better than nearest.
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+    // PNG rather than JPEG: chart screenshots are flat colour with sharp text,
+    // where JPEG ringing lands directly on the digits being read.
+    return canvas.toDataURL("image/png");
+  } catch {
+    return original;
+  }
+}

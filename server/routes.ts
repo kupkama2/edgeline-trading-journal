@@ -48,10 +48,12 @@ CLOSED-TRADE DETECTION (applies to both A and B): decide whether the screenshot 
 - If it is closed, also set exitReason to the best fit: "target" (closed at/near the take-profit), "stop" (closed at/near the stop loss), "breakeven" (closed at/near entry), "trailed" (closed at a trailed stop between entry and target), "manual_early" (closed in profit well before target), "manual_late" (closed after giving back a large part of the move), or "other" if you cannot tell.
 - If NOTHING in the image shows an exit, set isClosed to false and leave exitPrice, exitTime and exitReason null. Never invent an exit.
 
-Symbol normalization (applies to both A and B): report the CANONICAL ROOT instrument, not the specific dated contract. Micro and full-size futures on the same underlying are the same instrument: MNQ = NQ (Micro E-mini Nasdaq-100), MES = ES (Micro E-mini S&P 500). Also strip any trailing month/year contract code (a single letter from FGHJKMNQUVXZ followed by 1-2 digits) before applying that mapping — e.g. "MNQU6" -> "NQ", "ESZ5" -> "ES", "MNQ" -> "NQ". For any symbol/ticker that isn't a recognized futures alias (stocks, crypto, forex, etc.), just return it as printed.
+Symbol: report the ticker EXACTLY as printed on the screenshot — "MNQU6", not "NQ". Do not roll a micro up to its full-size sibling and do not strip the month/year contract code. The application does that rollup itself, and it needs the contract as written to tell a micro apart from an e-mini: they are the same instrument for grouping but differ tenfold in dollars per point.
+
+ALSO REPORT whether this image is an orders TABLE (many resting orders, one per row) rather than a single chart or a single position. Set looksLikeOrdersTable true only for a multi-row list of orders — a chart, or a log describing one position, is false.
 
 Respond with STRICT JSON only, no prose, no markdown fences:
-{"symbol": string|null, "direction": "long"|"short"|null, "entryPrice": number|null, "initialStop": number|null, "initialTarget": number|null, "entryTime": string|null, "size": number|null, "isClosed": boolean, "exitPrice": number|null, "exitTime": string|null, "exitReason": "target"|"stop"|"trailed"|"manual_early"|"manual_late"|"breakeven"|"other"|null}
+{"symbol": string|null, "direction": "long"|"short"|null, "entryPrice": number|null, "initialStop": number|null, "initialTarget": number|null, "entryTime": string|null, "size": number|null, "isClosed": boolean, "exitPrice": number|null, "exitTime": string|null, "exitReason": "target"|"stop"|"trailed"|"manual_early"|"manual_late"|"breakeven"|"other"|null, "looksLikeOrdersTable": boolean}
 
 Rules:
 - Output ONLY the JSON object. Do not wrap it in markdown code fences, do not add explanations, citations or any prose before or after it.
@@ -592,7 +594,14 @@ export async function registerRoutes(
       }
 
       if (kind === "setup") {
-        if (json.symbol) json.symbol = normalizeSymbol(json.symbol);
+        /*
+         * Deliberately NOT normalized here. The contract as written ("MNQU6")
+         * is what tells a micro apart from an e-mini — $2 a point versus $20 —
+         * and the point value is derived from it when the trade is saved.
+         * Rolling it up to "NQ" at this point discards that and silently
+         * multiplies every dollar figure on a micro trade by ten. The rollup
+         * still happens, on the way into the database.
+         */
         // A screenshot only counts as a closed trade if a usable exit price came
         // back with it — otherwise fall back to the normal open-trade flow.
         if (json.isClosed !== true || typeof json.exitPrice !== "number") {
