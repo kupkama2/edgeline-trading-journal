@@ -12,7 +12,13 @@ import {
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { ArrowDownRight, ArrowUpRight, Camera, ClipboardPaste, Loader2 } from "lucide-react";
-import { parseImport, type ImportCandidate } from "@shared/import-parse";
+import {
+  candidateKey,
+  mergeCandidates,
+  parseImport,
+  pruneWarnings,
+  type ImportCandidate,
+} from "@shared/import-parse";
 import { fileToDownscaledDataUrl, parseScreenshot, useImportTrades } from "@/lib/data";
 import { useStyleFilter } from "@/lib/style-filter";
 
@@ -53,8 +59,11 @@ export function ImportTradesDialog({
   // wipe them.
   const [shotRows, setShotRows] = useState<ImportCandidate[]>([]);
   const [scanning, setScanning] = useState(false);
-  const [edits, setEdits] = useState<Record<number, Partial<Row>>>({});
-  const [excluded, setExcluded] = useState<Record<number, boolean>>({});
+  // Keyed by the order's identity rather than its row position: pasting a second
+  // screen re-merges the list, and an index-keyed edit would slide onto the
+  // neighbouring trade when a row folds away.
+  const [edits, setEdits] = useState<Record<string, Partial<Row>>>({});
+  const [excluded, setExcluded] = useState<Record<string, boolean>>({});
   const { toast } = useToast();
   const importTrades = useImportTrades();
   // Imported trades join whichever book you are currently looking at.
@@ -71,16 +80,25 @@ export function ImportTradesDialog({
 
   const parsed = useMemo(() => parseImport(text), [text]);
 
-  // Manual corrections are keyed by index and layered over the parse, so
-  // retyping the paste does not silently discard them mid-edit.
+  // Several views of one order — the table plus its Take Profit / Stop Loss
+  // dialog — are folded together before anything is shown, so the preview
+  // describes one trade rather than an order and an orphaned pair of levels.
+  const { rows: base, merged } = useMemo(
+    () => mergeCandidates([...shotRows, ...parsed.candidates]),
+    [shotRows, parsed.candidates],
+  );
+
+  // Manual corrections are layered over the parse, so retyping the paste does
+  // not silently discard them mid-edit — and a hand-typed level outranks one
+  // matched from a later screen, because it was stated rather than inferred.
   const rows: Row[] = useMemo(
     () =>
-      [...shotRows, ...parsed.candidates].map((c, i) => ({
-        ...c,
-        ...edits[i],
-        include: !excluded[i],
-      })),
-    [shotRows, parsed.candidates, edits, excluded],
+      base.map((c) => {
+        const k = candidateKey(c);
+        const row = { ...c, ...edits[k], include: !excluded[k] };
+        return { ...row, warnings: pruneWarnings(row) };
+      }),
+    [base, edits, excluded],
   );
 
   const selected = rows.filter((r) => r.include);
@@ -96,9 +114,14 @@ export function ImportTradesDialog({
   }
 
   /**
-   * Read an orders-table screenshot as many rows. The AI returns the same shape
-   * the text parser emits, so everything downstream — preview, per-row edits,
-   * commit — is shared.
+   * Read an orders screenshot as rows. The AI returns the same shape the text
+   * parser emits, so everything downstream — preview, per-row edits, commit —
+   * is shared.
+   *
+   * Scans accumulate rather than replace, which is what makes a second screen
+   * useful: drop the orders table, then drop the Take Profit / Stop Loss dialog
+   * for one of those orders and the merge attaches its levels to the right row.
+   * Re-dropping the same table costs nothing, since identical orders fold too.
    */
   async function scanImage(file: File) {
     setScanning(true);
@@ -118,11 +141,13 @@ export function ImportTradesDialog({
           source: "binance-orders",
           raw: "(from screenshot)",
           warnings: [
-            ...(o.initialStop == null ? ["No stop in the screenshot — add it when it fills."] : []),
+            ...(o.initialStop == null
+              ? ["No stop in this screenshot — type one, or drop the TP/SL screen."]
+              : []),
             ...(o.symbol ? [] : ["Symbol unreadable — set it before importing."]),
           ],
         }));
-      setShotRows(mapped);
+      setShotRows((prev) => [...prev, ...mapped]);
       if (!mapped.length) {
         toast({
           title: "No orders found in that image",
@@ -130,7 +155,13 @@ export function ImportTradesDialog({
           variant: "destructive",
         });
       } else {
-        toast({ title: `Read ${mapped.length} orders from the screenshot` });
+        const attached = mapped.filter((m) => m.initialStop != null || m.initialTarget != null);
+        toast({
+          title: `Read ${mapped.length} ${mapped.length === 1 ? "order" : "orders"} from the screenshot`,
+          description: attached.length
+            ? "Levels found — they'll attach to any matching resting order."
+            : undefined,
+        });
       }
     } catch (err: any) {
       toast({
@@ -194,7 +225,11 @@ export function ImportTradesDialog({
             ) : (
               <Camera className="h-3.5 w-3.5" />
             )}
-            {scanning ? "Reading orders…" : "Drop a screenshot of your orders table"}
+            {scanning
+              ? "Reading orders…"
+              : shotRows.length
+                ? "Drop another screen — a TP/SL dialog attaches to its order"
+                : "Drop a screenshot of your orders table"}
             <input
               type="file"
               accept="image/*"
@@ -224,6 +259,11 @@ export function ImportTradesDialog({
                   {blocked.length} need a symbol or size
                 </Badge>
               )}
+              {merged > 0 && (
+                <Badge variant="secondary" className="font-mono" data-testid="badge-merged">
+                  {merged} matched to an order
+                </Badge>
+              )}
               {parsed.rejected.length > 0 && (
                 <Badge variant="outline" className="font-mono">
                   {parsed.rejected.length} unrecognised
@@ -239,9 +279,11 @@ export function ImportTradesDialog({
 
           {rows.length > 0 && (
             <div className="space-y-2">
-              {rows.map((r, i) => (
+              {rows.map((r, i) => {
+                const key = candidateKey(r);
+                return (
                 <Card
-                  key={i}
+                  key={key}
                   className={`p-3 ${r.include ? "" : "opacity-40"}`}
                   data-testid={`row-import-${i}`}
                 >
@@ -250,7 +292,7 @@ export function ImportTradesDialog({
                       type="checkbox"
                       checked={r.include}
                       onChange={(e) =>
-                        setExcluded((p) => ({ ...p, [i]: !e.target.checked }))
+                        setExcluded((p) => ({ ...p, [key]: !e.target.checked }))
                       }
                       className="h-3.5 w-3.5 accent-primary"
                       aria-label="Include this row"
@@ -267,7 +309,7 @@ export function ImportTradesDialog({
                       onChange={(e) =>
                         setEdits((p) => ({
                           ...p,
-                          [i]: { ...p[i], symbol: e.target.value.toUpperCase() },
+                          [key]: { ...p[key], symbol: e.target.value.toUpperCase() },
                         }))
                       }
                       placeholder="SYMBOL"
@@ -287,9 +329,40 @@ export function ImportTradesDialog({
                       </span>
                     </span>
 
-                    <span className="ml-auto font-mono text-[11px] text-muted-foreground">
-                      stop {num(r.initialStop, 6)} · target {num(r.initialTarget, 6)}
-                    </span>
+                    {/* Levels are editable because the view that lists an order
+                        usually isn't the view that shows its bracket: type them
+                        here, or drop the Take Profit / Stop Loss screen and let
+                        it match on the limit price. */}
+                    <div className="ml-auto flex items-center gap-1.5">
+                      {(
+                        [
+                          ["initialStop", "stop"],
+                          ["initialTarget", "target"],
+                        ] as const
+                      ).map(([field, label]) => (
+                        <label key={field} className="flex items-center gap-1">
+                          <span className="text-[10px] text-muted-foreground">{label}</span>
+                          <Input
+                            value={r[field] ?? ""}
+                            onChange={(e) => {
+                              const v = e.target.value.trim();
+                              const n = Number(v);
+                              setEdits((p) => ({
+                                ...p,
+                                [key]: {
+                                  ...p[key],
+                                  [field]: v === "" || !isFinite(n) ? null : n,
+                                },
+                              }));
+                            }}
+                            placeholder="—"
+                            inputMode="decimal"
+                            className="h-7 w-24 font-mono text-[11px]"
+                            data-testid={`input-${field}-${i}`}
+                          />
+                        </label>
+                      ))}
+                    </div>
                   </div>
 
                   {r.warnings.length > 0 && r.include && (
@@ -302,7 +375,8 @@ export function ImportTradesDialog({
                     </ul>
                   )}
                 </Card>
-              ))}
+                );
+              })}
             </div>
           )}
 

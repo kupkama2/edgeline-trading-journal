@@ -75,29 +75,31 @@ Rules:
  * two would make both worse: "find the one that matters" and "return all of
  * them" pull in opposite directions.
  */
-const ORDERS_PROMPT = `You are reading a screenshot of a trading venue's ORDERS table — a list of resting/open orders that have not been filled yet. Extract EVERY order row you can read.
+const ORDERS_PROMPT = `You are reading a screenshot from a trading venue showing resting/open orders that have not been filled yet. Extract EVERY order you can read.
 
 Common shapes:
 (A) Crypto exchange (Binance and similar): columns like Time, Symbol, Type, Side, Price, Amount, Filled, Reduce Only. Side reads "Open Long"/"Open Short" or "Buy"/"Sell". Amount is usually quote notional such as "37,177.47 USDT". This view typically has NO stop loss or take profit — leave them null, do not invent them.
 (B) Futures broker / DOM: columns like Symbol, Side, Type, Qty, Remaining Qty, Filled Qty, Limit Price, Stop Price, Take Profit, Stop Loss, Avg Fill Price, Update Time. Qty is contracts. Take Profit maps to initialTarget and Stop Loss to initialStop.
+(C) A bracket / OTOCO / "Take Profit Stop Loss" confirmation dialog for ONE order. It lists legs rather than columns: Order A is the entry (its Price is entryPrice, its Side gives the direction, its Amount is the size), Order B is the take profit and Order C is the stop loss. Both B and C label their level "Stop Price" — tell them apart by which order block they sit in, NOT by the number. Return exactly ONE order for a dialog like this, carrying entryPrice, initialTarget from B and initialStop from C. These dialogs usually do not name the instrument: if no ticker is visible, set symbol to null rather than guessing one — a wrong ticker attaches the levels to the wrong trade.
 
-For every row:
+For every order:
 - direction: "long" for Buy / Open Long, "short" for Sell / Open Short.
 - entryPrice: the limit/entry price for that order (Price, or Limit Price).
 - size: the position size as printed.
 - sizeUnit: "quote" when the size is a currency amount (e.g. "4,655.18 USDT" — a USD/USDT notional), "base" when it is a contract or coin count (e.g. Qty 2).
-- initialStop / initialTarget: only if the table actually shows them; otherwise null.
+- initialStop / initialTarget: only if the screenshot actually shows them; otherwise null.
 - entryTime: the row's timestamp as ISO 8601 if legible, otherwise null.
 - symbol: the ticker as printed, minus any "Perp" badge.
 
 Rules:
 - Return EVERY data row. Do not skip duplicates — two rows on the same symbol at different prices are two separate orders.
 - Ignore header rows, totals, and any row that is clearly a filled/closed position rather than a resting order.
+- entryPrice is the identity of an order: it is what lets a shape (C) dialog be matched to the row it brackets, so read it exactly, to every decimal shown.
 - Output ONLY this JSON object, no prose and no markdown fences:
 {"orders": [{"symbol": string|null, "direction": "long"|"short"|null, "size": number|null, "sizeUnit": "base"|"quote"|null, "entryPrice": number|null, "initialStop": number|null, "initialTarget": number|null, "entryTime": string|null}]}
 - Numbers must be plain JSON numbers: no currency symbols, no thousands separators.
 - If you cannot read a field, use null rather than guessing.
-- If the image is not an orders table at all, return {"orders": []}.`;
+- If the image shows no resting orders at all, return {"orders": []}.`;
 
 /**
  * Reads a week of written reflections against the week's numbers.
@@ -687,7 +689,11 @@ export async function registerRoutes(
           )
           .map((o: any) => ({
             ...o,
-            symbol: o.symbol ? normalizeSymbol(o.symbol) : null,
+            // Deliberately NOT normalised: /api/trades/import derives pointValue
+            // from the ticker as written, and "MNQU6" folded to "NQ" here would
+            // price a micro at $20 a point instead of $2. Roll-up happens on
+            // commit, where the raw string is still available.
+            symbol: o.symbol ? String(o.symbol).trim().toUpperCase() : null,
             sizeUnit: o.sizeUnit === "quote" ? "quote" : "base",
           }));
         return res.json({
