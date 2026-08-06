@@ -65,6 +65,7 @@ import {
 } from "@shared/metrics";
 import { DailyGuardCard, useDemonGuard } from "@/components/daily-guard";
 import { StyleChip, StyleSwitcher } from "@/components/style-switcher";
+import { pointValueFor } from "@shared/symbols";
 import { ImportTradesDialog } from "@/components/import-trades";
 
 /* ============================== helpers ============================== */
@@ -307,6 +308,11 @@ function NewTradeCard() {
   // entries, but only for the style that produced the streak.
   const guard = useDemonGuard(styleId);
 
+  // Futures are decided in contracts, crypto in USD notional. Defaulted per
+  // symbol so the common case needs no click, but always overridable — the
+  // guess is from the ticker, and tickers are not a reliable venue signal.
+  const [sizeUnit, setSizeUnit] = useState<"base" | "quote">("base");
+
   const form = useForm<SetupForm>({
     resolver: zodResolver(setupFormSchema) as any,
     defaultValues: {
@@ -323,6 +329,12 @@ function NewTradeCard() {
   });
 
   const v = form.watch();
+
+  // A recognised futures root is unambiguous — contracts, always.
+  const isFutures = Boolean(v.symbol) && pointValueFor(v.symbol) !== 1;
+  useEffect(() => {
+    if (isFutures) setSizeUnit("base");
+  }, [isFutures]);
   const preview = useMemo(() => {
     const e = Number(v.entryPrice);
     const s = Number(v.initialStop);
@@ -332,12 +344,20 @@ function NewTradeCard() {
     const risk = Math.abs(e - s);
     const reward = Math.abs(t - e);
     if (!risk) return null;
+
+    // 1R has to agree with the broker, so it needs the same two adjustments the
+    // stored trade gets: quote-denominated sizes convert to base units, and
+    // futures scale by their contract multiplier. Without the multiplier this
+    // read $83 on 2 MNQ where the platform said $165 — and it is shown at
+    // exactly the moment the size decision is being made.
+    const qty = sizeUnit === "quote" ? (e > 0 ? sz / e : 0) : sz;
+    const perPoint = qty * pointValueFor(v.symbol);
     return {
       risk,
       rr: reward / risk,
-      riskDollars: isFinite(sz) ? risk * sz : null,
+      riskDollars: isFinite(perPoint) ? risk * perPoint : null,
     };
-  }, [v.entryPrice, v.initialStop, v.initialTarget, v.size]);
+  }, [v.entryPrice, v.initialStop, v.initialTarget, v.size, v.symbol, sizeUnit]);
 
   async function handleFile(file: File) {
     const dataUrl = await fileToDataUrl(file);
@@ -427,6 +447,7 @@ function NewTradeCard() {
         symbol: data.symbol.toUpperCase(),
         direction: data.direction,
         size: data.size,
+        sizeUnit,
         entryPrice: data.entryPrice,
         initialStop: data.initialStop,
         initialTarget: data.initialTarget,
@@ -777,7 +798,58 @@ function NewTradeCard() {
               )}
             />
 
-            {numField("size", "Size")}
+            <FormField
+              control={form.control}
+              name={"size" as any}
+              render={({ field }) => (
+                <FormItem className="space-y-1">
+                  <div className="flex items-center justify-between">
+                    <FormLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                      Size
+                    </FormLabel>
+                    <div className="flex gap-0.5">
+                      {(["base", "quote"] as const).map((u) => {
+                        // A futures contract has no notional sizing — you buy
+                        // 2 contracts, never "$2 of MNQ". Offering it produced
+                        // a real but meaningless 1R of $0.
+                        const disabled = u === "quote" && isFutures;
+                        return (
+                          <button
+                            key={u}
+                            type="button"
+                            disabled={disabled}
+                            title={
+                              disabled ? "Futures are sized in contracts" : undefined
+                            }
+                            onClick={() => !disabled && setSizeUnit(u)}
+                            data-testid={`button-size-unit-${u}`}
+                            className={`rounded px-1.5 py-0.5 text-[9px] uppercase tracking-wider transition-colors ${
+                              disabled
+                                ? "cursor-not-allowed text-muted-foreground/30"
+                                : sizeUnit === u
+                                  ? "bg-primary/15 text-primary"
+                                  : "text-muted-foreground hover:text-foreground"
+                            }`}
+                          >
+                            {u === "base" ? "contracts" : "usd"}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  <FormControl>
+                    <Input
+                      {...field}
+                      type="number"
+                      step="any"
+                      inputMode="decimal"
+                      className="h-9 font-mono text-sm"
+                    />
+                  </FormControl>
+                  <FormMessage className="text-[10px]" />
+                </FormItem>
+              )}
+            />
             {numField("entryPrice", "Entry")}
             {numField("initialStop", "Stop")}
             {numField("initialTarget", "Target")}
