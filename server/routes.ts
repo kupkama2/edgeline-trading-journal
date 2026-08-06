@@ -573,15 +573,17 @@ export async function registerRoutes(
       return res.json({ ok: true, cached: true, weekStart: key, insights: JSON.parse(existing.insights) });
     }
 
-    const [trades, tags] = await Promise.all([
+    const [trades, tags, notes] = await Promise.all([
       storage.listTrades(),
       storage.listMistakeTags(),
+      storage.listDailyNotes(),
     ]);
-    const bundle = buildInsightsBundle(trades, tags, weekDate);
+    const bundle = buildInsightsBundle(trades, tags, weekDate, notes);
 
-    // Without written reflections there is nothing for this to read. Saying so
-    // beats spending a model call to produce a paraphrase of the stats.
-    if (bundle.reflectionCount === 0) {
+    // Without any writing there is nothing for this to read — per-trade
+    // reflections and end-of-day reviews both count. Saying so beats spending
+    // a model call to produce a paraphrase of the stats.
+    if (bundle.reflectionCount === 0 && bundle.dayNotes.length === 0) {
       return res.json({
         ok: false,
         weekStart: key,

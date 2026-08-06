@@ -14,6 +14,9 @@ import { num, parseTags, RationaleTags } from "@/components/trade-shared";
 
 /* ============================== trade rows ============================ */
 
+/** Resting this long without filling, an order is probably a stale decision. */
+const STALE_PENDING_DAYS = 3;
+
 export function OpenTradeRow({
   t,
   onSelect,
@@ -170,6 +173,25 @@ export function PendingTradeRow({
           {t.size}
           {t.sizeUnit === "quote" ? " USD" : ""} @ {num(t.entryPrice)}
         </span>
+        {/* A resting order that has sat for days is usually a decision nobody
+            made: the level is gone, or the idea is. Age is only worth showing
+            once it becomes a question. */}
+        {(() => {
+          const days = Math.floor(
+            (Date.now() - new Date(t.entryTime).getTime()) / 86400000,
+          );
+          if (!isFinite(days) || days < STALE_PENDING_DAYS) return null;
+          return (
+            <Badge
+              variant="outline"
+              className="border-amber-500/40 text-[10px] font-normal text-amber-500"
+              title="This order has been resting a while — still valid, or should it be cancelled?"
+              data-testid={`badge-stale-${t.id}`}
+            >
+              {days}d old — still valid?
+            </Badge>
+          );
+        })()}
         <Button
           variant="ghost"
           size="sm"

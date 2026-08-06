@@ -43,6 +43,14 @@ export interface SimulationInput {
   runs: number;
   /** Risk per trade in dollars, used only to translate R into money. */
   riskPerTrade?: number;
+  /**
+   * Draw contiguous runs of this many consecutive trades instead of single
+   * ones. Independent draws assume your results don't cluster; if your losses
+   * come in streaks — and tilt says they do — blocks carry that clustering
+   * into the simulation and the drawdown estimates stop flattering you.
+   * 1 (or omitted) is the classic independent bootstrap.
+   */
+  blockSize?: number;
 }
 
 export interface SimulationResult {
@@ -62,9 +70,16 @@ export interface SimulationResult {
   riskPerTrade: number | null;
 }
 
-/** The R outcomes to resample from: one per closed trade, in no order. */
+/**
+ * The R outcomes to resample from, in the order they were REALISED. Order is
+ * irrelevant to independent draws but is the entire substance of a block draw:
+ * a block is only "how your results actually clustered" if the sequence is the
+ * one you lived.
+ */
 export function rSample(trades: TradeWithTags[]): number[] {
   return closedTrades(trades)
+    .slice()
+    .sort((a, b) => (a.exitTime ?? a.entryTime).localeCompare(b.exitTime ?? b.entryTime))
     .map((t) => computeMetrics(t).actualR)
     .filter((r): r is number => r != null && isFinite(r));
 }
@@ -83,14 +98,21 @@ export const MIN_SAMPLE = 20;
 
 export function simulate(
   trades: TradeWithTags[],
-  { horizon, runs, riskPerTrade }: SimulationInput,
+  { horizon, runs, riskPerTrade, blockSize }: SimulationInput,
 ): SimulationResult | null {
   const sample = rSample(trades);
   if (sample.length < MIN_SAMPLE) return null;
 
-  // Seeded from the sample itself, so the simulation only changes when the
-  // record does — logging a trade re-rolls it, opening the page does not.
-  const seed = sample.length * 2654435761 + Math.round(sample.reduce((a, b) => a + b, 0) * 1000);
+  // A block longer than the record degenerates into replaying the record.
+  const block = Math.max(1, Math.min(Math.floor(blockSize ?? 1), sample.length));
+
+  // Seeded from the sample itself (and the block choice), so the simulation
+  // only changes when the record does — logging a trade re-rolls it, opening
+  // the page does not.
+  const seed =
+    sample.length * 2654435761 +
+    Math.round(sample.reduce((a, b) => a + b, 0) * 1000) +
+    block * 97;
   const rand = mulberry32(seed);
 
   const finals: number[] = [];
@@ -103,15 +125,22 @@ export function simulate(
     let peak = 0;
     let worst = 0;
 
-    for (let i = 0; i < horizon; i++) {
-      // Sampling WITH replacement: each trade is an independent draw from the
-      // same edge, which is the assumption being tested. It deliberately does
-      // not model streakiness — if your losses cluster, real drawdowns will be
-      // worse than this, and that is the direction you want to be wrong in.
-      equity += sample[Math.floor(rand() * sample.length)];
-      if (equity > peak) peak = equity;
-      const dd = peak - equity;
-      if (dd > worst) worst = dd;
+    /*
+     * Sampling WITH replacement, `block` consecutive trades at a time (a
+     * circular block bootstrap — blocks may wrap past the end so every trade
+     * is equally likely to be drawn). With block = 1 each trade is an
+     * independent draw, which assumes results never cluster; with block > 1
+     * the streaks you actually produced ride into the simulation, and the
+     * drawdown estimates stop assuming your tilt doesn't exist.
+     */
+    for (let i = 0; i < horizon; ) {
+      const start = Math.floor(rand() * sample.length);
+      for (let j = 0; j < block && i < horizon; j++, i++) {
+        equity += sample[(start + j) % sample.length];
+        if (equity > peak) peak = equity;
+        const dd = peak - equity;
+        if (dd > worst) worst = dd;
+      }
     }
 
     finals.push(equity);

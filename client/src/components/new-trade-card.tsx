@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowDownRight, ArrowUpRight, Ban, CheckCircle2, ChevronDown, ClipboardList, Loader2, Sparkles } from "lucide-react";
+import { ArrowDownRight, ArrowUpRight, Ban, CheckCircle2, ChevronDown, ClipboardList, Clock3, Loader2, Sparkles } from "lucide-react";
 import { useTrades, useMistakeTags, useStyles, useCreateTrade, parseScreenshot, fileToDownscaledDataUrl, analyzeRationale } from "@/lib/data";
 import { styleColor, styleName, useStyleFilter } from "@/lib/style-filter";
 import { parsePlaybook } from "@shared/schema";
@@ -20,6 +20,8 @@ import { useDemonGuard } from "@/components/daily-guard";
 import { pointValueFor } from "@shared/symbols";
 import { dropBracketLegs, type ImportCandidate } from "@shared/import-parse";
 import { Dropzone, EXIT_REASONS, RationaleTags, localNow, num, parseTags, toIso } from "@/components/trade-shared";
+import { suggestSize } from "@shared/sizing";
+import { inSessionWindow, windowLabel } from "@shared/session";
 
 /* ============================ new trade card ========================== */
 
@@ -35,6 +37,8 @@ const setupFormSchema = z.object({
   rationale: z.string().optional(),
 });
 type SetupForm = z.input<typeof setupFormSchema>;
+
+const RISK_BUDGET_KEY = "edgeline.riskBudget";
 
 export function NewTradeCard({
   onOrdersDetected,
@@ -95,6 +99,11 @@ export function NewTradeCard({
   // symbol so the common case needs no click, but always overridable — the
   // guess is from the ticker, and tickers are not a reliable venue signal.
   const [sizeUnit, setSizeUnit] = useState<"base" | "quote">("base");
+  // The risk budget is a account-level habit, not a per-trade fact — it
+  // survives reloads so it is typed once, not every morning.
+  const [riskBudget, setRiskBudget] = useState<string>(
+    () => localStorage.getItem(RISK_BUDGET_KEY) ?? "",
+  );
 
   const form = useForm<SetupForm>({
     resolver: zodResolver(setupFormSchema) as any,
@@ -683,6 +692,66 @@ export function NewTradeCard({
             {numField("initialStop", "Stop")}
             {numField("initialTarget", "Target")}
 
+            {/* Size from risk: type what the idea may cost, get the size that
+                costs exactly that. Same arithmetic as the metrics engine, so
+                the suggested size produces the promised 1R to the cent. */}
+            {(() => {
+              const s = suggestSize({
+                symbol: v.symbol ?? "",
+                entryPrice: Number(v.entryPrice),
+                initialStop: Number(v.initialStop),
+                riskDollars: Number(riskBudget),
+                sizeUnit,
+              });
+              return (
+                <div className="col-span-2 flex flex-wrap items-center gap-2 rounded-md border border-border/60 bg-secondary/20 px-2.5 py-1.5">
+                  <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                    Risk $
+                  </span>
+                  <Input
+                    value={riskBudget}
+                    onChange={(e) => {
+                      setRiskBudget(e.target.value);
+                      localStorage.setItem(RISK_BUDGET_KEY, e.target.value);
+                    }}
+                    placeholder="300"
+                    inputMode="decimal"
+                    className="h-7 w-20 font-mono text-[11px]"
+                    data-testid="input-risk-budget"
+                  />
+                  {s ? (
+                    <button
+                      type="button"
+                      onClick={() => form.setValue("size", s.size as any)}
+                      className="rounded bg-primary/10 px-2 py-1 font-mono text-[11px] text-primary transition-colors hover:bg-primary/20"
+                      data-testid="button-apply-size"
+                      title="Apply this size"
+                    >
+                      →{" "}
+                      {s.sizeUnit === "base"
+                        ? `${s.size} ${s.size === 1 ? "contract" : "contracts"}`
+                        : `$${s.size.toLocaleString()}`}
+                      {s.sizeUnit === "base" && s.size > 0 && (
+                        <span className="ml-1 text-muted-foreground">
+                          (risks ${Math.round(s.actualRiskDollars)})
+                        </span>
+                      )}
+                    </button>
+                  ) : (
+                    <span className="text-[10px] text-muted-foreground">
+                      needs entry, stop and a risk amount
+                    </span>
+                  )}
+                  {s?.sizeUnit === "base" && s.size === 0 && (
+                    <span className="text-[10px] text-amber-500">
+                      stop too far for this budget — even 1 contract risks $
+                      {Math.round(s.perUnitRisk)}
+                    </span>
+                  )}
+                </div>
+              );
+            })()}
+
             <FormField
               control={form.control}
               name="entryTime"
@@ -702,6 +771,29 @@ export function NewTradeCard({
                 </FormItem>
               )}
             />
+
+            {/* The hour-of-day stats prove where the money leaks; the window
+                turns that into a nudge at the moment of the decision. A
+                warning, not a lock: outside-hours trades exist, but they
+                should never happen absent-mindedly. */}
+            {(() => {
+              const style = styles.find((s) => s.id === styleId);
+              if (!style) return null;
+              const when = v.entryTime ? new Date(v.entryTime) : new Date();
+              const inside = inSessionWindow(when, style.sessionStart, style.sessionEnd);
+              if (inside !== false) return null;
+              return (
+                <div
+                  className="col-span-2 flex items-center gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/5 px-2.5 py-1.5 text-[11px] text-amber-500"
+                  data-testid="warning-session-window"
+                >
+                  <Clock3 className="h-3 w-3 shrink-0" />
+                  Outside the {style.name} window (
+                  {windowLabel(style.sessionStart, style.sessionEnd)}). Your best trades in this
+                  book happen inside it — is this one planned, or just there?
+                </div>
+              );
+            })()}
           </div>
 
           {closedMode && (

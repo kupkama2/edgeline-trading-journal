@@ -102,6 +102,8 @@ export const WEEKLY_INSIGHTS_PROMPT = `You are reviewing one week of a trader's 
 
 The reflections are where they wrote what they would have done differently, or what the "perfect version" of the trade looked like. Those are self-diagnoses. The statistics are the record. Your job is to find what is TRUE ACROSS the week — not to summarise trade by trade, which they can already read.
 
+The writing comes in two forms and both count as reflections for every rule below: per-trade notes (in "reflections", each tied to one trade's outcome) and end-of-day reviews (in "dayNotes", free-form, written about the whole session). A theme may draw its evidence from either or both. Day notes often contain what the per-trade notes omit — state of mind, what they skipped, plans for tomorrow — and a plan written on Monday that the rest of the week's data shows was not followed is exactly the kind of contradiction to report.
+
 Produce four things:
 
 1. themes — recurring ideas that appear in MULTIPLE reflections. A theme needs at least two trades behind it; one trade is an anecdote, not a pattern. For each, give the theme in the trader's own vocabulary where possible, how many trades it appeared in, and up to two short verbatim fragments as evidence. If nothing recurs, return an empty list rather than padding it.

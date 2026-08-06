@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { normalizeSymbol, pointValueFor } from "../shared/symbols";
 import { dayKeyOfIso, summarizeDays } from "../shared/daily";
-import { startOfWeek, weekStartKey } from "../shared/weekly-insights";
+import { buildInsightsBundle, startOfWeek, weekStartKey } from "../shared/weekly-insights";
 import { localIso, trade } from "./helpers";
 
 describe("symbols", () => {
@@ -52,5 +52,16 @@ describe("week boundaries", () => {
     expect(weekStartKey(startOfWeek(new Date(2026, 7, 6, 15, 0)))).toBe("2026-08-03");
     // A Monday is its own week start.
     expect(weekStartKey(startOfWeek(new Date(2026, 7, 3, 0, 5)))).toBe("2026-08-03");
+  });
+
+  it("carries only the week's own daily reviews into the insights bundle", () => {
+    const bundle = buildInsightsBundle([], [], startOfWeek(new Date(2026, 7, 6)), [
+      { day: "2026-08-04", body: "chopped myself up before lunch" },
+      { day: "2026-08-10", body: "next week — must not leak in" },
+      { day: "2026-08-05", body: "   " }, // blank — nothing to read
+    ]);
+    expect(bundle.dayNotes).toEqual([
+      { day: "2026-08-04", note: "chopped myself up before lunch" },
+    ]);
   });
 });

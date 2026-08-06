@@ -39,12 +39,20 @@ export interface ReflectionEntry {
   note: string;
 }
 
+/** One end-of-day review from the daily page, trimmed for the model. */
+export interface DayNoteEntry {
+  day: string;
+  note: string;
+}
+
 export interface InsightsBundle {
   weekStart: string;
   weekEnd: string;
   closedCount: number;
   /** Trades that carried a written note — the ones this analysis can learn from. */
   reflectionCount: number;
+  /** The week's daily reviews — the other half of what the trader wrote. */
+  dayNotes: DayNoteEntry[];
   stats: {
     winRate: number;
     expectancyR: number;
@@ -65,15 +73,21 @@ export interface InsightsBundle {
    that a heavy journaling week turns into an expensive request. */
 const MAX_REFLECTIONS = 40;
 const MAX_NOTE_CHARS = 600;
+const MAX_DAY_NOTE_CHARS = 1500;
 
 /**
  * Assemble the week's evidence. Only closed trades count — an open position has
  * no outcome to reflect on, and a pending one was never a position at all.
+ *
+ * Daily notes ride along when provided: the end-of-day review is where the
+ * richest self-diagnosis gets written, and an insights feature that skipped the
+ * daily file would be reading the footnotes and ignoring the diary.
  */
 export function buildInsightsBundle(
   trades: TradeWithTags[],
   tags: MistakeTag[],
   weekStartDate = startOfWeek(),
+  dailyNotes: { day: string; body: string | null }[] = [],
 ): InsightsBundle {
   const end = new Date(weekStartDate);
   end.setDate(end.getDate() + 7);
@@ -108,11 +122,21 @@ export function buildInsightsBundle(
       note: note.slice(0, MAX_NOTE_CHARS),
     }));
 
+  const weekStart = weekStartKey(weekStartDate);
+  const weekEnd = weekStartKey(new Date(end.getTime() - 86400000));
+
+  // Day keys are yyyy-MM-dd, so the week membership test is a string compare.
+  const dayNotes: DayNoteEntry[] = dailyNotes
+    .filter((n) => n.body?.trim() && n.day >= weekStart && n.day <= weekEnd)
+    .sort((a, b) => a.day.localeCompare(b.day))
+    .map((n) => ({ day: n.day, note: n.body!.trim().slice(0, MAX_DAY_NOTE_CHARS) }));
+
   return {
-    weekStart: weekStartKey(weekStartDate),
-    weekEnd: weekStartKey(new Date(end.getTime() - 86400000)),
+    weekStart,
+    weekEnd,
     closedCount: inWeek.length,
     reflectionCount: reflections.length,
+    dayNotes,
     stats: {
       winRate: agg.winRate,
       expectancyR: agg.expectancyR,

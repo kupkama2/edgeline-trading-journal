@@ -8,6 +8,7 @@ import { useMistakeTags, useTrades } from "@/lib/data";
 import { useStyleScopedTrades } from "@/lib/style-filter";
 import { StyleSwitcher } from "@/components/style-switcher";
 import { ImportCsvDialog } from "@/components/import-csv";
+import { EquityCurve } from "@/components/equity-curve";
 import {
   byHour,
   byMistake,
@@ -158,13 +159,16 @@ export default function Analysis() {
   const [tab, setTab] = useState<TabId>("hour");
   const [importOpen, setImportOpen] = useState(false);
   const [horizon, setHorizon] = useState(100);
+  // Streaky mode draws blocks of 4 consecutive trades, so the loss clusters
+  // you actually produced survive into the simulation.
+  const [blocky, setBlocky] = useState(false);
 
   const closed = useMemo(() => closedTrades(scoped), [scoped]);
   const dd = useMemo(() => drawdown(scoped), [scoped]);
   const st = useMemo(() => streaks(scoped), [scoped]);
   const sim = useMemo(
-    () => simulate(scoped, { horizon, runs: 2000 }),
-    [scoped, horizon],
+    () => simulate(scoped, { horizon, runs: 2000, blockSize: blocky ? 4 : 1 }),
+    [scoped, horizon, blocky],
   );
   const missed = useMemo(() => missedStats(scoped), [scoped]);
 
@@ -227,6 +231,14 @@ export default function Analysis() {
       {/* ---------------------------- the curve ---------------------------- */}
       <Card className="border-card-border bg-card p-4">
         <h2 className="mb-3 text-sm font-semibold tracking-tight">Streaks and drawdown</h2>
+        {dd.equityR.length >= 2 && (
+          <div className="mb-4">
+            <p className="mb-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+              Equity, cumulative R by day
+            </p>
+            <EquityCurve points={dd.equityR} />
+          </div>
+        )}
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
           <Stat
             label="Max drawdown"
@@ -330,7 +342,7 @@ export default function Analysis() {
               the median.
             </p>
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex flex-wrap items-center gap-1">
             {[50, 100, 250].map((h) => (
               <Button
                 key={h}
@@ -341,6 +353,32 @@ export default function Analysis() {
                 data-testid={`horizon-${h}`}
               >
                 {h}
+              </Button>
+            ))}
+            <span className="mx-1 h-4 w-px bg-border" />
+            {/* Independent draws assume results never cluster; streaky mode
+                resamples runs of 4 consecutive trades so your actual loss
+                clusters survive into the simulation. */}
+            {(
+              [
+                [false, "independent"],
+                [true, "streaky"],
+              ] as const
+            ).map(([mode, label]) => (
+              <Button
+                key={label}
+                size="sm"
+                variant={blocky === mode ? "default" : "ghost"}
+                className="h-7 text-[11px]"
+                onClick={() => setBlocky(mode)}
+                title={
+                  mode
+                    ? "Blocks of 4 consecutive trades — keeps your loss clustering"
+                    : "Each trade drawn independently"
+                }
+                data-testid={`mc-mode-${label}`}
+              >
+                {label}
               </Button>
             ))}
           </div>
@@ -392,8 +430,9 @@ export default function Analysis() {
                 />
               </div>
               <p className="mt-2 text-[10px] leading-snug text-muted-foreground">
-                Sampled independently, so clustered losses are not modelled — if your losers come in
-                runs, real drawdowns will be deeper than this.
+                {blocky
+                  ? "Streaky mode: blocks of 4 consecutive trades, so the loss runs you actually produced are in these numbers."
+                  : "Sampled independently, so clustered losses are not modelled — if your losers come in runs, real drawdowns will be deeper than this. Try streaky mode."}
               </p>
             </div>
 

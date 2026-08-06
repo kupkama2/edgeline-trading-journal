@@ -118,6 +118,23 @@ describe("simulate", () => {
     expect(s.finalR.p5).toBeGreaterThan(0);
     expect(s.maxDrawdownR.p95).toBe(0);
   });
+
+  it("block sampling reports deeper drawdowns on a streaky record", () => {
+    // Ten straight losers then ten straight winners, repeated: heavily
+    // clustered. Independent draws shuffle the clusters away; blocks keep
+    // them, so the block simulation must see the deeper hole.
+    const streaky = sample(40, (i) => (i % 20 < 10 ? -1 : 1.2));
+    const independent = simulate(streaky, { horizon: 100, runs: 800 })!;
+    const blocked = simulate(streaky, { horizon: 100, runs: 800, blockSize: 8 })!;
+    expect(blocked.maxDrawdownR.p50).toBeGreaterThan(independent.maxDrawdownR.p50);
+  });
+
+  it("block mode is deterministic too", () => {
+    const trades = sample(30, (i) => (i % 3 === 0 ? 2 : -1));
+    const a = simulate(trades, { horizon: 100, runs: 500, blockSize: 4 })!;
+    const b = simulate(trades, { horizon: 100, runs: 500, blockSize: 4 })!;
+    expect(a).toEqual(b);
+  });
 });
 
 describe("missed trades", () => {
