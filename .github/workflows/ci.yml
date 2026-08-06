@@ -1,0 +1,34 @@
+name: CI
+
+# Render auto-deploys main, so main going red means production goes red.
+# These are the two checks that would actually have caught it.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # --include=dev mirrors render.yaml: NODE_ENV=production makes npm drop
+      # devDependencies, and vite/esbuild/tsx all live there.
+      - name: Install
+        run: npm ci --include=dev
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      # Runs the real build script, so a broken vite/esbuild config fails here
+      # rather than on Render.
+      - name: Build
+        run: npm run build
+        env:
+          NODE_ENV: production

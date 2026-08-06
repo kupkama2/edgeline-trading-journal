@@ -55,6 +55,26 @@ export function useUpdateTrade() {
   });
 }
 
+/** Commit confirmed paste-import candidates as pending trades. */
+export function useImportTrades() {
+  return useMutation({
+    mutationFn: async (v: {
+      styleId?: number | null;
+      trades: {
+        symbol: string;
+        direction: "long" | "short";
+        size: number;
+        sizeUnit: "base" | "quote";
+        entryPrice: number;
+        initialStop?: number | null;
+        initialTarget?: number | null;
+        entryTime?: string | null;
+      }[];
+    }) => (await apiRequest("POST", "/api/trades/import", v)).json(),
+    onSuccess: invalidateTrades,
+  });
+}
+
 export function useDeleteTrade() {
   return useMutation({
     mutationFn: async (id: number) => {

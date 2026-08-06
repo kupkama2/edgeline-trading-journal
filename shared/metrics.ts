@@ -17,22 +17,51 @@ export interface TradeMetrics {
   dollarsLeftOnTable: number | null;
 }
 
+/**
+ * Position size in base units (contracts or coins), whatever unit it was
+ * entered in. A crypto trade sized as "4,655 USDT" holds 4655/entry coins, and
+ * every P&L and risk figure below is per-unit-of-price — so they all need base
+ * units, not the number the user typed.
+ */
+export function positionQty(t: Trade): number {
+  if (t.sizeUnit === "quote") {
+    return t.entryPrice > 0 ? t.size / t.entryPrice : 0;
+  }
+  return t.size;
+}
+
+/**
+ * What one point of price movement is worth across the whole position, in
+ * dollars. Futures need their contract multiplier here — 2 MNQ contracts move
+ * $4 a point, 2 NQ move $40 — while crypto and equities have a point value of
+ * 1 and reduce to plain quantity.
+ */
+function dollarsPerPoint(t: Trade): number {
+  return positionQty(t) * (t.pointValue ?? 1);
+}
+
 export function computeMetrics(t: Trade): TradeMetrics {
   const sign = t.direction === "long" ? 1 : -1;
-  const risk = Math.abs(t.entryPrice - t.initialStop);
-  const riskDollars = risk * t.size;
+  const perPoint = dollarsPerPoint(t);
+  // A pending trade has no stop yet, so it has no 1R. Guard explicitly: without
+  // this, null coerces to 0 and every R figure silently becomes entry-relative
+  // nonsense rather than being reported as unknown.
+  const risk = t.initialStop == null ? 0 : Math.abs(t.entryPrice - t.initialStop);
+  const riskDollars = risk * perPoint;
   const safe = risk > 0;
 
   const actualR =
     safe && t.exitPrice != null ? (sign * (t.exitPrice - t.entryPrice)) / risk : null;
   const actualPnL =
-    t.exitPrice != null ? sign * (t.exitPrice - t.entryPrice) * t.size : null;
+    t.exitPrice != null ? sign * (t.exitPrice - t.entryPrice) * perPoint : null;
   const mfeR = safe && t.mfe != null ? (sign * (t.mfe - t.entryPrice)) / risk : null;
   const maeR = safe && t.mae != null ? (sign * (t.mae - t.entryPrice)) / risk : null;
 
   let potentialR: number | null = null;
   if (safe && t.noManagementOutcome === "target_first") {
-    potentialR = (sign * (t.initialTarget - t.entryPrice)) / risk;
+    if (t.initialTarget != null) {
+      potentialR = (sign * (t.initialTarget - t.entryPrice)) / risk;
+    }
   } else if (t.noManagementOutcome === "stop_first") {
     potentialR = -1;
   }
@@ -64,7 +93,8 @@ export function computeMetrics(t: Trade): TradeMetrics {
 }
 
 export function rToDollars(r: number, t: Trade): number {
-  return r * Math.abs(t.entryPrice - t.initialStop) * t.size;
+  if (t.initialStop == null) return 0; // no stop yet ⇒ no defined 1R to scale by
+  return r * Math.abs(t.entryPrice - t.initialStop) * dollarsPerPoint(t);
 }
 
 /** $ cost attributable to poor management / left-on-table for a single trade. */

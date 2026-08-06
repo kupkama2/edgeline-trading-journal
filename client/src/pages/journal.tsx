@@ -31,6 +31,7 @@ import {
   CheckCircle2,
   ChevronDown,
   ClipboardList,
+  ClipboardPaste,
   Eye,
   Loader2,
   Pencil,
@@ -64,6 +65,7 @@ import {
 } from "@shared/metrics";
 import { DailyGuardCard, useDemonGuard } from "@/components/daily-guard";
 import { StyleChip, StyleSwitcher } from "@/components/style-switcher";
+import { ImportTradesDialog } from "@/components/import-trades";
 
 /* ============================== helpers ============================== */
 
@@ -1381,8 +1383,10 @@ function EditTradeDialog({
       symbol: trade.symbol,
       size: String(trade.size),
       entryPrice: String(trade.entryPrice),
-      initialStop: String(trade.initialStop),
-      initialTarget: String(trade.initialTarget),
+      // Pending trades have no stop/target yet — String(null) would put the
+      // literal text "null" in the field for the user to delete by hand.
+      initialStop: trade.initialStop != null ? String(trade.initialStop) : "",
+      initialTarget: trade.initialTarget != null ? String(trade.initialTarget) : "",
       entryTime: toLocalInput(trade.entryTime),
       exitPrice: trade.exitPrice != null ? String(trade.exitPrice) : "",
       exitTime: toLocalInput(trade.exitTime),
@@ -1428,8 +1432,16 @@ function EditTradeDialog({
     const initialStop = numOrNull(f.initialStop);
     const initialTarget = numOrNull(f.initialTarget);
     const size = numOrNull(f.size);
-    if (!f.symbol?.trim() || entryPrice == null || initialStop == null || initialTarget == null || size == null) {
-      toast({ title: "Symbol, size, entry, stop and target are required", variant: "destructive" });
+    // A pending trade is only a resting order, so it may be saved with just an
+    // entry — that is the whole point of importing one before it fills. Stop
+    // and target become mandatory when it goes live.
+    const isPending = trade.status === "pending";
+    if (!f.symbol?.trim() || entryPrice == null || size == null) {
+      toast({ title: "Symbol, size and entry are required", variant: "destructive" });
+      return;
+    }
+    if (!isPending && (initialStop == null || initialTarget == null)) {
+      toast({ title: "A live trade needs a stop and a target", variant: "destructive" });
       return;
     }
     const rTags = f.rationaleTags
@@ -1694,8 +1706,12 @@ function OpenTradeRow({
   onSelect: () => void;
   onView: () => void;
 }) {
-  const risk = Math.abs(t.entryPrice - t.initialStop);
-  const rr = risk ? Math.abs(t.initialTarget - t.entryPrice) / risk : 0;
+  // Pending trades have no stop or target yet, so there is no R:R to show.
+  const risk = t.initialStop == null ? 0 : Math.abs(t.entryPrice - t.initialStop);
+  const rr =
+    risk && t.initialTarget != null
+      ? Math.abs(t.initialTarget - t.entryPrice) / risk
+      : 0;
   const rationaleTags = parseTags(t.rationaleTags);
   return (
     <div
@@ -1761,6 +1777,93 @@ function OpenTradeRow({
         <RationaleTags tags={rationaleTags} />
       </button>
     </div>
+  );
+}
+
+/**
+ * A resting order that has not filled. It carries no risk yet, so there is no
+ * R:R or P&L to show — what matters is what is still missing before it can go
+ * live, which is what the row surfaces.
+ */
+function PendingTradeRow({
+  t,
+  onEdit,
+}: {
+  t: TradeWithTags;
+  onEdit: () => void;
+}) {
+  const updateTrade = useUpdateTrade();
+  const { toast } = useToast();
+  const needsRisk = t.initialStop == null || t.initialTarget == null;
+  const needsRationale = !t.rationale?.trim();
+
+  async function markFilled() {
+    try {
+      await updateTrade.mutateAsync({ id: t.id, trade: { status: "open" } });
+      toast({ title: `${t.symbol} is now open` });
+    } catch (err: any) {
+      // The server enforces stop+target on the merged row, so this is the
+      // authoritative check — surface its reason rather than pre-guessing.
+      toast({
+        title: "Add a stop and target first",
+        description: String(err?.message ?? err).slice(0, 160),
+        variant: "destructive",
+      });
+    }
+  }
+  return (
+    <Card className="p-3" data-testid={`row-pending-${t.id}`}>
+      <div className="flex items-center gap-2">
+        {t.direction === "long" ? (
+          <ArrowUpRight className="h-3.5 w-3.5 text-emerald-500" />
+        ) : (
+          <ArrowDownRight className="h-3.5 w-3.5 text-red-500" />
+        )}
+        <span className="font-mono text-xs font-semibold">{t.symbol}</span>
+        <span className="font-mono text-[11px] text-muted-foreground">
+          {t.size}
+          {t.sizeUnit === "quote" ? " USD" : ""} @ {num(t.entryPrice)}
+        </span>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="ml-auto h-7 px-2 text-[11px]"
+          onClick={onEdit}
+          data-testid={`button-fill-${t.id}`}
+        >
+          <Pencil className="mr-1 h-3 w-3" />
+          Fill in
+        </Button>
+      </div>
+      <div className="mt-1.5 flex flex-wrap gap-1.5 pl-5">
+        {needsRisk && (
+          <Badge variant="outline" className="text-[10px] font-normal">
+            needs stop &amp; target
+          </Badge>
+        )}
+        {needsRationale && (
+          <Badge variant="outline" className="text-[10px] font-normal">
+            needs rationale
+          </Badge>
+        )}
+        {!needsRisk && !needsRationale && (
+          <Badge variant="secondary" className="text-[10px] font-normal">
+            ready
+          </Badge>
+        )}
+        <Button
+          variant="ghost"
+          size="sm"
+          className="ml-auto h-6 px-2 text-[10px]"
+          onClick={markFilled}
+          disabled={updateTrade.isPending}
+          data-testid={`button-mark-filled-${t.id}`}
+        >
+          <CheckCircle2 className="mr-1 h-3 w-3" />
+          Mark filled
+        </Button>
+      </div>
+    </Card>
   );
 }
 
@@ -2007,6 +2110,7 @@ export default function Journal() {
   const [closing, setClosing] = useState<TradeWithTags | null>(null);
   const [viewing, setViewing] = useState<TradeWithTags | null>(null);
   const [editing, setEditing] = useState<TradeWithTags | null>(null);
+  const [importing, setImporting] = useState(false);
 
   const tagNames = useMemo(
     () => Object.fromEntries(tags.map((t) => [t.id, t.name])),
@@ -2017,16 +2121,28 @@ export default function Journal() {
     () => filterByStyle(trades ?? [], activeStyleId),
     [trades, activeStyleId],
   );
+  const pending = scoped.filter((t) => t.status === "pending");
   const open = scoped.filter((t) => t.status === "open");
   const closed = scoped.filter((t) => t.status === "closed");
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-xl font-bold tracking-tight">Journal</h1>
-        <p className="mt-0.5 text-xs text-muted-foreground">
-          Drop a chart, confirm the numbers, move on. Everything else is computed.
-        </p>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-bold tracking-tight">Journal</h1>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            Drop a chart, confirm the numbers, move on. Everything else is computed.
+          </p>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setImporting(true)}
+          data-testid="button-open-import"
+        >
+          <ClipboardPaste className="mr-1.5 h-3.5 w-3.5" />
+          Import orders
+        </Button>
       </div>
 
       <StyleSwitcher />
@@ -2069,6 +2185,27 @@ export default function Journal() {
         </div>
       </div>
 
+      {pending.length > 0 && (
+        <div className="space-y-3">
+          <div className="flex items-baseline justify-between">
+            <h2 className="text-sm font-semibold tracking-tight">
+              Waiting to be filled
+            </h2>
+            <span
+              className="font-mono text-[11px] text-muted-foreground"
+              data-testid="text-pending-count"
+            >
+              {pending.length} could open
+            </span>
+          </div>
+          <div className="grid gap-2 md:grid-cols-2">
+            {pending.map((t) => (
+              <PendingTradeRow key={t.id} t={t} onEdit={() => setEditing(t)} />
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="space-y-3">
         <div className="flex items-baseline justify-between">
           <h2 className="text-sm font-semibold tracking-tight">Closed trades</h2>
@@ -2100,6 +2237,7 @@ export default function Journal() {
       <CloseTradeDialog trade={closing} onClose={() => setClosing(null)} />
       <TradeDetailDialog trade={viewing} onClose={() => setViewing(null)} />
       <EditTradeDialog trade={editing} onClose={() => setEditing(null)} />
+      <ImportTradesDialog open={importing} onClose={() => setImporting(false)} />
     </div>
   );
 }

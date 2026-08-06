@@ -28,9 +28,35 @@ if (!DATABASE_URL) {
   );
 }
 
+/**
+ * Drop query parameters that are libpq client options rather than server
+ * settings. postgres.js forwards anything it doesn't recognise as a startup
+ * parameter, and Postgres then refuses the connection outright:
+ *
+ *   unrecognized configuration parameter "channel_binding"
+ *
+ * Neon puts `channel_binding=require` in the connection string it gives you,
+ * so pasting that string in unedited would crash the server on boot. psql and
+ * node-postgres both tolerate it, which is why it only breaks here.
+ *
+ * Stripping is string-level on purpose — round-tripping through URL would
+ * re-encode a password containing reserved characters.
+ */
+const LIBPQ_ONLY_PARAMS = ["channel_binding"];
+
+function stripLibpqOnlyParams(url: string): string {
+  const q = url.indexOf("?");
+  if (q === -1) return url;
+  const kept = url
+    .slice(q + 1)
+    .split("&")
+    .filter((p) => !LIBPQ_ONLY_PARAMS.some((k) => p.toLowerCase().startsWith(`${k}=`)));
+  return kept.length ? `${url.slice(0, q)}?${kept.join("&")}` : url.slice(0, q);
+}
+
 /* Neon's pooled endpoint is PgBouncer in transaction mode, which can't hold
    prepared statements across checkouts — hence `prepare: false`. */
-const sql = postgres(DATABASE_URL, { prepare: false });
+const sql = postgres(stripLibpqOnlyParams(DATABASE_URL), { prepare: false });
 
 export const db = drizzle(sql);
 
@@ -53,9 +79,12 @@ CREATE TABLE IF NOT EXISTS trades (
   symbol TEXT NOT NULL,
   direction TEXT NOT NULL,
   size DOUBLE PRECISION NOT NULL,
+  size_unit TEXT NOT NULL DEFAULT 'base',
+  point_value DOUBLE PRECISION NOT NULL DEFAULT 1,
   entry_price DOUBLE PRECISION NOT NULL,
-  initial_stop DOUBLE PRECISION NOT NULL,
-  initial_target DOUBLE PRECISION NOT NULL,
+  -- Nullable: a pending trade is a resting order with no risk defined yet.
+  initial_stop DOUBLE PRECISION,
+  initial_target DOUBLE PRECISION,
   entry_time TEXT NOT NULL,
   exit_price DOUBLE PRECISION,
   exit_time TEXT,
@@ -71,6 +100,15 @@ CREATE TABLE IF NOT EXISTS trades (
   rationale_tags TEXT,
   playbook TEXT
 );
+-- Pending trades are resting limit orders with no stop or target yet, so these
+-- two columns had to lose NOT NULL. Both DDL statements are no-ops once applied.
+ALTER TABLE trades ALTER COLUMN initial_stop DROP NOT NULL;
+ALTER TABLE trades ALTER COLUMN initial_target DROP NOT NULL;
+-- Existing rows were all sized in contracts/coins, which is exactly 'base'.
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS size_unit TEXT NOT NULL DEFAULT 'base';
+-- 1 is the correct default for existing rows: it reproduces the previous
+-- (unmultiplied) arithmetic exactly, so no historical figure silently shifts.
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS point_value DOUBLE PRECISION NOT NULL DEFAULT 1;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS rationale TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS rationale_tags TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS playbook TEXT;
