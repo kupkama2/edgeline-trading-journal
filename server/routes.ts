@@ -236,9 +236,37 @@ async function callAnthropic(
   return text;
 }
 
+/** True when a Perplexity call could actually authenticate. */
+function perplexityAvailable(): boolean {
+  return Boolean(PPLX_API_KEY || PPLX_PROXY_URL || sandboxDispatcher());
+}
+
+/**
+ * Anthropic first when its key is present — Claude reads prices off a chart
+ * axis more reliably — but never at the cost of the feature working.
+ *
+ * A configured provider can fail for reasons that have nothing to do with the
+ * screenshot: an exhausted credit balance, an expired key, a transient 5xx. In
+ * that situation the other provider is right there and funded, so preferring
+ * one must not mean depending on it. Any Anthropic failure therefore falls
+ * through to Perplexity when Perplexity is usable.
+ *
+ * If there is no fallback configured the original error is rethrown untouched,
+ * because a message like "credit balance is too low" is precisely what the
+ * caller needs to see.
+ */
 async function callLLM(systemPrompt: string, image?: { mediaType: string; data: string }) {
-  if (ANTHROPIC_API_KEY) return callAnthropic(systemPrompt, image);
-  return callPerplexity(systemPrompt, image);
+  if (!ANTHROPIC_API_KEY) return callPerplexity(systemPrompt, image);
+
+  try {
+    return await callAnthropic(systemPrompt, image);
+  } catch (err: any) {
+    if (!perplexityAvailable()) throw err;
+    console.warn(
+      `[ai] Anthropic failed, falling back to Perplexity: ${err?.message ?? err}`,
+    );
+    return await callPerplexity(systemPrompt, image);
+  }
 }
 
 async function callPerplexity(systemPrompt: string, image?: { mediaType: string; data: string }) {
