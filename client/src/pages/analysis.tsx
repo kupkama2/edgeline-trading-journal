@@ -9,6 +9,7 @@ import { useStyleScopedTrades } from "@/lib/style-filter";
 import { StyleSwitcher } from "@/components/style-switcher";
 import { ImportCsvDialog } from "@/components/import-csv";
 import { EquityCurve } from "@/components/equity-curve";
+import { ExcursionChart } from "@/components/excursion-chart";
 import {
   byHour,
   byMistake,
@@ -21,6 +22,7 @@ import {
 import { drawdown, streaks } from "@shared/streaks";
 import { MIN_SAMPLE, simulate } from "@shared/montecarlo";
 import { missedStats } from "@shared/missed";
+import { excursions, summariseExcursions } from "@shared/excursion";
 import { fmtMoney, fmtR } from "@shared/metrics";
 
 /**
@@ -171,6 +173,8 @@ export default function Analysis() {
     [scoped, horizon, blocky],
   );
   const missed = useMemo(() => missedStats(scoped), [scoped]);
+  const exc = useMemo(() => excursions(scoped), [scoped]);
+  const excSummary = useMemo(() => summariseExcursions(exc), [exc]);
 
   const rows = useMemo(() => {
     switch (tab) {
@@ -295,6 +299,62 @@ export default function Analysis() {
               {Math.abs(st.current) === 1 ? "" : "s"} in a row.
             </span>
           </div>
+        )}
+      </Card>
+
+      {/* ------------------------ MAE / MFE excursion ------------------------ */}
+      <Card className="border-card-border bg-card p-4">
+        <div className="mb-3">
+          <h2 className="text-sm font-semibold tracking-tight">How far each trade travelled</h2>
+          <p className="mt-0.5 text-[11px] text-muted-foreground">
+            Best reach and worst dip per trade, with your exit marked. Green above the line you
+            didn't keep is give-back; red below is heat the trade took first.
+          </p>
+        </div>
+
+        {exc.length === 0 ? (
+          <p className="py-6 text-center text-[11px] text-muted-foreground" data-testid="excursion-empty">
+            No path data yet. Add MAE/MFE when closing a trade — drop the outcome chart or type
+            them — and each trade's travel appears here.
+          </p>
+        ) : (
+          <>
+            <ExcursionChart rows={exc} />
+            {excSummary && (
+              <div className="mt-3 grid grid-cols-2 gap-4 sm:grid-cols-4">
+                <Stat
+                  label="Avg best reach"
+                  value={`${fmtR(excSummary.avgMfeR)}`}
+                  hint="how far trades ran"
+                  tone="good"
+                />
+                <Stat
+                  label="Avg you kept"
+                  value={excSummary.avgCapture != null ? `${Math.round(excSummary.avgCapture * 100)}%` : "—"}
+                  hint="of the favourable move"
+                  tone={excSummary.avgCapture != null && excSummary.avgCapture < 0.5 ? "bad" : undefined}
+                  testId="stat-avg-capture"
+                />
+                <Stat
+                  label="Avg worst dip"
+                  value={`${fmtR(excSummary.avgMaeR)}`}
+                  hint="heat taken per trade"
+                  tone="bad"
+                />
+                <Stat
+                  label="Deepest winner dip"
+                  value={`${fmtR(excSummary.deepestWinnerMaeR)}`}
+                  hint="how tight is too tight"
+                />
+              </div>
+            )}
+            <p className="mt-2 text-[10px] leading-snug text-muted-foreground">
+              {excSummary && excSummary.avgCapture != null && excSummary.avgCapture < 0.5
+                ? "You're keeping under half of the average move — the edge finds runs the exit gives back. Look at trailing wider or targeting further."
+                : "Winners that routinely dip well past your stop distance before working are the sign a tighter stop would cut good trades."}
+              {" "}Showing {exc.length} {exc.length === 1 ? "trade" : "trades"} with recorded path.
+            </p>
+          </>
         )}
       </Card>
 
