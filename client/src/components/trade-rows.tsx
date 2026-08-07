@@ -259,16 +259,24 @@ export function ClosedTradeRow({
   const m = computeMetrics(t);
   const del = useDeleteTrade();
   const win = (m.actualR ?? 0) >= 0;
-  // A camera with a count says "there is a visual record" without paying to
-  // load it — the images themselves stay lazy until the detail opens.
-  const shots = t.imageCount > 0 && (
-    <span
-      className="flex items-center gap-0.5 font-mono text-[10px] text-muted-foreground"
+  // The camera is a button, not a label: it both reports the count and is the
+  // shortcut to add more, so attaching to a trade closed weeks ago is one
+  // click from its row. With no images it stays faint and reads "add" — the
+  // affordance exists without cluttering the row that has none. Counts stay
+  // lazy; the images themselves load only when the trade opens.
+  const shots = (
+    <button
+      type="button"
+      onClick={onEdit}
+      className={`flex shrink-0 items-center gap-0.5 rounded px-1 py-0.5 font-mono text-[10px] transition-colors hover:text-foreground ${
+        t.imageCount > 0 ? "text-muted-foreground" : "text-muted-foreground/40"
+      }`}
+      title={t.imageCount > 0 ? "View or add screenshots" : "Add a screenshot"}
       data-testid={`badge-images-${t.id}`}
     >
       <Camera className="h-3 w-3" />
-      {t.imageCount}
-    </span>
+      {t.imageCount > 0 ? t.imageCount : "+"}
+    </button>
   );
   const rationaleTags = parseTags(t.rationaleTags);
   return (
