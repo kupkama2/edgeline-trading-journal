@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { positionLedger, totalPnLWithFills, validateFill } from "../shared/fills";
+import { positionLedger, suggestPartialSize, totalPnLWithFills, validateFill } from "../shared/fills";
 import { computeMetrics } from "../shared/metrics";
 import { trade } from "./helpers";
 import { parseExtraTargets, type TradeFill } from "../shared/schema";
@@ -148,6 +148,51 @@ describe("validateFill", () => {
 
   it("refuses fills on anything not open", () => {
     expect(validateFill(trade(), { kind: "add", price: 101, size: 1 })).toMatch(/open/i);
+  });
+});
+
+describe("suggestPartialSize", () => {
+  const live = (over: Parameters<typeof trade>[0] = {}) =>
+    trade({ status: "open", exitPrice: null, exitTime: null, ...over });
+
+  it("splits what's on across the remaining TPs, whole contracts for futures", () => {
+    // 4 NQ, 3 planned levels → 4/3 rounds to 1 contract.
+    const t = live({ size: 4, pointValue: 20, extraTargets: "[140,150]" });
+    expect(suggestPartialSize(t)).toBe(1);
+  });
+
+  it("recomputes from what actually remains after each partial", () => {
+    // Took 1 already: 3 on, 2 levels left → 1.5 → 2.
+    const t = live({
+      size: 4,
+      pointValue: 20,
+      extraTargets: "[140,150]",
+      fills: [fill("partial", 130, 1, "2026-08-03T10:00:00Z")],
+    });
+    expect(suggestPartialSize(t)).toBe(2);
+  });
+
+  it("goes quiet on the last planned level — that piece exits via Close", () => {
+    expect(suggestPartialSize(live({ size: 4 }))).toBeNull(); // one TP only
+  });
+
+  it("splits coins fractionally and quote sizes in dollars at the level's price", () => {
+    const coins = live({ size: 0.5, extraTargets: "[140]" });
+    expect(suggestPartialSize(coins)).toBeCloseTo(0.25);
+    // $5,000 @50 = 100 coins on, 2 levels → 50 coins at TP1 55 → $2,750.
+    const usd = live({
+      sizeUnit: "quote",
+      size: 5000,
+      entryPrice: 50,
+      initialStop: 45,
+      initialTarget: 55,
+      extraTargets: "[60]",
+    });
+    expect(suggestPartialSize(usd)).toBe(2750);
+  });
+
+  it("won't suggest flattening a 1-lot", () => {
+    expect(suggestPartialSize(live({ size: 1, pointValue: 20, extraTargets: "[140]" }))).toBeNull();
   });
 });
 

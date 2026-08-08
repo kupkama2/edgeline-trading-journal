@@ -107,6 +107,14 @@ export const trades = pgTable("trades", {
   rationale: text("rationale"), // raw quick-entry comment, e.g. "vah, 786 retest"
   rationaleTags: text("rationale_tags"), // JSON string[] — AI-normalized setup concepts
   playbook: text("playbook"), // JSON TradePlaybook — optional setup/edge checklist
+  /**
+   * Where the trade was executed — "Binance Futures", "Apex eval", "IBKR
+   * real". Free text on purpose: accounts come and go (prop evals expire,
+   * brokers change) and a managed table would make every one of them a
+   * chore. The entry card re-offers every name already used, so spelling
+   * stays consistent without any admin UI. NULL = not recorded.
+   */
+  account: text("account"),
 });
 
 /* ------------------------------- playbook ------------------------------ */

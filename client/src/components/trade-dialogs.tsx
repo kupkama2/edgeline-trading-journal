@@ -189,6 +189,14 @@ export function CloseTradeDialog({
                     .join(" → ") || "—"}
                 </p>
               </div>
+              {trade.account && (
+                <div>
+                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                    Account
+                  </p>
+                  <p className="truncate">{trade.account}</p>
+                </div>
+              )}
             </div>
 
             <Dropzone
@@ -459,6 +467,7 @@ export function EditTradeDialog({
       rationale: trade.rationale ?? "",
       rationaleTags: parseTags(trade.rationaleTags).join(", "),
       notes: trade.notes ?? "",
+      account: trade.account ?? "",
     });
     setDirection(trade.direction === "short" ? "short" : "long");
     setExitReason(trade.exitReason ?? null);
@@ -537,6 +546,7 @@ export function EditTradeDialog({
         rationale: f.rationale.trim() || null,
         rationaleTags: rTags.length ? JSON.stringify(rTags) : null,
         notes: f.notes.trim() || null,
+        account: f.account?.trim() || null,
       },
       mistakeTagIds: selectedTags,
     });
@@ -663,7 +673,7 @@ export function EditTradeDialog({
               {field("entryTime", "Entry time", "datetime-local")}
               {field("exitTime", "Exit time", "datetime-local")}
               {field("exitPrice", "Exit price")}
-              <div />
+              {field("account", "Account", "text")}
               {field("mae", "MAE (worst price)")}
               {field("mfe", "MFE (best price)")}
             </div>
@@ -889,6 +899,14 @@ export function TradeDetailDialog({
                     .join(" → ") || "—"}
                 </p>
               </div>
+              {trade.account && (
+                <div>
+                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                    Account
+                  </p>
+                  <p className="truncate">{trade.account}</p>
+                </div>
+              )}
             </div>
 
             {trade.rationale && (

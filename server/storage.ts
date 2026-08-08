@@ -133,6 +133,8 @@ ALTER TABLE trades ADD COLUMN IF NOT EXISTS playbook TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS style_id INTEGER;
 -- Planned scale-out levels beyond TP1, as a JSON number[]. NULL = one target.
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS extra_targets TEXT;
+-- Which account the trade ran in ("Binance Futures", "Apex eval", …).
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS account TEXT;
 CREATE TABLE IF NOT EXISTS mistake_tags (
   id SERIAL PRIMARY KEY,
   name TEXT NOT NULL,

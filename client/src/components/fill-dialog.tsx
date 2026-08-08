@@ -11,7 +11,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { Loader2, Minus, Plus } from "lucide-react";
 import { parseExtraTargets, type TradeWithTags } from "@shared/schema";
-import { positionLedger, validateFill } from "@shared/fills";
+import { positionLedger, suggestPartialSize, validateFill } from "@shared/fills";
 import { fmtMoney } from "@shared/metrics";
 import { useAddFill } from "@/lib/data";
 import { num } from "@/components/trade-shared";
@@ -109,6 +109,9 @@ export function FillDialog({
     kind === "partial" && plannedTps[led.partials] != null
       ? plannedTps[led.partials]
       : trade.entryPrice;
+  // Default plan: peel off an equal share per remaining TP.
+  const sizeHint =
+    kind === "partial" ? suggestPartialSize(trade, Number(price) || null) : null;
 
   return (
     <Dialog open={trade != null} onOpenChange={(o) => !o && onClose()}>
@@ -159,14 +162,27 @@ export function FillDialog({
               />
             </div>
             <div className="space-y-1">
-              <Label className="text-[11px]">
-                Size <span className="text-muted-foreground">({unit})</span>
-              </Label>
+              <div className="flex items-center justify-between">
+                <Label className="text-[11px]">
+                  Size <span className="text-muted-foreground">({unit})</span>
+                </Label>
+                {sizeHint != null && (
+                  <button
+                    type="button"
+                    onClick={() => setSize(String(sizeHint))}
+                    title="Equal split of what's still on across the remaining TPs"
+                    data-testid="button-apply-split"
+                    className="rounded px-1 font-mono text-[10px] leading-tight text-primary transition-colors hover:bg-primary/10"
+                  >
+                    even → {sizeHint}
+                  </button>
+                )}
+              </div>
               <Input
                 value={size}
                 onChange={(e) => setSize(e.target.value)}
                 inputMode="decimal"
-                placeholder="—"
+                placeholder={sizeHint != null ? String(sizeHint) : "—"}
                 className="h-9 font-mono text-sm"
                 data-testid="input-fill-size"
               />

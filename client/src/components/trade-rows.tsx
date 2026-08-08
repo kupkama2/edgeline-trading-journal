@@ -107,6 +107,15 @@ export function OpenTradeRow({
           </span>
           <span className="truncate font-mono text-sm font-semibold">{t.symbol}</span>
           <StyleChip styleId={t.styleId} />
+          {t.account && (
+            <Badge
+              variant="outline"
+              className="max-w-[8rem] truncate text-[10px] font-normal text-muted-foreground"
+              data-testid={`badge-account-${t.id}`}
+            >
+              {t.account}
+            </Badge>
+          )}
           <span className="ml-auto shrink-0 rounded bg-secondary px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
             {t.size} @ {num(t.entryPrice)}
           </span>
@@ -336,6 +345,16 @@ export function ClosedTradeRow({
       <div className="flex items-center gap-2">
         <span className="truncate font-mono text-sm font-semibold">{t.symbol}</span>
         <StyleChip styleId={t.styleId} />
+        {t.account && (
+          <Badge
+            variant="outline"
+            title={t.account}
+            className="max-w-[6rem] truncate text-[10px] font-normal text-muted-foreground"
+            data-testid={`badge-account-closed-${t.id}`}
+          >
+            {t.account}
+          </Badge>
+        )}
         {shots}
         <Badge variant="outline" className="shrink-0 text-[10px] capitalize">
           {t.exitReason ? EXIT_REASON_LABELS[t.exitReason] : "—"}

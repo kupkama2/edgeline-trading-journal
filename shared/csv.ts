@@ -37,7 +37,7 @@ const EXPORT_COLUMNS = [
   "riskDollars", "actualR", "actualPnL",
   "potentialR", "managementDeltaR", "captureRatio",
   "maeR", "mfeR",
-  "style", "mistakes", "setups", "rationale", "notes",
+  "style", "account", "mistakes", "setups", "rationale", "notes",
 ] as const;
 
 /**
@@ -93,6 +93,7 @@ export function tradesToCsv(
       round(m.maeR, 4),
       round(m.mfeR, 4),
       t.styleId != null ? (styleNames[t.styleId] ?? "") : "",
+      t.account,
       t.mistakeTagIds.map((id) => tagNames[id]).filter(Boolean).join("; "),
       setupsOf(t),
       t.rationale,

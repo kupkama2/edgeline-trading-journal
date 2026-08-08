@@ -16,7 +16,7 @@
  *    did this make" keeps meaning "against what I first agreed to lose".
  *    An add that doubles the position does not quietly halve every R.
  */
-import type { Trade, TradeFill } from "./schema";
+import { parseExtraTargets, type Trade, type TradeFill } from "./schema";
 
 /** A trade whose fills came along for the ride (TradeWithTags satisfies this). */
 export type TradeWithFills = Trade & { fills?: TradeFill[] };
@@ -87,6 +87,42 @@ export function totalPnLWithFills(t: TradeWithFills): number | null {
   const sign = t.direction === "long" ? 1 : -1;
   const led = positionLedger(t);
   return led.realizedPnL + sign * (t.exitPrice - led.avgEntry) * led.openQty * (t.pointValue ?? 1);
+}
+
+/**
+ * Equal-split suggestion for the next partial: what's still on, divided by
+ * the planned TP levels not yet taken. Returned in the trade's own size unit
+ * (USD for quote-sized trades, converted at the given price, falling back to
+ * the next planned TP). Futures suggest whole contracts; coins split
+ * fractionally.
+ *
+ * Null when no hint applies: one level (or none) left — that piece is the
+ * exit and belongs to Close — or a position too small to split, like a 1-lot.
+ * The last taker naturally inherits whatever rounding left behind, because
+ * the suggestion is recomputed from what actually remains each time.
+ */
+export function suggestPartialSize(
+  t: TradeWithFills,
+  price?: number | null,
+): number | null {
+  const led = positionLedger(t);
+  const tps = [t.initialTarget, ...parseExtraTargets(t.extraTargets)].filter(
+    (x): x is number => x != null,
+  );
+  const remaining = tps.length - led.partials;
+  if (remaining < 2 || led.openQty <= 0) return null;
+  const base = led.openQty / remaining;
+
+  if (t.sizeUnit === "quote") {
+    const px = price && price > 0 ? price : (tps[led.partials] ?? t.entryPrice);
+    const usd = Math.round(base * px);
+    return usd > 0 ? usd : null;
+  }
+  const s =
+    (t.pointValue ?? 1) !== 1
+      ? Math.max(1, Math.round(base))
+      : Math.round(base * 1e4) / 1e4;
+  return s > 0 && s < led.openQty - 1e-9 ? s : null;
 }
 
 /**
