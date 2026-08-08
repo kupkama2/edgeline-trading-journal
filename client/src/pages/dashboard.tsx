@@ -26,7 +26,6 @@ import {
   useSubmitWeeklyReview,
 } from "@/lib/data";
 import { DailyGuardCard } from "@/components/daily-guard";
-import { TradeDetailDialog } from "@/components/trade-dialogs";
 import { setJumpDay } from "@/lib/jump";
 import { useLocation } from "wouter";
 import { DemonFinderPanel, WeeklyReviewCard } from "@/components/demon-finder";
@@ -237,7 +236,6 @@ export default function Dashboard() {
   const { activeStyleId } = useStyleFilter();
   // A point on the equity curve is one closed trade, and a calendar cell is
   // one day — both are doors into the log rather than pictures of it.
-  const [viewing, setViewing] = useState<TradeWithTags | null>(null);
   const [, navigate] = useLocation();
   const all = useMemo(
     () => filterByStyle(trades ?? [], activeStyleId),
@@ -447,7 +445,7 @@ export default function Dashboard() {
                 // Recharts hands back the hovered datum; each point on this
                 // curve is one closed trade, so open it.
                 const id = e?.activePayload?.[0]?.payload?.tradeId;
-                if (id != null) setViewing(closed.find((t) => t.id === id) ?? null);
+                if (id != null) navigate(`/trade/${id}`);
               }}
             >
               <defs>
@@ -657,8 +655,6 @@ export default function Dashboard() {
           </div>
         </ChartCard>
       </div>
-
-      <TradeDetailDialog trade={viewing} onClose={() => setViewing(null)} />
     </div>
   );
 }

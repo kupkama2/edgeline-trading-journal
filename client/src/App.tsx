@@ -14,6 +14,7 @@ import Dashboard from "@/pages/dashboard";
 import Analysis from "@/pages/analysis";
 import Daily from "@/pages/daily";
 import Settings from "@/pages/settings";
+import TradeView from "@/pages/trade-view";
 
 function AppRouter() {
   return (
@@ -23,6 +24,8 @@ function AppRouter() {
       <Route path="/dashboard" component={Dashboard} />
       <Route path="/analysis" component={Analysis} />
       <Route path="/settings" component={Settings} />
+      {/* One trade, one address — every click path lands here. */}
+      <Route path="/trade/:id" component={TradeView} />
       <Route component={NotFound} />
     </Switch>
   );

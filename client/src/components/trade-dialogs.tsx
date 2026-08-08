@@ -1,5 +1,9 @@
 /**
- * The three per-trade dialogs: close it, edit it in place, read its story.
+ * The two per-trade dialogs: close it, and edit it in place.
+ *
+ * Reading a trade is not a dialog — it is the /trade/:id page, which every
+ * click path lands on. These two are the write paths, opened from that page
+ * and from the journal rows.
  */
 import { useEffect, useMemo, useState } from "react";
 import { Input } from "@/components/ui/input";
@@ -8,12 +12,12 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import { ClipboardList, Loader2, Pencil, Sparkles, Trash2 } from "lucide-react";
+import { Loader2, Pencil } from "lucide-react";
 import { useAccountSettings, useMistakeTags, useUpdateTrade, useAddTradeImage, archiveDataUrl, parseScreenshot, fileToDownscaledDataUrl } from "@/lib/data";
 import { suggestFees } from "@shared/fees";
 import { knownHighlights, parseHighlights, serializeHighlights } from "@shared/highlights";
 import { AccountPicker, HighlightPicker } from "@/components/trade-pickers";
-import { useDeleteFill, useTrades } from "@/lib/data";
+import { useTrades } from "@/lib/data";
 import { positionLedger } from "@shared/fills";
 import { TradeImageGallery } from "@/components/trade-images";
 import { parseExtraTargets, parsePlaybook, type TradeWithTags } from "@shared/schema";
@@ -963,228 +967,3 @@ export function EditTradeDialog({
     </Dialog>
   );
 }
-
-
-export function TradeDetailDialog({
-  trade: opened,
-  onClose,
-}: {
-  trade: TradeWithTags | null;
-  onClose: () => void;
-}) {
-  const deleteFill = useDeleteFill();
-  const { data: allTrades = [] } = useTrades();
-  // Callers pass the row they had when the dialog opened — a snapshot. Editing
-  // from inside (removing a fill) refetches the list but cannot change that
-  // snapshot, so re-read the live row by id and fall back to the snapshot only
-  // if it has since been deleted.
-  const trade = opened ? (allTrades.find((t) => t.id === opened.id) ?? opened) : null;
-  const open = trade != null;
-  const rationaleTags = parseTags(trade?.rationaleTags);
-  const playbook = parsePlaybook(trade?.playbook);
-  const playbookRows: [string, string][] = playbook
-    ? ([
-        ["Setup", playbook.setupName],
-        ["Stop logic", playbook.stopLogic],
-        ["Target logic", playbook.targetLogic],
-        ["Confidence", playbook.confidence ? `${playbook.confidence} / 5` : undefined],
-        ["Stand aside if", playbook.standAside],
-      ].filter(([, v]) => v && String(v).trim()) as [string, string][])
-    : [];
-  return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-h-[92vh] max-w-lg overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2 text-base">
-            {trade?.symbol}
-            {trade && (
-              <Badge
-                variant="outline"
-                className={`text-[10px] uppercase ${
-                  trade.direction === "long" ? "text-emerald-400" : "text-primary"
-                }`}
-              >
-                {trade.direction}
-              </Badge>
-            )}
-          </DialogTitle>
-        </DialogHeader>
-
-        {trade && (
-          <div className="space-y-4">
-            <div className="grid grid-cols-3 gap-2 rounded-md border border-border/60 bg-secondary/30 p-2.5 text-center font-mono text-xs">
-              <div>
-                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Entry</p>
-                <p>{num(trade.entryPrice)}</p>
-              </div>
-              <div>
-                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Stop</p>
-                <p className="text-primary">{num(trade.initialStop)}</p>
-              </div>
-              <div>
-                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                  {parseExtraTargets(trade.extraTargets).length > 0 ? "Targets" : "Target"}
-                </p>
-                <p className="text-emerald-400">
-                  {[trade.initialTarget, ...parseExtraTargets(trade.extraTargets)]
-                    .filter((x): x is number => x != null)
-                    .map((x) => num(x))
-                    .join(" → ") || "—"}
-                </p>
-              </div>
-              {trade.account && (
-                <div>
-                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                    Account
-                  </p>
-                  <p className="truncate">{trade.account}</p>
-                </div>
-              )}
-              {trade.fees != null && trade.fees > 0 && trade.exitPrice != null && (() => {
-                const m = computeMetrics(trade);
-                return (
-                  <div data-testid="detail-fees">
-                    <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                      Net · fees
-                    </p>
-                    <p>
-                      <span className={(m.actualPnL ?? 0) >= 0 ? "text-emerald-400" : "text-primary"}>
-                        {fmtMoney(m.actualPnL ?? 0)}
-                      </span>
-                      <span className="text-muted-foreground"> · {fmtFees(trade.fees)}</span>
-                    </p>
-                  </div>
-                );
-              })()}
-            </div>
-
-            {/* How the position was actually worked. A scaled trade's row
-                shows only the summary, so this is the one place the
-                individual fills exist — and therefore the only place a
-                mistyped one can be taken back. */}
-            {trade.fills.length > 0 && (
-              <div data-testid="detail-fills">
-                <p className="mb-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
-                  How it was scaled
-                </p>
-                <ul className="space-y-1">
-                  {[...trade.fills]
-                    .sort((a, b) => a.time.localeCompare(b.time))
-                    .map((f) => (
-                      <li
-                        key={f.id}
-                        className="flex items-center gap-2 rounded-md border border-border/60 px-2.5 py-1.5 text-xs"
-                        data-testid={`detail-fill-${f.id}`}
-                      >
-                        <Badge
-                          variant="outline"
-                          className={`shrink-0 text-[10px] font-normal ${
-                            f.kind === "add"
-                              ? "border-sky-500/40 text-sky-400"
-                              : "border-emerald-500/40 text-emerald-400"
-                          }`}
-                        >
-                          {f.kind === "add" ? "added" : "took"}
-                        </Badge>
-                        <span className="font-mono">
-                          {num(f.size, 4)}
-                          {trade.sizeUnit === "quote" ? " USD" : ""} @ {num(f.price, 4)}
-                        </span>
-                        <span className="truncate text-[11px] text-muted-foreground">
-                          {new Date(f.time).toLocaleString(undefined, {
-                            month: "short",
-                            day: "numeric",
-                            hour: "2-digit",
-                            minute: "2-digit",
-                          })}
-                          {f.note ? ` · ${f.note}` : ""}
-                        </span>
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          className="ml-auto h-6 w-6 shrink-0 text-muted-foreground hover:text-destructive"
-                          onClick={() => deleteFill.mutate(f.id)}
-                          disabled={deleteFill.isPending}
-                          aria-label="Remove this fill"
-                          data-testid={`button-delete-fill-${f.id}`}
-                        >
-                          <Trash2 className="h-3 w-3" />
-                        </Button>
-                      </li>
-                    ))}
-                </ul>
-                {(() => {
-                  const led = positionLedger(trade);
-                  return (
-                    <p className="mt-1.5 font-mono text-[11px] text-muted-foreground">
-                      avg entry {num(led.avgEntry, 4)}
-                      {trade.status === "open" && ` · ${num(led.openQty, 4)} still on`} ·{" "}
-                      {fmtMoney(led.realizedPnL)} banked before the close
-                    </p>
-                  );
-                })()}
-              </div>
-            )}
-
-            {parseHighlights(trade.highlights).length > 0 && (
-              <div data-testid="detail-highlights">
-                <p className="mb-1.5 flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
-                  <Sparkles className="h-3 w-3 text-emerald-400" />
-                  What went right
-                </p>
-                <div className="flex flex-wrap gap-1.5">
-                  {parseHighlights(trade.highlights).map((h) => (
-                    <Badge
-                      key={h}
-                      variant="outline"
-                      className="border-emerald-500/40 text-[10px] font-normal text-emerald-400"
-                    >
-                      {h}
-                    </Badge>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {trade.rationale && (
-              <div>
-                <p className="mb-1 text-[10px] uppercase tracking-wider text-muted-foreground">
-                  Rationale
-                </p>
-                <p className="text-xs">{trade.rationale}</p>
-                <RationaleTags tags={rationaleTags} />
-              </div>
-            )}
-
-            {playbookRows.length > 0 && (
-              <div data-testid="detail-playbook">
-                <p className="mb-1.5 flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
-                  <ClipboardList className="h-3 w-3" />
-                  Playbook
-                </p>
-                <dl className="space-y-1 rounded-md border border-border/60 bg-secondary/20 p-2.5">
-                  {playbookRows.map(([k, v]) => (
-                    <div key={k} className="flex gap-2 text-xs">
-                      <dt className="w-28 shrink-0 text-muted-foreground">{k}</dt>
-                      <dd className="min-w-0 flex-1 break-words">{v}</dd>
-                    </div>
-                  ))}
-                </dl>
-              </div>
-            )}
-
-            <TradeImageGallery tradeId={trade.id} />
-
-            {trade.notes && (
-              <div>
-                <p className="mb-1 text-[10px] uppercase tracking-wider text-muted-foreground">Notes</p>
-                <p className="text-xs">{trade.notes}</p>
-              </div>
-            )}
-          </div>
-        )}
-      </DialogContent>
-    </Dialog>
-  );
-}
-

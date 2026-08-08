@@ -16,7 +16,8 @@ import { FillDialog } from "@/components/fill-dialog";
 import { ResolveTradeDialog } from "@/components/resolve-trade";
 import { type ImportCandidate } from "@shared/import-parse";
 import { NewTradeCard } from "@/components/new-trade-card";
-import { CloseTradeDialog, EditTradeDialog, TradeDetailDialog } from "@/components/trade-dialogs";
+import { CloseTradeDialog, EditTradeDialog } from "@/components/trade-dialogs";
+import { useLocation } from "wouter";
 import { ClosedTradeRow, OpenTradeRow, PendingTradeRow } from "@/components/trade-rows";
 import { num } from "@/components/trade-shared";
 
@@ -87,7 +88,7 @@ export default function Journal() {
   const { data: tags = [] } = useMistakeTags();
   const { activeStyleId } = useStyleFilter();
   const [closing, setClosing] = useState<TradeWithTags | null>(null);
-  const [viewing, setViewing] = useState<TradeWithTags | null>(null);
+  const [, navigate] = useLocation();
   const [editing, setEditing] = useState<TradeWithTags | null>(null);
   const [importing, setImporting] = useState(false);
   const [loggingMissed, setLoggingMissed] = useState(false);
@@ -187,7 +188,7 @@ export default function Journal() {
                   key={t.id}
                   t={t}
                   onSelect={() => setClosing(t)}
-                  onView={() => setViewing(t)}
+                  onView={() => navigate(`/trade/${t.id}`)}
                   onEdit={() => setEditing(t)}
                   onResolve={() => setResolving(t)}
                   onAdd={() => setFilling({ trade: t, kind: "add" })}
@@ -245,7 +246,7 @@ export default function Journal() {
                 key={t.id}
                 t={t}
                 tagNames={tagNames}
-                onView={() => setViewing(t)}
+                onView={() => navigate(`/trade/${t.id}`)}
                 onEdit={() => setEditing(t)}
               />
             ))}
@@ -282,7 +283,7 @@ export default function Journal() {
                   variant="ghost"
                   size="icon"
                   className="ml-auto h-6 w-6 text-muted-foreground"
-                  onClick={() => setViewing(t)}
+                  onClick={() => navigate(`/trade/${t.id}`)}
                   aria-label="View"
                 >
                   <Eye className="h-3.5 w-3.5" />
@@ -294,7 +295,6 @@ export default function Journal() {
       )}
 
       <CloseTradeDialog trade={closing} onClose={() => setClosing(null)} />
-      <TradeDetailDialog trade={viewing} onClose={() => setViewing(null)} />
       <EditTradeDialog trade={editing} onClose={() => setEditing(null)} />
       <ImportTradesDialog
         open={importing}

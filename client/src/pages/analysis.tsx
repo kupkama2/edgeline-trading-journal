@@ -10,10 +10,10 @@ import { StyleSwitcher } from "@/components/style-switcher";
 import { ImportCsvDialog } from "@/components/import-csv";
 import { EquityCurve } from "@/components/equity-curve";
 import { ExcursionChart } from "@/components/excursion-chart";
-import { TradeDetailDialog } from "@/components/trade-dialogs";
+import { RDistributionChart } from "@/components/r-distribution";
+import { describeShape, rDistribution } from "@shared/distribution";
 import { setJumpDay } from "@/lib/jump";
 import { useLocation } from "wouter";
-import type { TradeWithTags } from "@shared/schema";
 import {
   byAccount,
   byHighlight,
@@ -180,8 +180,6 @@ export default function Analysis() {
   const { data: tags = [] } = useMistakeTags();
   const scoped = useStyleScopedTrades(trades);
   const [, navigate] = useLocation();
-  // Every chart mark stands for a real row; clicking one opens it.
-  const [viewing, setViewing] = useState<TradeWithTags | null>(null);
   const [tab, setTab] = useState<TabId>("hour");
   const [importOpen, setImportOpen] = useState(false);
   const [horizon, setHorizon] = useState(100);
@@ -197,6 +195,8 @@ export default function Analysis() {
     [scoped, horizon, blocky],
   );
   const missed = useMemo(() => missedStats(scoped), [scoped]);
+  const dist = useMemo(() => rDistribution(scoped), [scoped]);
+  const shape = useMemo(() => (dist ? describeShape(dist) : null), [dist]);
   const exc = useMemo(() => excursions(scoped), [scoped]);
   const excSummary = useMemo(() => summariseExcursions(exc), [exc]);
 
@@ -336,6 +336,55 @@ export default function Analysis() {
         )}
       </Card>
 
+      {/* --------------------------- R distribution -------------------------- */}
+      {dist && (
+        <Card className="border-card-border bg-card p-4">
+          <div className="mb-3">
+            <h2 className="text-sm font-semibold tracking-tight">The shape of the edge</h2>
+            <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
+              Every closed trade sorted into {dist.binSize}R buckets. Expectancy is one number;
+              this is the distribution it came from.
+            </p>
+          </div>
+          <RDistributionChart d={dist} />
+          <div className="mt-3 grid grid-cols-2 gap-4 sm:grid-cols-4">
+            <Stat
+              label="Typical trade"
+              value={fmtR(dist.medianR)}
+              hint="median — half above, half below"
+              tone={dist.medianR >= 0 ? "good" : "bad"}
+              testId="stat-median-r"
+            />
+            <Stat
+              label="Average trade"
+              value={fmtR(dist.meanR)}
+              hint="expectancy per trade"
+              tone={dist.meanR >= 0 ? "good" : "bad"}
+            />
+            <Stat
+              label="Best single win"
+              value={`${Math.round(dist.topWinShare * 100)}%`}
+              hint="of everything you won"
+              tone={dist.topWinShare >= 0.4 ? "bad" : undefined}
+              testId="stat-top-win-share"
+            />
+            <Stat
+              label="Range"
+              value={`${fmtR(dist.worstR)} … ${fmtR(dist.bestR)}`}
+              hint={`${dist.count} closed trades`}
+            />
+          </div>
+          {shape && (
+            <p
+              className="mt-3 text-[11px] leading-snug text-muted-foreground"
+              data-testid="text-shape-verdict"
+            >
+              {shape}
+            </p>
+          )}
+        </Card>
+      )}
+
       {/* ------------------------ MAE / MFE excursion ------------------------ */}
       <Card className="border-card-border bg-card p-4">
         <div className="mb-3">
@@ -355,7 +404,7 @@ export default function Analysis() {
           <>
             <ExcursionChart
               rows={exc}
-              onSelect={(id) => setViewing(scoped.find((t) => t.id === id) ?? null)}
+              onSelect={(id) => navigate(`/trade/${id}`)}
             />
             {excSummary && (
               <div className="mt-3 grid grid-cols-2 gap-4 sm:grid-cols-4">
@@ -605,7 +654,6 @@ export default function Analysis() {
       )}
 
       <ImportCsvDialog open={importOpen} onClose={() => setImportOpen(false)} />
-      <TradeDetailDialog trade={viewing} onClose={() => setViewing(null)} />
     </div>
   );
 }

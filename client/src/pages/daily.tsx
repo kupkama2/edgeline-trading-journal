@@ -16,9 +16,8 @@ import {
 import { useDailyNotes, useSaveDailyNote, useTrades } from "@/lib/data";
 import { useStyleScopedTrades } from "@/lib/style-filter";
 import { takeJumpDay } from "@/lib/jump";
+import { useLocation } from "wouter";
 import { StyleSwitcher } from "@/components/style-switcher";
-import { TradeDetailDialog } from "@/components/trade-dialogs";
-import type { TradeWithTags } from "@shared/schema";
 import { dayKey, monthGrid, summarizeDays, tradesOnDay } from "@shared/daily";
 import { computeMetrics, fmtMoney, fmtR } from "@shared/metrics";
 
@@ -48,12 +47,12 @@ export default function Daily() {
   const scoped = useStyleScopedTrades(trades);
   const { data: notes = [] } = useDailyNotes();
   const save = useSaveDailyNote();
+  const [, navigate] = useLocation();
 
   const today = dayKey(new Date());
   // A click on the equity curve arrives as a pending day; consuming it here
   // means the calendar opens on the day that was clicked, month and all.
   const [selected, setSelected] = useState(() => takeJumpDay() ?? today);
-  const [viewing, setViewing] = useState<TradeWithTags | null>(null);
   const [view, setView] = useState(() => {
     const d = selected ? new Date(`${selected}T12:00:00`) : new Date();
     const valid = !isNaN(d.getTime()) ? d : new Date();
@@ -330,7 +329,7 @@ export default function Daily() {
                   return (
                     <li
                       key={t.id}
-                      onClick={() => setViewing(t)}
+                      onClick={() => navigate(`/trade/${t.id}`)}
                       className="flex cursor-pointer items-center gap-2 rounded-md border border-border/60 px-2.5 py-1.5 transition-colors hover:border-primary/50"
                       data-testid={`row-day-trade-${t.id}`}
                     >
@@ -375,8 +374,6 @@ export default function Daily() {
           </Card>
         </div>
       </div>
-
-      <TradeDetailDialog trade={viewing} onClose={() => setViewing(null)} />
     </div>
   );
 }
