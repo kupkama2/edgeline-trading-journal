@@ -17,6 +17,7 @@ export function trade(over: Partial<TradeWithTags> = {}): TradeWithTags {
     entryPrice: 100,
     initialStop: 90,
     initialTarget: 130,
+    extraTargets: null,
     entryTime: "2026-08-03T09:30:00.000Z",
     exitPrice: 120,
     exitTime: "2026-08-03T10:00:00.000Z",
@@ -35,6 +36,7 @@ export function trade(over: Partial<TradeWithTags> = {}): TradeWithTags {
     playbook: null,
     mistakeTagIds: [],
     imageCount: 0,
+    fills: [],
     ...over,
   };
 }

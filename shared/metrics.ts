@@ -1,4 +1,5 @@
-import type { Trade, TradeWithTags } from "./schema";
+import type { Trade, TradeFill, TradeWithTags } from "./schema";
+import { totalPnLWithFills } from "./fills";
 
 export interface TradeMetrics {
   risk: number; // per-unit risk in price terms
@@ -40,7 +41,7 @@ function dollarsPerPoint(t: Trade): number {
   return positionQty(t) * (t.pointValue ?? 1);
 }
 
-export function computeMetrics(t: Trade): TradeMetrics {
+export function computeMetrics(t: Trade & { fills?: TradeFill[] }): TradeMetrics {
   const sign = t.direction === "long" ? 1 : -1;
   const perPoint = dollarsPerPoint(t);
   // A pending trade has no stop yet, so it has no 1R. Guard explicitly: without
@@ -50,10 +51,29 @@ export function computeMetrics(t: Trade): TradeMetrics {
   const riskDollars = risk * perPoint;
   const safe = risk > 0;
 
-  const actualR =
-    safe && t.exitPrice != null ? (sign * (t.exitPrice - t.entryPrice)) / risk : null;
+  /*
+   * A trade with fills settles by the cash-flow ledger: partials banked P&L on
+   * the way, adds moved the average entry, and the close settles the rest.
+   * R divides that total by the ORIGINAL planned risk (entry-to-stop on the
+   * opening size), so scaling in raises exposure without quietly re-basing
+   * every R the journal reports. With no fills this is the plain single-fill
+   * arithmetic it always was — same numbers to the last bit.
+   */
+  const hasFills = (t.fills?.length ?? 0) > 0;
+  const filledPnL = hasFills ? totalPnLWithFills(t) : null;
+
   const actualPnL =
-    t.exitPrice != null ? sign * (t.exitPrice - t.entryPrice) * perPoint : null;
+    filledPnL != null
+      ? filledPnL
+      : t.exitPrice != null
+        ? sign * (t.exitPrice - t.entryPrice) * perPoint
+        : null;
+  const actualR =
+    safe && t.exitPrice != null
+      ? filledPnL != null && riskDollars > 0
+        ? filledPnL / riskDollars
+        : (sign * (t.exitPrice - t.entryPrice)) / risk
+      : null;
   const mfeR = safe && t.mfe != null ? (sign * (t.mfe - t.entryPrice)) / risk : null;
   const maeR = safe && t.mae != null ? (sign * (t.mae - t.entryPrice)) / risk : null;
 

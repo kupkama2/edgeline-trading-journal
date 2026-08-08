@@ -5,10 +5,11 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowDownRight, ArrowUpRight, Camera, CheckCircle2, Eye, Pencil, Trash2, X } from "lucide-react";
+import { ArrowDownRight, ArrowUpRight, Camera, CheckCircle2, Eye, Minus, Pencil, Plus, Trash2, X } from "lucide-react";
 import { useUpdateTrade, useDeleteTrade } from "@/lib/data";
-import { type TradeWithTags } from "@shared/schema";
+import { parseExtraTargets, type TradeWithTags } from "@shared/schema";
 import { computeMetrics, fmtMoney, fmtR, EXIT_REASON_LABELS } from "@shared/metrics";
+import { positionLedger } from "@shared/fills";
 import { StyleChip } from "@/components/style-switcher";
 import { num, parseTags, RationaleTags } from "@/components/trade-shared";
 
@@ -23,13 +24,19 @@ export function OpenTradeRow({
   onView,
   onEdit,
   onResolve,
+  onAdd,
+  onTake,
 }: {
   t: TradeWithTags;
   onSelect: () => void;
   onView: () => void;
   onEdit: () => void;
   onResolve: () => void;
+  onAdd: () => void;
+  onTake: () => void;
 }) {
+  const led = positionLedger(t);
+  const scaled = t.fills.length > 0;
   // Pending trades have no stop or target yet, so there is no R:R to show.
   const risk = t.initialStop == null ? 0 : Math.abs(t.entryPrice - t.initialStop);
   const rr =
@@ -108,8 +115,14 @@ export function OpenTradeRow({
           <span>
             SL <span className="text-primary">{num(t.initialStop)}</span>
           </span>
-          <span>
-            TP <span className="text-emerald-400">{num(t.initialTarget)}</span>
+          <span data-testid={`text-tps-${t.id}`}>
+            TP{" "}
+            <span className="text-emerald-400">
+              {[t.initialTarget, ...parseExtraTargets(t.extraTargets)]
+                .filter((x): x is number => x != null)
+                .map((x) => num(x))
+                .join(" → ")}
+            </span>
           </span>
           <span>R:R {num(rr, 1)}</span>
           <span className="ml-auto">
@@ -123,6 +136,42 @@ export function OpenTradeRow({
         </div>
         <RationaleTags tags={rationaleTags} />
       </button>
+
+      {/* Scaling controls live on the row because that is where the decision
+          happens — mid-trade, fast. The ledger line only appears once the
+          trade has actually scaled; a plain one-fill position stays quiet. */}
+      <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-border/40 pt-2">
+        {scaled && (
+          <span className="font-mono text-[10px] text-muted-foreground" data-testid={`text-ledger-${t.id}`}>
+            avg {num(led.avgEntry, 4)} · {num(led.openQty, 4)} on ·{" "}
+            <span className={led.realizedPnL >= 0 ? "text-emerald-400" : "text-primary"}>
+              {fmtMoney(led.realizedPnL)} banked
+            </span>
+          </span>
+        )}
+        <div className="ml-auto flex gap-1">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-6 px-2 text-[10px]"
+            onClick={onTake}
+            data-testid={`button-partial-${t.id}`}
+          >
+            <Minus className="mr-0.5 h-3 w-3" /> Take
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-6 px-2 text-[10px]"
+            onClick={onAdd}
+            data-testid={`button-add-${t.id}`}
+          >
+            <Plus className="mr-0.5 h-3 w-3" /> Add
+          </Button>
+        </div>
+      </div>
     </div>
   );
 }

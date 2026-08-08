@@ -11,7 +11,7 @@ import { useToast } from "@/hooks/use-toast";
 import { ClipboardList, Loader2, Pencil } from "lucide-react";
 import { useMistakeTags, useUpdateTrade, useAddTradeImage, archiveDataUrl, parseScreenshot, fileToDownscaledDataUrl } from "@/lib/data";
 import { TradeImageGallery } from "@/components/trade-images";
-import { parsePlaybook, type TradeWithTags } from "@shared/schema";
+import { parseExtraTargets, parsePlaybook, type TradeWithTags } from "@shared/schema";
 import { computeMetrics, fmtR, EXIT_REASON_LABELS } from "@shared/metrics";
 import { Dropzone, EXIT_REASONS, RationaleTags, localNow, num, parseTags, toIso } from "@/components/trade-shared";
 
@@ -179,8 +179,15 @@ export function CloseTradeDialog({
                 <p className="text-primary">{num(trade.initialStop)}</p>
               </div>
               <div>
-                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Target</p>
-                <p className="text-emerald-400">{num(trade.initialTarget)}</p>
+                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  {parseExtraTargets(trade.extraTargets).length > 0 ? "Targets" : "Target"}
+                </p>
+                <p className="text-emerald-400">
+                  {[trade.initialTarget, ...parseExtraTargets(trade.extraTargets)]
+                    .filter((x): x is number => x != null)
+                    .map((x) => num(x))
+                    .join(" → ") || "—"}
+                </p>
               </div>
             </div>
 
@@ -431,6 +438,8 @@ export function EditTradeDialog({
   const [exitReason, setExitReason] = useState<string | null>(null);
   const [nmo, setNmo] = useState<string | null>(null);
   const [selectedTags, setSelectedTags] = useState<number[]>([]);
+  // Scale-out levels beyond TP1 — editable strings, serialized on save.
+  const [extraTps, setExtraTps] = useState<string[]>([]);
 
   useEffect(() => {
     if (!trade) return;
@@ -455,6 +464,7 @@ export function EditTradeDialog({
     setExitReason(trade.exitReason ?? null);
     setNmo(trade.noManagementOutcome ?? null);
     setSelectedTags(trade.mistakeTagIds);
+    setExtraTps(parseExtraTargets(trade.extraTargets).map(String));
   }, [trade]);
 
   const set = (k: string) => (e: { target: { value: string } }) =>
@@ -514,6 +524,10 @@ export function EditTradeDialog({
         initialStop,
         initialTarget,
         entryTime: f.entryTime ? toIso(f.entryTime) : trade.entryTime,
+        extraTargets: (() => {
+          const xs = extraTps.map(Number).filter((x) => isFinite(x) && x > 0);
+          return xs.length ? JSON.stringify(xs) : null;
+        })(),
         exitPrice: numOrNull(f.exitPrice),
         exitTime: f.exitTime ? toIso(f.exitTime) : null,
         exitReason: (exitReason as any) ?? null,
@@ -590,7 +604,62 @@ export function EditTradeDialog({
               {field("size", "Size")}
               {field("entryPrice", "Entry")}
               {field("initialStop", "Stop")}
-              {field("initialTarget", "Target")}
+              <div className="space-y-1">
+                <div className="flex items-center justify-between">
+                  <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                    {extraTps.length > 0 ? "TP1" : "Target"}
+                  </label>
+                  {extraTps.length < 3 && (
+                    <button
+                      type="button"
+                      onClick={() => setExtraTps((x) => [...x, ""])}
+                      title="Add another take-profit level"
+                      data-testid="button-edit-add-tp"
+                      className="rounded px-1 text-[11px] leading-none text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary"
+                    >
+                      +
+                    </button>
+                  )}
+                </div>
+                <Input
+                  type="number"
+                  step="any"
+                  inputMode="decimal"
+                  value={f.initialTarget ?? ""}
+                  onChange={set("initialTarget")}
+                  className="h-9 font-mono text-sm"
+                  data-testid="input-edit-initialTarget"
+                />
+              </div>
+              {extraTps.map((tp, i) => (
+                <div key={i} className="space-y-1">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                      TP{i + 2}
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setExtraTps((x) => x.filter((_, j) => j !== i))}
+                      title="Remove this level"
+                      data-testid={`button-edit-remove-tp-${i}`}
+                      className="rounded px-1 text-[11px] leading-none text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+                    >
+                      ×
+                    </button>
+                  </div>
+                  <Input
+                    type="number"
+                    step="any"
+                    inputMode="decimal"
+                    value={tp}
+                    onChange={(e) =>
+                      setExtraTps((x) => x.map((v, j) => (j === i ? e.target.value : v)))
+                    }
+                    className="h-9 font-mono text-sm"
+                    data-testid={`input-edit-extra-tp-${i}`}
+                  />
+                </div>
+              ))}
               {field("entryTime", "Entry time", "datetime-local")}
               {field("exitTime", "Exit time", "datetime-local")}
               {field("exitPrice", "Exit price")}
@@ -810,8 +879,15 @@ export function TradeDetailDialog({
                 <p className="text-primary">{num(trade.initialStop)}</p>
               </div>
               <div>
-                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Target</p>
-                <p className="text-emerald-400">{num(trade.initialTarget)}</p>
+                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  {parseExtraTargets(trade.extraTargets).length > 0 ? "Targets" : "Target"}
+                </p>
+                <p className="text-emerald-400">
+                  {[trade.initialTarget, ...parseExtraTargets(trade.extraTargets)]
+                    .filter((x): x is number => x != null)
+                    .map((x) => num(x))
+                    .join(" → ") || "—"}
+                </p>
               </div>
             </div>
 

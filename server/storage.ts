@@ -6,6 +6,7 @@ import {
   tradingStyles,
   dailyNotes,
   tradeImages,
+  tradeFills,
 } from "@shared/schema";
 import type {
   InsertTrade,
@@ -19,6 +20,7 @@ import type {
   InsertTradingStyle,
   DailyNote,
   TradeImage,
+  TradeFill,
 } from "@shared/schema";
 import { DEMON_TAXONOMY, DEMON_LEGACY_ALIASES } from "@shared/demons";
 import { drizzle } from "drizzle-orm/postgres-js";
@@ -94,6 +96,7 @@ CREATE TABLE IF NOT EXISTS trades (
   -- Nullable: a pending trade is a resting order with no risk defined yet.
   initial_stop DOUBLE PRECISION,
   initial_target DOUBLE PRECISION,
+  extra_targets TEXT,
   entry_time TEXT NOT NULL,
   exit_price DOUBLE PRECISION,
   exit_time TEXT,
@@ -128,6 +131,8 @@ ALTER TABLE trades ADD COLUMN IF NOT EXISTS rationale TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS rationale_tags TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS playbook TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS style_id INTEGER;
+-- Planned scale-out levels beyond TP1, as a JSON number[]. NULL = one target.
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS extra_targets TEXT;
 CREATE TABLE IF NOT EXISTS mistake_tags (
   id SERIAL PRIMARY KEY,
   name TEXT NOT NULL,
@@ -161,6 +166,16 @@ CREATE TABLE IF NOT EXISTS trade_images (
 );
 -- The one query pattern is "images for this trade" — index it.
 CREATE INDEX IF NOT EXISTS trade_images_trade_id ON trade_images (trade_id);
+CREATE TABLE IF NOT EXISTS trade_fills (
+  id SERIAL PRIMARY KEY,
+  trade_id INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  price DOUBLE PRECISION NOT NULL,
+  size DOUBLE PRECISION NOT NULL,
+  time TEXT NOT NULL,
+  note TEXT
+);
+CREATE INDEX IF NOT EXISTS trade_fills_trade_id ON trade_fills (trade_id);
 CREATE TABLE IF NOT EXISTS daily_notes (
   id SERIAL PRIMARY KEY,
   day TEXT NOT NULL UNIQUE,
@@ -218,6 +233,9 @@ export interface IStorage {
 
   listDailyNotes(): Promise<DailyNote[]>;
   upsertDailyNote(day: string, body: string): Promise<DailyNote>;
+
+  addFill(tradeId: number, f: { kind: string; price: number; size: number; time: string; note?: string | null }): Promise<TradeFill>;
+  deleteFill(id: number): Promise<void>;
 
   listTradeImages(tradeId: number): Promise<TradeImage[]>;
   imageUsage(): Promise<{ images: number; bytes: number }>;
@@ -338,23 +356,30 @@ export class DatabaseStorage implements IStorage {
       .from(tradeImages)
       .groupBy(tradeImages.tradeId);
     const countFor = new Map(counts.map((c) => [c.tradeId, c.n]));
+    const allFills = await db.select().from(tradeFills).orderBy(tradeFills.time);
     return rows.map((t) => ({
       ...t,
       mistakeTagIds: links.filter((l) => l.tradeId === t.id).map((l) => l.mistakeTagId),
       imageCount: countFor.get(t.id) ?? 0,
+      fills: allFills.filter((f) => f.tradeId === t.id),
     }));
   }
 
   async getTrade(id: number): Promise<TradeWithTags | undefined> {
     const [t] = await db.select().from(trades).where(eq(trades.id, id));
     if (!t) return undefined;
-    return { ...t, mistakeTagIds: await this.tagIdsFor(id), imageCount: await this.imageCountFor(id) };
+    return {
+      ...t,
+      mistakeTagIds: await this.tagIdsFor(id),
+      imageCount: await this.imageCountFor(id),
+      fills: await this.fillsFor(id),
+    };
   }
 
   async createTrade(t: InsertTrade, tagIds: number[] = []): Promise<TradeWithTags> {
     const [row] = await db.insert(trades).values(t as any).returning();
     if (tagIds.length) await this.setTags(row.id, tagIds);
-    return { ...row, mistakeTagIds: tagIds, imageCount: 0 };
+    return { ...row, mistakeTagIds: tagIds, imageCount: 0, fills: [] };
   }
 
   async updateTrade(
@@ -373,13 +398,38 @@ export class DatabaseStorage implements IStorage {
       ...row,
       mistakeTagIds: await this.tagIdsFor(id),
       imageCount: await this.imageCountFor(id),
+      fills: await this.fillsFor(id),
     };
   }
 
   async deleteTrade(id: number): Promise<void> {
     await db.delete(tradeMistakes).where(eq(tradeMistakes.tradeId, id));
     await db.delete(tradeImages).where(eq(tradeImages.tradeId, id));
+    await db.delete(tradeFills).where(eq(tradeFills.tradeId, id));
     await db.delete(trades).where(eq(trades.id, id));
+  }
+
+  private async fillsFor(tradeId: number): Promise<TradeFill[]> {
+    return db
+      .select()
+      .from(tradeFills)
+      .where(eq(tradeFills.tradeId, tradeId))
+      .orderBy(tradeFills.time);
+  }
+
+  async addFill(
+    tradeId: number,
+    f: { kind: string; price: number; size: number; time: string; note?: string | null },
+  ): Promise<TradeFill> {
+    const [row] = await db
+      .insert(tradeFills)
+      .values({ tradeId, kind: f.kind, price: f.price, size: f.size, time: f.time, note: f.note ?? null })
+      .returning();
+    return row;
+  }
+
+  async deleteFill(id: number): Promise<void> {
+    await db.delete(tradeFills).where(eq(tradeFills.id, id));
   }
 
   private async imageCountFor(tradeId: number): Promise<number> {
