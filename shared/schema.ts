@@ -74,6 +74,14 @@ export const trades = pgTable("trades", {
   // insertTradeSchema's refinement.
   initialStop: doublePrecision("initial_stop"),
   initialTarget: doublePrecision("initial_target"),
+  /**
+   * Planned scale-out levels beyond the first target, stored as a JSON
+   * number[] (same text-column convention as rationaleTags). initialTarget
+   * stays TP1 and keeps driving every R:R and planned-R figure — extra TPs
+   * are where the partials are MEANT to happen, not a redefinition of the
+   * plan's reward. NULL for the common single-target trade.
+   */
+  extraTargets: text("extra_targets"),
   entryTime: text("entry_time").notNull(), // ISO
   exitPrice: doublePrecision("exit_price"),
   exitTime: text("exit_time"),
@@ -99,6 +107,14 @@ export const trades = pgTable("trades", {
   rationale: text("rationale"), // raw quick-entry comment, e.g. "vah, 786 retest"
   rationaleTags: text("rationale_tags"), // JSON string[] — AI-normalized setup concepts
   playbook: text("playbook"), // JSON TradePlaybook — optional setup/edge checklist
+  /**
+   * Where the trade was executed — "Binance Futures", "Apex eval", "IBKR
+   * real". Free text on purpose: accounts come and go (prop evals expire,
+   * brokers change) and a managed table would make every one of them a
+   * chore. The entry card re-offers every name already used, so spelling
+   * stays consistent without any admin UI. NULL = not recorded.
+   */
+  account: text("account"),
 });
 
 /* ------------------------------- playbook ------------------------------ */
@@ -130,6 +146,23 @@ export function parsePlaybook(json: string | null | undefined): TradePlaybook | 
     return hasAny ? p : null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Read the extra-TP column back into numbers, defensively: the column is free
+ * text, so anything that isn't a positive finite number is dropped rather than
+ * allowed to poison a price display. Order is preserved — TP2 comes back
+ * before TP3 because that is the order they were planned in.
+ */
+export function parseExtraTargets(json: string | null | undefined): number[] {
+  if (!json) return [];
+  try {
+    const arr = JSON.parse(json);
+    if (!Array.isArray(arr)) return [];
+    return arr.filter((x): x is number => typeof x === "number" && isFinite(x) && x > 0);
+  } catch {
+    return [];
   }
 }
 
@@ -333,6 +366,43 @@ export const addTradeImageSchema = z.object({
 
 export type TradeImage = typeof tradeImages.$inferSelect;
 
+/* ============================= trade fills ============================= */
+
+/**
+ * Scaling events on a running trade: profit taken off, or size added on.
+ *
+ * A fill is not a trade — it is a movement inside one position's life, and
+ * modelling it that way (rather than as sibling trades) is what keeps the
+ * journal honest: one idea, one row, one R, however many pieces it was
+ * executed in. Adds move the weighted average entry; partials realise P&L
+ * against that average; the final close settles whatever is left.
+ *
+ * `size` is denominated in the TRADE's sizeUnit — contracts for a futures
+ * book, USD notional for crypto — so the number typed here is the number the
+ * venue showed.
+ */
+export const tradeFills = pgTable("trade_fills", {
+  id: serial("id").primaryKey(),
+  tradeId: integer("trade_id").notNull(),
+  kind: text("kind").notNull(), // 'add' | 'partial'
+  price: doublePrecision("price").notNull(),
+  size: doublePrecision("size").notNull(),
+  time: text("time").notNull(), // ISO
+  note: text("note"),
+});
+
+export const fillKindEnum = z.enum(["add", "partial"]);
+
+export const addFillSchema = z.object({
+  kind: fillKindEnum,
+  price: z.number().positive(),
+  size: z.number().positive(),
+  time: z.string().optional(),
+  note: z.string().max(300).nullable().optional(),
+});
+
+export type TradeFill = typeof tradeFills.$inferSelect;
+
 /* ===================== API payloads (screenshots) =================== */
 
 export const parseScreenshotSchema = z.object({
@@ -414,4 +484,7 @@ export interface TradeWithTags extends Trade {
   /** How many screenshots are attached — the images themselves never ride in
       the list; they're fetched per trade when the detail opens. */
   imageCount: number;
+  /** Scaling events, oldest first. A handful of floats per row, so unlike
+      images they ride with the list — the metrics need them everywhere. */
+  fills: TradeFill[];
 }

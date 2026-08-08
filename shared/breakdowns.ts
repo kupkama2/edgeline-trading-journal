@@ -131,6 +131,19 @@ export function byMistake(trades: TradeWithTags[], tags: MistakeTag[]): Slice[] 
   ).sort((a, b) => a.totalR - b.totalR); // costliest first
 }
 
+/**
+ * By account — prop eval vs live vs exchange. The same trade idea can behave
+ * very differently under different rules (trailing drawdown, fees, leverage),
+ * and this is where that difference becomes a number. Trades logged before
+ * accounts existed carry none and simply sit this table out.
+ */
+export function byAccount(trades: TradeWithTags[]): Slice[] {
+  return sliceBy(trades, (t) => {
+    const a = t.account?.trim();
+    return a ? { key: a, label: a } : null;
+  }).sort((a, b) => b.count - a.count);
+}
+
 /** By setup, read from the AI-normalised rationale tags. */
 export function bySetup(trades: TradeWithTags[]): Slice[] {
   return sliceBy(trades, (t) => {

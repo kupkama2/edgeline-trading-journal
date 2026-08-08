@@ -11,6 +11,7 @@ import {
   insertWeeklyReviewSchema,
   upsertDailyNoteSchema,
   addTradeImageSchema,
+  addFillSchema,
   parseScreenshotSchema,
   analyzeRationaleSchema,
   directionEnum,
@@ -25,6 +26,7 @@ import {
   outcomePrompt,
 } from "./prompts";
 import { tradesToCsv } from "@shared/csv";
+import { validateFill } from "@shared/fills";
 import {
   buildInsightsBundle,
   startOfWeek,
@@ -421,6 +423,35 @@ export async function registerRoutes(
 
   app.delete("/api/trades/:id", async (req, res) => {
     await storage.deleteTrade(Number(req.params.id));
+    res.status(204).end();
+  });
+
+  /* ------------------------------ trade fills ------------------------------ */
+  /*
+   * Scaling events on a running trade. The shared validator enforces the two
+   * rules that keep the model honest: fills only on open trades, and a partial
+   * may never flatten the position — the last piece is the exit, and it
+   * belongs in the close flow where the reason and the path get recorded.
+   */
+  app.post("/api/trades/:id/fills", async (req, res) => {
+    const parsed = addFillSchema.safeParse(req.body);
+    if (!parsed.success)
+      return res.status(400).json({ message: "Invalid fill", issues: parsed.error.issues });
+    const trade = await storage.getTrade(Number(req.params.id));
+    if (!trade) return res.status(404).json({ message: "Trade not found" });
+
+    const problem = validateFill(trade, parsed.data);
+    if (problem) return res.status(400).json({ message: problem });
+
+    const fill = await storage.addFill(trade.id, {
+      ...parsed.data,
+      time: parsed.data.time ?? new Date().toISOString(),
+    });
+    res.status(201).json(fill);
+  });
+
+  app.delete("/api/fills/:id", async (req, res) => {
+    await storage.deleteFill(Number(req.params.id));
     res.status(204).end();
   });
 

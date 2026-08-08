@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { byHour, byWeekday, dailyResults, sliceBy } from "../shared/breakdowns";
+import { byAccount, byHour, byWeekday, dailyResults, sliceBy } from "../shared/breakdowns";
 import { drawdown, streaks } from "../shared/streaks";
 import { MIN_SAMPLE, simulate } from "../shared/montecarlo";
 import { missedStats, plannedR } from "../shared/missed";
@@ -39,6 +39,19 @@ describe("breakdowns", () => {
     ]);
     expect(rows).toHaveLength(2);
     expect(rows[0].count).toBe(1);
+    expect(rows[1].count).toBe(1);
+  });
+
+  it("buckets by account and leaves unlabelled trades out", () => {
+    const rows = byAccount([
+      { ...at(2026, 8, 3, 9, 2), account: "Apex eval" },
+      { ...at(2026, 8, 4, 9, -1), account: "Apex eval" },
+      { ...at(2026, 8, 4, 10, 1), account: "Binance" },
+      at(2026, 8, 4, 11, 1), // pre-accounts trade: no bucket
+    ]);
+    expect(rows.map((r) => r.label)).toEqual(["Apex eval", "Binance"]);
+    expect(rows[0].count).toBe(2);
+    expect(rows[0].expectancyR).toBe(0.5);
     expect(rows[1].count).toBe(1);
   });
 

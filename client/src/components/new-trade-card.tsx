@@ -39,6 +39,7 @@ const setupFormSchema = z.object({
 type SetupForm = z.input<typeof setupFormSchema>;
 
 const RISK_BUDGET_KEY = "edgeline.riskBudget";
+const ACCOUNT_KEY = "edgeline.lastAccount";
 
 export function NewTradeCard({
   onOrdersDetected,
@@ -105,6 +106,21 @@ export function NewTradeCard({
   const [riskBudget, setRiskBudget] = useState<string>(
     () => localStorage.getItem(RISK_BUDGET_KEY) ?? "",
   );
+  // Planned scale-out levels beyond the first target. Most trades have one
+  // TP, so this starts empty and only the "+" reveals more rows.
+  const [extraTps, setExtraTps] = useState<string[]>([]);
+  // Which account the trade runs in. Sticky like the risk budget — you trade
+  // the same account all session, so it should not need re-picking per trade.
+  const [account, setAccount] = useState<string>(
+    () => localStorage.getItem(ACCOUNT_KEY) ?? "",
+  );
+  // Every account name already on a trade, so picking stays one click and one
+  // spelling. Free text underneath it all: no accounts table to administer.
+  const knownAccounts = useMemo(() => {
+    const names = new Set<string>();
+    for (const t of allTrades) if (t.account?.trim()) names.add(t.account.trim());
+    return Array.from(names).sort();
+  }, [allTrades]);
 
   const form = useForm<SetupForm>({
     resolver: zodResolver(setupFormSchema) as any,
@@ -274,6 +290,9 @@ export function NewTradeCard({
       ? JSON.stringify(playbookPayload)
       : null;
 
+    // Extra TPs: keep only real prices, in the order they were planned.
+    const extras = extraTps.map(Number).filter((x) => isFinite(x) && x > 0);
+
     const loggingClosed = closedMode && exitPrice !== "" && isFinite(Number(exitPrice));
     if (closedMode && !loggingClosed) {
       toast({ title: "Exit price required", variant: "destructive" });
@@ -290,6 +309,8 @@ export function NewTradeCard({
         entryPrice: data.entryPrice,
         initialStop: data.initialStop,
         initialTarget: data.initialTarget,
+        extraTargets: extras.length ? JSON.stringify(extras) : null,
+        account: account.trim() || null,
         entryTime: toIso(data.entryTime),
         // Screenshots are parsed, not kept. A base64 chart is ~300x the size of
         // the trade record it produces, and chart replay lives in Tradesly /
@@ -334,6 +355,9 @@ export function NewTradeCard({
     setExitReason(null);
     setSelectedDemons([]);
     setPickedStyleId(null);
+    setExtraTps([]);
+    // The account survives the reset on purpose — next trade, same account.
+    localStorage.setItem(ACCOUNT_KEY, account.trim());
     setPb({ setupName: "", stopLogic: "", targetLogic: "", confidence: null, standAside: "" });
     form.reset({
       symbol: "",
@@ -586,6 +610,40 @@ export function NewTradeCard({
             </div>
           )}
 
+          <div className="space-y-1" data-testid="section-account-picker">
+            <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+              Account
+            </p>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {knownAccounts.map((a) => {
+                const on = account.trim() === a;
+                return (
+                  <button
+                    key={a}
+                    type="button"
+                    onClick={() => setAccount(on ? "" : a)}
+                    data-testid={`chip-account-${a}`}
+                    aria-pressed={on}
+                    className={`rounded-full border px-2.5 py-1 text-[11px] leading-tight transition-colors ${
+                      on
+                        ? "border-primary/60 bg-primary/15 text-primary"
+                        : "border-border text-muted-foreground hover:border-primary/40 hover:text-foreground"
+                    }`}
+                  >
+                    {a}
+                  </button>
+                );
+              })}
+              <Input
+                value={account}
+                onChange={(e) => setAccount(e.target.value)}
+                placeholder={knownAccounts.length ? "or a new one…" : "e.g. Apex eval, Binance…"}
+                className="h-7 w-40 text-[11px]"
+                data-testid="input-account"
+              />
+            </div>
+          </div>
+
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <FormField
               control={form.control}
@@ -700,7 +758,75 @@ export function NewTradeCard({
             />
             {numField("entryPrice", "Entry")}
             {numField("initialStop", "Stop")}
-            {numField("initialTarget", "Target")}
+
+            {/* First target plus optional extra TPs. TP1 stays the target the
+                R:R math runs on; the extras are the levels the partials are
+                planned at, so they read TP2/TP3 the way a bracket order does. */}
+            <FormField
+              control={form.control}
+              name="initialTarget"
+              render={({ field }) => (
+                <FormItem className="space-y-1">
+                  <div className="flex items-center justify-between">
+                    <FormLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                      {extraTps.length > 0 ? "TP1" : "Target"}
+                    </FormLabel>
+                    {extraTps.length < 3 && (
+                      <button
+                        type="button"
+                        onClick={() => setExtraTps((x) => [...x, ""])}
+                        title="Add another take-profit level"
+                        data-testid="button-add-tp"
+                        className="rounded px-1 text-[11px] leading-none text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary"
+                      >
+                        +
+                      </button>
+                    )}
+                  </div>
+                  <FormControl>
+                    <Input
+                      {...field}
+                      type="number"
+                      step="any"
+                      inputMode="decimal"
+                      className="h-9 font-mono text-sm"
+                      data-testid="input-initialTarget"
+                      value={(field.value as any) ?? ""}
+                    />
+                  </FormControl>
+                  <FormMessage className="text-[10px]" />
+                </FormItem>
+              )}
+            />
+            {extraTps.map((tp, i) => (
+              <div key={i} className="space-y-1">
+                <div className="flex items-center justify-between">
+                  <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                    TP{i + 2}
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setExtraTps((x) => x.filter((_, j) => j !== i))}
+                    title="Remove this level"
+                    data-testid={`button-remove-tp-${i}`}
+                    className="rounded px-1 text-[11px] leading-none text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+                  >
+                    ×
+                  </button>
+                </div>
+                <Input
+                  type="number"
+                  step="any"
+                  inputMode="decimal"
+                  value={tp}
+                  onChange={(e) =>
+                    setExtraTps((x) => x.map((v, j) => (j === i ? e.target.value : v)))
+                  }
+                  className="h-9 font-mono text-sm"
+                  data-testid={`input-extra-tp-${i}`}
+                />
+              </div>
+            ))}
 
             {/* Size from risk: type what the idea may cost, get the size that
                 costs exactly that. Same arithmetic as the metrics engine, so

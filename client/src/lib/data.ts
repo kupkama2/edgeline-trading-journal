@@ -115,6 +115,39 @@ export function useImportCsv() {
   });
 }
 
+/** Log a scaling event on a running trade. */
+export function useAddFill() {
+  return useMutation({
+    mutationFn: async (v: {
+      tradeId: number;
+      kind: "add" | "partial";
+      price: number;
+      size: number;
+      time?: string;
+      note?: string | null;
+    }) =>
+      (
+        await apiRequest("POST", `/api/trades/${v.tradeId}/fills`, {
+          kind: v.kind,
+          price: v.price,
+          size: v.size,
+          time: v.time,
+          note: v.note,
+        })
+      ).json(),
+    onSuccess: invalidateTrades,
+  });
+}
+
+export function useDeleteFill() {
+  return useMutation({
+    mutationFn: async (id: number) => {
+      await apiRequest("DELETE", `/api/fills/${id}`);
+    },
+    onSuccess: invalidateTrades,
+  });
+}
+
 /** Fetched per trade, only when a detail view opens — never with the list. */
 export function useTradeImages(tradeId: number | null) {
   return useQuery<TradeImage[]>({

@@ -11,6 +11,7 @@ import { ImportCsvDialog } from "@/components/import-csv";
 import { EquityCurve } from "@/components/equity-curve";
 import { ExcursionChart } from "@/components/excursion-chart";
 import {
+  byAccount,
   byHour,
   byMistake,
   bySetup,
@@ -42,6 +43,7 @@ const TABS = [
   { id: "hour", label: "Hour of day" },
   { id: "weekday", label: "Weekday" },
   { id: "symbol", label: "Instrument" },
+  { id: "account", label: "Account" },
   { id: "setup", label: "Setup" },
   { id: "mistake", label: "Demon" },
 ] as const;
@@ -184,6 +186,8 @@ export default function Analysis() {
         return byWeekday(scoped);
       case "symbol":
         return bySymbol(scoped);
+      case "account":
+        return byAccount(scoped);
       case "setup":
         return bySetup(scoped);
       case "mistake":
@@ -381,7 +385,9 @@ export default function Analysis() {
               ? "No setups tagged yet — write a rationale when logging and they appear here."
               : tab === "mistake"
                 ? "No demons tagged on closed trades yet."
-                : "No closed trades yet."
+                : tab === "account"
+                  ? "No accounts recorded yet — pick one when logging a trade and it shows up here."
+                  : "No closed trades yet."
           }
         />
         {(tab === "mistake" || tab === "setup") && rows.length > 0 && (

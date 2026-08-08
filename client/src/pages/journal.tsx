@@ -12,6 +12,7 @@ import { DailyGuardCard } from "@/components/daily-guard";
 import { StyleSwitcher } from "@/components/style-switcher";
 import { ImportTradesDialog } from "@/components/import-trades";
 import { MissedTradeDialog } from "@/components/missed-trade";
+import { FillDialog } from "@/components/fill-dialog";
 import { ResolveTradeDialog } from "@/components/resolve-trade";
 import { type ImportCandidate } from "@shared/import-parse";
 import { NewTradeCard } from "@/components/new-trade-card";
@@ -91,6 +92,8 @@ export default function Journal() {
   const [importing, setImporting] = useState(false);
   const [loggingMissed, setLoggingMissed] = useState(false);
   const [resolving, setResolving] = useState<TradeWithTags | null>(null);
+  // Which trade is being scaled, and which way.
+  const [filling, setFilling] = useState<{ trade: TradeWithTags; kind: "add" | "partial" } | null>(null);
   // The server already returns newest-first; this re-sorts client-side so
   // switching is instant and costs no round trip.
   const [sortBy, setSortBy] = useState<SortKey>("newest");
@@ -187,6 +190,8 @@ export default function Journal() {
                   onView={() => setViewing(t)}
                   onEdit={() => setEditing(t)}
                   onResolve={() => setResolving(t)}
+                  onAdd={() => setFilling({ trade: t, kind: "add" })}
+                  onTake={() => setFilling({ trade: t, kind: "partial" })}
                 />
               ))}
             </div>
@@ -301,6 +306,11 @@ export default function Journal() {
       />
       <ResolveTradeDialog trade={resolving} onClose={() => setResolving(null)} />
       <MissedTradeDialog open={loggingMissed} onClose={() => setLoggingMissed(false)} />
+      <FillDialog
+        trade={filling?.trade ?? null}
+        kind={filling?.kind ?? "partial"}
+        onClose={() => setFilling(null)}
+      />
     </div>
   );
 }
