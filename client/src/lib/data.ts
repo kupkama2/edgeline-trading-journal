@@ -1,6 +1,8 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "./queryClient";
 import type {
+  AccountSettings,
+  UpsertAccountSettings,
   DailyNote,
   TradeImage,
   InsertTrade,
@@ -25,6 +27,19 @@ export function useStyles() {
 
 export function useMistakeTags() {
   return useQuery<MistakeTag[]>({ queryKey: ["/api/mistake-tags"] });
+}
+
+export function useAccountSettings() {
+  return useQuery<AccountSettings[]>({ queryKey: ["/api/account-settings"] });
+}
+
+export function useSaveAccountSettings() {
+  return useMutation({
+    mutationFn: async (v: UpsertAccountSettings) =>
+      (await apiRequest("PUT", "/api/account-settings", v)).json(),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ["/api/account-settings"] }),
+  });
 }
 
 export function useWeeklyReviews() {

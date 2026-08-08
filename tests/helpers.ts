@@ -35,6 +35,8 @@ export function trade(over: Partial<TradeWithTags> = {}): TradeWithTags {
     rationaleTags: null,
     playbook: null,
     account: null,
+    fees: null,
+    highlights: null,
     mistakeTagIds: [],
     imageCount: 0,
     fills: [],

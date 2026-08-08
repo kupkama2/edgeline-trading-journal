@@ -12,6 +12,7 @@ import {
   upsertDailyNoteSchema,
   addTradeImageSchema,
   addFillSchema,
+  upsertAccountSettingsSchema,
   parseScreenshotSchema,
   analyzeRationaleSchema,
   directionEnum,
@@ -586,6 +587,19 @@ export async function registerRoutes(
   });
 
   /* ---------------------------- mistake tags ---------------------------- */
+  /* -------------------------- account settings -------------------------- */
+
+  app.get("/api/account-settings", async (_req, res) => {
+    res.json(await storage.listAccountSettings());
+  });
+
+  app.put("/api/account-settings", async (req, res) => {
+    const parsed = upsertAccountSettingsSchema.safeParse(req.body);
+    if (!parsed.success)
+      return res.status(400).json({ message: "Invalid account settings", issues: parsed.error.issues });
+    res.json(await storage.upsertAccountSettings(parsed.data));
+  });
+
   app.get("/api/mistake-tags", async (_req, res) => {
     res.json(await storage.listMistakeTags());
   });

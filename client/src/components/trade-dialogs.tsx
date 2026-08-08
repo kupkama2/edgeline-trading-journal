@@ -8,11 +8,15 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import { ClipboardList, Loader2, Pencil } from "lucide-react";
-import { useMistakeTags, useUpdateTrade, useAddTradeImage, archiveDataUrl, parseScreenshot, fileToDownscaledDataUrl } from "@/lib/data";
+import { ClipboardList, Loader2, Pencil, Sparkles } from "lucide-react";
+import { useAccountSettings, useMistakeTags, useUpdateTrade, useAddTradeImage, archiveDataUrl, parseScreenshot, fileToDownscaledDataUrl } from "@/lib/data";
+import { suggestFees } from "@shared/fees";
+import { knownHighlights, parseHighlights, serializeHighlights } from "@shared/highlights";
+import { AccountPicker, HighlightPicker } from "@/components/trade-pickers";
+import { useTrades } from "@/lib/data";
 import { TradeImageGallery } from "@/components/trade-images";
 import { parseExtraTargets, parsePlaybook, type TradeWithTags } from "@shared/schema";
-import { computeMetrics, fmtR, EXIT_REASON_LABELS } from "@shared/metrics";
+import { computeMetrics, fmtFees, fmtMoney, fmtR, EXIT_REASON_LABELS } from "@shared/metrics";
 import { Dropzone, EXIT_REASONS, RationaleTags, localNow, num, parseTags, toIso } from "@/components/trade-shared";
 
 /* ============================ close dialog ============================ */
@@ -39,6 +43,10 @@ export function CloseTradeDialog({
   const [nmo, setNmo] = useState<string | null>(null);
   const [selectedTags, setSelectedTags] = useState<number[]>([]);
   const [notes, setNotes] = useState("");
+  const [fees, setFees] = useState("");
+  const [highlights, setHighlights] = useState<string[]>([]);
+  const { data: feeSchedules = [] } = useAccountSettings();
+  const { data: allTrades = [] } = useTrades();
 
   const open = trade != null;
 
@@ -52,7 +60,17 @@ export function CloseTradeDialog({
     setNmo(null);
     setSelectedTags([]);
     setNotes("");
+    setFees("");
+    setHighlights([]);
   }
+
+  // One-click fee suggestions from the account's schedule, sized on THIS
+  // trade (fills included). Only when the account has a schedule.
+  const feeChips = useMemo(() => {
+    if (!trade?.account) return [];
+    const cfg = feeSchedules.find((s) => s.name === trade.account?.trim());
+    return suggestFees(trade, cfg, Number(exitPrice) || null);
+  }, [trade, feeSchedules, exitPrice]);
 
   async function handleFile(file: File) {
     if (!trade) return;
@@ -101,9 +119,10 @@ export function CloseTradeDialog({
       mae: mae ? Number(mae) : null,
       mfe: mfe ? Number(mfe) : null,
       noManagementOutcome: nmo,
+      fees: fees && isFinite(Number(fees)) ? Number(fees) : null,
       status: "closed",
     } as any);
-  }, [trade, exitPrice, mae, mfe, nmo]);
+  }, [trade, exitPrice, mae, mfe, nmo, fees]);
 
   async function save() {
     if (!trade) return;
@@ -121,6 +140,8 @@ export function CloseTradeDialog({
         mae: mae ? Number(mae) : null,
         mfe: mfe ? Number(mfe) : null,
         noManagementOutcome: (nmo as any) ?? null,
+        fees: fees && isFinite(Number(fees)) ? Number(fees) : null,
+        highlights: serializeHighlights(highlights),
         // Parsed for MAE/MFE, then discarded — see the note on setupScreenshot.
         outcomeScreenshot: null,
         notes: notes || trade.notes || null,
@@ -285,6 +306,35 @@ export function CloseTradeDialog({
                   data-testid="input-mfe"
                 />
               </div>
+              <div className="col-span-2 space-y-1">
+                <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  Fees $ <span className="normal-case">(both sides · optional — R and P&amp;L go net)</span>
+                </label>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <Input
+                    type="number"
+                    step="any"
+                    inputMode="decimal"
+                    value={fees}
+                    onChange={(e) => setFees(e.target.value)}
+                    placeholder="0"
+                    className="h-8 w-24 font-mono text-sm"
+                    data-testid="input-fees"
+                  />
+                  {feeChips.map((c) => (
+                    <button
+                      key={c.key}
+                      type="button"
+                      onClick={() => setFees(String(c.dollars))}
+                      data-testid={`chip-fee-${c.key}`}
+                      className="rounded-full border border-border px-2 py-0.5 font-mono text-[10px] text-muted-foreground transition-colors hover:border-primary/40 hover:text-primary"
+                      title="From this account's fee schedule"
+                    >
+                      {c.label} · ${c.dollars}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
 
             <div>
@@ -342,6 +392,16 @@ export function CloseTradeDialog({
               </div>
             </div>
 
+            {/* The other half of the same minute: name what you nailed. */}
+            <HighlightPicker
+              selected={highlights}
+              extra={knownHighlights(allTrades)}
+              onToggle={(h) =>
+                setHighlights((s) => (s.includes(h) ? s.filter((x) => x !== h) : [...s, h]))
+              }
+              testIdPrefix="close-highlight"
+            />
+
             <Textarea
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
@@ -387,6 +447,24 @@ export function CloseTradeDialog({
                     {fmtR(previewMetrics.managementDeltaR)}
                   </p>
                 </div>
+                {/* R rounds to two places, so a small commission can vanish
+                    from it entirely — the dollars are where fees show up. */}
+                {previewMetrics.fees > 0 && (
+                  <p
+                    className="col-span-3 border-t border-border/60 pt-2 text-[11px] text-muted-foreground"
+                    data-testid="preview-net"
+                  >
+                    net{" "}
+                    <span
+                      className={
+                        (previewMetrics.actualPnL ?? 0) >= 0 ? "text-emerald-400" : "text-primary"
+                      }
+                    >
+                      {fmtMoney(previewMetrics.actualPnL ?? 0)}
+                    </span>{" "}
+                    · {fmtMoney(previewMetrics.grossPnL ?? 0)} gross − {fmtFees(previewMetrics.fees)} fees
+                  </p>
+                )}
               </div>
             )}
 
@@ -448,6 +526,14 @@ export function EditTradeDialog({
   const [selectedTags, setSelectedTags] = useState<number[]>([]);
   // Scale-out levels beyond TP1 — editable strings, serialized on save.
   const [extraTps, setExtraTps] = useState<string[]>([]);
+  const [highlights, setHighlights] = useState<string[]>([]);
+  const [account, setAccount] = useState("");
+  const { data: allTrades = [] } = useTrades();
+  const knownAccounts = useMemo(() => {
+    const s = new Set<string>();
+    for (const t of allTrades) if (t.account?.trim()) s.add(t.account.trim());
+    return Array.from(s).sort();
+  }, [allTrades]);
 
   useEffect(() => {
     if (!trade) return;
@@ -468,12 +554,15 @@ export function EditTradeDialog({
       rationaleTags: parseTags(trade.rationaleTags).join(", "),
       notes: trade.notes ?? "",
       account: trade.account ?? "",
+      fees: trade.fees != null ? String(trade.fees) : "",
     });
     setDirection(trade.direction === "short" ? "short" : "long");
     setExitReason(trade.exitReason ?? null);
     setNmo(trade.noManagementOutcome ?? null);
     setSelectedTags(trade.mistakeTagIds);
     setExtraTps(parseExtraTargets(trade.extraTargets).map(String));
+    setHighlights(parseHighlights(trade.highlights));
+    setAccount(trade.account ?? "");
   }, [trade]);
 
   const set = (k: string) => (e: { target: { value: string } }) =>
@@ -546,7 +635,9 @@ export function EditTradeDialog({
         rationale: f.rationale.trim() || null,
         rationaleTags: rTags.length ? JSON.stringify(rTags) : null,
         notes: f.notes.trim() || null,
-        account: f.account?.trim() || null,
+        account: account.trim() || null,
+        fees: numOrNull(f.fees ?? ""),
+        highlights: serializeHighlights(highlights),
       },
       mistakeTagIds: selectedTags,
     });
@@ -673,9 +764,20 @@ export function EditTradeDialog({
               {field("entryTime", "Entry time", "datetime-local")}
               {field("exitTime", "Exit time", "datetime-local")}
               {field("exitPrice", "Exit price")}
-              {field("account", "Account", "text")}
+              <div className="space-y-1">
+                <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  Account
+                </label>
+                <AccountPicker
+                  value={account}
+                  onChange={setAccount}
+                  known={knownAccounts}
+                  testIdPrefix="edit-account"
+                />
+              </div>
               {field("mae", "MAE (worst price)")}
               {field("mfe", "MFE (best price)")}
+              {field("fees", "Fees $ (both sides)")}
             </div>
 
             <div>
@@ -749,6 +851,17 @@ export function EditTradeDialog({
                 })}
               </div>
             </div>
+
+            <HighlightPicker
+              selected={highlights}
+              extra={knownHighlights(allTrades)}
+              onToggle={(h) =>
+                setHighlights((s) => (s.includes(h) ? s.filter((x) => x !== h) : [...s, h]))
+              }
+              testIdPrefix="edit-highlight"
+            />
+
+            {/* Fees explained where they're typed, since they change the R. */}
 
             <div className="space-y-1">
               <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
@@ -907,7 +1020,43 @@ export function TradeDetailDialog({
                   <p className="truncate">{trade.account}</p>
                 </div>
               )}
+              {trade.fees != null && trade.fees > 0 && trade.exitPrice != null && (() => {
+                const m = computeMetrics(trade);
+                return (
+                  <div data-testid="detail-fees">
+                    <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                      Net · fees
+                    </p>
+                    <p>
+                      <span className={(m.actualPnL ?? 0) >= 0 ? "text-emerald-400" : "text-primary"}>
+                        {fmtMoney(m.actualPnL ?? 0)}
+                      </span>
+                      <span className="text-muted-foreground"> · {fmtFees(trade.fees)}</span>
+                    </p>
+                  </div>
+                );
+              })()}
             </div>
+
+            {parseHighlights(trade.highlights).length > 0 && (
+              <div data-testid="detail-highlights">
+                <p className="mb-1.5 flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
+                  <Sparkles className="h-3 w-3 text-emerald-400" />
+                  What went right
+                </p>
+                <div className="flex flex-wrap gap-1.5">
+                  {parseHighlights(trade.highlights).map((h) => (
+                    <Badge
+                      key={h}
+                      variant="outline"
+                      className="border-emerald-500/40 text-[10px] font-normal text-emerald-400"
+                    >
+                      {h}
+                    </Badge>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {trade.rationale && (
               <div>

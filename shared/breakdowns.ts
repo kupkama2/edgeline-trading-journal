@@ -14,6 +14,7 @@
 import type { MistakeTag, TradeWithTags } from "./schema";
 import { closedTrades, computeMetrics } from "./metrics";
 import { summarizeDays } from "./daily";
+import { parseHighlights } from "./highlights";
 
 // Re-exported so slice consumers keep one import site for "trades stats may
 // speak about"; the definition lives with the rest of the metric vocabulary.
@@ -33,6 +34,8 @@ export interface Slice {
   /** Mean R per trade in this bucket — the figure that survives comparison
       between buckets of different sizes. */
   expectancyR: number;
+  /** Commission paid across the bucket. totalPnL is already net of it. */
+  totalFees: number;
 }
 
 const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
@@ -64,7 +67,7 @@ export function sliceBy(
       if (!b) {
         b = {
           key, label, count: 0, wins: 0, losses: 0,
-          winRate: 0, totalR: 0, totalPnL: 0, expectancyR: 0,
+          winRate: 0, totalR: 0, totalPnL: 0, expectancyR: 0, totalFees: 0,
         };
         buckets.set(key, b);
       }
@@ -73,6 +76,7 @@ export function sliceBy(
       else b.losses += 1;
       b.totalR += r;
       b.totalPnL += m.actualPnL ?? 0;
+      b.totalFees += m.fees;
     }
   }
 
@@ -142,6 +146,17 @@ export function byAccount(trades: TradeWithTags[]): Slice[] {
     const a = t.account?.trim();
     return a ? { key: a, label: a } : null;
   }).sort((a, b) => b.count - a.count);
+}
+
+/**
+ * By green flag. Same overlapping shape as demons — a trade with a perfect
+ * entry AND a perfect stop counts in both — and the same purpose inverted:
+ * this is what turns "I executed well" into an expectancy you can check.
+ */
+export function byHighlight(trades: TradeWithTags[]): Slice[] {
+  return sliceBy(trades, (t) =>
+    parseHighlights(t.highlights).map((h) => ({ key: h, label: h })),
+  ).sort((a, b) => b.totalR - a.totalR); // best first — the mirror of demons
 }
 
 /** By setup, read from the AI-normalised rationale tags. */

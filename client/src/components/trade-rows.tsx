@@ -8,6 +8,7 @@ import { useToast } from "@/hooks/use-toast";
 import { ArrowDownRight, ArrowUpRight, Camera, CheckCircle2, Eye, Minus, Pencil, Plus, Trash2, X } from "lucide-react";
 import { useUpdateTrade, useDeleteTrade } from "@/lib/data";
 import { parseExtraTargets, type TradeWithTags } from "@shared/schema";
+import { parseHighlights } from "@shared/highlights";
 import { computeMetrics, fmtMoney, fmtR, EXIT_REASON_LABELS } from "@shared/metrics";
 import { positionLedger } from "@shared/fills";
 import { StyleChip } from "@/components/style-switcher";
@@ -429,6 +430,18 @@ export function ClosedTradeRow({
               className="rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 text-[10px] leading-tight text-primary"
             >
               {tagNames[id] ?? "?"}
+            </span>
+          ))}
+        </div>
+      )}
+      {parseHighlights(t.highlights).length > 0 && (
+        <div className="mt-1 flex flex-wrap gap-1" data-testid={`highlights-${t.id}`}>
+          {parseHighlights(t.highlights).map((h) => (
+            <span
+              key={h}
+              className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] leading-tight text-emerald-400"
+            >
+              {h}
             </span>
           ))}
         </div>

@@ -90,6 +90,25 @@ export function totalPnLWithFills(t: TradeWithFills): number | null {
 }
 
 /**
+ * Convert a size typed in one unit into the trade's own unit, at the fill
+ * price. Fills are STORED in the trade's unit — this exists so the dialog can
+ * accept "take $2,750 off" on a coin-sized position (or "take 0.05 BTC" on a
+ * notional-sized one) and hand the ledger the number it already speaks.
+ * Crossing units needs a price; without one there is no conversion, so null.
+ */
+export function convertFillSize(
+  size: number,
+  from: "base" | "quote",
+  to: "base" | "quote",
+  price: number,
+): number | null {
+  if (!isFinite(size) || size <= 0) return null;
+  if (from === to) return size;
+  if (!isFinite(price) || price <= 0) return null;
+  return to === "base" ? size / price : size * price;
+}
+
+/**
  * Equal-split suggestion for the next partial: what's still on, divided by
  * the planned TP levels not yet taken. Returned in the trade's own size unit
  * (USD for quote-sized trades, converted at the given price, falling back to

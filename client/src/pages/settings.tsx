@@ -17,6 +17,8 @@ import {
   useUpdateStyle,
   useStorageUsage,
   useDeleteStyle,
+  useAccountSettings,
+  useSaveAccountSettings,
 } from "@/lib/data";
 import { STYLE_COLOR_NAMES, styleColor } from "@/lib/style-filter";
 import {
@@ -28,6 +30,171 @@ import {
   fmtMoney,
   mistakeCostLeaderboard,
 } from "@shared/metrics";
+
+/**
+ * Fee schedule per account. One row per account name — the names come from
+ * the trades themselves plus anything configured before its first trade.
+ * Maker = limit orders, taker = market orders, always per side; the mode
+ * decides whether the numbers read as % of notional (crypto) or dollars per
+ * contract (futures). The Close dialog turns these into one-click fee
+ * suggestions.
+ */
+function AccountFeesRow({
+  name,
+  existing,
+}: {
+  name: string;
+  existing: { feeMode: string; makerFee: number; takerFee: number } | undefined;
+}) {
+  const save = useSaveAccountSettings();
+  const { toast } = useToast();
+  const [mode, setMode] = useState<"percent" | "perContract">(
+    existing?.feeMode === "perContract" ? "perContract" : "percent",
+  );
+  const [maker, setMaker] = useState(existing != null ? String(existing.makerFee) : "");
+  const [taker, setTaker] = useState(existing != null ? String(existing.takerFee) : "");
+  const dirty =
+    (existing?.feeMode ?? "percent") !== mode ||
+    String(existing?.makerFee ?? "") !== (maker.trim() === "" ? "" : String(Number(maker))) ||
+    String(existing?.takerFee ?? "") !== (taker.trim() === "" ? "" : String(Number(taker)));
+
+  async function persist() {
+    const m = Number(maker) || 0;
+    const t = Number(taker) || 0;
+    await save.mutateAsync({ name, feeMode: mode, makerFee: m, takerFee: t });
+    toast({ title: "Fees saved", description: `${name} — schedule updated.` });
+  }
+
+  return (
+    <div
+      className="flex flex-wrap items-center gap-2 rounded-md border border-border/60 bg-secondary/20 px-2.5 py-2"
+      data-testid={`account-fees-${name}`}
+    >
+      <span className="min-w-[7rem] text-xs font-medium">{name}</span>
+      <div className="flex gap-0.5">
+        {(
+          [
+            { k: "percent", l: "% notional" },
+            { k: "perContract", l: "$ / contract" },
+          ] as const
+        ).map(({ k, l }) => (
+          <button
+            key={k}
+            type="button"
+            onClick={() => setMode(k)}
+            data-testid={`button-fee-mode-${name}-${k}`}
+            className={`rounded px-1.5 py-0.5 text-[10px] transition-colors ${
+              mode === k
+                ? "bg-primary/15 text-primary"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {l}
+          </button>
+        ))}
+      </div>
+      <label className="flex items-center gap-1 text-[10px] text-muted-foreground">
+        limit
+        <Input
+          value={maker}
+          onChange={(e) => setMaker(e.target.value)}
+          inputMode="decimal"
+          placeholder="0"
+          className="h-7 w-16 font-mono text-[11px]"
+          data-testid={`input-maker-${name}`}
+        />
+      </label>
+      <label className="flex items-center gap-1 text-[10px] text-muted-foreground">
+        market
+        <Input
+          value={taker}
+          onChange={(e) => setTaker(e.target.value)}
+          inputMode="decimal"
+          placeholder="0"
+          className="h-7 w-16 font-mono text-[11px]"
+          data-testid={`input-taker-${name}`}
+        />
+      </label>
+      <span className="text-[10px] text-muted-foreground">per side</span>
+      {dirty && (
+        <Button
+          size="sm"
+          variant="outline"
+          className="ml-auto h-7 px-2 text-[11px]"
+          onClick={persist}
+          disabled={save.isPending}
+          data-testid={`button-save-fees-${name}`}
+        >
+          <Check className="mr-1 h-3 w-3" />
+          Save
+        </Button>
+      )}
+    </div>
+  );
+}
+
+function AccountFeesCard() {
+  const { data: trades = [] } = useTrades();
+  const { data: settings = [] } = useAccountSettings();
+  const [newName, setNewName] = useState("");
+  const [added, setAdded] = useState<string[]>([]);
+
+  const names = useMemo(() => {
+    const s = new Set<string>();
+    for (const t of trades) if (t.account?.trim()) s.add(t.account.trim());
+    for (const cfg of settings) s.add(cfg.name);
+    for (const a of added) s.add(a);
+    return Array.from(s).sort();
+  }, [trades, settings, added]);
+
+  return (
+    <Card className="border-card-border bg-card p-4 sm:p-5" data-testid="card-account-fees">
+      <h2 className="text-sm font-semibold tracking-tight">Account fees</h2>
+      <p className="mt-0.5 text-xs text-muted-foreground">
+        Commission per side for each account — limit (maker) and market (taker) orders
+        separately. The Close dialog uses these to suggest the fee; you can always
+        overtype it per trade.
+      </p>
+      <div className="mt-3 space-y-2">
+        {names.length === 0 && (
+          <p className="text-[11px] text-muted-foreground">
+            No accounts yet — log a trade with an account, or add one below.
+          </p>
+        )}
+        {names.map((n) => (
+          <AccountFeesRow
+            key={`${n}:${settings.find((s) => s.name === n)?.id ?? "new"}`}
+            name={n}
+            existing={settings.find((s) => s.name === n)}
+          />
+        ))}
+        <div className="flex items-center gap-2">
+          <Input
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            placeholder="add an account…"
+            className="h-8 w-48 text-xs"
+            data-testid="input-new-fee-account"
+          />
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-8 px-2 text-[11px]"
+            disabled={!newName.trim()}
+            onClick={() => {
+              setAdded((a) => [...a, newName.trim()]);
+              setNewName("");
+            }}
+            data-testid="button-add-fee-account"
+          >
+            <Plus className="mr-1 h-3 w-3" />
+            Add
+          </Button>
+        </div>
+      </div>
+    </Card>
+  );
+}
 
 function StylesCard() {
   const { toast } = useToast();
@@ -296,6 +463,8 @@ export default function Settings() {
       </div>
 
       <StylesCard />
+
+      <AccountFeesCard />
 
       <Card className="border-card-border bg-card p-4 sm:p-5">
         <h2 className="text-sm font-semibold tracking-tight">Demons</h2>
