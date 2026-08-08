@@ -46,7 +46,10 @@ export function AccountPicker({
     return (
       <div className="flex items-center gap-1.5">
         <Input
-          autoFocus
+          /* Only when the user asked for a new one. Focusing on mount would
+             steal the caret at page load, because a remembered account looks
+             "unknown" for the one render before the trade list arrives. */
+          autoFocus={typing}
           value={value}
           onChange={(e) => onChange(e.target.value)}
           placeholder="e.g. Apex eval, Binance Futures"

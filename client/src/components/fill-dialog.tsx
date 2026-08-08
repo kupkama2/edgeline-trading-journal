@@ -55,20 +55,21 @@ export function FillDialog({
     trade && size.trim()
       ? convertFillSize(Number(size), fillUnit, tradeUnit, Number(price))
       : null;
+  // Both numbers have to BE numbers before this counts as a fill. Checking
+  // finiteness here rather than only inside `problem` is what keeps the save
+  // button disabled on "abc" — a non-numeric price used to sail through to
+  // the server and come back as a validation error.
+  const priceNum = Number(price);
   const parsed =
-    trade && price.trim() && effSize != null
-      ? { kind, price: Number(price), size: effSize }
+    trade && price.trim() && isFinite(priceNum) && priceNum > 0 && effSize != null && effSize > 0
+      ? { kind, price: priceNum, size: effSize }
       : null;
-  const problem =
-    trade && parsed && isFinite(parsed.price) && isFinite(parsed.size)
-      ? validateFill(trade, parsed)
-      : null;
+  const problem = trade && parsed ? validateFill(trade, parsed) : null;
 
   // What THIS partial would bank, previewed before commit — the number the
   // decision is actually about.
   const preview = useMemo(() => {
     if (!trade || !led || !parsed || kind !== "partial" || problem) return null;
-    if (!isFinite(parsed.price) || !isFinite(parsed.size)) return null;
     const sign = trade.direction === "long" ? 1 : -1;
     const qty =
       trade.sizeUnit === "quote" ? (parsed.price > 0 ? parsed.size / parsed.price : 0) : parsed.size;
