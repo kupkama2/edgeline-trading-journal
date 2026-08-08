@@ -8,12 +8,13 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import { ClipboardList, Loader2, Pencil, Sparkles } from "lucide-react";
+import { ClipboardList, Loader2, Pencil, Sparkles, Trash2 } from "lucide-react";
 import { useAccountSettings, useMistakeTags, useUpdateTrade, useAddTradeImage, archiveDataUrl, parseScreenshot, fileToDownscaledDataUrl } from "@/lib/data";
 import { suggestFees } from "@shared/fees";
 import { knownHighlights, parseHighlights, serializeHighlights } from "@shared/highlights";
 import { AccountPicker, HighlightPicker } from "@/components/trade-pickers";
-import { useTrades } from "@/lib/data";
+import { useDeleteFill, useTrades } from "@/lib/data";
+import { positionLedger } from "@shared/fills";
 import { TradeImageGallery } from "@/components/trade-images";
 import { parseExtraTargets, parsePlaybook, type TradeWithTags } from "@shared/schema";
 import { computeMetrics, fmtFees, fmtMoney, fmtR, EXIT_REASON_LABELS } from "@shared/metrics";
@@ -104,7 +105,16 @@ export function CloseTradeDialog({
     if (!trade) return;
     setExitReason(r);
     if (!exitPrice) {
-      if (r === "target") setExitPrice(String(trade.initialTarget));
+      // With a scale-out plan, "hit target" means the level this remainder was
+      // aimed at — the nth TP after n partials — not TP1, which was taken
+      // several fills ago. Falls back to the last planned level.
+      if (r === "target") {
+        const tps = [trade.initialTarget, ...parseExtraTargets(trade.extraTargets)].filter(
+          (x): x is number => x != null,
+        );
+        const taken = positionLedger(trade).partials;
+        setExitPrice(String(tps[Math.min(taken, tps.length - 1)] ?? trade.initialTarget));
+      }
       else if (r === "stop") setExitPrice(String(trade.initialStop));
       else if (r === "breakeven") setExitPrice(String(trade.entryPrice));
     }
@@ -586,6 +596,9 @@ export function EditTradeDialog({
       mae: numOrNull(f.mae ?? ""),
       mfe: numOrNull(f.mfe ?? ""),
       noManagementOutcome: nmo,
+      // Without this the preview kept the SAVED fee while you edited the
+      // field, so correcting a commission left the R below it unmoved.
+      fees: numOrNull(f.fees ?? ""),
     } as any);
   }, [trade, f, direction, nmo]);
 
@@ -953,12 +966,19 @@ export function EditTradeDialog({
 
 
 export function TradeDetailDialog({
-  trade,
+  trade: opened,
   onClose,
 }: {
   trade: TradeWithTags | null;
   onClose: () => void;
 }) {
+  const deleteFill = useDeleteFill();
+  const { data: allTrades = [] } = useTrades();
+  // Callers pass the row they had when the dialog opened — a snapshot. Editing
+  // from inside (removing a fill) refetches the list but cannot change that
+  // snapshot, so re-read the live row by id and fall back to the snapshot only
+  // if it has since been deleted.
+  const trade = opened ? (allTrades.find((t) => t.id === opened.id) ?? opened) : null;
   const open = trade != null;
   const rationaleTags = parseTags(trade?.rationaleTags);
   const playbook = parsePlaybook(trade?.playbook);
@@ -1037,6 +1057,74 @@ export function TradeDetailDialog({
                 );
               })()}
             </div>
+
+            {/* How the position was actually worked. A scaled trade's row
+                shows only the summary, so this is the one place the
+                individual fills exist — and therefore the only place a
+                mistyped one can be taken back. */}
+            {trade.fills.length > 0 && (
+              <div data-testid="detail-fills">
+                <p className="mb-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
+                  How it was scaled
+                </p>
+                <ul className="space-y-1">
+                  {[...trade.fills]
+                    .sort((a, b) => a.time.localeCompare(b.time))
+                    .map((f) => (
+                      <li
+                        key={f.id}
+                        className="flex items-center gap-2 rounded-md border border-border/60 px-2.5 py-1.5 text-xs"
+                        data-testid={`detail-fill-${f.id}`}
+                      >
+                        <Badge
+                          variant="outline"
+                          className={`shrink-0 text-[10px] font-normal ${
+                            f.kind === "add"
+                              ? "border-sky-500/40 text-sky-400"
+                              : "border-emerald-500/40 text-emerald-400"
+                          }`}
+                        >
+                          {f.kind === "add" ? "added" : "took"}
+                        </Badge>
+                        <span className="font-mono">
+                          {num(f.size, 4)}
+                          {trade.sizeUnit === "quote" ? " USD" : ""} @ {num(f.price, 4)}
+                        </span>
+                        <span className="truncate text-[11px] text-muted-foreground">
+                          {new Date(f.time).toLocaleString(undefined, {
+                            month: "short",
+                            day: "numeric",
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          })}
+                          {f.note ? ` · ${f.note}` : ""}
+                        </span>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="ml-auto h-6 w-6 shrink-0 text-muted-foreground hover:text-destructive"
+                          onClick={() => deleteFill.mutate(f.id)}
+                          disabled={deleteFill.isPending}
+                          aria-label="Remove this fill"
+                          data-testid={`button-delete-fill-${f.id}`}
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
+                      </li>
+                    ))}
+                </ul>
+                {(() => {
+                  const led = positionLedger(trade);
+                  return (
+                    <p className="mt-1.5 font-mono text-[11px] text-muted-foreground">
+                      avg entry {num(led.avgEntry, 4)}
+                      {trade.status === "open" && ` · ${num(led.openQty, 4)} still on`} ·{" "}
+                      {fmtMoney(led.realizedPnL)} banked before the close
+                    </p>
+                  );
+                })()}
+              </div>
+            )}
 
             {parseHighlights(trade.highlights).length > 0 && (
               <div data-testid="detail-highlights">

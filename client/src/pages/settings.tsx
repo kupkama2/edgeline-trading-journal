@@ -274,7 +274,10 @@ function StylesCard() {
             return (
               <div
                 key={s.id}
-                className="flex items-center gap-2 rounded-md border border-border/70 bg-secondary/25 px-3 py-2"
+                /* Wraps rather than overflows: the colour swatches and the
+                   session-hour pair are each wide enough to push this row off
+                   a phone screen if they are forced onto one line. */
+                className="flex flex-wrap items-center gap-2 rounded-md border border-border/70 bg-secondary/25 px-3 py-2"
                 data-testid={`row-style-${s.id}`}
               >
                 {editing ? (
@@ -312,7 +315,7 @@ function StylesCard() {
                 ) : (
                   <>
                     <span className={`h-2 w-2 shrink-0 rounded-full ${c.dot}`} />
-                    <span className="min-w-0 flex-1 truncate text-sm">{s.name}</span>
+                    <span className="min-w-0 flex-1 basis-24 truncate text-sm">{s.name}</span>
 
                     <div className="flex shrink-0 items-center gap-1">
                       {STYLE_COLOR_NAMES.map((name) => (

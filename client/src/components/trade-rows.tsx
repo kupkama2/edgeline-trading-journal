@@ -9,7 +9,7 @@ import { ArrowDownRight, ArrowUpRight, Camera, CheckCircle2, Eye, Minus, Pencil,
 import { useUpdateTrade, useDeleteTrade } from "@/lib/data";
 import { parseExtraTargets, type TradeWithTags } from "@shared/schema";
 import { parseHighlights } from "@shared/highlights";
-import { computeMetrics, fmtMoney, fmtR, EXIT_REASON_LABELS } from "@shared/metrics";
+import { computeMetrics, fmtFees, fmtMoney, fmtR, EXIT_REASON_LABELS } from "@shared/metrics";
 import { positionLedger } from "@shared/fills";
 import { StyleChip } from "@/components/style-switcher";
 import { num, parseTags, RationaleTags } from "@/components/trade-shared";
@@ -343,8 +343,11 @@ export function ClosedTradeRow({
       className="rounded-lg border border-card-border bg-card p-3"
       data-testid={`card-closed-trade-${t.id}`}
     >
-      <div className="flex items-center gap-2">
-        <span className="truncate font-mono text-sm font-semibold">{t.symbol}</span>
+      {/* Wraps on narrow screens: symbol, style, account, shots and reason are
+          all shrink-0, so on a phone the money used to run off the card. The
+          result group below stays glued together as one wrapping unit. */}
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="min-w-0 truncate font-mono text-sm font-semibold">{t.symbol}</span>
         <StyleChip styleId={t.styleId} />
         {t.account && (
           <Badge
@@ -360,8 +363,9 @@ export function ClosedTradeRow({
         <Badge variant="outline" className="shrink-0 text-[10px] capitalize">
           {t.exitReason ? EXIT_REASON_LABELS[t.exitReason] : "—"}
         </Badge>
+        <div className="ml-auto flex shrink-0 items-center gap-2">
         <span
-          className={`ml-auto shrink-0 font-mono text-sm font-bold ${
+          className={`shrink-0 font-mono text-sm font-bold ${
             win ? "text-emerald-400" : "text-primary"
           }`}
           data-testid={`text-actual-r-${t.id}`}
@@ -370,6 +374,7 @@ export function ClosedTradeRow({
         </span>
         <span
           className={`shrink-0 font-mono text-xs ${win ? "text-emerald-400/80" : "text-primary/80"}`}
+          title={m.fees > 0 ? `net of ${fmtFees(m.fees)} fees` : undefined}
         >
           {fmtMoney(m.actualPnL)}
         </span>
@@ -403,6 +408,7 @@ export function ClosedTradeRow({
         >
           <Trash2 className="h-3 w-3" />
         </Button>
+        </div>
       </div>
       <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 font-mono text-[11px] text-muted-foreground">
         <span>No-mgmt {fmtR(m.potentialR)}</span>

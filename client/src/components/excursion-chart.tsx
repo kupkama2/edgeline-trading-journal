@@ -30,6 +30,9 @@ export function ExcursionChart({
   onSelect?: (tradeId: number) => void;
 }) {
   const [hover, setHover] = useState<number | null>(null);
+  // Tracked in state rather than via a :focus-visible CSS variant: an <svg>
+  // <g> is an unusual focus target and the variant silently did nothing.
+  const [focus, setFocus] = useState<number | null>(null);
 
   const geom = useMemo(() => {
     if (!rows.length) return null;
@@ -49,11 +52,17 @@ export function ExcursionChart({
   return (
     <div className="relative">
       <div className="overflow-x-auto">
+        {/* Stretches to fill the card when there are few trades and scrolls
+            once there are many. Horizontal-only scaling (preserveAspectRatio
+            "none" at a fixed height) widens the bars without stretching the R
+            axis; the strokes opt out via non-scaling-stroke. */}
         <svg
           viewBox={`0 0 ${width} ${H}`}
           width={width}
           height={H}
-          className="max-w-none"
+          preserveAspectRatio="none"
+          className="max-w-none min-w-full"
+          style={{ height: H }}
           onMouseLeave={() => setHover(null)}
         >
           {/* Zero line — the entry. Everything above is profit reached, below is heat taken. */}
@@ -84,6 +93,11 @@ export function ExcursionChart({
                     onSelect?.(r.tradeId);
                   }
                 }}
+                onFocus={() => {
+                  setFocus(i);
+                  setHover(i); // the tooltip is the label; keyboard needs it too
+                }}
+                onBlur={() => setFocus((f) => (f === i ? null : f))}
                 tabIndex={onSelect ? 0 : undefined}
                 role={onSelect ? "button" : undefined}
                 aria-label={onSelect ? `Open ${r.symbol} trade` : undefined}
@@ -131,14 +145,15 @@ export function ExcursionChart({
                 )}
                 {/* Keyboard focus needs its own ring — the hover wash is a
                     pointer affordance and never fires from the keyboard. */}
-                {onSelect && (
+                {focus === i && (
                   <rect
-                    x={i * barW}
-                    y={0}
-                    width={barW}
-                    height={H}
+                    x={i * barW + 1}
+                    y={1}
+                    width={barW - 2}
+                    height={H - 2}
+                    rx={2}
                     fill="none"
-                    className="stroke-transparent [g:focus-visible>&]:stroke-primary"
+                    className="stroke-primary"
                     strokeWidth={2}
                     vectorEffect="non-scaling-stroke"
                   />
@@ -149,9 +164,19 @@ export function ExcursionChart({
         </svg>
       </div>
 
-      {h && (
+      {h && hover != null && (
         <div
-          className="pointer-events-none absolute top-1 left-1 rounded-md border border-border bg-popover px-2.5 py-1.5 text-[11px] shadow-md"
+          /* Follows the bar instead of parking top-left, where it covered the
+             first two trades. Flips side past the midpoint so it never leaves
+             the card. */
+          className="pointer-events-none absolute top-1 rounded-md border border-border bg-popover px-2.5 py-1.5 text-[11px] shadow-md"
+          style={{
+            left: `${(((hover + 0.5) * barW) / width) * 100}%`,
+            transform:
+              (hover + 0.5) * barW > width * 0.6
+                ? "translateX(calc(-100% - 8px))"
+                : "translateX(8px)",
+          }}
           data-testid="excursion-tooltip"
         >
           <p className="font-medium">{h.symbol}</p>
