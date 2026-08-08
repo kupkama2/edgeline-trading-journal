@@ -12,6 +12,7 @@ import { EquityCurve } from "@/components/equity-curve";
 import { ExcursionChart } from "@/components/excursion-chart";
 import {
   byAccount,
+  byHighlight,
   byHour,
   byMistake,
   bySetup,
@@ -24,7 +25,7 @@ import { drawdown, streaks } from "@shared/streaks";
 import { MIN_SAMPLE, simulate } from "@shared/montecarlo";
 import { missedStats } from "@shared/missed";
 import { excursions, summariseExcursions } from "@shared/excursion";
-import { fmtMoney, fmtR } from "@shared/metrics";
+import { fmtFees, fmtMoney, fmtR } from "@shared/metrics";
 
 /**
  * Where the number comes from.
@@ -46,6 +47,7 @@ const TABS = [
   { id: "account", label: "Account" },
   { id: "setup", label: "Setup" },
   { id: "mistake", label: "Demon" },
+  { id: "highlight", label: "Green flag" },
 ] as const;
 
 type TabId = (typeof TABS)[number]["id"];
@@ -72,6 +74,8 @@ function SliceTable({ rows, empty }: { rows: Slice[]; empty: string }) {
   // One shared scale across the table, so a tall bar means "better than the
   // others" rather than "widest in its own row".
   const scale = Math.max(...rows.map((r) => Math.abs(r.expectancyR)), 0.5);
+  // The fees column only earns its width once something is actually paying it.
+  const showFees = rows.some((r) => r.totalFees > 0);
 
   if (!rows.length) {
     return <p className="py-6 text-center text-[11px] text-muted-foreground">{empty}</p>;
@@ -87,7 +91,10 @@ function SliceTable({ rows, empty }: { rows: Slice[]; empty: string }) {
             <th className="px-2 py-1.5 text-right font-medium">Win %</th>
             <th className="px-2 py-1.5 text-right font-medium">Exp R</th>
             <th className="px-2 py-1.5 text-right font-medium">Total R</th>
-            <th className="px-2 py-1.5 text-right font-medium">P&amp;L</th>
+            <th className="px-2 py-1.5 text-right font-medium">
+              {showFees ? "Net P&L" : "P&L"}
+            </th>
+            {showFees && <th className="px-2 py-1.5 text-right font-medium">Fees</th>}
             <th className="w-28 py-1.5 pl-2 text-left font-medium">vs zero</th>
           </tr>
         </thead>
@@ -116,6 +123,14 @@ function SliceTable({ rows, empty }: { rows: Slice[]; empty: string }) {
               <td className="px-2 py-1.5 text-right font-mono text-muted-foreground">
                 {fmtMoney(r.totalPnL)}
               </td>
+              {showFees && (
+                <td
+                  className="px-2 py-1.5 text-right font-mono text-muted-foreground/70"
+                  data-testid={`slice-fees-${r.key}`}
+                >
+                  {r.totalFees > 0 ? `−${fmtFees(r.totalFees)}` : "—"}
+                </td>
+              )}
               <td className="py-1.5 pl-2">
                 <ExpectancyBar value={r.expectancyR} scale={scale} />
               </td>
@@ -192,6 +207,8 @@ export default function Analysis() {
         return bySetup(scoped);
       case "mistake":
         return byMistake(scoped, tags);
+      case "highlight":
+        return byHighlight(scoped);
     }
   }, [tab, scoped, tags]);
 
@@ -385,15 +402,18 @@ export default function Analysis() {
               ? "No setups tagged yet — write a rationale when logging and they appear here."
               : tab === "mistake"
                 ? "No demons tagged on closed trades yet."
-                : tab === "account"
-                  ? "No accounts recorded yet — pick one when logging a trade and it shows up here."
-                  : "No closed trades yet."
+                : tab === "highlight"
+                  ? "Nothing marked as done right yet — flag what you nailed when closing a trade."
+                  : tab === "account"
+                    ? "No accounts recorded yet — pick one when logging a trade and it shows up here."
+                    : "No closed trades yet."
           }
         />
-        {(tab === "mistake" || tab === "setup") && rows.length > 0 && (
+        {(tab === "mistake" || tab === "setup" || tab === "highlight") && rows.length > 0 && (
           <p className="mt-2 text-[10px] text-muted-foreground">
-            A trade can carry more than one {tab === "mistake" ? "demon" : "setup"}, so these rows
-            overlap and will not sum to your totals.
+            A trade can carry more than one{" "}
+            {tab === "mistake" ? "demon" : tab === "highlight" ? "green flag" : "setup"}, so these
+            rows overlap and will not sum to your totals.
           </p>
         )}
       </Card>

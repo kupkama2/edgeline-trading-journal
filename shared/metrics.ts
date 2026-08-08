@@ -4,8 +4,14 @@ import { totalPnLWithFills } from "./fills";
 export interface TradeMetrics {
   risk: number; // per-unit risk in price terms
   riskDollars: number; // 1R in $
+  /** NET of fees when fees are recorded — the R that actually hit the account. */
   actualR: number | null;
+  /** NET of fees when fees are recorded. */
   actualPnL: number | null;
+  /** What the price action alone made, before fees. Equal to actualPnL when no fees. */
+  grossPnL: number | null;
+  /** Dollars paid in commission on this trade; 0 when not recorded. */
+  fees: number;
   mfeR: number | null;
   maeR: number | null;
   potentialR: number | null;
@@ -62,17 +68,25 @@ export function computeMetrics(t: Trade & { fills?: TradeFill[] }): TradeMetrics
   const hasFills = (t.fills?.length ?? 0) > 0;
   const filledPnL = hasFills ? totalPnLWithFills(t) : null;
 
-  const actualPnL =
+  // Fees only bite once the trade has actually settled — an open trade has
+  // nothing to deduct from. When zero (all history), every branch below is
+  // bit-identical to the pre-fee arithmetic.
+  const fees = t.exitPrice != null ? (t.fees ?? 0) : 0;
+
+  const grossPnL =
     filledPnL != null
       ? filledPnL
       : t.exitPrice != null
         ? sign * (t.exitPrice - t.entryPrice) * perPoint
         : null;
+  const actualPnL = grossPnL != null ? grossPnL - fees : null;
   const actualR =
     safe && t.exitPrice != null
       ? filledPnL != null && riskDollars > 0
-        ? filledPnL / riskDollars
-        : (sign * (t.exitPrice - t.entryPrice)) / risk
+        ? (filledPnL - fees) / riskDollars
+        : fees !== 0 && riskDollars > 0
+          ? (sign * (t.exitPrice - t.entryPrice) * perPoint - fees) / riskDollars
+          : (sign * (t.exitPrice - t.entryPrice)) / risk
       : null;
   const mfeR = safe && t.mfe != null ? (sign * (t.mfe - t.entryPrice)) / risk : null;
   const maeR = safe && t.mae != null ? (sign * (t.mae - t.entryPrice)) / risk : null;
@@ -97,6 +111,8 @@ export function computeMetrics(t: Trade & { fills?: TradeFill[] }): TradeMetrics
     riskDollars,
     actualR,
     actualPnL,
+    grossPnL,
+    fees,
     mfeR,
     maeR,
     potentialR,
@@ -273,4 +289,17 @@ export function fmtMoney(v: number | null | undefined): string {
   if (v == null || !isFinite(v)) return "—";
   const sign = v < 0 ? "-" : v > 0 ? "+" : "";
   return `${sign}$${Math.abs(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+}
+
+/**
+ * Fees, formatted as the cost they are: unsigned, and to the cent — a $12.50
+ * commission rounded to "+$13" by fmtMoney reads as a gain and loses the half
+ * dollar that made it worth typing.
+ */
+export function fmtFees(v: number | null | undefined): string {
+  if (v == null || !isFinite(v)) return "—";
+  return `$${Math.abs(v).toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
 }

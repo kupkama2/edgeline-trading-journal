@@ -7,6 +7,7 @@ import {
   dailyNotes,
   tradeImages,
   tradeFills,
+  accountSettings,
 } from "@shared/schema";
 import type {
   InsertTrade,
@@ -21,6 +22,8 @@ import type {
   DailyNote,
   TradeImage,
   TradeFill,
+  AccountSettings,
+  UpsertAccountSettings,
 } from "@shared/schema";
 import { DEMON_TAXONOMY, DEMON_LEGACY_ALIASES } from "@shared/demons";
 import { drizzle } from "drizzle-orm/postgres-js";
@@ -135,6 +138,19 @@ ALTER TABLE trades ADD COLUMN IF NOT EXISTS style_id INTEGER;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS extra_targets TEXT;
 -- Which account the trade ran in ("Binance Futures", "Apex eval", …).
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS account TEXT;
+-- Commission paid on the trade, both sides, in dollars. Deducted in metrics.
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS fees DOUBLE PRECISION;
+-- Green flags: JSON string[] of what went right on the trade.
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS highlights TEXT;
+-- Fee schedule per account name: maker/taker per side, % of notional or $
+-- per contract. Free-standing — an account needs no row to exist on trades.
+CREATE TABLE IF NOT EXISTS account_settings (
+  id SERIAL PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
+  fee_mode TEXT NOT NULL DEFAULT 'percent',
+  maker_fee DOUBLE PRECISION NOT NULL DEFAULT 0,
+  taker_fee DOUBLE PRECISION NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS mistake_tags (
   id SERIAL PRIMARY KEY,
   name TEXT NOT NULL,
@@ -238,6 +254,9 @@ export interface IStorage {
 
   addFill(tradeId: number, f: { kind: string; price: number; size: number; time: string; note?: string | null }): Promise<TradeFill>;
   deleteFill(id: number): Promise<void>;
+
+  listAccountSettings(): Promise<AccountSettings[]>;
+  upsertAccountSettings(s: UpsertAccountSettings): Promise<AccountSettings>;
 
   listTradeImages(tradeId: number): Promise<TradeImage[]>;
   imageUsage(): Promise<{ images: number; bytes: number }>;
@@ -432,6 +451,31 @@ export class DatabaseStorage implements IStorage {
 
   async deleteFill(id: number): Promise<void> {
     await db.delete(tradeFills).where(eq(tradeFills.id, id));
+  }
+
+  async listAccountSettings(): Promise<AccountSettings[]> {
+    return db.select().from(accountSettings).orderBy(accountSettings.name);
+  }
+
+  async upsertAccountSettings(s: UpsertAccountSettings): Promise<AccountSettings> {
+    const name = s.name.trim();
+    const [existing] = await db
+      .select()
+      .from(accountSettings)
+      .where(eq(accountSettings.name, name));
+    if (existing) {
+      const [row] = await db
+        .update(accountSettings)
+        .set({ feeMode: s.feeMode, makerFee: s.makerFee, takerFee: s.takerFee })
+        .where(eq(accountSettings.id, existing.id))
+        .returning();
+      return row;
+    }
+    const [row] = await db
+      .insert(accountSettings)
+      .values({ name, feeMode: s.feeMode, makerFee: s.makerFee, takerFee: s.takerFee })
+      .returning();
+    return row;
   }
 
   private async imageCountFor(tradeId: number): Promise<number> {

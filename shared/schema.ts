@@ -115,6 +115,21 @@ export const trades = pgTable("trades", {
    * stays consistent without any admin UI. NULL = not recorded.
    */
   account: text("account"),
+  /**
+   * Total commission/fees paid on this trade, in dollars, both sides
+   * included. When present it is DEDUCTED inside computeMetrics, so the R
+   * and P&L shown everywhere are net — the number that actually hits the
+   * account. NULL (the default, and all history) means "not recorded" and
+   * changes nothing.
+   */
+  fees: doublePrecision("fees"),
+  /**
+   * Green flags — JSON string[] of what went RIGHT ("Perfect Entry", "Let It
+   * Run"). The positive counterpart to mistake tags, and sliced the same way
+   * on Analysis so "perfect entry" earns an expectancy figure rather than a
+   * pat on the back. NULL for every trade that hasn't been marked.
+   */
+  highlights: text("highlights"),
 });
 
 /* ------------------------------- playbook ------------------------------ */
@@ -256,6 +271,34 @@ export const updateTradeSchema = tradeFields.partial();
 export type InsertTrade = z.infer<typeof insertTradeSchema>;
 export type UpdateTrade = z.infer<typeof updateTradeSchema>;
 export type Trade = typeof trades.$inferSelect;
+
+/* ========================== account settings ======================== */
+
+/**
+ * Fee schedule for an account name, keyed by the same free-text name trades
+ * carry. Maker = limit orders, taker = market orders, defined per side:
+ * percent mode reads the rates as % of notional, perContract mode as dollars
+ * per contract. Only accounts whose fees you care about need a row here —
+ * everything else simply has no schedule and no suggestions.
+ */
+export const accountSettings = pgTable("account_settings", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull(),
+  feeMode: text("fee_mode").notNull().default("percent"), // 'percent' | 'perContract'
+  makerFee: doublePrecision("maker_fee").notNull().default(0), // limit orders, per side
+  takerFee: doublePrecision("taker_fee").notNull().default(0), // market orders, per side
+});
+
+export const feeModeEnum = z.enum(["percent", "perContract"]);
+export const upsertAccountSettingsSchema = z.object({
+  name: z.string().min(1).max(80),
+  feeMode: feeModeEnum,
+  makerFee: z.number().min(0),
+  takerFee: z.number().min(0),
+});
+
+export type AccountSettings = typeof accountSettings.$inferSelect;
+export type UpsertAccountSettings = z.infer<typeof upsertAccountSettingsSchema>;
 
 /* ============================ mistakeTags =========================== */
 

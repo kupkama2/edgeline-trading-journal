@@ -15,6 +15,7 @@ import type { Trade, TradeWithTags, MistakeTag } from "./schema";
 import { computeMetrics } from "./metrics";
 import { parseNum, parseVenueTime } from "./import-parse";
 import { dayKey } from "./daily";
+import { parseHighlights } from "./highlights";
 
 /* ------------------------------- writing ------------------------------- */
 
@@ -34,10 +35,10 @@ const EXPORT_COLUMNS = [
   "size", "sizeUnit", "pointValue",
   "entryPrice", "initialStop", "initialTarget", "exitPrice",
   "entryTime", "exitTime", "exitReason", "cancelReason",
-  "riskDollars", "actualR", "actualPnL",
+  "riskDollars", "actualR", "actualPnL", "fees",
   "potentialR", "managementDeltaR", "captureRatio",
   "maeR", "mfeR",
-  "style", "account", "mistakes", "setups", "rationale", "notes",
+  "style", "account", "mistakes", "highlights", "setups", "rationale", "notes",
 ] as const;
 
 /**
@@ -87,6 +88,7 @@ export function tradesToCsv(
       round(m.riskDollars),
       round(m.actualR, 4),
       round(m.actualPnL),
+      t.fees,
       round(m.potentialR, 4),
       round(m.managementDeltaR, 4),
       round(m.captureRatio, 4),
@@ -95,6 +97,7 @@ export function tradesToCsv(
       t.styleId != null ? (styleNames[t.styleId] ?? "") : "",
       t.account,
       t.mistakeTagIds.map((id) => tagNames[id]).filter(Boolean).join("; "),
+      parseHighlights(t.highlights).join("; "),
       setupsOf(t),
       t.rationale,
       t.notes,

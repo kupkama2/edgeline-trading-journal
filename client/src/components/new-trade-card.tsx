@@ -20,6 +20,8 @@ import { useDemonGuard } from "@/components/daily-guard";
 import { pointValueFor } from "@shared/symbols";
 import { dropBracketLegs, type ImportCandidate } from "@shared/import-parse";
 import { Dropzone, EXIT_REASONS, RationaleTags, localNow, num, parseTags, toIso } from "@/components/trade-shared";
+import { AccountPicker, HighlightPicker } from "@/components/trade-pickers";
+import { knownHighlights, serializeHighlights } from "@shared/highlights";
 import { suggestSize } from "@shared/sizing";
 import { inSessionWindow, windowLabel } from "@shared/session";
 
@@ -62,6 +64,7 @@ export function NewTradeCard({
   const [exitTime, setExitTime] = useState(localNow());
   const [exitReason, setExitReason] = useState<string | null>(null);
   const [selectedDemons, setSelectedDemons] = useState<number[]>([]);
+  const [highlights, setHighlights] = useState<string[]>([]);
   const { data: demons = [] } = useMistakeTags();
 
   /* Optional playbook / edge checklist — never required. */
@@ -311,6 +314,7 @@ export function NewTradeCard({
         initialTarget: data.initialTarget,
         extraTargets: extras.length ? JSON.stringify(extras) : null,
         account: account.trim() || null,
+        highlights: loggingClosed ? serializeHighlights(highlights) : null,
         entryTime: toIso(data.entryTime),
         // Screenshots are parsed, not kept. A base64 chart is ~300x the size of
         // the trade record it produces, and chart replay lives in Tradesly /
@@ -354,6 +358,7 @@ export function NewTradeCard({
     setExitTime(localNow());
     setExitReason(null);
     setSelectedDemons([]);
+    setHighlights([]);
     setPickedStyleId(null);
     setExtraTps([]);
     // The account survives the reset on purpose — next trade, same account.
@@ -614,34 +619,7 @@ export function NewTradeCard({
             <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
               Account
             </p>
-            <div className="flex flex-wrap items-center gap-1.5">
-              {knownAccounts.map((a) => {
-                const on = account.trim() === a;
-                return (
-                  <button
-                    key={a}
-                    type="button"
-                    onClick={() => setAccount(on ? "" : a)}
-                    data-testid={`chip-account-${a}`}
-                    aria-pressed={on}
-                    className={`rounded-full border px-2.5 py-1 text-[11px] leading-tight transition-colors ${
-                      on
-                        ? "border-primary/60 bg-primary/15 text-primary"
-                        : "border-border text-muted-foreground hover:border-primary/40 hover:text-foreground"
-                    }`}
-                  >
-                    {a}
-                  </button>
-                );
-              })}
-              <Input
-                value={account}
-                onChange={(e) => setAccount(e.target.value)}
-                placeholder={knownAccounts.length ? "or a new one…" : "e.g. Apex eval, Binance…"}
-                className="h-7 w-40 text-[11px]"
-                data-testid="input-account"
-              />
-            </div>
+            <AccountPicker value={account} onChange={setAccount} known={knownAccounts} />
           </div>
 
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -1025,6 +1003,15 @@ export function NewTradeCard({
                   })}
                 </div>
               </div>
+
+              <HighlightPicker
+                selected={highlights}
+                extra={knownHighlights(allTrades).filter((h) => !highlights.includes(h))}
+                onToggle={(h) =>
+                  setHighlights((s) => (s.includes(h) ? s.filter((x) => x !== h) : [...s, h]))
+                }
+                testIdPrefix="new-highlight"
+              />
 
               <p className="text-[10px] leading-snug text-muted-foreground">
                 MAE / MFE and the no-management verdict stay optional — add them later

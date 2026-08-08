@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -11,7 +11,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { Loader2, Minus, Plus } from "lucide-react";
 import { parseExtraTargets, type TradeWithTags } from "@shared/schema";
-import { positionLedger, suggestPartialSize, validateFill } from "@shared/fills";
+import { convertFillSize, positionLedger, suggestPartialSize, validateFill } from "@shared/fills";
 import { fmtMoney } from "@shared/metrics";
 import { useAddFill } from "@/lib/data";
 import { num } from "@/components/trade-shared";
@@ -37,14 +37,27 @@ export function FillDialog({
   const [price, setPrice] = useState("");
   const [size, setSize] = useState("");
   const [note, setNote] = useState("");
+  // The unit the size is TYPED in. Storage stays in the trade's own unit;
+  // crossing over just converts at the fill price on the way out.
+  const [fillUnit, setFillUnit] = useState<"base" | "quote">("base");
   const { toast } = useToast();
   const addFill = useAddFill();
 
+  const tradeUnit: "base" | "quote" = trade?.sizeUnit === "quote" ? "quote" : "base";
+  useEffect(() => {
+    if (trade) setFillUnit(trade.sizeUnit === "quote" ? "quote" : "base");
+  }, [trade?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const led = useMemo(() => (trade ? positionLedger(trade) : null), [trade]);
 
+  // The size in the trade's own unit — what actually gets stored.
+  const effSize =
+    trade && size.trim()
+      ? convertFillSize(Number(size), fillUnit, tradeUnit, Number(price))
+      : null;
   const parsed =
-    trade && price.trim() && size.trim()
-      ? { kind, price: Number(price), size: Number(size) }
+    trade && price.trim() && effSize != null
+      ? { kind, price: Number(price), size: effSize }
       : null;
   const problem =
     trade && parsed && isFinite(parsed.price) && isFinite(parsed.size)
@@ -97,7 +110,8 @@ export function FillDialog({
   }
 
   if (!trade || !led) return null;
-  const unit = trade.sizeUnit === "quote" ? "USD" : "ct";
+  // Futures have no meaningful USD-notional sizing, so no unit choice there.
+  const canSwitchUnit = (trade.pointValue ?? 1) === 1;
 
   // The nth partial usually happens at the nth planned TP, so suggest exactly
   // that: first partial hints TP1, the next hints TP2, and so on. A hint only
@@ -112,6 +126,18 @@ export function FillDialog({
   // Default plan: peel off an equal share per remaining TP.
   const sizeHint =
     kind === "partial" ? suggestPartialSize(trade, Number(price) || null) : null;
+  // The hint follows whichever unit is being typed.
+  const hintPx = Number(price) > 0 ? Number(price) : priceHint;
+  const sizeHintShown =
+    sizeHint == null
+      ? null
+      : fillUnit === tradeUnit
+        ? sizeHint
+        : fillUnit === "quote"
+          ? Math.round(sizeHint * hintPx)
+          : hintPx > 0
+            ? Math.round((sizeHint / hintPx) * 1e4) / 1e4
+            : null;
 
   return (
     <Dialog open={trade != null} onOpenChange={(o) => !o && onClose()}>
@@ -163,18 +189,40 @@ export function FillDialog({
             </div>
             <div className="space-y-1">
               <div className="flex items-center justify-between">
-                <Label className="text-[11px]">
-                  Size <span className="text-muted-foreground">({unit})</span>
-                </Label>
-                {sizeHint != null && (
+                <div className="flex items-center gap-1.5">
+                  <Label className="text-[11px]">Size</Label>
+                  {canSwitchUnit ? (
+                    <div className="flex gap-0.5">
+                      {(["base", "quote"] as const).map((u) => (
+                        <button
+                          key={u}
+                          type="button"
+                          onClick={() => setFillUnit(u)}
+                          data-testid={`button-fill-unit-${u}`}
+                          aria-pressed={fillUnit === u}
+                          className={`rounded px-1 py-0.5 text-[9px] uppercase tracking-wider transition-colors ${
+                            fillUnit === u
+                              ? "bg-primary/15 text-primary"
+                              : "text-muted-foreground hover:text-foreground"
+                          }`}
+                        >
+                          {u === "base" ? "units" : "usd"}
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <span className="text-[11px] text-muted-foreground">(ct)</span>
+                  )}
+                </div>
+                {sizeHintShown != null && (
                   <button
                     type="button"
-                    onClick={() => setSize(String(sizeHint))}
+                    onClick={() => setSize(String(sizeHintShown))}
                     title="Equal split of what's still on across the remaining TPs"
                     data-testid="button-apply-split"
                     className="rounded px-1 font-mono text-[10px] leading-tight text-primary transition-colors hover:bg-primary/10"
                   >
-                    even → {sizeHint}
+                    even → {sizeHintShown}
                   </button>
                 )}
               </div>
@@ -182,13 +230,18 @@ export function FillDialog({
                 value={size}
                 onChange={(e) => setSize(e.target.value)}
                 inputMode="decimal"
-                placeholder={sizeHint != null ? String(sizeHint) : "—"}
+                placeholder={sizeHintShown != null ? String(sizeHintShown) : "—"}
                 className="h-9 font-mono text-sm"
                 data-testid="input-fill-size"
               />
             </div>
           </div>
 
+          {fillUnit !== tradeUnit && effSize != null && (
+            <p className="font-mono text-[10px] text-muted-foreground" data-testid="fill-converted">
+              = {num(effSize, 4)} {tradeUnit === "quote" ? "USD" : "units"} at this price
+            </p>
+          )}
           {problem && (
             <p className="text-[11px] leading-snug text-amber-500" data-testid="fill-problem">
               {problem}
