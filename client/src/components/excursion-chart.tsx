@@ -20,7 +20,15 @@ const H = 220;
 const PAD = { top: 14, bottom: 14 };
 const BAR_MIN = 10; // px per bar incl. gap; the chart scrolls past ~60 trades
 
-export function ExcursionChart({ rows }: { rows: Excursion[] }) {
+export function ExcursionChart({
+  rows,
+  onSelect,
+}: {
+  rows: Excursion[];
+  /** Open the trade behind a bar. Every bar IS a trade, so the chart is a
+      way into the log rather than a picture of it. */
+  onSelect?: (tradeId: number) => void;
+}) {
   const [hover, setHover] = useState<number | null>(null);
 
   const geom = useMemo(() => {
@@ -69,6 +77,17 @@ export function ExcursionChart({ rows }: { rows: Excursion[] }) {
               <g
                 key={r.tradeId}
                 onMouseEnter={() => setHover(i)}
+                onClick={() => onSelect?.(r.tradeId)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    onSelect?.(r.tradeId);
+                  }
+                }}
+                tabIndex={onSelect ? 0 : undefined}
+                role={onSelect ? "button" : undefined}
+                aria-label={onSelect ? `Open ${r.symbol} trade` : undefined}
+                className={onSelect ? "cursor-pointer focus:outline-none" : undefined}
                 data-testid={`excursion-bar-${r.tradeId}`}
               >
                 {/* invisible full-height hit target so thin bars are hoverable */}
@@ -110,6 +129,20 @@ export function ExcursionChart({ rows }: { rows: Excursion[] }) {
                     className="fill-foreground/5"
                   />
                 )}
+                {/* Keyboard focus needs its own ring — the hover wash is a
+                    pointer affordance and never fires from the keyboard. */}
+                {onSelect && (
+                  <rect
+                    x={i * barW}
+                    y={0}
+                    width={barW}
+                    height={H}
+                    fill="none"
+                    className="stroke-transparent [g:focus-visible>&]:stroke-primary"
+                    strokeWidth={2}
+                    vectorEffect="non-scaling-stroke"
+                  />
+                )}
               </g>
             );
           })}
@@ -128,6 +161,7 @@ export function ExcursionChart({ rows }: { rows: Excursion[] }) {
             {h.capture != null && ` · kept ${Math.round(h.capture * 100)}%`}
           </p>
           <p className="font-mono text-red-500">dipped {fmtR(h.maeR)}</p>
+          {onSelect && <p className="text-muted-foreground">click to open</p>}
         </div>
       )}
 

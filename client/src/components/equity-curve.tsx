@@ -24,7 +24,15 @@ const W = 800;
 const H = 180;
 const PAD = { top: 12, right: 56, bottom: 20, left: 8 };
 
-export function EquityCurve({ points }: { points: EquityPoint[] }) {
+export function EquityCurve({
+  points,
+  onSelect,
+}: {
+  points: EquityPoint[];
+  /** A point here is a DAY, not a trade, so clicking opens that day's page
+      rather than a trade dialog — the thing behind the dot. */
+  onSelect?: (day: string) => void;
+}) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const [hover, setHover] = useState<number | null>(null);
 
@@ -68,10 +76,13 @@ export function EquityCurve({ points }: { points: EquityPoint[] }) {
     <div ref={wrapRef} className="relative" data-testid="equity-curve">
       <svg
         viewBox={`0 0 ${W} ${H}`}
-        className="h-44 w-full"
+        className={`h-44 w-full ${onSelect ? "cursor-pointer" : ""}`}
         preserveAspectRatio="none"
         onMouseMove={onMove}
         onMouseLeave={() => setHover(null)}
+        onClick={() => {
+          if (onSelect && hover != null) onSelect(points[hover].day);
+        }}
       >
         {/* Recessive zero baseline — the only gridline the story needs. */}
         <line
@@ -138,6 +149,7 @@ export function EquityCurve({ points }: { points: EquityPoint[] }) {
             total {fmtR(h.cumulativeR)} · {fmtMoney(h.cumulativePnL)}
           </p>
           <p className="font-mono text-muted-foreground">day {fmtR(dayDelta)}</p>
+          {onSelect && <p className="text-muted-foreground">click to open the day</p>}
         </div>
       )}
     </div>

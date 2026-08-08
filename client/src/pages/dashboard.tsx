@@ -26,6 +26,9 @@ import {
   useSubmitWeeklyReview,
 } from "@/lib/data";
 import { DailyGuardCard } from "@/components/daily-guard";
+import { TradeDetailDialog } from "@/components/trade-dialogs";
+import { setJumpDay } from "@/lib/jump";
+import { useLocation } from "wouter";
 import { DemonFinderPanel, WeeklyReviewCard } from "@/components/demon-finder";
 import { WeeklyInsightsCard } from "@/components/weekly-insights";
 import { StyleSwitcher } from "@/components/style-switcher";
@@ -232,6 +235,10 @@ export default function Dashboard() {
   const { data: trades, isLoading } = useTrades();
   const { data: tags = [] } = useMistakeTags();
   const { activeStyleId } = useStyleFilter();
+  // A point on the equity curve is one closed trade, and a calendar cell is
+  // one day — both are doors into the log rather than pictures of it.
+  const [viewing, setViewing] = useState<TradeWithTags | null>(null);
+  const [, navigate] = useLocation();
   const all = useMemo(
     () => filterByStyle(trades ?? [], activeStyleId),
     [trades, activeStyleId],
@@ -264,6 +271,8 @@ export default function Dashboard() {
       d += m.managementDeltaR ?? 0;
       return {
         i: i + 1,
+        // Carried so a click on the curve can find its way back to the row.
+        tradeId: t.id,
         label: `#${i + 1} ${t.symbol}`,
         actual: +a.toFixed(3),
         potential: +p.toFixed(3),
@@ -430,7 +439,17 @@ export default function Dashboard() {
           <EmptyChart msg="Close a few trades with an outcome screenshot (or a no-management verdict) and both curves appear here." />
         ) : (
           <ResponsiveContainer width="100%" height={280}>
-            <ComposedChart data={equity} margin={{ top: 8, right: 8, bottom: 4, left: -4 }}>
+            <ComposedChart
+              data={equity}
+              margin={{ top: 8, right: 8, bottom: 4, left: -4 }}
+              className="cursor-pointer"
+              onClick={(e: any) => {
+                // Recharts hands back the hovered datum; each point on this
+                // curve is one closed trade, so open it.
+                const id = e?.activePayload?.[0]?.payload?.tradeId;
+                if (id != null) setViewing(closed.find((t) => t.id === id) ?? null);
+              }}
+            >
               <defs>
                 <linearGradient id="gDelta" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="0%" stopColor={C.delta} stopOpacity={0.28} />
@@ -593,11 +612,17 @@ export default function Dashboard() {
                           ? `hsl(var(--chart-1) / ${0.2 + intensity * 0.8})`
                           : `hsl(var(--chart-4) / ${0.2 + intensity * 0.8})`;
                     return (
-                      <div
+                      <button
+                        type="button"
                         key={cell.day}
                         title={`${cell.day}${v != null ? ` · ${fmtMoney(v)}` : ""}`}
                         data-testid={`cal-${cell.day}`}
-                        className="h-4 w-4 rounded-[3px] sm:h-5 sm:w-5"
+                        onClick={() => {
+                          setJumpDay(cell.day);
+                          navigate("/daily");
+                        }}
+                        aria-label={`Open ${cell.day}`}
+                        className="h-4 w-4 rounded-[3px] transition-transform hover:scale-125 sm:h-5 sm:w-5"
                         style={{ backgroundColor: bg }}
                       />
                     );
@@ -632,6 +657,8 @@ export default function Dashboard() {
           </div>
         </ChartCard>
       </div>
+
+      <TradeDetailDialog trade={viewing} onClose={() => setViewing(null)} />
     </div>
   );
 }

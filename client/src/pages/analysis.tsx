@@ -10,6 +10,10 @@ import { StyleSwitcher } from "@/components/style-switcher";
 import { ImportCsvDialog } from "@/components/import-csv";
 import { EquityCurve } from "@/components/equity-curve";
 import { ExcursionChart } from "@/components/excursion-chart";
+import { TradeDetailDialog } from "@/components/trade-dialogs";
+import { setJumpDay } from "@/lib/jump";
+import { useLocation } from "wouter";
+import type { TradeWithTags } from "@shared/schema";
 import {
   byAccount,
   byHighlight,
@@ -175,6 +179,9 @@ export default function Analysis() {
   const { data: trades = [], isLoading } = useTrades();
   const { data: tags = [] } = useMistakeTags();
   const scoped = useStyleScopedTrades(trades);
+  const [, navigate] = useLocation();
+  // Every chart mark stands for a real row; clicking one opens it.
+  const [viewing, setViewing] = useState<TradeWithTags | null>(null);
   const [tab, setTab] = useState<TabId>("hour");
   const [importOpen, setImportOpen] = useState(false);
   const [horizon, setHorizon] = useState(100);
@@ -261,7 +268,13 @@ export default function Analysis() {
             <p className="mb-1 text-[10px] uppercase tracking-wider text-muted-foreground">
               Equity, cumulative R by day
             </p>
-            <EquityCurve points={dd.equityR} />
+            <EquityCurve
+              points={dd.equityR}
+              onSelect={(day) => {
+                setJumpDay(day);
+                navigate("/daily");
+              }}
+            />
           </div>
         )}
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
@@ -340,7 +353,10 @@ export default function Analysis() {
           </p>
         ) : (
           <>
-            <ExcursionChart rows={exc} />
+            <ExcursionChart
+              rows={exc}
+              onSelect={(id) => setViewing(scoped.find((t) => t.id === id) ?? null)}
+            />
             {excSummary && (
               <div className="mt-3 grid grid-cols-2 gap-4 sm:grid-cols-4">
                 <Stat
@@ -589,6 +605,7 @@ export default function Analysis() {
       )}
 
       <ImportCsvDialog open={importOpen} onClose={() => setImportOpen(false)} />
+      <TradeDetailDialog trade={viewing} onClose={() => setViewing(null)} />
     </div>
   );
 }

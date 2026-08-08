@@ -15,7 +15,10 @@ import {
 } from "lucide-react";
 import { useDailyNotes, useSaveDailyNote, useTrades } from "@/lib/data";
 import { useStyleScopedTrades } from "@/lib/style-filter";
+import { takeJumpDay } from "@/lib/jump";
 import { StyleSwitcher } from "@/components/style-switcher";
+import { TradeDetailDialog } from "@/components/trade-dialogs";
+import type { TradeWithTags } from "@shared/schema";
 import { dayKey, monthGrid, summarizeDays, tradesOnDay } from "@shared/daily";
 import { computeMetrics, fmtMoney, fmtR } from "@shared/metrics";
 
@@ -47,10 +50,14 @@ export default function Daily() {
   const save = useSaveDailyNote();
 
   const today = dayKey(new Date());
-  const [selected, setSelected] = useState(today);
+  // A click on the equity curve arrives as a pending day; consuming it here
+  // means the calendar opens on the day that was clicked, month and all.
+  const [selected, setSelected] = useState(() => takeJumpDay() ?? today);
+  const [viewing, setViewing] = useState<TradeWithTags | null>(null);
   const [view, setView] = useState(() => {
-    const d = new Date();
-    return { year: d.getFullYear(), month: d.getMonth() };
+    const d = selected ? new Date(`${selected}T12:00:00`) : new Date();
+    const valid = !isNaN(d.getTime()) ? d : new Date();
+    return { year: valid.getFullYear(), month: valid.getMonth() };
   });
 
   const days = useMemo(() => summarizeDays(scoped), [scoped]);
@@ -323,7 +330,8 @@ export default function Daily() {
                   return (
                     <li
                       key={t.id}
-                      className="flex items-center gap-2 rounded-md border border-border/60 px-2.5 py-1.5"
+                      onClick={() => setViewing(t)}
+                      className="flex cursor-pointer items-center gap-2 rounded-md border border-border/60 px-2.5 py-1.5 transition-colors hover:border-primary/50"
                       data-testid={`row-day-trade-${t.id}`}
                     >
                       {t.direction === "long" ? (
@@ -367,6 +375,8 @@ export default function Daily() {
           </Card>
         </div>
       </div>
+
+      <TradeDetailDialog trade={viewing} onClose={() => setViewing(null)} />
     </div>
   );
 }
