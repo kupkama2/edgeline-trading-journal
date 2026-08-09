@@ -102,6 +102,7 @@ export default function Journal() {
   // switching is instant and costs no round trip.
   const [sortBy, setSortBy] = useState<SortKey>("newest");
   const [importSeed, setImportSeed] = useState<ImportCandidate[] | null>(null);
+  const [entryOpen, setEntryOpen] = useState(false);
   const [showClosed, setShowClosed] = useState(true);
   const [allClosed, setAllClosed] = useState(false);
 
@@ -167,12 +168,21 @@ export default function Journal() {
 
       <DailyGuardCard trades={scoped} tags={tags} styleId={activeStyleId} />
 
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
+      {/* The entry form gets its own column only while it is open. Closed, it
+          is one line, and holding a half-empty column beside it just to keep
+          the grid symmetrical would waste the widest part of the page —
+          so the open trades take the whole width instead. */}
+      <div
+        className={`grid items-start gap-6 ${
+          entryOpen ? "lg:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]" : "grid-cols-1"
+        }`}
+      >
         <NewTradeCard
           onOrdersDetected={(rows) => {
             setImportSeed(rows);
             setImporting(true);
           }}
+          onExpandedChange={setEntryOpen}
         />
 
         <div className="space-y-3">
@@ -200,7 +210,7 @@ export default function Journal() {
               </p>
             </Card>
           ) : (
-            <div className="space-y-2">
+            <div className={entryOpen ? "space-y-2" : "grid gap-2 md:grid-cols-2"}>
               {open.map((t) => (
                 <OpenTradeRow
                   key={t.id}

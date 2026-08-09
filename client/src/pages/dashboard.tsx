@@ -230,7 +230,7 @@ function WeeklyGate({
 
 /* --------------------------------- page -------------------------------- */
 
-export default function Dashboard() {
+export default function Dashboard({ embedded = false }: { embedded?: boolean } = {}) {
   const { data: trades, isLoading } = useTrades();
   const { data: tags = [] } = useMistakeTags();
   const { activeStyleId } = useStyleFilter();
@@ -381,15 +381,20 @@ export default function Dashboard() {
     <div className="space-y-6">
       <WeeklyGate leaderboard={leaderboard} />
 
-      <div>
-        <h1 className="text-xl font-bold tracking-tight">Dashboard</h1>
-        <p className="mt-0.5 text-xs text-muted-foreground">
-          {stats.count} closed {stats.count === 1 ? "trade" : "trades"} · what your management is
-          actually worth
-        </p>
-      </div>
-
-      <StyleSwitcher />
+      {/* Embedded inside Stats, the page header and the book switcher belong
+          to the shell around it, not to this half of it. */}
+      {!embedded && (
+        <>
+          <div>
+            <h1 className="text-xl font-bold tracking-tight">Dashboard</h1>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              {stats.count} closed {stats.count === 1 ? "trade" : "trades"} · what your management
+              is actually worth
+            </p>
+          </div>
+          <StyleSwitcher />
+        </>
+      )}
 
       {/* Account-level on purpose: process discipline doesn't reset when you
           switch books, so this card ignores the style filter. */}

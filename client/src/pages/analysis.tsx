@@ -175,7 +175,7 @@ function Stat({
   );
 }
 
-export default function Analysis() {
+export default function Analysis({ embedded = false }: { embedded?: boolean } = {}) {
   const { data: trades = [], isLoading } = useTrades();
   const { data: tags = [] } = useMistakeTags();
   const scoped = useStyleScopedTrades(trades);
@@ -229,17 +229,21 @@ export default function Analysis() {
   }
 
   return (
-    <div className="space-y-4 p-4 sm:p-6">
+    <div className={embedded ? "space-y-4" : "space-y-4 p-4 sm:p-6"}>
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-lg font-semibold tracking-tight">Analysis</h1>
-          <p className="text-[11px] text-muted-foreground">
-            {closed.length} closed {closed.length === 1 ? "trade" : "trades"} sliced by when, what
-            and why.
-          </p>
-        </div>
+        {embedded ? (
+          <span />
+        ) : (
+          <div>
+            <h1 className="text-lg font-semibold tracking-tight">Analysis</h1>
+            <p className="text-[11px] text-muted-foreground">
+              {closed.length} closed {closed.length === 1 ? "trade" : "trades"} sliced by when,
+              what and why.
+            </p>
+          </div>
+        )}
         <div className="flex flex-wrap items-center gap-2">
-          <StyleSwitcher />
+          {!embedded && <StyleSwitcher />}
           <Button
             size="sm"
             variant="outline"
