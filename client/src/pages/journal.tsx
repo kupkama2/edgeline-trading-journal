@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ClipboardPaste, Eye, EyeOff } from "lucide-react";
+import { ChevronDown, ClipboardPaste, Eye, EyeOff } from "lucide-react";
 import { useTrades, useMistakeTags } from "@/lib/data";
 import { filterByStyle, useStyleFilter } from "@/lib/style-filter";
 import { type TradeWithTags } from "@shared/schema";
@@ -24,6 +24,9 @@ import { num } from "@/components/trade-shared";
 /* ================================ page ================================ */
 
 type SortKey = "newest" | "oldest" | "symbol" | "risk";
+
+/** How many closes the journal shows before you ask for the rest. */
+const CLOSED_PREVIEW = 3;
 
 const SORT_LABELS: Record<SortKey, string> = {
   newest: "Newest",
@@ -99,6 +102,8 @@ export default function Journal() {
   // switching is instant and costs no round trip.
   const [sortBy, setSortBy] = useState<SortKey>("newest");
   const [importSeed, setImportSeed] = useState<ImportCandidate[] | null>(null);
+  const [showClosed, setShowClosed] = useState(true);
+  const [allClosed, setAllClosed] = useState(false);
 
   const tagNames = useMemo(
     () => Object.fromEntries(tags.map((t) => [t.id, t.name])),
@@ -111,7 +116,20 @@ export default function Journal() {
   );
   const pending = sortTrades(scoped.filter((t) => t.status === "pending"), sortBy);
   const open = sortTrades(scoped.filter((t) => t.status === "open"), sortBy);
-  const closed = scoped.filter((t) => t.status === "closed");
+  /**
+   * Closed trades, newest CLOSE first — the list is a record of what just
+   * settled, and a trade opened last week but closed an hour ago belongs at
+   * the top. Falls back to entry time for anything missing an exit stamp.
+   */
+  const closed = useMemo(
+    () =>
+      scoped
+        .filter((t) => t.status === "closed")
+        .sort((a, b) =>
+          (b.exitTime ?? b.entryTime).localeCompare(a.exitTime ?? a.entryTime),
+        ),
+    [scoped],
+  );
   const cancelled = scoped.filter((t) => t.status === "cancelled");
 
   return (
@@ -226,32 +244,60 @@ export default function Journal() {
         </div>
       )}
 
+      {/* The history is long and the page is for trading, not reading: only
+          the last few closes are shown, and the whole section folds away. */}
       <div className="space-y-3">
-        <div className="flex items-baseline justify-between">
-          <h2 className="text-sm font-semibold tracking-tight">Closed trades</h2>
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <button
+            type="button"
+            onClick={() => setShowClosed((v) => !v)}
+            aria-expanded={showClosed}
+            className="flex items-center gap-1.5 text-sm font-semibold tracking-tight transition-colors hover:text-primary"
+            data-testid="button-toggle-closed-section"
+          >
+            <ChevronDown
+              className={`h-3.5 w-3.5 transition-transform ${showClosed ? "" : "-rotate-90"}`}
+            />
+            Closed trades
+          </button>
           <span className="font-mono text-[11px] text-muted-foreground">
             {closed.length} logged
           </span>
         </div>
-        {closed.length === 0 ? (
-          <Card className="border-dashed border-border bg-card/40 p-6 text-center">
-            <p className="text-xs text-muted-foreground">
-              Closed trades and their management scorecard will appear here.
-            </p>
-          </Card>
-        ) : (
-          <div className="grid gap-2 md:grid-cols-2">
-            {closed.map((t) => (
-              <ClosedTradeRow
-                key={t.id}
-                t={t}
-                tagNames={tagNames}
-                onView={() => navigate(`/trade/${t.id}`)}
-                onEdit={() => setEditing(t)}
-              />
-            ))}
-          </div>
-        )}
+        {showClosed &&
+          (closed.length === 0 ? (
+            <Card className="border-dashed border-border bg-card/40 p-6 text-center">
+              <p className="text-xs text-muted-foreground">
+                Closed trades and their management scorecard will appear here.
+              </p>
+            </Card>
+          ) : (
+            <>
+              <div className="grid gap-2 md:grid-cols-2">
+                {(allClosed ? closed : closed.slice(0, CLOSED_PREVIEW)).map((t) => (
+                  <ClosedTradeRow
+                    key={t.id}
+                    t={t}
+                    tagNames={tagNames}
+                    onView={() => navigate(`/trade/${t.id}`)}
+                    onEdit={() => setEditing(t)}
+                  />
+                ))}
+              </div>
+              {closed.length > CLOSED_PREVIEW && (
+                <button
+                  type="button"
+                  onClick={() => setAllClosed((v) => !v)}
+                  className="text-[11px] text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline"
+                  data-testid="button-show-all-closed"
+                >
+                  {allClosed
+                    ? `Show only the last ${CLOSED_PREVIEW}`
+                    : `Show all ${closed.length} closed trades`}
+                </button>
+              )}
+            </>
+          ))}
       </div>
 
       {cancelled.length > 0 && (
