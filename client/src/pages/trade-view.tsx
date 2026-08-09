@@ -416,7 +416,7 @@ function TradeBody({
             />
             <Fig
               label="Size"
-              value={`${num(trade.size, 4)}${trade.sizeUnit === "quote" ? " USD" : ""}`}
+              value={`${num(trade.size)}${trade.sizeUnit === "quote" ? " USD" : ""}`}
               hint={trade.pointValue !== 1 ? `$${trade.pointValue}/pt` : undefined}
             />
             <Fig
@@ -499,8 +499,8 @@ function TradeBody({
                         {f.kind === "add" ? "added" : "took"}
                       </Badge>
                       <span className="font-mono">
-                        {num(f.size, 4)}
-                        {trade.sizeUnit === "quote" ? " USD" : ""} @ {num(f.price, 4)}
+                        {num(f.size)}
+                        {trade.sizeUnit === "quote" ? " USD" : ""} @ {num(f.price)}
                       </span>
                       <span className="truncate text-[11px] text-muted-foreground">
                         {new Date(f.time).toLocaleString(undefined, {
@@ -526,8 +526,8 @@ function TradeBody({
                   ))}
               </ul>
               <p className="mt-2 font-mono text-[11px] text-muted-foreground" data-testid="view-ledger">
-                avg entry {num(led.avgEntry, 4)}
-                {trade.status === "open" && ` · ${num(led.openQty, 4)} still on`} ·{" "}
+                avg entry {num(led.avgEntry)}
+                {trade.status === "open" && ` · ${num(led.openQty)} still on`} ·{" "}
                 {fmtMoney(led.realizedPnL)} banked before the close
               </p>
             </>

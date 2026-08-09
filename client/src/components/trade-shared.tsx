@@ -20,8 +20,42 @@ export const EXIT_REASONS = [
   "breakeven",
 ] as const;
 
-export const num = (v: number | null | undefined, d = 2) =>
-  v == null || !isFinite(v) ? "—" : v.toFixed(d);
+/**
+ * Decimals that survive the instrument.
+ *
+ * Two was fine while everything was NQ and BTC. A 0.0064875 PENGU entry
+ * rendered as "0.01" — and so did its stop, and its target, which turned a
+ * whole trade into three identical numbers and hid the difference the trade
+ * was made of. Precision therefore follows magnitude: the smaller the price,
+ * the further past the decimal point the information lives.
+ *
+ * Chosen so the *distance between two nearby levels* stays visible, which is
+ * a stronger requirement than showing the price itself: an entry and a stop
+ * four ticks apart must not collapse onto the same string.
+ */
+function decimalsFor(v: number): number {
+  const a = Math.abs(v);
+  if (a >= 100) return 2;
+  if (a >= 1) return 4;
+  if (a >= 0.01) return 5;
+  if (a >= 0.0001) return 7;
+  return 9;
+}
+
+/**
+ * Format a number for display. With no explicit precision it adapts to the
+ * magnitude (see decimalsFor) and drops trailing zeros, so 21000 reads
+ * "21000.00" and 0.0064875 keeps every digit that matters. Passing a
+ * precision opts out and pins it — used where a column has to line up.
+ */
+export const num = (v: number | null | undefined, d?: number) => {
+  if (v == null || !isFinite(v)) return "—";
+  if (d != null) return v.toFixed(d);
+  const s = v.toFixed(decimalsFor(v));
+  // Trim the padding an adaptive precision adds, but never the last digit
+  // before the point: "0.0065" not "0.0065000", "3" stays "3.00".
+  return Math.abs(v) >= 100 ? s : s.replace(/(\.\d*?[1-9])0+$/, "$1").replace(/\.0+$/, ".00");
+};
 
 export function localNow() {
   const d = new Date();

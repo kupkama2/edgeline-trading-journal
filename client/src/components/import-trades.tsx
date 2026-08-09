@@ -387,11 +387,11 @@ export function ImportTradesDialog({
                     />
 
                     <span className="font-mono text-[11px] text-muted-foreground">
-                      @ {num(r.entryPrice, 6)}
+                      @ {num(r.entryPrice)}
                     </span>
 
                     <span className="font-mono text-[11px]">
-                      {num(r.size, 4)}
+                      {num(r.size)}
                       <span className="ml-1 text-muted-foreground">
                         {r.sizeUnit === "quote" ? "USD" : "ct"}
                       </span>

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { suggestFees } from "../shared/fees";
 import { convertFillSize } from "../shared/fills";
-import { computeMetrics } from "../shared/metrics";
+import { computeMetrics, fmtMoney } from "../shared/metrics";
 import { parseHighlights, serializeHighlights } from "../shared/highlights";
 import { byHighlight } from "../shared/breakdowns";
 import { trade } from "./helpers";
@@ -132,5 +132,17 @@ describe("fees in metrics", () => {
     expect(m.grossPnL).toBe(70);
     expect(m.actualPnL).toBe(60);
     expect(m.actualR).toBeCloseTo(1.5);
+  });
+});
+
+describe("formatting small numbers", () => {
+  it("keeps cents on figures a sub-penny position actually produces", () => {
+    // 3,000 units of a $0.0065 token moving 0.0011 settles for ~$3.30, and
+    // whole-dollar rounding threw most of that away.
+    expect(fmtMoney(3.3)).toBe("+$3.30");
+    expect(fmtMoney(-0.42)).toBe("-$0.42");
+    // Above the noise floor the cents stop earning their space.
+    expect(fmtMoney(12000)).toBe("+$12,000");
+    expect(fmtMoney(0)).toBe("$0.00");
   });
 });

@@ -548,6 +548,11 @@ export function EditTradeDialog({
   // was active when it was logged, and without this the only fix was to
   // delete it and re-enter it.
   const [styleId, setStyleId] = useState<number | null>(null);
+  // Contracts vs USD notional. Editable because it is the one field that
+  // silently changes what every other number MEANS — a 3,000 logged as
+  // contracts instead of dollars misprices the whole trade — and until now it
+  // could only be set at entry.
+  const [sizeUnit, setSizeUnit] = useState<"base" | "quote">("base");
   const { data: styles = [] } = useStyles();
   const { data: allTrades = [] } = useTrades();
   const deleteFill = useDeleteFill();
@@ -591,10 +596,7 @@ export function EditTradeDialog({
       }));
       toast({
         title: "Merged into one exit",
-        description: `Now ${num(merged.size, 4)} @ ${num(merged.entryPrice, 4)} → ${num(
-          merged.exitPrice,
-          4,
-        )}. Same P&L.`,
+        description: `Now ${num(merged.size)} @ ${num(merged.entryPrice)} → ${num(merged.exitPrice)}. Same P&L.`,
       });
     } catch (err: any) {
       toast({
@@ -642,6 +644,7 @@ export function EditTradeDialog({
     setHighlights(parseHighlights(trade.highlights));
     setAccount(trade.account ?? "");
     setStyleId(trade.styleId ?? null);
+    setSizeUnit(trade.sizeUnit === "quote" ? "quote" : "base");
   }, [trade]);
 
   const set = (k: string) => (e: { target: { value: string } }) =>
@@ -658,6 +661,7 @@ export function EditTradeDialog({
       ...trade,
       direction,
       size: numOrNull(f.size ?? "") ?? trade.size,
+      sizeUnit,
       entryPrice,
       initialStop,
       initialTarget: numOrNull(f.initialTarget ?? "") ?? trade.initialTarget,
@@ -701,6 +705,7 @@ export function EditTradeDialog({
         direction,
         size,
         entryPrice,
+        sizeUnit,
         initialStop,
         initialTarget,
         entryTime: f.entryTime ? toIso(f.entryTime) : trade.entryTime,
@@ -785,7 +790,49 @@ export function EditTradeDialog({
                   ))}
                 </div>
               </div>
-              {field("size", "Size")}
+              <div className="space-y-1">
+                <div className="flex items-center justify-between">
+                  <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                    Size
+                  </label>
+                  <div className="flex gap-0.5">
+                    {(["base", "quote"] as const).map((u) => {
+                      // A futures contract has no notional sizing; offering it
+                      // there produces a real but meaningless 1R.
+                      const disabled = u === "quote" && (trade.pointValue ?? 1) !== 1;
+                      return (
+                        <button
+                          key={u}
+                          type="button"
+                          disabled={disabled}
+                          title={disabled ? "Futures are sized in contracts" : undefined}
+                          onClick={() => !disabled && setSizeUnit(u)}
+                          data-testid={`button-edit-size-unit-${u}`}
+                          aria-pressed={sizeUnit === u}
+                          className={`rounded px-1.5 py-0.5 text-[9px] uppercase tracking-wider transition-colors ${
+                            disabled
+                              ? "cursor-not-allowed text-muted-foreground/30"
+                              : sizeUnit === u
+                                ? "bg-primary/15 text-primary"
+                                : "text-muted-foreground hover:text-foreground"
+                          }`}
+                        >
+                          {u === "base" ? "units" : "usd"}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+                <Input
+                  type="number"
+                  step="any"
+                  inputMode="decimal"
+                  value={f.size ?? ""}
+                  onChange={set("size")}
+                  className="h-9 font-mono text-sm"
+                  data-testid="input-edit-size"
+                />
+              </div>
               {field("entryPrice", "Entry")}
               {field("initialStop", "Stop")}
               <div className="space-y-1">
@@ -954,8 +1001,8 @@ export function EditTradeDialog({
                           {fl.kind === "add" ? "added" : "took"}
                         </Badge>
                         <span className="font-mono">
-                          {num(fl.size, 4)}
-                          {trade.sizeUnit === "quote" ? " USD" : ""} @ {num(fl.price, 4)}
+                          {num(fl.size)}
+                          {trade.sizeUnit === "quote" ? " USD" : ""} @ {num(fl.price)}
                         </span>
                         <span className="truncate text-[11px] text-muted-foreground">
                           {new Date(fl.time).toLocaleString(undefined, {
@@ -985,9 +1032,9 @@ export function EditTradeDialog({
                     <p className="text-[11px] leading-snug text-muted-foreground">
                       Log it as one round trip instead:{" "}
                       <span className="font-mono text-foreground">
-                        {num(merged.size, 4)}
-                        {trade.sizeUnit === "quote" ? " USD" : ""} @ {num(merged.entryPrice, 4)}{" "}
-                        &rarr; {num(merged.exitPrice, 4)}
+                        {num(merged.size)}
+                        {trade.sizeUnit === "quote" ? " USD" : ""} @ {num(merged.entryPrice)}{" "}
+                        &rarr; {num(merged.exitPrice)}
                       </span>
                       . The P&amp;L is identical to the cent &mdash; only the story of how it
                       got there is dropped.
