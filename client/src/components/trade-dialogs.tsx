@@ -17,7 +17,8 @@ import { useAccountSettings, useMistakeTags, useUpdateTrade, useAddTradeImage, a
 import { suggestFees } from "@shared/fees";
 import { knownHighlights, parseHighlights, serializeHighlights } from "@shared/highlights";
 import { AccountPicker, HighlightPicker } from "@/components/trade-pickers";
-import { useTrades } from "@/lib/data";
+import { useStyles, useTrades } from "@/lib/data";
+import { styleColor } from "@/lib/style-filter";
 import { positionLedger } from "@shared/fills";
 import { TradeImageGallery } from "@/components/trade-images";
 import { parseExtraTargets, parsePlaybook, type TradeWithTags } from "@shared/schema";
@@ -542,6 +543,12 @@ export function EditTradeDialog({
   const [extraTps, setExtraTps] = useState<string[]>([]);
   const [highlights, setHighlights] = useState<string[]>([]);
   const [account, setAccount] = useState("");
+  // Which book the trade belongs to. Mutable after the fact on purpose: a
+  // trade often turns out to belong to a different style than the one that
+  // was active when it was logged, and without this the only fix was to
+  // delete it and re-enter it.
+  const [styleId, setStyleId] = useState<number | null>(null);
+  const { data: styles = [] } = useStyles();
   const { data: allTrades = [] } = useTrades();
   const knownAccounts = useMemo(() => {
     const s = new Set<string>();
@@ -577,6 +584,7 @@ export function EditTradeDialog({
     setExtraTps(parseExtraTargets(trade.extraTargets).map(String));
     setHighlights(parseHighlights(trade.highlights));
     setAccount(trade.account ?? "");
+    setStyleId(trade.styleId ?? null);
   }, [trade]);
 
   const set = (k: string) => (e: { target: { value: string } }) =>
@@ -653,6 +661,7 @@ export function EditTradeDialog({
         rationaleTags: rTags.length ? JSON.stringify(rTags) : null,
         notes: f.notes.trim() || null,
         account: account.trim() || null,
+        styleId,
         fees: numOrNull(f.fees ?? ""),
         highlights: serializeHighlights(highlights),
       },
@@ -792,6 +801,48 @@ export function EditTradeDialog({
                   testIdPrefix="edit-account"
                 />
               </div>
+              {styles.length > 0 && (
+                <div className="col-span-2 space-y-1" data-testid="section-edit-style">
+                  <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                    Style
+                  </label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {styles.map((s) => {
+                      const on = s.id === styleId;
+                      const c = styleColor(s.color);
+                      return (
+                        <button
+                          key={s.id}
+                          type="button"
+                          /* Tapping the active one clears it: a trade can
+                             legitimately belong to no book. */
+                          onClick={() => setStyleId(on ? null : s.id)}
+                          aria-pressed={on}
+                          data-testid={`chip-edit-style-${s.id}`}
+                          className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] leading-tight transition-colors ${
+                            on
+                              ? c.chip
+                              : "border-border text-muted-foreground hover:border-primary/40 hover:text-foreground"
+                          }`}
+                        >
+                          <span className={`h-1.5 w-1.5 rounded-full ${c.dot}`} />
+                          {s.name}
+                        </button>
+                      );
+                    })}
+                    {styleId != null && (
+                      <button
+                        type="button"
+                        onClick={() => setStyleId(null)}
+                        className="rounded-full border border-border px-2 py-1 text-[10px] text-muted-foreground transition-colors hover:text-foreground"
+                        data-testid="button-edit-style-clear"
+                      >
+                        unassigned
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
               {field("mae", "MAE (worst price)")}
               {field("mfe", "MFE (best price)")}
               {field("fees", "Fees $ (both sides)")}

@@ -1,4 +1,5 @@
-import { Switch, Route, Router } from "wouter";
+import { useRef } from "react";
+import { Switch, Route, Router, useLocation } from "wouter";
 import { useHashLocation } from "wouter/use-hash-location";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -16,18 +17,37 @@ import Daily from "@/pages/daily";
 import Settings from "@/pages/settings";
 import TradeView from "@/pages/trade-view";
 
+/**
+ * A trade has its own address but is not its own screen.
+ *
+ * /trade/:id opens OVER whatever you were looking at: the page underneath
+ * stays mounted, keeps its scroll position and its filters, and dismissing
+ * the overlay puts you back exactly where you were rather than re-running the
+ * page you came from. That is why the Switch is driven by a remembered
+ * non-trade location instead of the live one — the router's idea of "the
+ * page" deliberately lags behind the URL while a trade is open.
+ *
+ * The URL is still real: deep links, the back button and a refresh all work.
+ * Arriving cold on /trade/:id simply shows the journal underneath.
+ */
 function AppRouter() {
+  const [location] = useLocation();
+  const onTrade = location.startsWith("/trade/");
+  const lastPage = useRef("/");
+  if (!onTrade) lastPage.current = location;
+
   return (
-    <Switch>
-      <Route path="/" component={Journal} />
-      <Route path="/daily" component={Daily} />
-      <Route path="/dashboard" component={Dashboard} />
-      <Route path="/analysis" component={Analysis} />
-      <Route path="/settings" component={Settings} />
-      {/* One trade, one address — every click path lands here. */}
-      <Route path="/trade/:id" component={TradeView} />
-      <Route component={NotFound} />
-    </Switch>
+    <>
+      <Switch location={onTrade ? lastPage.current : location}>
+        <Route path="/" component={Journal} />
+        <Route path="/daily" component={Daily} />
+        <Route path="/dashboard" component={Dashboard} />
+        <Route path="/analysis" component={Analysis} />
+        <Route path="/settings" component={Settings} />
+        <Route component={NotFound} />
+      </Switch>
+      {onTrade && <TradeView under={lastPage.current} />}
+    </>
   );
 }
 
