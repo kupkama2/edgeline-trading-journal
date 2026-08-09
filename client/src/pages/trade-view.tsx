@@ -2,19 +2,22 @@
  * One trade, in full — the single place a trade is ever looked at.
  *
  * Every route into a trade (a bar on the excursion chart, a point on the
- * dashboard curve, a row in the journal or on a day) lands here, so what you
- * see never depends on how you arrived. It replaced a dialog for exactly that
- * reason: a dialog is a peek that dies on Escape and can't be linked to or
- * come back to, and half the routes here were opening a different, smaller
- * view of the same row.
+ * dashboard curve, a row in the journal or on a day) opens this same view, so
+ * what you see never depends on how you arrived.
  *
- * Everything on the page reads from the live list by id, so an edit made in
- * the dialog above (or a fill removed below) is reflected the moment the
- * mutation lands.
+ * It is an overlay rather than a screen of its own: the page you came from
+ * stays mounted underneath with its scroll and filters intact, and clicking
+ * outside — or Escape, or the X — drops you straight back into it. But it
+ * still has a URL, so a trade can be linked, bookmarked and reloaded; see the
+ * router note in App.tsx for how those two facts coexist.
+ *
+ * Everything reads from the live list by id, so an edit made in the dialog
+ * above (or a fill removed below) is reflected the moment the mutation lands.
  */
-import { useMemo, useState } from "react";
-import { Link, useLocation, useRoute } from "wouter";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useLocation, useRoute } from "wouter";
 import { Card } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -22,13 +25,13 @@ import {
   ArrowDownRight,
   ArrowLeft,
   ArrowUpRight,
+  Ban,
   ClipboardList,
   Minus,
   Pencil,
   Plus,
   Sparkles,
   Trash2,
-  X,
 } from "lucide-react";
 import { useDeleteFill, useDeleteTrade, useMistakeTags, useTrades } from "@/lib/data";
 import { parseExtraTargets, parsePlaybook, type TradeWithTags } from "@shared/schema";
@@ -72,55 +75,153 @@ function Fig({
   );
 }
 
-export default function TradeView() {
+export default function TradeView({ under = "/" }: { under?: string }) {
   const [, params] = useRoute("/trade/:id");
   const [, navigate] = useLocation();
   const id = Number(params?.id);
   const { data: trades, isLoading } = useTrades();
-  const { data: tags = [] } = useMistakeTags();
-  const deleteFill = useDeleteFill();
-  const deleteTrade = useDeleteTrade();
 
   const [editing, setEditing] = useState(false);
   const [closing, setClosing] = useState(false);
   const [resolving, setResolving] = useState(false);
   const [filling, setFilling] = useState<"add" | "partial" | null>(null);
-  const [confirmDelete, setConfirmDelete] = useState(false);
 
   const trade = useMemo(
     () => (trades ?? []).find((t) => t.id === id) ?? null,
     [trades, id],
   );
+
+  // Dismissing REPLACES the trade URL with the page underneath, so the back
+  // button doesn't bounce you straight back into the trade you just closed.
+  const close = () => navigate(under, { replace: true });
+  // While a write dialog is stacked on top, a click inside it counts as
+  // "outside" the overlay; without this guard, editing would dismiss both.
+  const innerOpen = editing || closing || resolving || filling != null;
+
+  /*
+   * Escape is handled here rather than left to the dialog primitive. Landing
+   * cold on a trade URL, the primitive's own Escape handling stayed inert for
+   * the first few seconds — click-outside and the close button worked
+   * throughout, but the key did nothing — and a dismissal that works only
+   * sometimes is worse than one that never did.
+   *
+   * Two details make this deterministic. It listens in the CAPTURE phase, and
+   * it is registered when the overlay mounts, which is before any stacked
+   * dialog registers its own: same target, same phase, so this handler runs
+   * first and still sees the world as it was when the key went down. And it
+   * reads the guard from a ref, because a dialog closing flushes state
+   * synchronously mid-dispatch — a value captured in a closure would already
+   * be stale by the time a later listener ran.
+   */
+  const innerOpenRef = useRef(false);
+  innerOpenRef.current = innerOpen;
+  const closeRef = useRef(close);
+  closeRef.current = close;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      // A stacked write dialog gets first refusal: Escape closes that and
+      // leaves the trade open behind it.
+      if (e.key === "Escape" && !innerOpenRef.current) closeRef.current();
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, []);
+
+  return (
+    <>
+      {/* Written once, at a stable position in the tree. Declaring this shell
+          inside a conditional (or as a nested component) would give React a
+          new component identity on every render and remount the dialog —
+          which silently costs it its focus trap and its Escape handler. */}
+      <Dialog open onOpenChange={(o) => !o && close()}>
+        <DialogContent
+          className="max-h-[90vh] max-w-4xl overflow-y-auto"
+          onInteractOutside={(e) => innerOpen && e.preventDefault()}
+          /* Always declined here; the listener below owns Escape. Sharing the
+             key with the primitive lost a race: closing a stacked dialog
+             flushes innerOpen to false synchronously, so by the time this
+             guard ran it no longer knew a dialog had just been dismissed and
+             the trade closed along with it. */
+          onEscapeKeyDown={(e) => e.preventDefault()}
+          data-testid="overlay-trade"
+        >
+          <DialogTitle className="sr-only">
+            {trade ? `${trade.symbol} trade` : "Trade"}
+          </DialogTitle>
+
+          {isLoading ? (
+            <div className="space-y-4">
+              <Skeleton className="h-8 w-40" />
+              <Skeleton className="h-64 w-full" />
+            </div>
+          ) : !trade ? (
+            <div className="p-4 text-center">
+              <p className="text-sm">That trade is gone.</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                It was deleted, or the link points at an id that never existed.
+              </p>
+              <Button
+                variant="outline"
+                size="sm"
+                className="mt-4"
+                onClick={close}
+                data-testid="button-back-journal"
+              >
+                <ArrowLeft className="mr-1.5 h-3.5 w-3.5" />
+                Back
+              </Button>
+            </div>
+          ) : (
+            <TradeBody
+              trade={trade}
+              onEdit={() => setEditing(true)}
+              onCloseTrade={() => setClosing(true)}
+              onResolve={() => setResolving(true)}
+              onFill={setFilling}
+              onDeleted={close}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Stacked above the overlay, not inside it: each is its own root, so
+          Escape closes the top one and the trade stays open behind it. */}
+      <EditTradeDialog trade={editing ? trade : null} onClose={() => setEditing(false)} />
+      <CloseTradeDialog trade={closing ? trade : null} onClose={() => setClosing(false)} />
+      <ResolveTradeDialog trade={resolving ? trade : null} onClose={() => setResolving(false)} />
+      <FillDialog
+        trade={filling ? trade : null}
+        kind={filling ?? "partial"}
+        onClose={() => setFilling(null)}
+      />
+    </>
+  );
+}
+
+/** The trade itself. Split out so the overlay shell above never remounts. */
+function TradeBody({
+  trade,
+  onEdit,
+  onCloseTrade,
+  onResolve,
+  onFill,
+  onDeleted,
+}: {
+  trade: TradeWithTags;
+  onEdit: () => void;
+  onCloseTrade: () => void;
+  onResolve: () => void;
+  onFill: (kind: "add" | "partial") => void;
+  onDeleted: () => void;
+}) {
+  const { data: tags = [] } = useMistakeTags();
+  const deleteFill = useDeleteFill();
+  const deleteTrade = useDeleteTrade();
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const tagNames = useMemo(
     () => Object.fromEntries(tags.map((t) => [t.id, t.name])),
     [tags],
   );
-
-  if (isLoading) {
-    return (
-      <div className="space-y-4">
-        <Skeleton className="h-8 w-40" />
-        <Skeleton className="h-64 w-full" />
-      </div>
-    );
-  }
-
-  if (!trade) {
-    return (
-      <Card className="border-dashed border-border bg-card/40 p-8 text-center">
-        <p className="text-sm">That trade is gone.</p>
-        <p className="mt-1 text-xs text-muted-foreground">
-          It was deleted, or the link points at an id that never existed.
-        </p>
-        <Link href="/">
-          <Button variant="outline" size="sm" className="mt-4" data-testid="button-back-journal">
-            <ArrowLeft className="mr-1.5 h-3.5 w-3.5" />
-            Back to the journal
-          </Button>
-        </Link>
-      </Card>
-    );
-  }
 
   const m = computeMetrics(trade);
   const led = positionLedger(trade);
@@ -148,17 +249,9 @@ export default function TradeView() {
   return (
     <div className="space-y-4" data-testid={`page-trade-${trade.id}`}>
       {/* ------------------------------ header ------------------------------ */}
-      <div className="flex flex-wrap items-center gap-2">
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-8 px-2 text-muted-foreground"
-          onClick={() => window.history.back()}
-          data-testid="button-back"
-        >
-          <ArrowLeft className="mr-1.5 h-3.5 w-3.5" />
-          Back
-        </Button>
+      {/* The overlay supplies its own close affordance top-right, so the
+          header carries identity and actions only. */}
+      <div className="flex flex-wrap items-center gap-2 pr-8">
         <span
           className={`flex h-7 w-7 items-center justify-center rounded ${
             trade.direction === "long"
@@ -190,7 +283,7 @@ export default function TradeView() {
                 variant="outline"
                 size="sm"
                 className="h-8 text-[11px]"
-                onClick={() => setFilling("partial")}
+                onClick={() => onFill("partial")}
                 data-testid="button-view-partial"
               >
                 <Minus className="mr-1 h-3 w-3" /> Take
@@ -199,7 +292,7 @@ export default function TradeView() {
                 variant="outline"
                 size="sm"
                 className="h-8 text-[11px]"
-                onClick={() => setFilling("add")}
+                onClick={() => onFill("add")}
                 data-testid="button-view-add"
               >
                 <Plus className="mr-1 h-3 w-3" /> Add
@@ -207,7 +300,7 @@ export default function TradeView() {
               <Button
                 size="sm"
                 className="h-8 text-[11px]"
-                onClick={() => setClosing(true)}
+                onClick={onCloseTrade}
                 data-testid="button-view-close"
               >
                 Close trade
@@ -219,18 +312,22 @@ export default function TradeView() {
               variant="ghost"
               size="icon"
               className="h-8 w-8 text-muted-foreground hover:text-destructive"
-              onClick={() => setResolving(true)}
+              onClick={onResolve}
               aria-label="Never became a position"
+              title="It never became a position"
               data-testid="button-view-resolve"
             >
-              <X className="h-4 w-4" />
+              {/* Not an X: the overlay's own dismiss X sits inches away, and
+                  two identical glyphs one meaning "close this" and the other
+                  "void this trade" is a mistake waiting to happen. */}
+              <Ban className="h-4 w-4" />
             </Button>
           )}
           <Button
             variant="outline"
             size="sm"
             className="h-8 text-[11px]"
-            onClick={() => setEditing(true)}
+            onClick={onEdit}
             data-testid="button-view-edit"
           >
             <Pencil className="mr-1 h-3 w-3" /> Edit
@@ -242,7 +339,7 @@ export default function TradeView() {
               className="h-8 text-[11px]"
               onClick={async () => {
                 await deleteTrade.mutateAsync(trade.id);
-                navigate("/");
+                onDeleted();
               }}
               data-testid="button-view-delete-confirm"
             >
@@ -509,14 +606,6 @@ export default function TradeView() {
         <TradeImageGallery tradeId={trade.id} />
       </Card>
 
-      <EditTradeDialog trade={editing ? trade : null} onClose={() => setEditing(false)} />
-      <CloseTradeDialog trade={closing ? trade : null} onClose={() => setClosing(false)} />
-      <ResolveTradeDialog trade={resolving ? trade : null} onClose={() => setResolving(false)} />
-      <FillDialog
-        trade={filling ? trade : null}
-        kind={filling ?? "partial"}
-        onClose={() => setFilling(null)}
-      />
     </div>
   );
 }
