@@ -107,8 +107,7 @@ export function Logo({ className = "" }: { className?: string }) {
 const NAV = [
   { href: "/", label: "Journal", icon: NotebookPen },
   { href: "/daily", label: "Daily", icon: CalendarDays },
-  { href: "/dashboard", label: "Dashboard", icon: LineChart },
-  { href: "/analysis", label: "Analysis", icon: BarChart3 },
+  { href: "/stats", label: "Stats", icon: BarChart3 },
   { href: "/settings", label: "Settings", icon: Settings2 },
 ];
 

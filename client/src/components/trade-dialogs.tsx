@@ -1113,9 +1113,31 @@ export function EditTradeDialog({
 
             {previewMetrics && (
               <div
-                className="grid grid-cols-3 gap-2 rounded-md border border-border/60 bg-secondary/30 p-2.5 text-center font-mono text-xs"
+                className="grid grid-cols-2 gap-2 rounded-md border border-border/60 bg-secondary/30 p-2.5 text-center font-mono text-xs sm:grid-cols-4"
                 data-testid="edit-preview-metrics"
               >
+                {/* P&L leads. R is this journal's unit, but the broker's
+                    statement is in dollars, and the fastest way to know a
+                    trade was logged correctly is that this figure matches the
+                    one on the exchange. */}
+                <div>
+                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                    {previewMetrics.fees > 0 ? "Net P&L" : "P&L"}
+                  </p>
+                  <p
+                    className={`text-sm font-semibold ${
+                      (previewMetrics.actualPnL ?? 0) >= 0 ? "text-emerald-400" : "text-primary"
+                    }`}
+                    data-testid="edit-preview-pnl"
+                  >
+                    {previewMetrics.actualPnL != null ? fmtMoney(previewMetrics.actualPnL) : "—"}
+                  </p>
+                  {previewMetrics.fees > 0 && (
+                    <p className="text-[10px] text-muted-foreground">
+                      {fmtMoney(previewMetrics.grossPnL)} gross
+                    </p>
+                  )}
+                </div>
                 <div>
                   <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Actual</p>
                   <p

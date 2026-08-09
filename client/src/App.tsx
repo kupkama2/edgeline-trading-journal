@@ -11,10 +11,9 @@ import { StyleFilterProvider } from "@/lib/style-filter";
 import { LoginGate } from "@/components/login-gate";
 import NotFound from "@/pages/not-found";
 import Journal from "@/pages/journal";
-import Dashboard from "@/pages/dashboard";
-import Analysis from "@/pages/analysis";
 import Daily from "@/pages/daily";
 import Settings from "@/pages/settings";
+import Stats from "@/pages/stats";
 import TradeView from "@/pages/trade-view";
 
 /**
@@ -41,8 +40,12 @@ function AppRouter() {
       <Switch location={onTrade ? lastPage.current : location}>
         <Route path="/" component={Journal} />
         <Route path="/daily" component={Daily} />
-        <Route path="/dashboard" component={Dashboard} />
-        <Route path="/analysis" component={Analysis} />
+        {/* One tab, two halves. The old two addresses still resolve — links
+            and bookmarks outlive a navigation change — each landing on the
+            half it used to be. */}
+        <Route path="/stats" component={Stats} />
+        <Route path="/dashboard" component={Stats} />
+        <Route path="/analysis" component={Stats} />
         <Route path="/settings" component={Settings} />
         <Route component={NotFound} />
       </Switch>

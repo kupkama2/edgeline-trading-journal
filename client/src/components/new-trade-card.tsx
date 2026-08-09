@@ -45,8 +45,11 @@ const ACCOUNT_KEY = "edgeline.lastAccount";
 
 export function NewTradeCard({
   onOrdersDetected,
+  onExpandedChange,
 }: {
   onOrdersDetected: (rows: ImportCandidate[]) => void;
+  /** So the page can give the column back when the form is closed. */
+  onExpandedChange?: (open: boolean) => void;
 }) {
   const { toast } = useToast();
   const createTrade = useCreateTrade();
@@ -54,6 +57,14 @@ export function NewTradeCard({
   const [image, setImage] = useState<string | null>(null);
   const [parsing, setParsing] = useState(false);
   const [parsed, setParsed] = useState(false);
+  /*
+   * The form is a full page of fields and it is idle most of the time — the
+   * journal is read far more often than it is written to. So it starts as a
+   * single line and opens on demand: a click, or a chart pasted anywhere on
+   * the page, which is how a trade usually starts anyway.
+   */
+  const [expanded, setExpanded] = useState(false);
+  useEffect(() => onExpandedChange?.(expanded), [expanded, onExpandedChange]);
 
   /* One-step closed-trade logging: when the screenshot already shows an exit
      (or the user flips the toggle) we skip CloseTradeDialog entirely and write
@@ -271,6 +282,31 @@ export function NewTradeCard({
     }
   }
 
+  // Paste while collapsed: open, then hand the image straight to the parser.
+  // The expanded card has its own dropzone listener, so this one stands down
+  // the moment the form is open, and never competes with a dialog's.
+  useEffect(() => {
+    if (expanded) return;
+    function onPaste(e: ClipboardEvent) {
+      if (document.querySelector('[role="dialog"]')) return;
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].type.startsWith("image/")) {
+          const file = items[i].getAsFile();
+          if (!file) return;
+          e.preventDefault();
+          setExpanded(true);
+          handleFile(file);
+          return;
+        }
+      }
+    }
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expanded]);
+
   const [analyzingRationale, setAnalyzingRationale] = useState(false);
 
   const onSubmit = form.handleSubmit(async (values) => {
@@ -412,12 +448,33 @@ export function NewTradeCard({
 
   return (
     <Card className="border-card-border bg-card p-4 sm:p-5">
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <Sparkles className="h-4 w-4 text-primary" />
+      <div className="flex items-center justify-between gap-2">
+        <button
+          type="button"
+          onClick={() => setExpanded((e) => !e)}
+          aria-expanded={expanded}
+          className="group flex min-w-0 items-center gap-2 text-left"
+          data-testid="button-toggle-entry"
+        >
+          <Sparkles className="h-4 w-4 shrink-0 text-primary" />
           <h2 className="text-sm font-semibold tracking-tight">Log a setup</h2>
-        </div>
-        <div className="flex items-center gap-2">
+          {!expanded && (
+            <span className="truncate text-[11px] text-muted-foreground">
+              click, or paste a chart
+            </span>
+          )}
+          <ChevronDown
+            className={`h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform ${
+              expanded ? "" : "-rotate-90"
+            }`}
+          />
+        </button>
+        {!expanded && (
+          <kbd className="hidden shrink-0 rounded border border-border px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground sm:block">
+            ⌘V
+          </kbd>
+        )}
+        <div className={`flex items-center gap-2 ${expanded ? "" : "hidden"}`}>
           {parsed && (
             <Badge variant="secondary" className="text-[10px]" data-testid="badge-ai-prefill">
               AI pre-filled · verify
@@ -441,6 +498,9 @@ export function NewTradeCard({
         </div>
       </div>
 
+      {expanded && (
+      <>
+      <div className="mt-3" />
       <Dropzone
         testId="dropzone-setup"
         label="Drop entry screenshot"
@@ -1120,6 +1180,8 @@ export function NewTradeCard({
           )}
         </form>
       </Form>
+      </>
+      )}
     </Card>
   );
 }
