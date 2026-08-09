@@ -12,14 +12,14 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, Pencil } from "lucide-react";
+import { Loader2, Pencil, Trash2 } from "lucide-react";
 import { useAccountSettings, useMistakeTags, useUpdateTrade, useAddTradeImage, archiveDataUrl, parseScreenshot, fileToDownscaledDataUrl } from "@/lib/data";
 import { suggestFees } from "@shared/fees";
 import { knownHighlights, parseHighlights, serializeHighlights } from "@shared/highlights";
 import { AccountPicker, HighlightPicker } from "@/components/trade-pickers";
-import { useStyles, useTrades } from "@/lib/data";
+import { useDeleteFill, useStyles, useTrades } from "@/lib/data";
 import { styleColor } from "@/lib/style-filter";
-import { positionLedger } from "@shared/fills";
+import { collapseFills, positionLedger } from "@shared/fills";
 import { TradeImageGallery } from "@/components/trade-images";
 import { parseExtraTargets, parsePlaybook, type TradeWithTags } from "@shared/schema";
 import { computeMetrics, fmtFees, fmtMoney, fmtR, EXIT_REASON_LABELS } from "@shared/metrics";
@@ -550,6 +550,63 @@ export function EditTradeDialog({
   const [styleId, setStyleId] = useState<number | null>(null);
   const { data: styles = [] } = useStyles();
   const { data: allTrades = [] } = useTrades();
+  const deleteFill = useDeleteFill();
+  const [merging, setMerging] = useState(false);
+  const [confirmMerge, setConfirmMerge] = useState(false);
+
+  // What the trade would look like as a single round trip. Null when there is
+  // nothing to fold (no fills, or it hasn't been closed yet).
+  const merged = useMemo(() => (trade ? collapseFills(trade) : null), [trade]);
+
+  /**
+   * Fold the scaling away: write the averaged round trip, then drop the fills.
+   * Two clicks, because it destroys the fill history and the first click is
+   * where the consequence is spelled out. The trade is written BEFORE the
+   * fills are removed, so a failure midway leaves a trade that still adds up
+   * rather than one whose exit no longer accounts for its partials.
+   */
+  async function mergeIntoOneExit() {
+    if (!trade || !merged) return;
+    if (!confirmMerge) {
+      setConfirmMerge(true);
+      return;
+    }
+    setMerging(true);
+    try {
+      await updateTrade.mutateAsync({
+        id: trade.id,
+        trade: {
+          size: merged.size,
+          entryPrice: merged.entryPrice,
+          exitPrice: merged.exitPrice,
+        },
+        mistakeTagIds: selectedTags,
+      });
+      for (const fl of trade.fills) await deleteFill.mutateAsync(fl.id);
+      setF((prev) => ({
+        ...prev,
+        size: String(merged.size),
+        entryPrice: String(merged.entryPrice),
+        exitPrice: String(merged.exitPrice),
+      }));
+      toast({
+        title: "Merged into one exit",
+        description: `Now ${num(merged.size, 4)} @ ${num(merged.entryPrice, 4)} → ${num(
+          merged.exitPrice,
+          4,
+        )}. Same P&L.`,
+      });
+    } catch (err: any) {
+      toast({
+        title: "Couldn't merge",
+        description: String(err?.message ?? err).slice(0, 160),
+        variant: "destructive",
+      });
+    } finally {
+      setMerging(false);
+      setConfirmMerge(false);
+    }
+  }
   const knownAccounts = useMemo(() => {
     const s = new Set<string>();
     for (const t of allTrades) if (t.account?.trim()) s.add(t.account.trim());
@@ -868,6 +925,96 @@ export function EditTradeDialog({
                 ))}
               </div>
             </div>
+
+            {/* Scaling belongs in the edit dialog too: the trade view can show
+                and remove fills, but this is where a trade gets corrected, and
+                "I logged partials I would rather not keep" is a correction. */}
+            {trade.fills.length > 0 && (
+              <div data-testid="section-edit-fills">
+                <p className="mb-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
+                  Partials and adds
+                </p>
+                <ul className="space-y-1">
+                  {[...trade.fills]
+                    .sort((a, b) => a.time.localeCompare(b.time))
+                    .map((fl) => (
+                      <li
+                        key={fl.id}
+                        className="flex flex-wrap items-center gap-2 rounded-md border border-border/60 px-2.5 py-1.5 text-xs"
+                        data-testid={`edit-fill-${fl.id}`}
+                      >
+                        <Badge
+                          variant="outline"
+                          className={`shrink-0 text-[10px] font-normal ${
+                            fl.kind === "add"
+                              ? "border-sky-500/40 text-sky-400"
+                              : "border-emerald-500/40 text-emerald-400"
+                          }`}
+                        >
+                          {fl.kind === "add" ? "added" : "took"}
+                        </Badge>
+                        <span className="font-mono">
+                          {num(fl.size, 4)}
+                          {trade.sizeUnit === "quote" ? " USD" : ""} @ {num(fl.price, 4)}
+                        </span>
+                        <span className="truncate text-[11px] text-muted-foreground">
+                          {new Date(fl.time).toLocaleString(undefined, {
+                            month: "short",
+                            day: "numeric",
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          })}
+                        </span>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="ml-auto h-6 w-6 shrink-0 text-muted-foreground hover:text-destructive"
+                          onClick={() => deleteFill.mutate(fl.id)}
+                          disabled={deleteFill.isPending}
+                          aria-label="Remove this fill"
+                          data-testid={`button-edit-delete-fill-${fl.id}`}
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
+                      </li>
+                    ))}
+                </ul>
+
+                {merged && (
+                  <div className="mt-2 rounded-md border border-border/60 bg-secondary/20 p-2.5">
+                    <p className="text-[11px] leading-snug text-muted-foreground">
+                      Log it as one round trip instead:{" "}
+                      <span className="font-mono text-foreground">
+                        {num(merged.size, 4)}
+                        {trade.sizeUnit === "quote" ? " USD" : ""} @ {num(merged.entryPrice, 4)}{" "}
+                        &rarr; {num(merged.exitPrice, 4)}
+                      </span>
+                      . The P&amp;L is identical to the cent &mdash; only the story of how it
+                      got there is dropped.
+                      {trade.fills.some((fl) => fl.kind === "add") && (
+                        <span className="text-amber-500">
+                          {" "}
+                          This trade was added to, so folding the adds into the entry rebases 1R
+                          onto the larger position: R will change.
+                        </span>
+                      )}
+                    </p>
+                    <Button
+                      type="button"
+                      variant={confirmMerge ? "destructive" : "outline"}
+                      size="sm"
+                      className="mt-2 h-7 text-[11px]"
+                      disabled={merging}
+                      onClick={mergeIntoOneExit}
+                      data-testid="button-merge-fills"
+                    >
+                      {merging && <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />}
+                      {confirmMerge ? "Merge and delete the fills?" : "Merge into one exit"}
+                    </Button>
+                  </div>
+                )}
+              </div>
+            )}
 
             <div>
               <p className="mb-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">

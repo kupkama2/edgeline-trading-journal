@@ -90,6 +90,73 @@ export function totalPnLWithFills(t: TradeWithFills): number | null {
 }
 
 /**
+ * Flatten a scaled trade back into a single entry and a single exit.
+ *
+ * Sometimes the scaling is noise: you took three pieces, the broker reports
+ * one average, and you would rather the journal said the same. This computes
+ * the one-in/one-out trade that settles for EXACTLY the same money — total
+ * quantity, the volume-weighted average of everything bought, and the
+ * volume-weighted average of everything sold.
+ *
+ * That equality is not an approximation. Once a position is flat, P&L is
+ * cash-flow: proceeds minus cost. Average-cost bookkeeping and a single
+ * averaged round trip agree on both sides of that subtraction, so collapsing
+ * the fills cannot move the number — only the story of how it got there.
+ *
+ * R is a different matter, and only when the trade was scaled IN. This app
+ * measures R against the original planned risk — entry-to-stop on the size
+ * you opened with — so folding adds into the entry and size necessarily
+ * rebases the denominator: a trade that risked $20 by plan and became a $60
+ * position reports the same dollars against a larger 1R. Collapsing a trade
+ * that was only scaled OUT touches neither entry nor size, so its R is
+ * untouched too. Callers should say so before doing it to a scaled-in trade.
+ *
+ * Returns null when there is nothing to collapse (no fills, or the trade has
+ * not been closed, so there is no final sell to average against).
+ */
+export function collapseFills(
+  t: TradeWithFills,
+): { size: number; entryPrice: number; exitPrice: number } | null {
+  if (!t.fills?.length || t.exitPrice == null) return null;
+
+  let boughtQty = baseQty(t.size, t.sizeUnit, t.entryPrice);
+  let boughtCost = boughtQty * t.entryPrice;
+  let soldQty = 0;
+  let soldProceeds = 0;
+
+  for (const f of [...t.fills].sort((a, b) => a.time.localeCompare(b.time))) {
+    const q = baseQty(f.size, t.sizeUnit, f.price);
+    if (f.kind === "add") {
+      boughtQty += q;
+      boughtCost += q * f.price;
+    } else {
+      // Clamp for the same reason positionLedger does: a partial bigger than
+      // the position is a typo, not a reversal.
+      const closing = Math.min(q, boughtQty - soldQty);
+      soldQty += closing;
+      soldProceeds += closing * f.price;
+    }
+  }
+
+  // Whatever is still open settles at the recorded exit.
+  const rest = Math.max(0, boughtQty - soldQty);
+  soldQty += rest;
+  soldProceeds += rest * t.exitPrice;
+
+  if (!(boughtQty > 0) || !(soldQty > 0)) return null;
+  const entryPrice = boughtCost / boughtQty;
+  const exitPrice = soldProceeds / soldQty;
+
+  return {
+    // Quote-sized trades store notional, and notional/entry must still give
+    // back the same base quantity, so the size travels through the new entry.
+    size: t.sizeUnit === "quote" ? boughtQty * entryPrice : boughtQty,
+    entryPrice,
+    exitPrice,
+  };
+}
+
+/**
  * Convert a size typed in one unit into the trade's own unit, at the fill
  * price. Fills are STORED in the trade's unit — this exists so the dialog can
  * accept "take $2,750 off" on a coin-sized position (or "take 0.05 BTC" on a

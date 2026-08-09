@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { positionLedger, suggestPartialSize, totalPnLWithFills, validateFill } from "../shared/fills";
+import {
+  collapseFills,
+  positionLedger,
+  suggestPartialSize,
+  totalPnLWithFills,
+  validateFill,
+} from "../shared/fills";
 import { computeMetrics } from "../shared/metrics";
 import { trade } from "./helpers";
 import { parseExtraTargets, type TradeFill } from "../shared/schema";
@@ -123,6 +129,97 @@ describe("computeMetrics with fills", () => {
     const m = computeMetrics(t);
     expect(m.actualPnL).toBeCloseTo(-12);
     expect(m.actualR).toBeCloseTo(-0.6);
+  });
+});
+
+describe("collapseFills", () => {
+  /**
+   * The invariant that matters: collapsing must not move the money. R is
+   * asserted separately, because folding ADDS into the entry legitimately
+   * rebases 1R — see the note on collapseFills.
+   */
+  const settlesTheSame = (t: ReturnType<typeof trade>) => {
+    const before = computeMetrics(t);
+    const c = collapseFills(t)!;
+    const after = computeMetrics(trade({ ...t, ...c, fills: [] }));
+    expect(after.actualPnL).toBeCloseTo(before.actualPnL!, 6);
+    if (!t.fills.some((f) => f.kind === "add")) {
+      expect(after.actualR).toBeCloseTo(before.actualR!, 6);
+    }
+    return c;
+  };
+
+  it("averages the exits and keeps the P&L to the cent", () => {
+    // Long 4 @100: take 2 @115, close 2 @120 → avg exit 117.5 on 4.
+    const c = settlesTheSame(
+      trade({ size: 4, exitPrice: 120, fills: [fill("partial", 115, 2, "2026-08-03T10:00:00Z")] }),
+    );
+    expect(c.size).toBe(4);
+    expect(c.entryPrice).toBe(100);
+    expect(c.exitPrice).toBeCloseTo(117.5);
+  });
+
+  it("averages the entries when the trade was scaled into", () => {
+    // Long 2 @100, add 2 @110 → 4 @105 avg; closed at 102.
+    const t = trade({ size: 2, exitPrice: 102, fills: [fill("add", 110, 2, "2026-08-03T09:40:00Z")] });
+    const c = settlesTheSame(t);
+    expect(c.size).toBe(4);
+    expect(c.entryPrice).toBeCloseTo(105);
+    expect(c.exitPrice).toBe(102);
+    // Same dollars, but 1R is now measured on the position that actually
+    // existed (4 @105 against the 90 stop = $60) rather than the planned $20.
+    const after = computeMetrics(trade({ ...t, ...c, fills: [] }));
+    expect(after.actualPnL).toBeCloseTo(-12);
+    expect(after.riskDollars).toBeCloseTo(60);
+    expect(after.actualR).toBeCloseTo(-0.2);
+  });
+
+  it("holds for a mixed sequence of adds and partials", () => {
+    settlesTheSame(
+      trade({
+        size: 4,
+        exitPrice: 121,
+        pointValue: 20,
+        fills: [
+          fill("partial", 115, 2, "2026-08-03T10:00:00Z"),
+          fill("add", 112, 3, "2026-08-03T10:30:00Z"),
+          fill("partial", 118, 1, "2026-08-03T11:00:00Z"),
+        ],
+      }),
+    );
+  });
+
+  it("holds for shorts and for quote-sized positions", () => {
+    settlesTheSame(
+      trade({
+        direction: "short",
+        size: 4,
+        initialStop: 110,
+        exitPrice: 88,
+        fills: [fill("partial", 90, 2, "2026-08-03T10:00:00Z")],
+      }),
+    );
+    const c = settlesTheSame(
+      trade({
+        sizeUnit: "quote",
+        size: 5000,
+        entryPrice: 50,
+        initialStop: 45,
+        exitPrice: 60,
+        fills: [fill("partial", 55, 2750, "2026-08-03T10:00:00Z")],
+      }),
+    );
+    // Notional must still divide by the new entry into the same 100 coins.
+    expect(c.size / c.entryPrice).toBeCloseTo(100);
+  });
+
+  it("has nothing to collapse without fills or without an exit", () => {
+    expect(collapseFills(trade())).toBeNull();
+    expect(
+      collapseFills(
+        trade({ status: "open", exitPrice: null, fills: [fill("partial", 110, 1, "t")] }),
+      ),
+    ).toBeNull();
   });
 });
 
