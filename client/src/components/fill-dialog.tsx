@@ -159,12 +159,12 @@ export function FillDialog({
           <div className="grid grid-cols-3 gap-2 rounded-md border border-border/60 bg-secondary/30 p-2.5 text-center font-mono text-xs">
             <div>
               <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Avg entry</p>
-              <p data-testid="fill-avg-entry">{num(led.avgEntry, 4)}</p>
+              <p data-testid="fill-avg-entry">{num(led.avgEntry)}</p>
             </div>
             <div>
               <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Still on</p>
               <p data-testid="fill-open-qty">
-                {num(led.openQty, 4)}
+                {num(led.openQty)}
                 <span className="ml-0.5 text-muted-foreground">ct</span>
               </p>
             </div>
@@ -240,7 +240,7 @@ export function FillDialog({
 
           {fillUnit !== tradeUnit && effSize != null && (
             <p className="font-mono text-[10px] text-muted-foreground" data-testid="fill-converted">
-              = {num(effSize, 4)} {tradeUnit === "quote" ? "USD" : "units"} at this price
+              = {num(effSize)} {tradeUnit === "quote" ? "USD" : "units"} at this price
             </p>
           )}
           {problem && (
@@ -254,7 +254,7 @@ export function FillDialog({
               <span className={preview >= 0 ? "text-emerald-400" : "text-primary"}>
                 {fmtMoney(preview)}
               </span>{" "}
-              against avg {num(led.avgEntry, 4)}.
+              against avg {num(led.avgEntry)}.
             </p>
           )}
 

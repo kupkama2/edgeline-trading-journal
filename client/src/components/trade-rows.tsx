@@ -153,7 +153,7 @@ export function OpenTradeRow({
       <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-border/40 pt-2">
         {scaled && (
           <span className="font-mono text-[10px] text-muted-foreground" data-testid={`text-ledger-${t.id}`}>
-            avg {num(led.avgEntry, 4)} · {num(led.openQty, 4)} on ·{" "}
+            avg {num(led.avgEntry)} · {num(led.openQty)} on ·{" "}
             <span className={led.realizedPnL >= 0 ? "text-emerald-400" : "text-primary"}>
               {fmtMoney(led.realizedPnL)} banked
             </span>
