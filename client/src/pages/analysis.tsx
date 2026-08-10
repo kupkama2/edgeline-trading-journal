@@ -342,7 +342,10 @@ export default function Analysis({ embedded = false }: { embedded?: boolean } = 
 
       {/* --------------------------- R distribution -------------------------- */}
       {dist && (
-        <Card className="border-card-border bg-card p-4">
+        <Card
+          id="jump-distribution"
+          className="scroll-mt-20 border-card-border bg-card p-4 transition-shadow"
+        >
           <div className="mb-3">
             <h2 className="text-sm font-semibold tracking-tight">The shape of the edge</h2>
             <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">

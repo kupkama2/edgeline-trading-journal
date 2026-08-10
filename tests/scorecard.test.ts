@@ -23,7 +23,7 @@ describe("scorecard", () => {
   it("withholds a score until there is enough evidence", () => {
     const few = scorecard(many(SCORE_MIN_SAMPLE - 1, 1));
     expect(few.score).toBeNull();
-    expect(few.verdict).toMatch(/before these numbers mean anything/);
+    expect(few.verdict).toMatch(/1 more closed trade before a score/);
     expect(scorecard(many(SCORE_MIN_SAMPLE, 1)).score).not.toBeNull();
   });
 
@@ -56,7 +56,21 @@ describe("scorecard", () => {
     const clean = scorecard(many(25, 0.6, { rationale: "vah retest", exitReason: "target" }));
     const d = (s: typeof clean) => s.parts.find((p) => p.label === "Discipline")!.points;
     expect(d(clean)).toBeGreaterThan(d(sloppy));
-    expect(sloppy.verdict).toMatch(/logging/i);
+    // The verdict names the weak part and the figure under it — no line
+    // grading the record, which the score above it already does.
+    expect(sloppy.verdict).toContain("Discipline");
+    expect(sloppy.verdict).toContain(`${d(sloppy)}/25`);
+    expect(sloppy.verdict).not.toMatch(/good record|not profitable/i);
+  });
+
+  it("shows the arithmetic behind the two ratios", () => {
+    // The hints on the card are these numbers, so a figure can be checked by
+    // hand rather than taken on faith.
+    const s = scorecard([...many(3, 2), ...many(2, -1)]);
+    expect(s.wins).toBe(3);
+    expect(s.losses).toBe(2);
+    expect(s.grossWin / s.grossLoss).toBeCloseTo(s.profitFactor, 10);
+    expect(s.wins / s.count).toBeCloseTo(s.winRate, 10);
   });
 
   it("builds a cumulative curve in exit order", () => {
