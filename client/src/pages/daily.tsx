@@ -19,6 +19,13 @@ import { takeJumpDay } from "@/lib/jump";
 import { useLocation } from "wouter";
 import { StyleSwitcher } from "@/components/style-switcher";
 import { dayKey, monthGrid, summarizeDays, tradesOnDay } from "@shared/daily";
+import {
+  METRIC_LABELS,
+  byPeriod,
+  metricOf,
+  type Period,
+  type PeriodMetric,
+} from "@shared/periods";
 import { computeMetrics, fmtMoney, fmtR } from "@shared/metrics";
 
 /**
@@ -48,6 +55,9 @@ export default function Daily() {
   const { data: notes = [] } = useDailyNotes();
   const save = useSaveDailyNote();
   const [, navigate] = useLocation();
+  // Which zoom the left panel is at, and which figure its cells carry.
+  const [period, setPeriod] = useState<Period>("day");
+  const [metric, setMetric] = useState<PeriodMetric>("pnl");
 
   const today = dayKey(new Date());
   // A click on the equity curve arrives as a pending day; consuming it here
@@ -118,6 +128,11 @@ export default function Daily() {
   }, [entered, closed]);
 
   const cells = useMemo(() => monthGrid(view.year, view.month), [view]);
+  // Newest first: a period list is read from the top, unlike a calendar.
+  const periods = useMemo(
+    () => byPeriod(scoped, period).reverse(),
+    [scoped, period],
+  );
 
   function shiftMonth(by: number) {
     setView(({ year, month }) => {
@@ -150,6 +165,102 @@ export default function Daily() {
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
         {/* ------------------------------ calendar ------------------------------ */}
         <Card className="border-card-border bg-card p-4" data-testid="card-calendar">
+          {/* Zoom and figure. Day keeps the calendar — a month of trading has a
+              shape you can only see laid out — while week and month become a
+              list, because twelve rows read better than twelve squares. */}
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <div className="inline-flex rounded-lg border border-border bg-secondary/30 p-0.5">
+              {(["day", "week", "month"] as const).map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  onClick={() => setPeriod(p)}
+                  aria-selected={period === p}
+                  data-testid={`button-period-${p}`}
+                  className={`rounded-md px-2.5 py-1 text-[11px] font-medium capitalize transition-colors ${
+                    period === p
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  {p}
+                </button>
+              ))}
+            </div>
+            <div className="ml-auto flex gap-0.5">
+              {(Object.keys(METRIC_LABELS) as PeriodMetric[]).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => setMetric(m)}
+                  aria-pressed={metric === m}
+                  data-testid={`button-metric-${m}`}
+                  className={`rounded px-1.5 py-0.5 text-[10px] transition-colors ${
+                    metric === m
+                      ? "bg-primary/15 text-primary"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  {METRIC_LABELS[m]}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {period !== "day" ? (
+            <div className="space-y-1" data-testid="period-list">
+              {periods.length === 0 ? (
+                <p className="py-6 text-center text-[11px] text-muted-foreground">
+                  Nothing closed yet.
+                </p>
+              ) : (
+                periods.map((b) => {
+                  const m = metricOf(b, metric);
+                  const value =
+                    metric === "pnl"
+                      ? fmtMoney(b.totalPnL)
+                      : metric === "r"
+                        ? fmtR(b.totalR)
+                        : metric === "trades"
+                          ? String(b.closed)
+                          : `${Math.round(b.winRate * 100)}%`;
+                  return (
+                    <button
+                      key={b.key}
+                      type="button"
+                      /* Opens the first day of the period, so drilling in from
+                         a bad week lands somewhere you can actually read. */
+                      onClick={() => {
+                        setSelected(b.start);
+                        const d = new Date(`${b.start}T12:00:00`);
+                        setView({ year: d.getFullYear(), month: d.getMonth() });
+                        setPeriod("day");
+                      }}
+                      data-testid={`period-${b.key}`}
+                      className="flex w-full flex-wrap items-center gap-2 rounded-md border border-border/60 px-2.5 py-2 text-left transition-colors hover:border-primary/50"
+                    >
+                      <span className="text-xs font-medium">{b.label}</span>
+                      <span className="font-mono text-[10px] text-muted-foreground">
+                        {b.closed} closed · {b.wins}W {b.losses}L · {b.activeDays}d active
+                      </span>
+                      <span
+                        className={`ml-auto font-mono text-sm font-bold ${
+                          m.tone === "good"
+                            ? "text-emerald-400"
+                            : m.tone === "bad"
+                              ? "text-primary"
+                              : "text-foreground"
+                        }`}
+                      >
+                        {value}
+                      </span>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          ) : (
+          <>
           <div className="mb-3 flex items-center justify-between">
             <Button
               variant="ghost"
@@ -191,7 +302,6 @@ export default function Daily() {
               const s = days.get(k);
               const hasNote = (noteByDay.get(k)?.body ?? "").trim().length > 0;
               const active = k === selected;
-              const pnl = s?.totalPnL ?? 0;
               return (
                 <button
                   key={k}
@@ -211,22 +321,38 @@ export default function Daily() {
                     {date.getDate()}
                   </span>
                   {s && s.closed > 0 ? (
-                    <>
-                      <span
-                        className={`font-mono text-[10px] leading-tight ${
-                          pnl > 0
-                            ? "text-emerald-500"
-                            : pnl < 0
-                              ? "text-red-500"
-                              : "text-muted-foreground"
-                        }`}
-                      >
-                        {fmtMoney(pnl)}
-                      </span>
-                      <span className="font-mono text-[9px] leading-tight text-muted-foreground">
-                        {s.wins}W {s.losses}L
-                      </span>
-                    </>
+                    (() => {
+                      // The cell carries whichever figure is selected above, so
+                      // the calendar answers the same question as the list.
+                      const cell = { ...s, winRate: s.closed ? s.wins / s.closed : 0 };
+                      const m = metricOf(cell, metric);
+                      const shown =
+                        metric === "pnl"
+                          ? fmtMoney(s.totalPnL)
+                          : metric === "r"
+                            ? fmtR(s.totalR)
+                            : metric === "trades"
+                              ? String(s.closed)
+                              : `${Math.round(cell.winRate * 100)}%`;
+                      return (
+                        <>
+                          <span
+                            className={`font-mono text-[10px] leading-tight ${
+                              m.tone === "good"
+                                ? "text-emerald-500"
+                                : m.tone === "bad"
+                                  ? "text-red-500"
+                                  : "text-muted-foreground"
+                            }`}
+                          >
+                            {shown}
+                          </span>
+                          <span className="font-mono text-[9px] leading-tight text-muted-foreground">
+                            {s.wins}W {s.losses}L
+                          </span>
+                        </>
+                      );
+                    })()
                   ) : (
                     // The dot marks a day that has words but no closed trades —
                     // a skipped day you wrote about is still a day reviewed.
@@ -236,6 +362,8 @@ export default function Daily() {
               );
             })}
           </div>
+          </>
+          )}
         </Card>
 
         {/* ----------------------------- day detail ----------------------------- */}
