@@ -234,14 +234,24 @@ export function aggregate(trades: Trade[]): AggregateStats {
   };
 }
 
+/**
+ * What ended the position, stated as a fact.
+ *
+ * Whether the decision was any good is a separate column (exitGrade) and a
+ * separate calculation (managementDeltaR) — see shared/grades.ts. The two
+ * 'manual_*' entries are only here to render rows written before that split.
+ */
 export const EXIT_REASON_LABELS: Record<string, string> = {
   target: "Hit target",
   stop: "Stopped out",
   trailed: "Trailed out",
-  manual_early: "Manual early",
-  manual_late: "Manual late",
   breakeven: "Breakeven",
+  discretion: "Closed by hand",
+  invalidated: "Setup invalidated",
+  time: "Out of time",
   other: "Other",
+  manual_early: "Closed by hand",
+  manual_late: "Closed by hand",
 };
 
 /* ===== Risk-guardrail config (carried over from the reference app) ===== */

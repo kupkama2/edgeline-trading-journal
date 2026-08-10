@@ -86,7 +86,7 @@ export const trades = pgTable("trades", {
   exitPrice: doublePrecision("exit_price"),
   exitTime: text("exit_time"),
   status: text("status").notNull().default("open"), // 'pending' | 'open' | 'closed'
-  exitReason: text("exit_reason"), // 'target' | 'stop' | 'trailed' | 'manual_early' | 'manual_late' | 'breakeven' | 'other'
+  exitReason: text("exit_reason"), // see exitReasonEnum — the fact, not the verdict
   /**
    * Why a trade ended without ever becoming a real position. Distinct from
    * exitReason, which describes how a position that DID exist was closed.
@@ -130,6 +130,16 @@ export const trades = pgTable("trades", {
    * pat on the back. NULL for every trade that hasn't been marked.
    */
   highlights: text("highlights"),
+  /**
+   * Execution grades — how the three decisions inside the trade actually went.
+   * 'early' | 'perfect' | 'late' for the entry and the exit, 'tight' | 'good' |
+   * 'wide' for the stop. Self-reported and entirely optional; NULL means "not
+   * graded" and is excluded from every share and average, never counted as
+   * average. See shared/grades.ts for what each grade claims and what it costs.
+   */
+  entryGrade: text("entry_grade"),
+  stopGrade: text("stop_grade"),
+  exitGrade: text("exit_grade"),
 });
 
 /* ------------------------------- playbook ------------------------------ */
@@ -206,15 +216,39 @@ export const cancelReasonEnum = z.enum([
   "changed_mind",
   "never_placed",
 ]);
+/**
+ * How the position ended — the FACT, never the judgement.
+ *
+ * The old list mixed the two: 'manual_early' and 'manual_late' recorded both
+ * that you closed by hand and that you thought it was mistimed, which meant
+ * the one question worth answering — "when I ignore my target, am I ahead?" —
+ * could never be asked without also trusting your mood at the time. The verdict
+ * now lives on exitGrade (self-reported) and in managementDeltaR (arithmetic),
+ * and this column only says what happened.
+ *
+ * The two legacy values stay accepted so old exports and CSV imports still
+ * load; storage migrates them to 'discretion' plus the matching exit grade.
+ */
 export const exitReasonEnum = z.enum([
   "target",
   "stop",
   "trailed",
+  "breakeven",
+  /** Closed by hand while the plan was still valid — a decision, not a trigger. */
+  "discretion",
+  /** The reason to be in it disappeared, so the level stopped mattering. */
+  "invalidated",
+  /** Session over, had to leave — the market never resolved it. */
+  "time",
+  "other",
   "manual_early",
   "manual_late",
-  "breakeven",
-  "other",
 ]);
+
+/** What each axis of shared/grades.ts accepts, mirrored for request validation. */
+export const entryGradeEnum = z.enum(["early", "perfect", "late"]);
+export const stopGradeEnum = z.enum(["tight", "good", "wide"]);
+export const exitGradeEnum = z.enum(["early", "perfect", "late"]);
 export const noManagementOutcomeEnum = z.enum([
   "target_first",
   "stop_first",
@@ -232,6 +266,9 @@ const tradeFields = createInsertSchema(trades)
     initialStop: z.number().nullable().optional(),
     initialTarget: z.number().nullable().optional(),
     exitReason: exitReasonEnum.nullable().optional(),
+    entryGrade: entryGradeEnum.nullable().optional(),
+    stopGrade: stopGradeEnum.nullable().optional(),
+    exitGrade: exitGradeEnum.nullable().optional(),
     cancelReason: cancelReasonEnum.nullable().optional(),
     wouldHaveHitTarget: z.boolean().nullable().optional(),
     noManagementOutcome: noManagementOutcomeEnum.nullable().optional(),
@@ -503,15 +540,7 @@ export interface SetupParseResult {
   isClosed?: boolean | null;
   exitPrice?: number | null;
   exitTime?: string | null;
-  exitReason?:
-    | "target"
-    | "stop"
-    | "trailed"
-    | "manual_early"
-    | "manual_late"
-    | "breakeven"
-    | "other"
-    | null;
+  exitReason?: z.infer<typeof exitReasonEnum> | null;
 }
 
 export interface OutcomeParseResult {

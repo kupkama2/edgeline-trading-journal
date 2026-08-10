@@ -32,6 +32,7 @@ import { DemonFinderPanel, WeeklyReviewCard } from "@/components/demon-finder";
 import { WeeklyInsightsCard } from "@/components/weekly-insights";
 import { StyleSwitcher } from "@/components/style-switcher";
 import { ProgressionCard } from "@/components/xp";
+import { ExecutionCard } from "@/components/execution-card";
 import { filterByStyle, useStyleFilter } from "@/lib/style-filter";
 import {
   aggregate,
@@ -401,6 +402,10 @@ export default function Dashboard({ embedded = false }: { embedded?: boolean } =
       <ProgressionCard />
 
       <DailyGuardCard trades={all} tags={tags} styleId={activeStyleId} />
+
+      {/* Scoped to the selected book: "am I late on my scalps" and "am I late
+          on my swings" are different questions with different answers. */}
+      <ExecutionCard trades={all} />
 
       <WeeklyReviewCard trades={all} tags={tags} />
 

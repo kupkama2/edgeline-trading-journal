@@ -142,6 +142,20 @@ ALTER TABLE trades ADD COLUMN IF NOT EXISTS account TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS fees DOUBLE PRECISION;
 -- Green flags: JSON string[] of what went right on the trade.
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS highlights TEXT;
+-- Execution grades: how the entry, the stop and the exit actually went.
+-- NULL = not graded, which is not the same as average and is never counted so.
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS entry_grade TEXT;
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS stop_grade TEXT;
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS exit_grade TEXT;
+-- 'manual_early'/'manual_late' packed a fact (closed by hand) and a judgement
+-- (it was mistimed) into one column, so neither could be counted on its own.
+-- Split them: the judgement becomes an exit grade, the fact becomes the reason.
+-- Lossless, and a no-op on every run after the first.
+UPDATE trades SET exit_grade = CASE exit_reason
+    WHEN 'manual_early' THEN 'early' ELSE 'late' END
+  WHERE exit_reason IN ('manual_early', 'manual_late') AND exit_grade IS NULL;
+UPDATE trades SET exit_reason = 'discretion'
+  WHERE exit_reason IN ('manual_early', 'manual_late');
 -- Fee schedule per account name: maker/taker per side, % of notional or $
 -- per contract. Free-standing — an account needs no row to exist on trades.
 CREATE TABLE IF NOT EXISTS account_settings (
@@ -162,6 +176,35 @@ CREATE TABLE IF NOT EXISTS trade_mistakes (
   trade_id INTEGER NOT NULL,
   mistake_tag_id INTEGER NOT NULL
 );
+-- Retire the four timing demons into the grade axes that replaced them.
+--
+-- "Exited Too Soon" and an exit graded early were the same claim in two
+-- places, and two places is worse than one: the demon fed streaks and the
+-- discipline score while the grade fed the take-profit arithmetic, so ticking
+-- one, both, or the wrong one told three different stories about one trade.
+--
+-- Copy first, delete second: every tick becomes a grade on the matching axis
+-- unless that axis was already graded by hand, in which case the hand-set
+-- value wins. Only these exact names are touched, so a custom demon that
+-- happens to read similarly is left alone. A no-op once the tags are gone.
+UPDATE trades t SET entry_grade = 'early'
+  FROM trade_mistakes tm JOIN mistake_tags mt ON mt.id = tm.mistake_tag_id
+  WHERE tm.trade_id = t.id AND mt.name = 'Entered Too Soon' AND t.entry_grade IS NULL;
+UPDATE trades t SET entry_grade = 'late'
+  FROM trade_mistakes tm JOIN mistake_tags mt ON mt.id = tm.mistake_tag_id
+  WHERE tm.trade_id = t.id AND mt.name = 'Entered Too Late' AND t.entry_grade IS NULL;
+UPDATE trades t SET exit_grade = 'early'
+  FROM trade_mistakes tm JOIN mistake_tags mt ON mt.id = tm.mistake_tag_id
+  WHERE tm.trade_id = t.id AND mt.name = 'Exited Too Soon' AND t.exit_grade IS NULL;
+UPDATE trades t SET exit_grade = 'late'
+  FROM trade_mistakes tm JOIN mistake_tags mt ON mt.id = tm.mistake_tag_id
+  WHERE tm.trade_id = t.id AND mt.name = 'Exited Too Late' AND t.exit_grade IS NULL;
+DELETE FROM trade_mistakes WHERE mistake_tag_id IN (
+  SELECT id FROM mistake_tags
+   WHERE name IN ('Entered Too Soon', 'Entered Too Late', 'Exited Too Soon', 'Exited Too Late')
+);
+DELETE FROM mistake_tags
+ WHERE name IN ('Entered Too Soon', 'Entered Too Late', 'Exited Too Soon', 'Exited Too Late');
 CREATE TABLE IF NOT EXISTS weekly_reviews (
   id SERIAL PRIMARY KEY,
   week_start TEXT NOT NULL,

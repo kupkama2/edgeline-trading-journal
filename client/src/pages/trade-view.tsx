@@ -38,6 +38,8 @@ import { parseExtraTargets, parsePlaybook, type TradeWithTags } from "@shared/sc
 import { computeMetrics, fmtFees, fmtMoney, fmtR, EXIT_REASON_LABELS } from "@shared/metrics";
 import { positionLedger } from "@shared/fills";
 import { parseHighlights } from "@shared/highlights";
+import { overrodeThePlan } from "@shared/grades";
+import { GradeBadges } from "@/components/grade-picker";
 import { StyleChip } from "@/components/style-switcher";
 import { TradeImageGallery } from "@/components/trade-images";
 import { RationaleTags, num, parseTags } from "@/components/trade-shared";
@@ -229,6 +231,7 @@ function TradeBody({
     (x): x is number => x != null,
   );
   const highlights = parseHighlights(trade.highlights);
+  const overrode = overrodeThePlan(trade);
   const playbook = parsePlaybook(trade.playbook);
   const playbookRows: [string, string][] = playbook
     ? ([
@@ -394,6 +397,42 @@ function TradeBody({
             hint="heat taken"
           />
         </div>
+
+        {/* How you graded it, and — where the log allows — whether the grade
+            agrees with the arithmetic. The delta only exists when the trade
+            records what the untouched plan would have done, so its absence is
+            stated rather than papered over with an assumption. */}
+        {trade.status === "closed" &&
+          (trade.entryGrade || trade.stopGrade || trade.exitGrade || overrode) && (
+            <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-border/60 pt-3">
+              <GradeBadges
+                entry={trade.entryGrade}
+                stop={trade.stopGrade}
+                exit={trade.exitGrade}
+              />
+              {overrode && (
+                <span
+                  className="font-mono text-[11px] text-muted-foreground"
+                  data-testid="view-override-delta"
+                >
+                  {m.managementDeltaR != null ? (
+                    <>
+                      vs leaving the plan alone:{" "}
+                      <span
+                        className={
+                          m.managementDeltaR >= 0 ? "text-emerald-400" : "text-primary"
+                        }
+                      >
+                        {fmtR(m.managementDeltaR)}
+                      </span>
+                    </>
+                  ) : (
+                    "your call, not the plan's — log the no-management outcome to price it"
+                  )}
+                </span>
+              )}
+            </div>
+          )}
       </Card>
 
       {/* ------------------------------ the plan ---------------------------- */}

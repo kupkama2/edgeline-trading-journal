@@ -9,6 +9,8 @@ import { filterByStyle, useStyleFilter } from "@/lib/style-filter";
 import { type TradeWithTags } from "@shared/schema";
 import { computeMetrics } from "@shared/metrics";
 import { DailyGuardCard } from "@/components/daily-guard";
+import { ScorecardCard } from "@/components/scorecard-card";
+import { CoachCard } from "@/components/coach-card";
 import { StyleSwitcher } from "@/components/style-switcher";
 import { ImportTradesDialog } from "@/components/import-trades";
 import { MissedTradeDialog } from "@/components/missed-trade";
@@ -166,7 +168,13 @@ export default function Journal() {
 
       <StyleSwitcher />
 
+      {/* Opening the journal should answer "is this working?" before it asks
+          for anything. The guard is the day; the scorecard is the record. */}
+      <ScorecardCard trades={scoped} />
+
       <DailyGuardCard trades={scoped} tags={tags} styleId={activeStyleId} />
+
+      <CoachCard />
 
       {/* The entry form gets its own column only while it is open. Closed, it
           is one line, and holding a half-empty column beside it just to keep

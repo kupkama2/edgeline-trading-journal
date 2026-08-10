@@ -20,6 +20,7 @@ import { useDemonGuard } from "@/components/daily-guard";
 import { pointValueFor } from "@shared/symbols";
 import { dropBracketLegs, type ImportCandidate } from "@shared/import-parse";
 import { Dropzone, EXIT_REASONS, RationaleTags, localNow, num, parseTags, toIso } from "@/components/trade-shared";
+import { EMPTY_GRADES, GradePicker, type GradeState } from "@/components/grade-picker";
 import { AccountPicker, HighlightPicker } from "@/components/trade-pickers";
 import { knownHighlights, serializeHighlights } from "@shared/highlights";
 import { suggestSize } from "@shared/sizing";
@@ -74,6 +75,7 @@ export function NewTradeCard({
   const [exitPrice, setExitPrice] = useState("");
   const [exitTime, setExitTime] = useState(localNow());
   const [exitReason, setExitReason] = useState<string | null>(null);
+  const [grades, setGrades] = useState<GradeState>(EMPTY_GRADES);
   const [selectedDemons, setSelectedDemons] = useState<number[]>([]);
   const [highlights, setHighlights] = useState<string[]>([]);
   const { data: demons = [] } = useMistakeTags();
@@ -366,6 +368,9 @@ export function NewTradeCard({
               exitPrice: Number(exitPrice),
               exitTime: toIso(exitTime),
               exitReason: (exitReason as any) ?? "other",
+              entryGrade: grades.entry as any,
+              stopGrade: grades.stop as any,
+              exitGrade: grades.exit as any,
             }
           : { status: "open" as const }),
       },
@@ -393,6 +398,7 @@ export function NewTradeCard({
     setExitPrice("");
     setExitTime(localNow());
     setExitReason(null);
+    setGrades(EMPTY_GRADES);
     setSelectedDemons([]);
     setHighlights([]);
     setPickedStyleId(null);
@@ -1033,6 +1039,11 @@ export function NewTradeCard({
                   ))}
                 </div>
               </div>
+
+              {/* A trade logged after the fact is still a trade to grade —
+                  leaving it out here is how the take-profit stats end up
+                  covering only the half you happened to close from the app. */}
+              <GradePicker value={grades} onChange={setGrades} testPrefix="grade-new" />
 
               <div>
                 <p className="mb-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
