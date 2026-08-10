@@ -19,7 +19,7 @@ def get(path):
 tags = get("/mistake-tags")
 tag_ids = [t["id"] for t in tags]
 symbols = ["NQ", "ES", "CL", "GC", "EURUSD", "BTCUSD"]
-reasons = ["target", "stop", "trailed", "manual_early", "manual_late", "breakeven"]
+reasons = ["target", "stop", "trailed", "discretion", "invalidated", "breakeven"]
 
 now = datetime.now()
 for i in range(24):

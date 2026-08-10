@@ -20,6 +20,7 @@ import { closedTrades, computeMetrics } from "./metrics";
 import { byHour, byMistake } from "./breakdowns";
 import { inSessionWindow } from "./session";
 import { isMissed, missedStats } from "./missed";
+import { MIN_GRADED, axisReport, exitCost, overrideReport } from "./grades";
 
 export interface Finding {
   /** Stable id so the UI can key and dismiss. */
@@ -147,6 +148,8 @@ export function reviewStyle(
       }
     }
 
+    /* ---- the grades: which way you lean, and what it costs ---- */
+    findings.push(...gradeFindings(scoped, styleId));
   }
 
   /* ---- the ones that were never taken ---- */
@@ -184,6 +187,100 @@ export function reviewStyle(
     trades: closed.length,
     findings: findings.sort((a, b) => b.costR - a.costR).slice(0, 3),
   };
+}
+
+/**
+ * What the self-grades say once there are enough of them.
+ *
+ * These are the only findings built on an opinion rather than a price, so they
+ * are held to a higher bar: a lean has to be both frequent and expensive
+ * before it is worth a line in the weekly read. The cost attached is always
+ * measured, never inferred from the grade — you say "late", the log says how
+ * much was reached and given back.
+ */
+function gradeFindings(scoped: TradeWithTags[], styleId: number | null): Finding[] {
+  const out: Finding[] = [];
+
+  /* ---- take profit: the two sins, priced against each other ---- */
+  const exits = axisReport(scoped, "exit");
+  if (exits.graded >= MIN_GRADED) {
+    const cost = exitCost(scoped);
+    const worst = cost.worse === "late" ? cost.lateR : cost.earlyR;
+    if (cost.worse && worst > 1) {
+      const late = cost.worse === "late";
+      out.push({
+        id: `tp:${styleId}:${cost.worse}`,
+        kind: "exits",
+        costR: worst,
+        title: late
+          ? "You hold winners past the point they pay"
+          : "You take profit before the move is done",
+        detail: late
+          ? `${cost.lateCount} exits you graded late gave back ${cost.lateR.toFixed(
+              1,
+            )}R from their best price — against ${cost.earlyR.toFixed(
+              1,
+            )}R left behind by the ones you called early. The round trips cost more than the early exits do.`
+          : `${cost.earlyCount} exits you graded early left ${cost.earlyR.toFixed(
+              1,
+            )}R that the move went on to offer — against ${cost.lateR.toFixed(
+              1,
+            )}R handed back on the late ones. Cutting winners is the more expensive habit here.`,
+      });
+    }
+  }
+
+  /* ---- stops: a stop you keep calling too tight is a sizing decision ---- */
+  const stops = axisReport(scoped, "stop");
+  const tight = stops.buckets.find((b) => b.grade === "tight");
+  if (stops.graded >= MIN_GRADED && tight && tight.count >= 3 && tight.missedPlanR > 1) {
+    out.push({
+      id: `stopgrade:${styleId}`,
+      kind: "stops",
+      costR: tight.missedPlanR,
+      title: "Your stop keeps taking you out of trades that were right",
+      detail: `${tight.count} trades you graded "too tight" would have paid ${tight.missedPlanR.toFixed(
+        1,
+      )}R had the original plan run untouched. Widen the stop and cut the size to hold 1R where it is — the risk per trade does not have to move for the stop to.`,
+    });
+  }
+
+  /* ---- entries: chasing shows up as heat, and heat shows up in R ---- */
+  const entries = axisReport(scoped, "entry");
+  const lateEntry = entries.buckets.find((b) => b.grade === "late");
+  if (
+    entries.graded >= MIN_GRADED &&
+    lateEntry &&
+    lateEntry.count >= 3 &&
+    lateEntry.share >= 0.4 &&
+    lateEntry.expectancyR < 0
+  ) {
+    out.push({
+      id: `entrygrade:${styleId}`,
+      kind: "timing",
+      costR: -lateEntry.totalR,
+      title: "The ones you chase are the ones that lose",
+      detail: `${Math.round(lateEntry.share * 100)}% of your graded entries here are late, and they average ${lateEntry.expectancyR.toFixed(
+        2,
+      )}R — ${lateEntry.totalR.toFixed(1)}R in total. The setup is not the problem; the price you accept for it is.`,
+    });
+  }
+
+  /* ---- overriding the plan: is the discretion earning its keep? ---- */
+  const ov = overrideReport(scoped);
+  if (ov.judged >= MIN_GRADED && ov.netR < -1) {
+    out.push({
+      id: `override:${styleId}`,
+      kind: "exits",
+      costR: -ov.netR,
+      title: "Leaving your own plan alone would have paid more",
+      detail: `${ov.judged} exits here were your call rather than the target or the stop, and together they came out ${ov.netR.toFixed(
+        1,
+      )}R behind what the untouched trade would have done. Only ${ov.ahead} of them beat the plan.`,
+    });
+  }
+
+  return out;
 }
 
 /**

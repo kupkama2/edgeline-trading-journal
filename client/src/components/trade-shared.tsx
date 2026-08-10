@@ -10,14 +10,23 @@ import { Camera, Loader2, X } from "lucide-react";
 
 /* ============================== helpers ============================== */
 
-/** The exit reasons a closing trade can carry, in the order the pickers show. */
+/**
+ * The exit reasons a closing trade can carry, in the order the pickers show —
+ * the plan finishing first, then the four ways you ended it yourself.
+ *
+ * Each one is a fact about what happened. Whether it was the right call is a
+ * separate question, asked once by the grade buttons underneath and answered
+ * again by arithmetic on Stats. Keeping them apart is the only reason
+ * "when I override my target, am I ahead?" is answerable at all.
+ */
 export const EXIT_REASONS = [
   "target",
   "stop",
   "trailed",
-  "manual_early",
-  "manual_late",
   "breakeven",
+  "discretion",
+  "invalidated",
+  "time",
 ] as const;
 
 /**

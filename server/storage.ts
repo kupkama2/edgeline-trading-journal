@@ -142,6 +142,20 @@ ALTER TABLE trades ADD COLUMN IF NOT EXISTS account TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS fees DOUBLE PRECISION;
 -- Green flags: JSON string[] of what went right on the trade.
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS highlights TEXT;
+-- Execution grades: how the entry, the stop and the exit actually went.
+-- NULL = not graded, which is not the same as average and is never counted so.
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS entry_grade TEXT;
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS stop_grade TEXT;
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS exit_grade TEXT;
+-- 'manual_early'/'manual_late' packed a fact (closed by hand) and a judgement
+-- (it was mistimed) into one column, so neither could be counted on its own.
+-- Split them: the judgement becomes an exit grade, the fact becomes the reason.
+-- Lossless, and a no-op on every run after the first.
+UPDATE trades SET exit_grade = CASE exit_reason
+    WHEN 'manual_early' THEN 'early' ELSE 'late' END
+  WHERE exit_reason IN ('manual_early', 'manual_late') AND exit_grade IS NULL;
+UPDATE trades SET exit_reason = 'discretion'
+  WHERE exit_reason IN ('manual_early', 'manual_late');
 -- Fee schedule per account name: maker/taker per side, % of notional or $
 -- per contract. Free-standing — an account needs no row to exist on trades.
 CREATE TABLE IF NOT EXISTS account_settings (

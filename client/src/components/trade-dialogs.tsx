@@ -24,6 +24,7 @@ import { TradeImageGallery } from "@/components/trade-images";
 import { parseExtraTargets, parsePlaybook, type TradeWithTags } from "@shared/schema";
 import { computeMetrics, fmtFees, fmtMoney, fmtR, EXIT_REASON_LABELS } from "@shared/metrics";
 import { Dropzone, EXIT_REASONS, RationaleTags, localNow, num, parseTags, toIso } from "@/components/trade-shared";
+import { EMPTY_GRADES, GradePicker, type GradeState } from "@/components/grade-picker";
 
 /* ============================ close dialog ============================ */
 
@@ -51,6 +52,7 @@ export function CloseTradeDialog({
   const [notes, setNotes] = useState("");
   const [fees, setFees] = useState("");
   const [highlights, setHighlights] = useState<string[]>([]);
+  const [grades, setGrades] = useState<GradeState>(EMPTY_GRADES);
   const { data: feeSchedules = [] } = useAccountSettings();
   const { data: allTrades = [] } = useTrades();
 
@@ -68,6 +70,7 @@ export function CloseTradeDialog({
     setNotes("");
     setFees("");
     setHighlights([]);
+    setGrades(EMPTY_GRADES);
   }
 
   // One-click fee suggestions from the account's schedule, sized on THIS
@@ -157,6 +160,9 @@ export function CloseTradeDialog({
         noManagementOutcome: (nmo as any) ?? null,
         fees: fees && isFinite(Number(fees)) ? Number(fees) : null,
         highlights: serializeHighlights(highlights),
+        entryGrade: grades.entry as any,
+        stopGrade: grades.stop as any,
+        exitGrade: grades.exit as any,
         // Parsed for MAE/MFE, then discarded — see the note on setupScreenshot.
         outcomeScreenshot: null,
         notes: notes || trade.notes || null,
@@ -265,6 +271,8 @@ export function CloseTradeDialog({
                 ))}
               </div>
             </div>
+
+            <GradePicker value={grades} onChange={setGrades} testPrefix="grade-close" />
 
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1">
@@ -542,6 +550,7 @@ export function EditTradeDialog({
   // Scale-out levels beyond TP1 — editable strings, serialized on save.
   const [extraTps, setExtraTps] = useState<string[]>([]);
   const [highlights, setHighlights] = useState<string[]>([]);
+  const [grades, setGrades] = useState<GradeState>(EMPTY_GRADES);
   const [account, setAccount] = useState("");
   // Which book the trade belongs to. Mutable after the fact on purpose: a
   // trade often turns out to belong to a different style than the one that
@@ -642,6 +651,11 @@ export function EditTradeDialog({
     setSelectedTags(trade.mistakeTagIds);
     setExtraTps(parseExtraTargets(trade.extraTargets).map(String));
     setHighlights(parseHighlights(trade.highlights));
+    setGrades({
+      entry: trade.entryGrade ?? null,
+      stop: trade.stopGrade ?? null,
+      exit: trade.exitGrade ?? null,
+    });
     setAccount(trade.account ?? "");
     setStyleId(trade.styleId ?? null);
     setSizeUnit(trade.sizeUnit === "quote" ? "quote" : "base");
@@ -726,6 +740,9 @@ export function EditTradeDialog({
         styleId,
         fees: numOrNull(f.fees ?? ""),
         highlights: serializeHighlights(highlights),
+        entryGrade: grades.entry as any,
+        stopGrade: grades.stop as any,
+        exitGrade: grades.exit as any,
       },
       mistakeTagIds: selectedTags,
     });
@@ -972,6 +989,8 @@ export function EditTradeDialog({
                 ))}
               </div>
             </div>
+
+            <GradePicker value={grades} onChange={setGrades} testPrefix="grade-edit" />
 
             {/* Scaling belongs in the edit dialog too: the trade view can show
                 and remove fills, but this is where a trade gets corrected, and
