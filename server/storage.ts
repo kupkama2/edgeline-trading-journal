@@ -176,6 +176,35 @@ CREATE TABLE IF NOT EXISTS trade_mistakes (
   trade_id INTEGER NOT NULL,
   mistake_tag_id INTEGER NOT NULL
 );
+-- Retire the four timing demons into the grade axes that replaced them.
+--
+-- "Exited Too Soon" and an exit graded early were the same claim in two
+-- places, and two places is worse than one: the demon fed streaks and the
+-- discipline score while the grade fed the take-profit arithmetic, so ticking
+-- one, both, or the wrong one told three different stories about one trade.
+--
+-- Copy first, delete second: every tick becomes a grade on the matching axis
+-- unless that axis was already graded by hand, in which case the hand-set
+-- value wins. Only these exact names are touched, so a custom demon that
+-- happens to read similarly is left alone. A no-op once the tags are gone.
+UPDATE trades t SET entry_grade = 'early'
+  FROM trade_mistakes tm JOIN mistake_tags mt ON mt.id = tm.mistake_tag_id
+  WHERE tm.trade_id = t.id AND mt.name = 'Entered Too Soon' AND t.entry_grade IS NULL;
+UPDATE trades t SET entry_grade = 'late'
+  FROM trade_mistakes tm JOIN mistake_tags mt ON mt.id = tm.mistake_tag_id
+  WHERE tm.trade_id = t.id AND mt.name = 'Entered Too Late' AND t.entry_grade IS NULL;
+UPDATE trades t SET exit_grade = 'early'
+  FROM trade_mistakes tm JOIN mistake_tags mt ON mt.id = tm.mistake_tag_id
+  WHERE tm.trade_id = t.id AND mt.name = 'Exited Too Soon' AND t.exit_grade IS NULL;
+UPDATE trades t SET exit_grade = 'late'
+  FROM trade_mistakes tm JOIN mistake_tags mt ON mt.id = tm.mistake_tag_id
+  WHERE tm.trade_id = t.id AND mt.name = 'Exited Too Late' AND t.exit_grade IS NULL;
+DELETE FROM trade_mistakes WHERE mistake_tag_id IN (
+  SELECT id FROM mistake_tags
+   WHERE name IN ('Entered Too Soon', 'Entered Too Late', 'Exited Too Soon', 'Exited Too Late')
+);
+DELETE FROM mistake_tags
+ WHERE name IN ('Entered Too Soon', 'Entered Too Late', 'Exited Too Soon', 'Exited Too Late');
 CREATE TABLE IF NOT EXISTS weekly_reviews (
   id SERIAL PRIMARY KEY,
   week_start TEXT NOT NULL,

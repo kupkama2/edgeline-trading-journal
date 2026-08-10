@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { DEMON_RETIRED_TO_GRADE, DEMON_TAXONOMY } from "../shared/demons";
 import {
+  GRADES,
   axisReport,
   exitCost,
   executionReport,
@@ -213,6 +215,32 @@ describe("overriding the plan", () => {
     ]);
     expect(r.netR).toBeCloseTo(-3.5, 10);
     expect(r.verdict).toContain("cost");
+  });
+});
+
+describe("the demons the grades replaced", () => {
+  it("no longer offers a timing demon that duplicates a grade", () => {
+    // Two places to record "I got out too soon" is worse than one: the demon
+    // fed streaks and discipline, the grade feeds the take-profit arithmetic,
+    // and ticking either told a different story about the same trade.
+    for (const name of Object.keys(DEMON_RETIRED_TO_GRADE)) {
+      expect(DEMON_TAXONOMY).not.toContain(name);
+    }
+  });
+
+  it("sends each retired demon to a grade that exists on its axis", () => {
+    for (const [name, to] of Object.entries(DEMON_RETIRED_TO_GRADE)) {
+      const axis = to.column === "entry_grade" ? "entry" : "exit";
+      expect(GRADES[axis], `${name} maps somewhere real`).toContain(to.grade);
+    }
+  });
+
+  it("keeps the demons that say something no grade says", () => {
+    // Sizing, plan-breaking and the trade you didn't take are not timing, and
+    // retiring them with the rest would lose them entirely.
+    expect(DEMON_TAXONOMY).toContain("Bet Too Large");
+    expect(DEMON_TAXONOMY).toContain("Trade Not In Plan");
+    expect(DEMON_TAXONOMY).toContain("Didn't Take Planned Trade");
   });
 });
 

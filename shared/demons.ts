@@ -13,13 +13,12 @@
  */
 import type { MistakeTag, TradeWithTags } from "./schema";
 
-/** The canonical nine, in Tom Dante's original order. */
+/**
+ * The canonical list, in Tom Dante's original order — minus the four timing
+ * demons, which the execution grades now own (see DEMON_RETIRED_TO_GRADE).
+ */
 export const DEMON_TAXONOMY: string[] = [
   "Poor Risk/Reward",
-  "Entered Too Soon",
-  "Entered Too Late",
-  "Exited Too Soon",
-  "Exited Too Late",
   "Trade Not In Plan",
   "Bet Too Large",
   "Bet Too Small",
@@ -30,6 +29,30 @@ export const DEMON_TAXONOMY: string[] = [
 export const DEMON_LEGACY_ALIASES: Record<string, string> = {
   "Poor Risk/Reward Trade": "Poor Risk/Reward",
   "Trade Not In Trading Plan": "Trade Not In Plan",
+};
+
+/**
+ * Four demons that the grade axes say better, and where each one moves to.
+ *
+ * "Exited Too Soon" and an exit graded early were the same claim recorded in
+ * two places, which is worse than recording it in neither: the demon counts
+ * toward streaks and discipline while the grade drives the take-profit
+ * arithmetic, so ticking one, both, or the wrong one produced three different
+ * pictures of the same trade. The grade wins because it is the one with a
+ * price attached.
+ *
+ * Storage retires them on boot, but only after copying each tick onto the
+ * matching axis — nothing recorded is thrown away, it just moves to the column
+ * that can price it. See the migration in server/storage.ts.
+ */
+export const DEMON_RETIRED_TO_GRADE: Record<
+  string,
+  { column: "entry_grade" | "exit_grade"; grade: string }
+> = {
+  "Entered Too Soon": { column: "entry_grade", grade: "early" },
+  "Entered Too Late": { column: "entry_grade", grade: "late" },
+  "Exited Too Soon": { column: "exit_grade", grade: "early" },
+  "Exited Too Late": { column: "exit_grade", grade: "late" },
 };
 
 /** Soft nudge: same demon three trades running. Also the guardrail trigger. */
