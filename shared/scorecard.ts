@@ -45,6 +45,12 @@ export interface Scorecard {
   expectancyR: number;
   /** Gross profit ÷ gross loss, in dollars. */
   profitFactor: number;
+  /** The two dollar totals profitFactor is the ratio of, so it can be checked. */
+  grossWin: number;
+  grossLoss: number;
+  /** Winners and losers behind winRate, for the same reason. */
+  wins: number;
+  losses: number;
   /** Van Tharp's System Quality Number: mean/σ × √n, n capped at 100. */
   sqn: number;
   /** Total realised R and dollars, net of fees. */
@@ -151,6 +157,10 @@ export function scorecard(trades: TradeWithTags[]): Scorecard {
     payoff: avgLoss > 0 ? avgWin / avgLoss : avgWin > 0 ? Infinity : 0,
     expectancyR,
     profitFactor: grossLoss > 0 ? grossWin / grossLoss : grossWin > 0 ? Infinity : 0,
+    grossWin,
+    grossLoss,
+    wins: wins.length,
+    losses: losses.length,
     sqn,
     totalR: rs.reduce((a, b) => a + b, 0),
     totalPnL: pnls.reduce((a, b) => a + b, 0),
@@ -164,32 +174,21 @@ export function scorecard(trades: TradeWithTags[]): Scorecard {
 /**
  * Name the binding constraint — the lowest-scoring part — because "78/100" is
  * a grade and what a grade is for is knowing what to work on next.
+ *
+ * Stated as the part, its points and the figure underneath it, and nothing
+ * else. An earlier version opened with a line grading the record ("This is a
+ * good record.") before naming the constraint; it read as a pat on the back
+ * and told you nothing the score above it hadn't already said.
  */
 function verdictFor(
   n: number,
-  expectancyR: number,
-  parts: { label: string; points: number; max: number }[],
+  _expectancyR: number,
+  parts: { label: string; points: number; max: number; hint: string }[],
 ): string {
   if (n < SCORE_MIN_SAMPLE) {
-    return `${SCORE_MIN_SAMPLE - n} more closed ${
-      SCORE_MIN_SAMPLE - n === 1 ? "trade" : "trades"
-    } before these numbers mean anything.`;
+    const left = SCORE_MIN_SAMPLE - n;
+    return `${left} more closed ${left === 1 ? "trade" : "trades"} before a score.`;
   }
   const worst = parts.reduce((a, b) => (b.points < a.points ? b : a));
-  const total = parts.reduce((a, p) => a + p.points, 0);
-  const lead =
-    total >= 75
-      ? "This is a good record."
-      : total >= 50
-        ? "The record is working."
-        : expectancyR > 0
-          ? "Marginally profitable."
-          : "Not profitable yet.";
-  const fix: Record<string, string> = {
-    Edge: "The average trade barely pays — the setups themselves are the constraint.",
-    Consistency: "Results swing hard around that average; the edge is not repeatable yet.",
-    Discipline: "The weak link is the logging: rationale, named exits, demons left untagged.",
-    Management: "You are giving back most of what the moves offer — exits are the constraint.",
-  };
-  return `${lead} ${fix[worst.label]}`;
+  return `Weakest part: ${worst.label} ${worst.points}/${worst.max} — ${worst.hint}.`;
 }

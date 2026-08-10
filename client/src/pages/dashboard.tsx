@@ -71,6 +71,7 @@ function ChartCard({
   children,
   testId,
   className = "",
+  anchorId,
 }: {
   title: string;
   subtitle?: string;
@@ -78,9 +79,15 @@ function ChartCard({
   children: React.ReactNode;
   testId?: string;
   className?: string;
+  /** Landing target for a figure clicked on the homepage; see lib/jump.ts. */
+  anchorId?: string;
 }) {
   return (
-    <Card className={`border-card-border bg-card p-4 sm:p-5 ${className}`} data-testid={testId}>
+    <Card
+      id={anchorId}
+      className={`scroll-mt-20 border-card-border bg-card p-4 transition-shadow sm:p-5 ${className}`}
+      data-testid={testId}
+    >
       <div className="mb-3 flex items-start gap-2">
         {Icon && <Icon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
         <div className="min-w-0">
@@ -442,6 +449,7 @@ export default function Dashboard({ embedded = false }: { embedded?: boolean } =
         subtitle="Cumulative R if you managed the trade (green) vs. leaving the original stop and target untouched (blue). Amber is the running R your management added or destroyed."
         icon={TrendingUp}
         testId="chart-equity"
+        anchorId="jump-equity"
       >
         {equity.length === 0 ? (
           <EmptyChart msg="Close a few trades with an outcome screenshot (or a no-management verdict) and both curves appear here." />

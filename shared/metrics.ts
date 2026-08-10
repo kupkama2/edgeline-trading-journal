@@ -298,12 +298,25 @@ export function fmtR(v: number | null | undefined, digits = 2): string {
 export function fmtMoney(v: number | null | undefined): string {
   if (v == null || !isFinite(v)) return "—";
   const sign = v < 0 ? "-" : v > 0 ? "+" : "";
+  return `${sign}${fmtAmount(v)}`;
+}
+
+/**
+ * The same dollars without a sign, for figures whose direction is already in
+ * the words around them — "$310 lost" must not render as "+$310 lost".
+ */
+export function fmtAmount(v: number | null | undefined, forceDigits?: 0 | 2): string {
+  if (v == null || !isFinite(v)) return "—";
   const a = Math.abs(v);
   // Whole dollars once the figure is big enough that cents are noise, but
   // cents below that: a 3,000-unit position in a sub-penny token settles for
-  // a few dollars, and rounding those to "+$3" throws away most of the result.
-  const digits = a >= 100 ? 0 : 2;
-  return `${sign}$${a.toLocaleString(undefined, {
+  // a few dollars, and rounding those to "$3" throws away most of the result.
+  //
+  // forceDigits overrides that for figures printed side by side, where the
+  // rule would otherwise render one half of a ratio as "$246" and the other
+  // as "$40.00" and make a matched pair look like a mistake.
+  const digits = forceDigits ?? (a >= 100 ? 0 : 2);
+  return `$${a.toLocaleString(undefined, {
     minimumFractionDigits: digits,
     maximumFractionDigits: digits,
   })}`;

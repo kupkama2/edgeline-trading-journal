@@ -27,6 +27,15 @@ import { useTrades } from "@/lib/data";
 import { closedTrades } from "@shared/breakdowns";
 import Analysis from "@/pages/analysis";
 import Dashboard from "@/pages/dashboard";
+import { scrollToAnchor, takeJumpSection } from "@/lib/jump";
+
+/**
+ * The anchor waiting to be scrolled to, read during the very first render so
+ * the half is already correct by the time anything mounts. Module scope rather
+ * than state: it must survive the render that consumed it without causing a
+ * second one, and it is cleared the moment it is used.
+ */
+let pendingAnchor: string | null = null;
 
 const HALVES = [
   { id: "edge", label: "Edge", icon: BarChart3 },
@@ -41,8 +50,22 @@ export default function Stats() {
   // /analysis silently shows whichever half was last looked at.
   const [onDashboard] = useRoute("/dashboard");
   const [onAnalysis] = useRoute("/analysis");
-  const [half, setHalf] = useState<Half>(onDashboard ? "habits" : "edge");
+  // A figure clicked on the homepage names both the half and the card, since
+  // neither is recoverable from the URL. Consumed once, on arrival.
+  const [half, setHalf] = useState<Half>(() => {
+    const jump = takeJumpSection();
+    if (jump) {
+      pendingAnchor = jump.anchor;
+      return jump.half;
+    }
+    return onDashboard ? "habits" : "edge";
+  });
   useEffect(() => {
+    if (pendingAnchor) {
+      scrollToAnchor(pendingAnchor);
+      pendingAnchor = null;
+      return;
+    }
     if (onDashboard) setHalf("habits");
     else if (onAnalysis) setHalf("edge");
   }, [onDashboard, onAnalysis]);
