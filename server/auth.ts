@@ -144,6 +144,8 @@ async function resolveAccount(profile: {
   // The owner claims the pre-sign-in history; everyone else starts empty.
   const isOwner = Boolean(OWNER_EMAIL && profile.email.toLowerCase() === OWNER_EMAIL);
   const alreadyClaimed = await accounts.owner();
+  // create() adopts the pre-sign-in history before seeding, so an owner never
+  // ends up with a starter style sitting next to the real one it duplicates.
   const user = await accounts.create({
     googleSub: profile.sub,
     email: profile.email,
@@ -151,7 +153,6 @@ async function resolveAccount(profile: {
     picture: profile.picture ?? null,
     isOwner: isOwner && !alreadyClaimed,
   });
-  if (isOwner && !alreadyClaimed) await accounts.claimOwnership(user.id);
   await accounts.touchLogin(user.id);
   return user;
 }
@@ -342,7 +343,6 @@ function setupLocalAccount(app: Express) {
       name: "Local dev",
       isOwner: !(await accounts.owner()),
     });
-    if (created.isOwner) await accounts.claimOwnership(created.id);
     return (cached = created);
   }
 

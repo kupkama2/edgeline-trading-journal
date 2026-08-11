@@ -232,6 +232,108 @@ describe.skipIf(!DB)("one account cannot reach another", () => {
   });
 });
 
+describe.skipIf(!DB)("the owner adopts a journal without duplicating it", () => {
+  it("does not seed a starter style next to the real one it adopts", async () => {
+    const { initSchema, accounts, db, storageFor } = await import("../server/storage");
+    const { tradingStyles, trades } = await import("../shared/schema");
+    await initSchema();
+
+    // Stand in for a pre-sign-in journal: rows with no owner, one of them
+    // sharing a name with a starter style, and one with a trade attached.
+    const mark = `pre-${stamp}`;
+    const [legacy] = await db
+      .insert(tradingStyles)
+      .values({ name: "Crypto Swings", color: "amber", sortOrder: 0, userId: null } as any)
+      .returning();
+    await db.insert(trades).values({ ...baseTrade, styleId: legacy.id, userId: null } as any);
+
+    const owner = await accounts.create({
+      googleSub: `owner-${stamp}`,
+      email: `owner-${stamp}@x.test`,
+      isOwner: true,
+    });
+    const styles = await storageFor(owner.id).listTradingStyles();
+
+    // Exactly one, and it is the one carrying the history — not a fresh copy
+    // created seconds earlier by the seeder.
+    const named = styles.filter((s) => s.name === "Crypto Swings");
+    expect(named.length).toBe(1);
+    expect(named[0].id).toBe(legacy.id);
+    expect(named[0].color).toBe("amber");
+    expect(mark).toBeTruthy();
+  });
+
+  it("still seeds a starter set for an account with nothing to adopt", async () => {
+    const { accounts, storageFor } = await import("../server/storage");
+    const fresh = await accounts.create({
+      googleSub: `fresh-${stamp}`,
+      email: `fresh-${stamp}@x.test`,
+    });
+    const styles = await storageFor(fresh.id).listTradingStyles();
+    const tags = await storageFor(fresh.id).listMistakeTags();
+    expect(styles.length).toBeGreaterThan(0);
+    expect(tags.length).toBeGreaterThan(0);
+    // ...and no name appears twice in it.
+    expect(new Set(styles.map((s) => s.name)).size).toBe(styles.length);
+    expect(new Set(tags.map((t) => t.name)).size).toBe(tags.length);
+  });
+
+  it("sweeps up duplicates an earlier build already created", async () => {
+    const { initSchema, accounts, db, storageFor } = await import("../server/storage");
+    const { tradingStyles, trades } = await import("../shared/schema");
+
+    const user = await accounts.create({
+      googleSub: `dupe-${stamp}`,
+      email: `dupe-${stamp}@x.test`,
+    });
+    // Recreate the damage by hand: the real one with a trade, then a younger
+    // twin with nothing attached, exactly as the mis-ordered seed produced.
+    const [real] = await db
+      .insert(tradingStyles)
+      .values({ name: "Twinned", color: "amber", sortOrder: 0, userId: user.id } as any)
+      .returning();
+    await db.insert(trades).values({ ...baseTrade, styleId: real.id, userId: user.id } as any);
+    const [twin] = await db
+      .insert(tradingStyles)
+      .values({ name: "Twinned", color: "violet", sortOrder: 1, userId: user.id } as any)
+      .returning();
+
+    await initSchema();
+
+    const styles = await storageFor(user.id).listTradingStyles();
+    const named = styles.filter((s) => s.name === "Twinned");
+    expect(named.map((s) => s.id)).toEqual([real.id]);
+    expect(named.map((s) => s.id)).not.toContain(twin.id);
+    // The trade kept its style rather than being orphaned by the cleanup.
+    const kept = await storageFor(user.id).listTrades();
+    expect(kept.some((t) => t.styleId === real.id)).toBe(true);
+  });
+
+  it("leaves two same-named styles alone when both are in use", async () => {
+    const { initSchema, accounts, db, storageFor } = await import("../server/storage");
+    const { tradingStyles, trades } = await import("../shared/schema");
+
+    const user = await accounts.create({
+      googleSub: `both-${stamp}`,
+      email: `both-${stamp}@x.test`,
+    });
+    for (const color of ["amber", "violet"]) {
+      const [s] = await db
+        .insert(tradingStyles)
+        .values({ name: "BothUsed", color, sortOrder: 0, userId: user.id } as any)
+        .returning();
+      await db.insert(trades).values({ ...baseTrade, styleId: s.id, userId: user.id } as any);
+    }
+
+    await initSchema();
+
+    // Deliberate duplicates with history on both sides are the user's
+    // business; a cleanup that destroys one of them is worse than the mess.
+    const styles = await storageFor(user.id).listTradingStyles();
+    expect(styles.filter((s) => s.name === "BothUsed").length).toBe(2);
+  });
+});
+
 /**
  * A structural guard, not a behavioural one.
  *
