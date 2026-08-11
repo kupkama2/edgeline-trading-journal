@@ -39,6 +39,33 @@ const PUBLIC_URL = process.env.PUBLIC_URL?.replace(/\/$/, "");
 
 export const authEnabled = Boolean(GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET);
 
+/**
+ * Refuse to boot a production server that has no way to sign anyone in.
+ *
+ * The local-account fallback below is right for `npm run dev` and catastrophic
+ * anywhere else, in two ways at once: every /api route would be open, and the
+ * implicit local account would CLAIM OWNERSHIP of the pre-sign-in history —
+ * so the real owner would later sign in to an empty journal while their trades
+ * sat under a placeholder they can never log in as.
+ *
+ * Crashing is the safe failure. Render keeps the last healthy deploy running,
+ * so a misconfigured release leaves the existing gated version serving instead
+ * of replacing it with an open one. A warning in a log nobody reads is not a
+ * control; a deploy that refuses to go live is.
+ *
+ * Exported and pure so the rule itself is testable — the boot path is not.
+ */
+export function authConfigError(env: NodeJS.ProcessEnv): string | null {
+  if (env.NODE_ENV !== "production") return null;
+  if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET) {
+    return "GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are required in production. Without them the API has no accounts and no gate, and the placeholder local account would claim your existing trades. See DEPLOY.md.";
+  }
+  if (!env.OWNER_EMAIL?.trim() && !env.ALLOWED_EMAILS?.trim()) {
+    return "OWNER_EMAIL is required in production — it decides which Google account owns the journal logged so far. Without it nobody can sign in. See DEPLOY.md.";
+  }
+  return null;
+}
+
 const AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
 const USERINFO_ENDPOINT = "https://openidconnect.googleapis.com/v1/userinfo";
@@ -130,6 +157,9 @@ async function resolveAccount(profile: {
 }
 
 export function setupAuth(app: Express) {
+  const misconfigured = authConfigError(process.env);
+  if (misconfigured) throw new Error(`[auth] ${misconfigured}`);
+
   const isProd = process.env.NODE_ENV === "production";
   if (isProd) app.set("trust proxy", 1);
 
