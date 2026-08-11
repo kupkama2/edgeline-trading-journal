@@ -29,6 +29,7 @@ import { dropBracketLegs, type ImportCandidate } from "@shared/import-parse";
 import { Dropzone, EXIT_REASONS, RationaleTags, localNow, num, parseTags, toIso } from "@/components/trade-shared";
 import { EMPTY_GRADES, GradePicker, type GradeState } from "@/components/grade-picker";
 import { AccountPicker, HighlightPicker } from "@/components/trade-pickers";
+import { SymbolPicker } from "@/components/symbol-picker";
 import { knownHighlights, serializeHighlights } from "@shared/highlights";
 import { suggestSize } from "@shared/sizing";
 import { inSessionWindow, windowLabel } from "@shared/session";
@@ -210,9 +211,21 @@ export function NewTradeCard({
       : pointValueFor(v.symbol, remembered);
   // A recognised futures root is unambiguous — contracts, always.
   const isFutures = Boolean(v.symbol) && perContract !== 1;
+  /*
+   * Keyed on the resolved instrument rather than the raw string, so it fires
+   * when the symbol genuinely changes and not on every keystroke — otherwise
+   * it would fight a unit the user had just switched by hand.
+   *
+   * A recognised contract is bought in contracts. Anything else is assumed to
+   * be a crypto asset, which is decided in USD notional; that is both the far
+   * commoner case for an unrecognised ticker here and the recoverable one,
+   * since the unit sits one click away.
+   */
+  const instrumentKey = spec?.root ?? (v.symbol?.trim() ? "unknown" : "");
   useEffect(() => {
-    if (isFutures) setSizeUnit("base");
-  }, [isFutures]);
+    if (instrumentKey === "") return;
+    setSizeUnit(instrumentKey === "unknown" ? "quote" : "base");
+  }, [instrumentKey]);
   const sized = useMemo(
     () =>
       suggestSize({
@@ -779,11 +792,14 @@ export function NewTradeCard({
                     Symbol
                   </FormLabel>
                   <FormControl>
-                    <Input
-                      {...field}
-                      placeholder="NQ"
+                    <SymbolPicker
+                      value={(field.value as string) ?? ""}
+                      onChange={field.onChange}
+                      trades={allTrades}
+                      onBlur={field.onBlur}
+                      name={field.name}
+                      placeholder="NQ, MBTZ6, SOL…"
                       className="h-9 font-mono text-sm uppercase"
-                      data-testid="input-symbol"
                     />
                   </FormControl>
                   <FormMessage className="text-[10px]" />
