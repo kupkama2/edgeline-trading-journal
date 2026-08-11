@@ -32,7 +32,13 @@ import {
   directionEnum,
   sizeUnitEnum,
 } from "@shared/schema";
-import { lastPointValueFor, normalizeSymbol, pointValueFor } from "@shared/symbols";
+import {
+  contractFor,
+  lastPointValueFor,
+  looksLikeFuturesContract,
+  normalizeSymbol,
+  pointValueFor,
+} from "@shared/symbols";
 import {
   ORDERS_PROMPT,
   RATIONALE_PROMPT,
@@ -334,12 +340,22 @@ export async function registerRoutes(
     // set the size of a contract the table has never heard of), what the table
     // knows, then what this symbol was worth last time it was logged. That
     // last one is why a nano contract only has to be explained once.
-    const raw = parsed.data.trade.symbol;
-    const remembered = lastPointValueFor(raw, await store(req).listTrades());
+    //
+    // The instrument and the contract are separated here. When the client
+    // sends both it has already decided (the entry card lets you say a nano
+    // listing belongs to "BTC"); otherwise the contract is whatever was typed
+    // and the instrument is its rollup.
+    const body = parsed.data.trade;
+    const typed = (body.contract || body.symbol).trim().toUpperCase();
+    const isContract = Boolean(contractFor(typed)) || looksLikeFuturesContract(typed);
+    const remembered = lastPointValueFor(typed, await store(req).listTrades());
     const trade = {
-      ...parsed.data.trade,
-      pointValue: parsed.data.trade.pointValue ?? pointValueFor(raw, remembered),
-      symbol: normalizeSymbol(raw),
+      ...body,
+      pointValue: body.pointValue ?? pointValueFor(typed, remembered),
+      symbol: body.contract ? body.symbol.trim().toUpperCase() : normalizeSymbol(typed),
+      // Nothing to record for a stock or a spot pair — there is no contract to
+      // tell apart from the instrument.
+      contract: isContract ? typed : null,
     };
     res.status(201).json(
       await store(req).createTrade(trade, parsed.data.mistakeTagIds ?? []),

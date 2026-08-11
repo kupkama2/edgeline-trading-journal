@@ -7,6 +7,7 @@ import {
   normalizeSymbol,
   pointValueFor,
 } from "../shared/symbols";
+import { suggestSize } from "../shared/sizing";
 
 /**
  * Crypto futures are where the size table earns its keep: the same underlying
@@ -53,6 +54,85 @@ describe("crypto futures", () => {
     expect(pointValueFor("NQ")).toBe(20);
     expect(pointValueFor("MGC")).toBe(10);
     expect(pointValueFor("CL")).toBe(1000);
+  });
+
+  it("covers the rest of the majors", () => {
+    // Spot-checks across the table. Each is contract size x $1 of price:
+    // silver is 5,000 oz, natural gas 10,000 MMBtu, a bond point $1,000.
+    expect(pointValueFor("SI")).toBe(5000);
+    expect(pointValueFor("SIL")).toBe(1000);
+    expect(pointValueFor("NG")).toBe(10000);
+    expect(pointValueFor("ZB")).toBe(1000);
+    expect(pointValueFor("6E")).toBe(125000);
+    expect(pointValueFor("MSL")).toBe(25);
+  });
+
+  it("keeps the micro/full pair on one instrument across the table", () => {
+    for (const [micro, full] of [
+      ["MES", "ES"],
+      ["MNQ", "NQ"],
+      ["MGC", "GC"],
+      ["MCL", "CL"],
+      ["SIL", "SI"],
+      ["MHG", "HG"],
+      ["MSL", "SOLZ6"],
+      ["MBT", "BTCZ6"],
+    ] as const) {
+      expect(normalizeSymbol(micro)).toBe(normalizeSymbol(full));
+      // ...and the micro is always the smaller of the two, or the rollup is
+      // hiding a size difference rather than expressing one.
+      expect(pointValueFor(micro)).toBeLessThan(pointValueFor(full));
+    }
+  });
+
+  it("prefers the longer root when one contains another", () => {
+    // SIL vs SI, MHG vs HG, MES vs ES — a prefix match in the wrong order
+    // would price micro silver as full silver, five times over.
+    expect(pointValueFor("SILZ6")).toBe(1000);
+    expect(pointValueFor("SIZ6")).toBe(5000);
+    expect(pointValueFor("MHGZ6")).toBe(2500);
+    expect(pointValueFor("MESZ6")).toBe(5);
+  });
+});
+
+describe("sizing from a risk budget", () => {
+  it("solves contracts from dollars at the contract's real size", () => {
+    // $500 of risk, a $1,000 stop, 0.1 BTC a contract: five micros.
+    const s = suggestSize({
+      symbol: "MBTZ6",
+      entryPrice: 95000,
+      initialStop: 94000,
+      riskDollars: 500,
+      sizeUnit: "base",
+    });
+    expect(s?.size).toBe(5);
+    expect(s?.actualRiskDollars).toBe(500);
+  });
+
+  it("uses a caller-supplied multiplier for a contract off the table", () => {
+    // Without this the 1.0 default would suggest a position a hundred times
+    // too large, and it would look perfectly reasonable on screen.
+    const s = suggestSize({
+      symbol: "NANOBITZ6",
+      entryPrice: 95000,
+      initialStop: 94000,
+      riskDollars: 500,
+      sizeUnit: "base",
+      pointValue: 0.01,
+    });
+    expect(s?.size).toBe(50);
+  });
+
+  it("rounds down, because rounding up risks more than you said", () => {
+    const s = suggestSize({
+      symbol: "MBTZ6",
+      entryPrice: 95000,
+      initialStop: 94000,
+      riskDollars: 550,
+      sizeUnit: "base",
+    });
+    expect(s?.size).toBe(5);
+    expect(s?.actualRiskDollars).toBe(500);
   });
 });
 

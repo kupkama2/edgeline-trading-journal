@@ -48,44 +48,57 @@ export interface ContractSpec {
 }
 
 export const CONTRACTS: ContractSpec[] = [
-  /* ------------------------------ index ------------------------------ */
-  { root: "NQ", underlying: "NQ", pointValue: 20, label: "E-mini Nasdaq-100" },
-  { root: "MNQ", underlying: "NQ", pointValue: 2, label: "Micro Nasdaq-100" },
+  /* --------------------------- equity index --------------------------- */
   { root: "ES", underlying: "ES", pointValue: 50, label: "E-mini S&P 500" },
   { root: "MES", underlying: "ES", pointValue: 5, label: "Micro S&P 500" },
+  { root: "NQ", underlying: "NQ", pointValue: 20, label: "E-mini Nasdaq-100" },
+  { root: "MNQ", underlying: "NQ", pointValue: 2, label: "Micro Nasdaq-100" },
   { root: "YM", underlying: "YM", pointValue: 5, label: "E-mini Dow" },
   { root: "MYM", underlying: "YM", pointValue: 0.5, label: "Micro Dow" },
   { root: "RTY", underlying: "RTY", pointValue: 50, label: "E-mini Russell 2000" },
   { root: "M2K", underlying: "RTY", pointValue: 5, label: "Micro Russell 2000" },
 
-  /* ---------------------------- commodities --------------------------- */
+  /* ------------------------------ metals ------------------------------ */
   { root: "GC", underlying: "GC", pointValue: 100, unit: "oz", label: "Gold" },
   { root: "MGC", underlying: "GC", pointValue: 10, unit: "oz", label: "Micro Gold" },
-  { root: "CL", underlying: "CL", pointValue: 1000, unit: "bbl", label: "Crude Oil" },
+  { root: "SI", underlying: "SI", pointValue: 5000, unit: "oz", label: "Silver" },
+  { root: "SIL", underlying: "SI", pointValue: 1000, unit: "oz", label: "Micro Silver" },
+  { root: "HG", underlying: "HG", pointValue: 25000, unit: "lb", label: "Copper" },
+  { root: "MHG", underlying: "HG", pointValue: 2500, unit: "lb", label: "Micro Copper" },
+  { root: "PL", underlying: "PL", pointValue: 50, unit: "oz", label: "Platinum" },
+  { root: "PA", underlying: "PA", pointValue: 100, unit: "oz", label: "Palladium" },
+
+  /* ------------------------------ energy ------------------------------ */
+  { root: "CL", underlying: "CL", pointValue: 1000, unit: "bbl", label: "Crude Oil (WTI)" },
   { root: "MCL", underlying: "CL", pointValue: 100, unit: "bbl", label: "Micro Crude Oil" },
+  { root: "BZ", underlying: "BZ", pointValue: 1000, unit: "bbl", label: "Brent Crude" },
+  { root: "NG", underlying: "NG", pointValue: 10000, unit: "MMBtu", label: "Natural Gas" },
+  { root: "QG", underlying: "NG", pointValue: 2500, unit: "MMBtu", label: "E-mini Natural Gas" },
+  { root: "RB", underlying: "RB", pointValue: 42000, unit: "gal", label: "RBOB Gasoline" },
+  { root: "HO", underlying: "HO", pointValue: 42000, unit: "gal", label: "Heating Oil" },
 
   /* ------------------------------ crypto ------------------------------ */
   // Micros and below are unambiguous roots — nothing else is called "MBT".
   { root: "MBT", underlying: "BTC", pointValue: 0.1, unit: "BTC", label: "Micro Bitcoin" },
   { root: "MET", underlying: "ETH", pointValue: 0.1, unit: "ETH", label: "Micro Ether" },
-  // The full-size contracts share their ticker with the spot pair, so they
-  // only count when a month code says a contract was meant.
-  {
-    root: "BTC",
-    underlying: "BTC",
-    pointValue: 5,
-    unit: "BTC",
-    label: "Bitcoin futures",
-    monthCodeOnly: true,
-  },
-  {
-    root: "ETH",
-    underlying: "ETH",
-    pointValue: 50,
-    unit: "ETH",
-    label: "Ether futures",
-    monthCodeOnly: true,
-  },
+  { root: "MSL", underlying: "SOL", pointValue: 25, unit: "SOL", label: "Micro Solana" },
+  { root: "MXP", underlying: "XRP", pointValue: 2500, unit: "XRP", label: "Micro XRP" },
+  // The full-size crypto contracts share their ticker with the spot pair, so
+  // they only count when a month code says a contract was meant.
+  { root: "BTC", underlying: "BTC", pointValue: 5, unit: "BTC", label: "Bitcoin futures", monthCodeOnly: true },
+  { root: "ETH", underlying: "ETH", pointValue: 50, unit: "ETH", label: "Ether futures", monthCodeOnly: true },
+  { root: "SOL", underlying: "SOL", pointValue: 500, unit: "SOL", label: "Solana futures", monthCodeOnly: true },
+  { root: "XRP", underlying: "XRP", pointValue: 50000, unit: "XRP", label: "XRP futures", monthCodeOnly: true },
+
+  /* ----------------------------- rates & FX ---------------------------- */
+  { root: "ZB", underlying: "ZB", pointValue: 1000, label: "30-Year T-Bond" },
+  { root: "ZN", underlying: "ZN", pointValue: 1000, label: "10-Year T-Note" },
+  { root: "ZF", underlying: "ZF", pointValue: 1000, label: "5-Year T-Note" },
+  { root: "ZT", underlying: "ZT", pointValue: 2000, label: "2-Year T-Note" },
+  { root: "6E", underlying: "6E", pointValue: 125000, unit: "EUR", label: "Euro FX" },
+  { root: "6B", underlying: "6B", pointValue: 62500, unit: "GBP", label: "British Pound" },
+  { root: "6A", underlying: "6A", pointValue: 100000, unit: "AUD", label: "Australian Dollar" },
+  { root: "6C", underlying: "6C", pointValue: 100000, unit: "CAD", label: "Canadian Dollar" },
 ];
 
 const BY_ROOT = new Map(CONTRACTS.map((c) => [c.root, c]));
@@ -174,17 +187,21 @@ export function pointValueFor(
 }
 
 /**
- * The key a remembered size is filed under.
+ * The key a remembered size is filed under: the CONTRACT root, not the
+ * instrument.
  *
- * normalizeSymbol only strips a month code off roots it recognises, which is
- * right for grouping — inventing a rollup for an unrecognised ticker would
- * merge instruments on a guess. But it is wrong for remembering: the entire
- * point is contracts the table does NOT know, and "NANOBITZ6" and "NANOBITH7"
- * are one contract in two months. So this strips a trailing month code from
- * anything shaped like a contract, known or not.
+ * These must not be the same key. Spot BTC and a nano BTC future both belong
+ * to the instrument "BTC" but hold wildly different amounts of it, so filing
+ * the remembered size under the instrument would have one overwrite the other
+ * and misprice whichever was logged second. Filing it under the contract root
+ * keeps "NANOBIT" and "MBT" separate while still collapsing December into
+ * March, which is the one thing that SHOULD merge.
  */
-function memoryKey(raw: string | null | undefined): string {
-  const s = normalizeSymbol(raw);
+export function contractRoot(raw: string | null | undefined): string {
+  if (!raw) return "";
+  const s = raw.trim().toUpperCase();
+  const spec = contractFor(s);
+  if (spec) return spec.root;
   const m = /^([A-Z]{2,})[FGHJKMNQUVXZ]\d{1,2}$/.exec(s);
   return m ? m[1] : s;
 }
@@ -200,12 +217,20 @@ function memoryKey(raw: string | null | undefined): string {
  */
 export function lastPointValueFor(
   raw: string | null | undefined,
-  history: { symbol: string; pointValue?: number | null; entryTime: string }[],
+  history: {
+    symbol: string;
+    /** The contract as written, when the row has one. */
+    contract?: string | null;
+    pointValue?: number | null;
+    entryTime: string;
+  }[],
 ): number | null {
-  const key = memoryKey(raw);
+  const key = contractRoot(raw);
   if (!key) return null;
   const seen = history
-    .filter((t) => memoryKey(t.symbol) === key)
+    // Rows written before the instrument/contract split have no contract, so
+    // their symbol is the best available answer for what was typed.
+    .filter((t) => contractRoot(t.contract || t.symbol) === key)
     .filter((t) => t.pointValue != null && isFinite(t.pointValue) && t.pointValue > 0)
     .sort((a, b) => b.entryTime.localeCompare(a.entryTime));
   return seen.length ? (seen[0].pointValue as number) : null;

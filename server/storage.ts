@@ -145,6 +145,11 @@ ALTER TABLE trades ADD COLUMN IF NOT EXISTS account TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS fees DOUBLE PRECISION;
 -- Green flags: JSON string[] of what went right on the trade.
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS highlights TEXT;
+-- The contract as written, beside the instrument it belongs to. NULL for
+-- everything logged before the split, which is correct: those rows recorded
+-- whatever the user typed into the instrument field, and there is nothing
+-- left to recover it from.
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS contract TEXT;
 -- Execution grades: how the entry, the stop and the exit actually went.
 -- NULL = not graded, which is not the same as average and is never counted so.
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS entry_grade TEXT;
