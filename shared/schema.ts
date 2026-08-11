@@ -95,7 +95,20 @@ export const trades = pgTable("trades", {
   /** Owning account. Injected by the storage layer, never by a request. */
   userId: integer("user_id").notNull(),
   styleId: integer("style_id"),
+  /**
+   * The INSTRUMENT — "BTC", "NQ", "AAPL". What the stats group by, and what a
+   * trader means when they say what they traded. Every expiry and every
+   * contract size of the same underlying share it, which is the whole point.
+   */
   symbol: text("symbol").notNull(),
+  /**
+   * The CONTRACT as written — "MBTZ6", "NANOBITH7" — when the trade was one.
+   * Kept beside the instrument rather than folded into it because the two
+   * answer different questions: the instrument groups the record, the contract
+   * is what remembers how big one of them is. NULL for spot and equities,
+   * where there is no contract to distinguish.
+   */
+  contract: text("contract"),
   direction: text("direction").notNull(), // 'long' | 'short'
   size: doublePrecision("size").notNull(),
   /**

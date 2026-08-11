@@ -39,6 +39,7 @@ import { computeMetrics, fmtFees, fmtMoney, fmtR, EXIT_REASON_LABELS } from "@sh
 import { positionLedger } from "@shared/fills";
 import { parseHighlights } from "@shared/highlights";
 import { overrodeThePlan } from "@shared/grades";
+import { exposureOf, fmtExposure } from "@shared/symbols";
 import { GradeBadges } from "@/components/grade-picker";
 import { StyleChip } from "@/components/style-switcher";
 import { TradeImageGallery } from "@/components/trade-images";
@@ -456,7 +457,12 @@ function TradeBody({
             <Fig
               label="Size"
               value={`${num(trade.size)}${trade.sizeUnit === "quote" ? " USD" : ""}`}
-              hint={trade.pointValue !== 1 ? `$${trade.pointValue}/pt` : undefined}
+              // For a contract quoted in dollars per coin or per ounce, what
+              // the position actually holds is the more useful of the two.
+              hint={
+                fmtExposure(exposureOf(trade.symbol, trade.size, trade.pointValue)) ??
+                (trade.pointValue !== 1 ? `$${trade.pointValue}/pt` : undefined)
+              }
             />
             <Fig
               label="Entered"

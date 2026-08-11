@@ -34,6 +34,12 @@ export function suggestSize(input: {
   initialStop: number;
   riskDollars: number;
   sizeUnit: "base" | "quote";
+  /**
+   * The resolved dollars-per-point, when the caller already knows it — a
+   * contract taught by hand has no entry in the table, and sizing it from the
+   * table's 1.0 default would suggest a position a hundred times too large.
+   */
+  pointValue?: number | null;
 }): SizeSuggestion | null {
   const { symbol, entryPrice, initialStop, riskDollars, sizeUnit } = input;
   if (!isFinite(entryPrice) || !isFinite(initialStop) || !isFinite(riskDollars)) return null;
@@ -53,7 +59,11 @@ export function suggestSize(input: {
     };
   }
 
-  const perContract = stopDistance * pointValueFor(symbol);
+  const per =
+    input.pointValue != null && isFinite(input.pointValue) && input.pointValue > 0
+      ? input.pointValue
+      : pointValueFor(symbol);
+  const perContract = stopDistance * per;
   const contracts = Math.floor(riskDollars / perContract);
   return {
     size: contracts,

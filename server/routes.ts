@@ -32,7 +32,13 @@ import {
   directionEnum,
   sizeUnitEnum,
 } from "@shared/schema";
-import { normalizeSymbol, pointValueFor } from "@shared/symbols";
+import {
+  contractFor,
+  lastPointValueFor,
+  looksLikeFuturesContract,
+  normalizeSymbol,
+  pointValueFor,
+} from "@shared/symbols";
 import {
   ORDERS_PROMPT,
   RATIONALE_PROMPT,
@@ -329,10 +335,27 @@ export async function registerRoutes(
     // Derive the point value from the symbol AS TYPED, before normalization
     // collapses "MNQU6" into "NQ" — that collapse is what keeps the stats
     // merged, and it is also what would otherwise lose the $2-vs-$20 distinction.
+    //
+    // Three sources, in order: what the request said (the entry card lets you
+    // set the size of a contract the table has never heard of), what the table
+    // knows, then what this symbol was worth last time it was logged. That
+    // last one is why a nano contract only has to be explained once.
+    //
+    // The instrument and the contract are separated here. When the client
+    // sends both it has already decided (the entry card lets you say a nano
+    // listing belongs to "BTC"); otherwise the contract is whatever was typed
+    // and the instrument is its rollup.
+    const body = parsed.data.trade;
+    const typed = (body.contract || body.symbol).trim().toUpperCase();
+    const isContract = Boolean(contractFor(typed)) || looksLikeFuturesContract(typed);
+    const remembered = lastPointValueFor(typed, await store(req).listTrades());
     const trade = {
-      ...parsed.data.trade,
-      pointValue: parsed.data.trade.pointValue ?? pointValueFor(parsed.data.trade.symbol),
-      symbol: normalizeSymbol(parsed.data.trade.symbol),
+      ...body,
+      pointValue: body.pointValue ?? pointValueFor(typed, remembered),
+      symbol: body.contract ? body.symbol.trim().toUpperCase() : normalizeSymbol(typed),
+      // Nothing to record for a stock or a spot pair — there is no contract to
+      // tell apart from the instrument.
+      contract: isContract ? typed : null,
     };
     res.status(201).json(
       await store(req).createTrade(trade, parsed.data.mistakeTagIds ?? []),

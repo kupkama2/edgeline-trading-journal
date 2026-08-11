@@ -17,7 +17,14 @@ import { styleColor, styleName, useStyleFilter } from "@/lib/style-filter";
 import { parsePlaybook } from "@shared/schema";
 import { EXIT_REASON_LABELS } from "@shared/metrics";
 import { useDemonGuard } from "@/components/daily-guard";
-import { pointValueFor } from "@shared/symbols";
+import {
+  contractFor,
+  exposureOf,
+  fmtExposure,
+  lastPointValueFor,
+  looksLikeFuturesContract,
+  pointValueFor,
+} from "@shared/symbols";
 import { dropBracketLegs, type ImportCandidate } from "@shared/import-parse";
 import { Dropzone, EXIT_REASONS, RationaleTags, localNow, num, parseTags, toIso } from "@/components/trade-shared";
 import { EMPTY_GRADES, GradePicker, type GradeState } from "@/components/grade-picker";
@@ -155,11 +162,78 @@ export function NewTradeCard({
 
   const v = form.watch();
 
+  /*
+   * What one contract of this symbol is worth, resolved exactly as the server
+   * will resolve it on save: the table first, then whatever this symbol was
+   * worth the last time it was logged. Computing it here rather than guessing
+   * is what makes the 1R below match the broker instead of approximating it.
+   */
+  const remembered = useMemo(
+    () => lastPointValueFor(v.symbol, allTrades),
+    [v.symbol, allTrades],
+  );
+  const spec = contractFor(v.symbol);
+  /*
+   * A contract the table has never heard of — a broker's own nano listing, say
+   * — still has a size, and the journal only has to be told it once. This is
+   * that once: it appears only for symbols written like a contract (root plus
+   * month code) that aren't recognised, pre-filled with whatever this symbol
+   * was worth last time, and it is what makes the R on a nano trade real
+   * instead of off by a hundredfold.
+   */
+  const [customMult, setCustomMult] = useState("");
+  /*
+   * Size leads; risk reads back.
+   *
+   * The normal way a trade gets logged is contract, entry, stop, size — the
+   * numbers the platform already shows — and what the journal owes you in
+   * return is what that costs: the dollar risk, the R:R and the exposure,
+   * filled in as you type rather than worked out in your head.
+   *
+   * Risk-drives-size is the exception, not the rule. Typing a dollar figure
+   * into the risk box back-solves the position for the rare "I have $300 to
+   * lose on this, how many contracts is that" case, and the × puts it back.
+   */
+  const [sizeMode, setSizeMode] = useState<"auto" | "manual">("manual");
+  /** Empty means "risk is whatever the size works out to". */
+  const [riskOverride, setRiskOverride] = useState("");
+  useEffect(() => {
+    setCustomMult(remembered != null ? String(remembered) : "");
+  }, [remembered, v.symbol]);
+  const needsMultiplier =
+    !spec && sizeUnit === "base" &&
+    (remembered != null || looksLikeFuturesContract(v.symbol));
+  const typedMult = Number(customMult);
+  const perContract =
+    needsMultiplier && isFinite(typedMult) && typedMult > 0
+      ? typedMult
+      : pointValueFor(v.symbol, remembered);
   // A recognised futures root is unambiguous — contracts, always.
-  const isFutures = Boolean(v.symbol) && pointValueFor(v.symbol) !== 1;
+  const isFutures = Boolean(v.symbol) && perContract !== 1;
   useEffect(() => {
     if (isFutures) setSizeUnit("base");
   }, [isFutures]);
+  const sized = useMemo(
+    () =>
+      suggestSize({
+        symbol: v.symbol ?? "",
+        entryPrice: Number(v.entryPrice),
+        initialStop: Number(v.initialStop),
+        riskDollars: Number(riskOverride),
+        sizeUnit,
+        pointValue: perContract,
+      }),
+    [v.symbol, v.entryPrice, v.initialStop, riskOverride, sizeUnit, perContract],
+  );
+
+  // Keep the size honest to the risk while risk is driving. Writing only on a
+  // real change stops this fighting the field the user is typing in.
+  useEffect(() => {
+    if (sizeMode !== "auto" || !sized) return;
+    if (Number(form.getValues("size")) === sized.size) return;
+    form.setValue("size", sized.size as any, { shouldValidate: false });
+  }, [sized, sizeMode, form]);
+
   const preview = useMemo(() => {
     const e = Number(v.entryPrice);
     const s = Number(v.initialStop);
@@ -176,13 +250,15 @@ export function NewTradeCard({
     // read $83 on 2 MNQ where the platform said $165 — and it is shown at
     // exactly the moment the size decision is being made.
     const qty = sizeUnit === "quote" ? (e > 0 ? sz / e : 0) : sz;
-    const perPoint = qty * pointValueFor(v.symbol);
+    const perPoint = qty * perContract;
     return {
       risk,
       rr: reward / risk,
       riskDollars: isFinite(perPoint) ? risk * perPoint : null,
+      // "3 contracts" says nothing about how much Bitcoin that is; this does.
+      exposure: fmtExposure(exposureOf(v.symbol, qty, perContract)),
     };
-  }, [v.entryPrice, v.initialStop, v.initialTarget, v.size, v.symbol, sizeUnit]);
+  }, [v.entryPrice, v.initialStop, v.initialTarget, v.size, v.symbol, sizeUnit, perContract]);
 
   async function handleFile(file: File) {
     const dataUrl = await fileToDownscaledDataUrl(file);
@@ -347,6 +423,11 @@ export function NewTradeCard({
         direction: data.direction,
         size: data.size,
         sizeUnit,
+        // Only sent when the table doesn't know this contract; otherwise the
+        // server derives it from the symbol, which is the authority.
+        ...(needsMultiplier && isFinite(typedMult) && typedMult > 0
+          ? { pointValue: typedMult }
+          : {}),
         entryPrice: data.entryPrice,
         initialStop: data.initialStop,
         initialTarget: data.initialTarget,
@@ -754,9 +835,25 @@ export function NewTradeCard({
               render={({ field }) => (
                 <FormItem className="space-y-1">
                   <div className="flex items-center justify-between">
-                    <FormLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                      Size
-                    </FormLabel>
+                    <div className="flex items-center gap-1.5">
+                      <FormLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                        Size
+                      </FormLabel>
+                      {sizeMode === "auto" && Number(riskOverride) > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSizeMode("manual");
+                            setRiskOverride("");
+                          }}
+                          data-testid="button-size-mode"
+                          title="Size is being solved from the risk you typed. Click to set it by hand again."
+                          className="rounded-full bg-primary/15 px-1.5 py-0.5 text-[9px] text-primary transition-colors"
+                        >
+                          from ${riskOverride} risk
+                        </button>
+                      )}
+                    </div>
                     <div className="flex gap-0.5">
                       {(["base", "quote"] as const).map((u) => {
                         // A futures contract has no notional sizing — you buy
@@ -790,16 +887,45 @@ export function NewTradeCard({
                   <FormControl>
                     <Input
                       {...field}
+                      onChange={(e) => {
+                        // Touching the field is the clearest possible statement
+                        // that this position is fixed and the risk is whatever
+                        // it works out to be.
+                        setSizeMode("manual");
+                        field.onChange(e);
+                      }}
                       type="number"
                       step="any"
                       inputMode="decimal"
                       className="h-9 font-mono text-sm"
+                      data-testid="input-size"
                     />
                   </FormControl>
                   <FormMessage className="text-[10px]" />
                 </FormItem>
               )}
             />
+            {needsMultiplier && (
+              <div className="space-y-1" data-testid="field-contract-multiplier">
+                <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  Contract size
+                </label>
+                <Input
+                  type="number"
+                  step="any"
+                  inputMode="decimal"
+                  value={customMult}
+                  onChange={(e) => setCustomMult(e.target.value)}
+                  placeholder="0.01"
+                  className="h-9 font-mono text-sm"
+                  data-testid="input-contract-multiplier"
+                />
+                <p className="text-[10px] leading-snug text-muted-foreground">
+                  What one contract holds — 0.01 for a nano Bitcoin. Saved with the trade
+                  and reused for this symbol from now on.
+                </p>
+              </div>
+            )}
             {numField("entryPrice", "Entry")}
             {numField("initialStop", "Stop")}
 
@@ -872,65 +998,93 @@ export function NewTradeCard({
               </div>
             ))}
 
-            {/* Size from risk: type what the idea may cost, get the size that
-                costs exactly that. Same arithmetic as the metrics engine, so
-                the suggested size produces the promised 1R to the cent. */}
-            {(() => {
-              const s = suggestSize({
-                symbol: v.symbol ?? "",
-                entryPrice: Number(v.entryPrice),
-                initialStop: Number(v.initialStop),
-                riskDollars: Number(riskBudget),
-                sizeUnit,
-              });
-              return (
-                <div className="col-span-2 flex flex-wrap items-center gap-2 rounded-md border border-border/60 bg-secondary/20 px-2.5 py-1.5">
-                  <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                    Risk $
-                  </span>
-                  <Input
-                    value={riskBudget}
-                    onChange={(e) => {
-                      setRiskBudget(e.target.value);
+            {/* What this position costs, filled in from what you typed. The
+                box is editable, and typing in it flips the arithmetic round to
+                solve for size instead — the exception, for when the budget is
+                the fixed thing rather than the position. */}
+            <div className="col-span-2 flex flex-wrap items-center gap-2 rounded-md border border-border/60 bg-secondary/20 px-2.5 py-1.5">
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                Risk $
+              </span>
+              <div className="relative">
+                <Input
+                  value={
+                    riskOverride !== ""
+                      ? riskOverride
+                      : preview?.riskDollars != null
+                        ? String(Math.round(preview.riskDollars))
+                        : ""
+                  }
+                  onChange={(e) => {
+                    setRiskOverride(e.target.value);
+                    setSizeMode(e.target.value.trim() === "" ? "manual" : "auto");
+                    if (e.target.value.trim() !== "") {
                       localStorage.setItem(RISK_BUDGET_KEY, e.target.value);
+                    }
+                  }}
+                  placeholder={localStorage.getItem(RISK_BUDGET_KEY) ?? "300"}
+                  inputMode="decimal"
+                  className={`h-7 w-24 font-mono text-[11px] ${
+                    riskOverride !== "" ? "border-primary/50 text-primary" : ""
+                  }`}
+                  data-testid="input-risk-budget"
+                />
+                {riskOverride !== "" && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRiskOverride("");
+                      setSizeMode("manual");
                     }}
-                    placeholder="300"
-                    inputMode="decimal"
-                    className="h-7 w-20 font-mono text-[11px]"
-                    data-testid="input-risk-budget"
-                  />
-                  {s ? (
-                    <button
-                      type="button"
-                      onClick={() => form.setValue("size", s.size as any)}
-                      className="rounded bg-primary/10 px-2 py-1 font-mono text-[11px] text-primary transition-colors hover:bg-primary/20"
-                      data-testid="button-apply-size"
-                      title="Apply this size"
-                    >
-                      →{" "}
-                      {s.sizeUnit === "base"
-                        ? `${s.size} ${s.size === 1 ? "contract" : "contracts"}`
-                        : `$${s.size.toLocaleString()}`}
-                      {s.sizeUnit === "base" && s.size > 0 && (
-                        <span className="ml-1 text-muted-foreground">
-                          (risks ${Math.round(s.actualRiskDollars)})
-                        </span>
-                      )}
-                    </button>
-                  ) : (
-                    <span className="text-[10px] text-muted-foreground">
-                      needs entry, stop and a risk amount
-                    </span>
+                    aria-label="Back to reading the risk off the size"
+                    data-testid="button-clear-risk-override"
+                    className="absolute right-1 top-1/2 -translate-y-1/2 rounded px-1 text-[11px] leading-none text-muted-foreground hover:text-foreground"
+                  >
+                    ×
+                  </button>
+                )}
+              </div>
+
+              {sizeMode === "auto" && sized ? (
+                <span
+                  className="font-mono text-[11px] text-muted-foreground"
+                  data-testid="text-sized-from-risk"
+                >
+                  &rarr;{" "}
+                  <span className="text-foreground">
+                    {sized.sizeUnit === "base"
+                      ? `${sized.size} ${sized.size === 1 ? "contract" : "contracts"}`
+                      : `$${sized.size.toLocaleString()}`}
+                  </span>
+                  {sized.sizeUnit === "base" && sized.size > 0 && (
+                    <> · risks ${Math.round(sized.actualRiskDollars)}</>
                   )}
-                  {s?.sizeUnit === "base" && s.size === 0 && (
-                    <span className="text-[10px] text-amber-500">
-                      stop too far for this budget — even 1 contract risks $
-                      {Math.round(s.perUnitRisk)}
-                    </span>
-                  )}
-                </div>
-              );
-            })()}
+                </span>
+              ) : preview ? (
+                <span
+                  className="font-mono text-[11px] text-muted-foreground"
+                  data-testid="text-derived-risk"
+                >
+                  R:R{" "}
+                  <span className={preview.rr >= 2 ? "text-emerald-400" : "text-foreground"}>
+                    {num(preview.rr, 1)}
+                  </span>
+                  {preview.exposure && <> · {preview.exposure}</>}
+                  {spec && <> · {spec.label}</>}
+                </span>
+              ) : (
+                <span className="text-[10px] text-muted-foreground">
+                  fills in from the contract, entry, stop and size
+                </span>
+              )}
+
+              {sizeMode === "auto" && sized?.sizeUnit === "base" && sized.size === 0 && (
+                <span className="text-[10px] text-amber-500" data-testid="text-stop-too-far">
+                  stop too far for this budget — even 1 contract risks $
+                  {Math.round(sized.perUnitRisk)}
+                </span>
+              )}
+            </div>
 
             <FormField
               control={form.control}
@@ -1172,6 +1326,18 @@ export function NewTradeCard({
                 {preview.riskDollars != null && (
                   <span>
                     1R <span className="text-foreground">${num(preview.riskDollars, 0)}</span>
+                  </span>
+                )}
+                {preview.exposure && (
+                  <span
+                    data-testid="text-exposure"
+                    title={
+                      spec
+                        ? `${spec.label} — ${spec.pointValue} ${spec.unit} per contract`
+                        : `${perContract} per contract, remembered from your last ${v.symbol} trade`
+                    }
+                  >
+                    = <span className="text-foreground">{preview.exposure}</span>
                   </span>
                 )}
               </div>
