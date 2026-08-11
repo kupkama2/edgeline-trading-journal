@@ -32,7 +32,7 @@ import {
   directionEnum,
   sizeUnitEnum,
 } from "@shared/schema";
-import { normalizeSymbol, pointValueFor } from "@shared/symbols";
+import { lastPointValueFor, normalizeSymbol, pointValueFor } from "@shared/symbols";
 import {
   ORDERS_PROMPT,
   RATIONALE_PROMPT,
@@ -329,10 +329,17 @@ export async function registerRoutes(
     // Derive the point value from the symbol AS TYPED, before normalization
     // collapses "MNQU6" into "NQ" — that collapse is what keeps the stats
     // merged, and it is also what would otherwise lose the $2-vs-$20 distinction.
+    //
+    // Three sources, in order: what the request said (the entry card lets you
+    // set the size of a contract the table has never heard of), what the table
+    // knows, then what this symbol was worth last time it was logged. That
+    // last one is why a nano contract only has to be explained once.
+    const raw = parsed.data.trade.symbol;
+    const remembered = lastPointValueFor(raw, await store(req).listTrades());
     const trade = {
       ...parsed.data.trade,
-      pointValue: parsed.data.trade.pointValue ?? pointValueFor(parsed.data.trade.symbol),
-      symbol: normalizeSymbol(parsed.data.trade.symbol),
+      pointValue: parsed.data.trade.pointValue ?? pointValueFor(raw, remembered),
+      symbol: normalizeSymbol(raw),
     };
     res.status(201).json(
       await store(req).createTrade(trade, parsed.data.mistakeTagIds ?? []),

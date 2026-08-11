@@ -1,116 +1,245 @@
 /**
- * Futures symbol normalization.
+ * Futures contracts: what they roll up to, and what one is actually worth.
  *
- * Brokers/exchanges quote the *specific contract* (e.g. "MNQU6" = Micro E-mini
- * Nasdaq-100, September 2026 expiry). For journaling purposes the underlying
- * instrument is what matters — a micro contract and its full-size sibling
- * (and every expiry month of either) should all roll up as the same symbol
- * so stats, charts, and leaderboards aren't fragmented across "MNQU6",
- * "MNQZ6", "NQZ6", etc.
+ * Brokers quote the *specific contract* ("MNQU6" = Micro E-mini Nasdaq-100,
+ * September 2026). Journaling wants two different things from that string and
+ * they pull in opposite directions:
  *
- * Add more aliases here as needed — this list intentionally starts small.
+ *   the INSTRUMENT, so a micro, its full-size sibling and every expiry month
+ *   pool into one set of stats rather than fragmenting across MNQU6/MNQZ6/NQZ6
+ *
+ *   the SIZE, so 10 points on 2 micros and 10 points on 2 e-minis do not
+ *   record identical P&L — $2 a point against $20
+ *
+ * Hence one table with both, rather than two tables that can drift apart.
+ *
+ * WHY THE UNIT MATTERS. For anything quoted in dollars per unit of a physical
+ * or digital thing — 0.1 BTC, 100 troy ounces, 1,000 barrels — the dollars per
+ * point and the units per contract are the SAME NUMBER, because a $1 move on
+ * 0.1 BTC is $0.10. That coincidence is what lets three nano contracts be
+ * displayed as "0.03 BTC" without storing anything extra. Index futures have
+ * no such unit: an NQ point is an index point, and $20 is a multiplier rather
+ * than a quantity of something.
  */
-export const SYMBOL_ALIASES: Record<string, string> = {
-  NQ: "NQ",
-  MNQ: "NQ",
-  ES: "ES",
-  MES: "ES",
-  YM: "YM",
-  MYM: "YM",
-  RTY: "RTY",
-  M2K: "RTY",
-  GC: "GC",
-  MGC: "GC",
-  CL: "CL",
-  MCL: "CL",
-};
 
-/**
- * Dollars per one point of price movement, per contract.
- *
- * This is deliberately keyed on the *specific* contract rather than the rolled-
- * up root: MNQ and NQ are the same instrument for grouping purposes (which is
- * why both normalize to "NQ"), but they are emphatically not the same size —
- * $2 a point versus $20. Without this, a 10-point win on 2 micros and on 2
- * e-minis record identical P&L, and the daily-loss guardrail fires at the wrong
- * threshold.
- *
- * Anything absent here — crypto, equities, FX — is 1, i.e. price moves are
- * already denominated in the quote currency and need no scaling.
- */
-export const CONTRACT_POINT_VALUES: Record<string, number> = {
-  NQ: 20,
-  MNQ: 2,
-  ES: 50,
-  MES: 5,
-  YM: 5,
-  MYM: 0.5,
-  RTY: 50,
-  M2K: 5,
-  GC: 100,
-  MGC: 10,
-  CL: 1000,
-  MCL: 100,
-};
+export interface ContractSpec {
+  /** The root as written — "MBT", not "BTC". */
+  root: string;
+  /** What it rolls up to for stats and charts. */
+  underlying: string;
+  /** Dollars per 1.00 of price movement, per contract. */
+  pointValue: number;
+  /**
+   * What one contract holds, when the quote is dollars-per-something. Equal to
+   * pointValue by construction; named separately because "0.1 BTC" and "$0.10
+   * a point" are the same fact told to two different readers.
+   */
+  unit?: string;
+  /** Human name, for the entry card's confirmation line. */
+  label: string;
+  /**
+   * True when the bare root means something else far more often than it means
+   * this contract. "BTC" typed into a crypto journal is spot Bitcoin roughly
+   * always and CME's 5-BTC future roughly never, so the future is recognised
+   * only when written with a month code (BTCZ6). Getting this wrong scales a
+   * position by 5x in silence, which is the worst kind of wrong.
+   */
+  monthCodeOnly?: boolean;
+}
+
+export const CONTRACTS: ContractSpec[] = [
+  /* ------------------------------ index ------------------------------ */
+  { root: "NQ", underlying: "NQ", pointValue: 20, label: "E-mini Nasdaq-100" },
+  { root: "MNQ", underlying: "NQ", pointValue: 2, label: "Micro Nasdaq-100" },
+  { root: "ES", underlying: "ES", pointValue: 50, label: "E-mini S&P 500" },
+  { root: "MES", underlying: "ES", pointValue: 5, label: "Micro S&P 500" },
+  { root: "YM", underlying: "YM", pointValue: 5, label: "E-mini Dow" },
+  { root: "MYM", underlying: "YM", pointValue: 0.5, label: "Micro Dow" },
+  { root: "RTY", underlying: "RTY", pointValue: 50, label: "E-mini Russell 2000" },
+  { root: "M2K", underlying: "RTY", pointValue: 5, label: "Micro Russell 2000" },
+
+  /* ---------------------------- commodities --------------------------- */
+  { root: "GC", underlying: "GC", pointValue: 100, unit: "oz", label: "Gold" },
+  { root: "MGC", underlying: "GC", pointValue: 10, unit: "oz", label: "Micro Gold" },
+  { root: "CL", underlying: "CL", pointValue: 1000, unit: "bbl", label: "Crude Oil" },
+  { root: "MCL", underlying: "CL", pointValue: 100, unit: "bbl", label: "Micro Crude Oil" },
+
+  /* ------------------------------ crypto ------------------------------ */
+  // Micros and below are unambiguous roots — nothing else is called "MBT".
+  { root: "MBT", underlying: "BTC", pointValue: 0.1, unit: "BTC", label: "Micro Bitcoin" },
+  { root: "MET", underlying: "ETH", pointValue: 0.1, unit: "ETH", label: "Micro Ether" },
+  // The full-size contracts share their ticker with the spot pair, so they
+  // only count when a month code says a contract was meant.
+  {
+    root: "BTC",
+    underlying: "BTC",
+    pointValue: 5,
+    unit: "BTC",
+    label: "Bitcoin futures",
+    monthCodeOnly: true,
+  },
+  {
+    root: "ETH",
+    underlying: "ETH",
+    pointValue: 50,
+    unit: "ETH",
+    label: "Ether futures",
+    monthCodeOnly: true,
+  },
+];
+
+const BY_ROOT = new Map(CONTRACTS.map((c) => [c.root, c]));
+
+/** Roots longest-first, so "MNQ" is tested before "NQ" on "MNQU6". */
+const ROOTS_BY_LENGTH = CONTRACTS.map((c) => c.root).sort((a, b) => b.length - a.length);
+
+/** Kept for the settings screen and tests; derived so it cannot drift. */
+export const SYMBOL_ALIASES: Record<string, string> = Object.fromEntries(
+  CONTRACTS.map((c) => [c.root, c.underlying]),
+);
+export const CONTRACT_POINT_VALUES: Record<string, number> = Object.fromEntries(
+  CONTRACTS.map((c) => [c.root, c.pointValue]),
+);
 
 // Standard CME futures month codes.
 const MONTH_CODES = "FGHJKMNQUVXZ";
 const CONTRACT_SUFFIX = new RegExp(`^[${MONTH_CODES}]\\d{1,2}$`);
 
 /**
- * Normalize a raw symbol/contract string to its canonical root.
- * "MNQU6" -> "NQ", "ESZ5" -> "ES", "MNQ" -> "NQ", "AAPL" -> "AAPL" (untouched).
+ * The contract a raw symbol names, or null when it names none.
+ *
+ * `withMonthCode` reports whether the string carried an expiry, which is what
+ * settles the ambiguous roots: "BTCZ6" is a futures contract, "BTC" is spot.
  */
-export function normalizeSymbol(raw: string | null | undefined): string {
-  if (!raw) return "";
-  const s = raw.trim().toUpperCase();
-  if (!s) return "";
-
-  // Exact alias match (e.g. plain "MNQ" or "NQ").
-  if (SYMBOL_ALIASES[s]) return SYMBOL_ALIASES[s];
-
-  // Try stripping a trailing month+year contract code against known roots,
-  // longest root first so "MNQ" is checked before "NQ".
-  const roots = Object.keys(SYMBOL_ALIASES).sort((a, b) => b.length - a.length);
-  for (const root of roots) {
-    if (s.startsWith(root)) {
-      const rest = s.slice(root.length);
-      if (CONTRACT_SUFFIX.test(rest)) {
-        return SYMBOL_ALIASES[root];
-      }
-    }
-  }
-
-  return s;
-}
-
-/**
- * Resolve the contract root as *written* — "MNQU6" → "MNQ", not "NQ". This is
- * the half of the symbol that normalizeSymbol deliberately throws away, and the
- * half that determines what a point is worth.
- */
-function contractRoot(raw: string): string | null {
+export function contractFor(raw: string | null | undefined): ContractSpec | null {
+  if (!raw) return null;
   const s = raw.trim().toUpperCase();
   if (!s) return null;
-  if (CONTRACT_POINT_VALUES[s] != null) return s;
 
-  // Longest root first so "MNQ" wins over "NQ" on "MNQU6".
-  const roots = Object.keys(CONTRACT_POINT_VALUES).sort((a, b) => b.length - a.length);
-  for (const root of roots) {
-    if (s.startsWith(root) && CONTRACT_SUFFIX.test(s.slice(root.length))) {
-      return root;
-    }
+  const exact = BY_ROOT.get(s);
+  if (exact) return exact.monthCodeOnly ? null : exact;
+
+  for (const root of ROOTS_BY_LENGTH) {
+    if (!s.startsWith(root)) continue;
+    if (CONTRACT_SUFFIX.test(s.slice(root.length))) return BY_ROOT.get(root) ?? null;
   }
   return null;
 }
 
 /**
- * Dollars per point for a raw symbol as the user typed it. Defaults to 1 for
- * anything that isn't a known futures contract, which is correct: a crypto or
- * equity price move is already in quote currency.
+ * Normalize a raw symbol/contract string to its canonical root.
+ * "MNQU6" -> "NQ", "MBTZ6" -> "BTC", "MBT" -> "BTC", "AAPL" -> "AAPL".
  */
-export function pointValueFor(raw: string | null | undefined): number {
-  if (!raw) return 1;
-  const root = contractRoot(raw);
-  return root ? CONTRACT_POINT_VALUES[root] : 1;
+export function normalizeSymbol(raw: string | null | undefined): string {
+  if (!raw) return "";
+  const s = raw.trim().toUpperCase();
+  if (!s) return "";
+  const spec = contractFor(s);
+  return spec ? spec.underlying : s;
+}
+
+/**
+ * True when a symbol is written like a futures contract — a root plus a month
+ * code — regardless of whether this table has heard of the root.
+ *
+ * "NANOBITZ6" is unmistakably a contract with an expiry; the journal simply
+ * does not know how big one is. That is the moment to ask, and the only moment
+ * worth asking: a bare "AAPL" or "BTCUSDT" needs no multiplier and should
+ * never be interrupted for one.
+ */
+export function looksLikeFuturesContract(raw: string | null | undefined): boolean {
+  if (!raw) return false;
+  const s = raw.trim().toUpperCase();
+  // At least two characters of root before the month code, so a stock ticker
+  // that happens to end in a letter+digit is not mistaken for a contract.
+  return /^[A-Z]{2,}[FGHJKMNQUVXZ]\d{1,2}$/.test(s);
+}
+
+/**
+ * Dollars per point for a raw symbol as the user typed it.
+ *
+ * `remembered` is the value this symbol carried last time it was logged, and
+ * it wins over the 1.0 default but never over a known contract: a broker's own
+ * naming for a nano contract cannot be guessed from a table, but it only has
+ * to be told to the journal once. See lastPointValueFor.
+ */
+export function pointValueFor(
+  raw: string | null | undefined,
+  remembered?: number | null,
+): number {
+  const spec = contractFor(raw);
+  if (spec) return spec.pointValue;
+  if (remembered != null && isFinite(remembered) && remembered > 0) return remembered;
+  return 1;
+}
+
+/**
+ * The key a remembered size is filed under.
+ *
+ * normalizeSymbol only strips a month code off roots it recognises, which is
+ * right for grouping — inventing a rollup for an unrecognised ticker would
+ * merge instruments on a guess. But it is wrong for remembering: the entire
+ * point is contracts the table does NOT know, and "NANOBITZ6" and "NANOBITH7"
+ * are one contract in two months. So this strips a trailing month code from
+ * anything shaped like a contract, known or not.
+ */
+function memoryKey(raw: string | null | undefined): string {
+  const s = normalizeSymbol(raw);
+  const m = /^([A-Z]{2,})[FGHJKMNQUVXZ]\d{1,2}$/.exec(s);
+  return m ? m[1] : s;
+}
+
+/**
+ * What this symbol was worth the last time it was logged.
+ *
+ * The journal already stores pointValue on every trade, so a contract it has
+ * never heard of is still only unknown once — tell it the size on the first
+ * nano Bitcoin trade and every later one inherits it. Matching is on the
+ * symbol as normalised, so "BITZ6" and "BITH7" are the same contract in
+ * different months rather than two strangers.
+ */
+export function lastPointValueFor(
+  raw: string | null | undefined,
+  history: { symbol: string; pointValue?: number | null; entryTime: string }[],
+): number | null {
+  const key = memoryKey(raw);
+  if (!key) return null;
+  const seen = history
+    .filter((t) => memoryKey(t.symbol) === key)
+    .filter((t) => t.pointValue != null && isFinite(t.pointValue) && t.pointValue > 0)
+    .sort((a, b) => b.entryTime.localeCompare(a.entryTime));
+  return seen.length ? (seen[0].pointValue as number) : null;
+}
+
+/**
+ * How much of the underlying a position actually holds — "3 contracts = 0.3
+ * BTC". Null when the instrument has no such unit (an index future) or when
+ * the symbol is not a contract at all, because inventing a unit for a Nasdaq
+ * position would be worse than saying nothing.
+ */
+export function exposureOf(
+  raw: string | null | undefined,
+  contracts: number,
+  pointValue?: number | null,
+): { qty: number; unit: string; label: string } | null {
+  const spec = contractFor(raw);
+  if (!spec?.unit) return null;
+  if (!isFinite(contracts) || contracts <= 0) return null;
+  // The stored pointValue wins: a trade logged before a table change keeps
+  // the arithmetic it was booked with.
+  const per = pointValue != null && isFinite(pointValue) && pointValue > 0
+    ? pointValue
+    : spec.pointValue;
+  return { qty: contracts * per, unit: spec.unit, label: spec.label };
+}
+
+/** Pretty-print an exposure without trailing-zero noise: 0.3 BTC, 0.03 BTC. */
+export function fmtExposure(e: { qty: number; unit: string } | null): string | null {
+  if (!e) return null;
+  const dp = e.qty >= 100 ? 0 : e.qty >= 1 ? 2 : e.qty >= 0.01 ? 3 : 5;
+  const fixed = e.qty.toFixed(dp);
+  // Strip padding only when there is a decimal point to strip it from —
+  // otherwise the same regex turns 1000 barrels into 1.
+  const n = fixed.includes(".") ? fixed.replace(/\.?0+$/, "") : fixed;
+  return `${n} ${e.unit}`;
 }

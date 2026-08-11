@@ -17,7 +17,14 @@ import { styleColor, styleName, useStyleFilter } from "@/lib/style-filter";
 import { parsePlaybook } from "@shared/schema";
 import { EXIT_REASON_LABELS } from "@shared/metrics";
 import { useDemonGuard } from "@/components/daily-guard";
-import { pointValueFor } from "@shared/symbols";
+import {
+  contractFor,
+  exposureOf,
+  fmtExposure,
+  lastPointValueFor,
+  looksLikeFuturesContract,
+  pointValueFor,
+} from "@shared/symbols";
 import { dropBracketLegs, type ImportCandidate } from "@shared/import-parse";
 import { Dropzone, EXIT_REASONS, RationaleTags, localNow, num, parseTags, toIso } from "@/components/trade-shared";
 import { EMPTY_GRADES, GradePicker, type GradeState } from "@/components/grade-picker";
@@ -155,8 +162,39 @@ export function NewTradeCard({
 
   const v = form.watch();
 
+  /*
+   * What one contract of this symbol is worth, resolved exactly as the server
+   * will resolve it on save: the table first, then whatever this symbol was
+   * worth the last time it was logged. Computing it here rather than guessing
+   * is what makes the 1R below match the broker instead of approximating it.
+   */
+  const remembered = useMemo(
+    () => lastPointValueFor(v.symbol, allTrades),
+    [v.symbol, allTrades],
+  );
+  const spec = contractFor(v.symbol);
+  /*
+   * A contract the table has never heard of — a broker's own nano listing, say
+   * — still has a size, and the journal only has to be told it once. This is
+   * that once: it appears only for symbols written like a contract (root plus
+   * month code) that aren't recognised, pre-filled with whatever this symbol
+   * was worth last time, and it is what makes the R on a nano trade real
+   * instead of off by a hundredfold.
+   */
+  const [customMult, setCustomMult] = useState("");
+  useEffect(() => {
+    setCustomMult(remembered != null ? String(remembered) : "");
+  }, [remembered, v.symbol]);
+  const needsMultiplier =
+    !spec && sizeUnit === "base" &&
+    (remembered != null || looksLikeFuturesContract(v.symbol));
+  const typedMult = Number(customMult);
+  const perContract =
+    needsMultiplier && isFinite(typedMult) && typedMult > 0
+      ? typedMult
+      : pointValueFor(v.symbol, remembered);
   // A recognised futures root is unambiguous — contracts, always.
-  const isFutures = Boolean(v.symbol) && pointValueFor(v.symbol) !== 1;
+  const isFutures = Boolean(v.symbol) && perContract !== 1;
   useEffect(() => {
     if (isFutures) setSizeUnit("base");
   }, [isFutures]);
@@ -176,13 +214,15 @@ export function NewTradeCard({
     // read $83 on 2 MNQ where the platform said $165 — and it is shown at
     // exactly the moment the size decision is being made.
     const qty = sizeUnit === "quote" ? (e > 0 ? sz / e : 0) : sz;
-    const perPoint = qty * pointValueFor(v.symbol);
+    const perPoint = qty * perContract;
     return {
       risk,
       rr: reward / risk,
       riskDollars: isFinite(perPoint) ? risk * perPoint : null,
+      // "3 contracts" says nothing about how much Bitcoin that is; this does.
+      exposure: fmtExposure(exposureOf(v.symbol, qty, perContract)),
     };
-  }, [v.entryPrice, v.initialStop, v.initialTarget, v.size, v.symbol, sizeUnit]);
+  }, [v.entryPrice, v.initialStop, v.initialTarget, v.size, v.symbol, sizeUnit, perContract]);
 
   async function handleFile(file: File) {
     const dataUrl = await fileToDownscaledDataUrl(file);
@@ -347,6 +387,11 @@ export function NewTradeCard({
         direction: data.direction,
         size: data.size,
         sizeUnit,
+        // Only sent when the table doesn't know this contract; otherwise the
+        // server derives it from the symbol, which is the authority.
+        ...(needsMultiplier && isFinite(typedMult) && typedMult > 0
+          ? { pointValue: typedMult }
+          : {}),
         entryPrice: data.entryPrice,
         initialStop: data.initialStop,
         initialTarget: data.initialTarget,
@@ -800,6 +845,27 @@ export function NewTradeCard({
                 </FormItem>
               )}
             />
+            {needsMultiplier && (
+              <div className="space-y-1" data-testid="field-contract-multiplier">
+                <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  Contract size
+                </label>
+                <Input
+                  type="number"
+                  step="any"
+                  inputMode="decimal"
+                  value={customMult}
+                  onChange={(e) => setCustomMult(e.target.value)}
+                  placeholder="0.01"
+                  className="h-9 font-mono text-sm"
+                  data-testid="input-contract-multiplier"
+                />
+                <p className="text-[10px] leading-snug text-muted-foreground">
+                  What one contract holds — 0.01 for a nano Bitcoin. Saved with the trade
+                  and reused for this symbol from now on.
+                </p>
+              </div>
+            )}
             {numField("entryPrice", "Entry")}
             {numField("initialStop", "Stop")}
 
@@ -1172,6 +1238,18 @@ export function NewTradeCard({
                 {preview.riskDollars != null && (
                   <span>
                     1R <span className="text-foreground">${num(preview.riskDollars, 0)}</span>
+                  </span>
+                )}
+                {preview.exposure && (
+                  <span
+                    data-testid="text-exposure"
+                    title={
+                      spec
+                        ? `${spec.label} — ${spec.pointValue} ${spec.unit} per contract`
+                        : `${perContract} per contract, remembered from your last ${v.symbol} trade`
+                    }
+                  >
+                    = <span className="text-foreground">{preview.exposure}</span>
                   </span>
                 )}
               </div>
