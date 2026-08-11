@@ -1,6 +1,20 @@
 import type { Express } from "express";
 import type { Server } from "node:http";
-import { storage } from "./storage";
+import { storageFor } from "./storage";
+
+/**
+ * The account's storage for this request.
+ *
+ * Every handler goes through here rather than a module-level singleton, which
+ * is what makes cross-account reads impossible to write: there is no storage
+ * object in this file that isn't tied to the signed-in user. requireUser has
+ * already run (see setupAuth), so a missing id is a wiring bug, not a request
+ * a visitor can make — hence the throw rather than a 401.
+ */
+function store(req: { userId?: number }) {
+  if (!req.userId) throw new Error("no account on request — auth middleware missing");
+  return storageFor(req.userId);
+}
 import { ProxyAgent, fetch as undiciFetch } from "undici";
 import Anthropic from "@anthropic-ai/sdk";
 import {
@@ -298,12 +312,12 @@ export async function registerRoutes(
   app: Express,
 ): Promise<Server> {
   /* ------------------------------- trades ------------------------------- */
-  app.get("/api/trades", async (_req, res) => {
-    res.json(await storage.listTrades());
+  app.get("/api/trades", async (req, res) => {
+    res.json(await store(req).listTrades());
   });
 
   app.get("/api/trades/:id", async (req, res) => {
-    const t = await storage.getTrade(Number(req.params.id));
+    const t = await store(req).getTrade(Number(req.params.id));
     if (!t) return res.status(404).json({ message: "Trade not found" });
     res.json(t);
   });
@@ -321,7 +335,7 @@ export async function registerRoutes(
       symbol: normalizeSymbol(parsed.data.trade.symbol),
     };
     res.status(201).json(
-      await storage.createTrade(trade, parsed.data.mistakeTagIds ?? []),
+      await store(req).createTrade(trade, parsed.data.mistakeTagIds ?? []),
     );
   });
 
@@ -331,7 +345,7 @@ export async function registerRoutes(
       return res.status(400).json({ message: "Invalid trade", issues: parsed.error.issues });
     // The merged row is needed twice below — for the point value and for the
     // stop/target rule — because a PATCH carries only what changed.
-    const existing = await storage.getTrade(Number(req.params.id));
+    const existing = await store(req).getTrade(Number(req.params.id));
     if (!existing) return res.status(404).json({ message: "Trade not found" });
 
     /*
@@ -377,7 +391,7 @@ export async function registerRoutes(
       }
     }
 
-    const updated = await storage.updateTrade(
+    const updated = await store(req).updateTrade(
       Number(req.params.id),
       trade,
       parsed.data.mistakeTagIds,
@@ -401,7 +415,7 @@ export async function registerRoutes(
     const created = [];
     for (const c of parsed.data.trades) {
       created.push(
-        await storage.createTrade(
+        await store(req).createTrade(
           {
             styleId: parsed.data.styleId ?? null,
             symbol: normalizeSymbol(c.symbol),
@@ -423,7 +437,7 @@ export async function registerRoutes(
   });
 
   app.delete("/api/trades/:id", async (req, res) => {
-    await storage.deleteTrade(Number(req.params.id));
+    await store(req).deleteTrade(Number(req.params.id));
     res.status(204).end();
   });
 
@@ -438,13 +452,13 @@ export async function registerRoutes(
     const parsed = addFillSchema.safeParse(req.body);
     if (!parsed.success)
       return res.status(400).json({ message: "Invalid fill", issues: parsed.error.issues });
-    const trade = await storage.getTrade(Number(req.params.id));
+    const trade = await store(req).getTrade(Number(req.params.id));
     if (!trade) return res.status(404).json({ message: "Trade not found" });
 
     const problem = validateFill(trade, parsed.data);
     if (problem) return res.status(400).json({ message: problem });
 
-    const fill = await storage.addFill(trade.id, {
+    const fill = await store(req).addFill(trade.id, {
       ...parsed.data,
       time: parsed.data.time ?? new Date().toISOString(),
     });
@@ -452,7 +466,7 @@ export async function registerRoutes(
   });
 
   app.delete("/api/fills/:id", async (req, res) => {
-    await storage.deleteFill(Number(req.params.id));
+    await store(req).deleteFill(Number(req.params.id));
     res.status(204).end();
   });
 
@@ -463,7 +477,7 @@ export async function registerRoutes(
    * the server, and it is always scoped to one trade someone is looking at.
    */
   app.get("/api/trades/:id/images", async (req, res) => {
-    res.json(await storage.listTradeImages(Number(req.params.id)));
+    res.json(await store(req).listTradeImages(Number(req.params.id)));
   });
 
   app.post("/api/trades/:id/images", async (req, res) => {
@@ -471,24 +485,24 @@ export async function registerRoutes(
     if (!parsed.success)
       return res.status(400).json({ message: "Invalid image", issues: parsed.error.issues });
     const tradeId = Number(req.params.id);
-    if (!(await storage.getTrade(tradeId)))
+    if (!(await store(req).getTrade(tradeId)))
       return res.status(404).json({ message: "Trade not found" });
     // A dozen shots tell a trade's whole story; an unbounded gallery is how a
     // free-tier database quietly fills with near-duplicates.
-    if ((await storage.listTradeImages(tradeId)).length >= 12)
+    if ((await store(req).listTradeImages(tradeId)).length >= 12)
       return res.status(400).json({ message: "This trade already has 12 screenshots — delete one first." });
     res
       .status(201)
-      .json(await storage.addTradeImage(tradeId, parsed.data.kind ?? "other", parsed.data.data));
+      .json(await store(req).addTradeImage(tradeId, parsed.data.kind ?? "other", parsed.data.data));
   });
 
   /** Storage awareness: what the screenshots cost, against the 512 MB tier. */
-  app.get("/api/storage-usage", async (_req, res) => {
-    res.json(await storage.imageUsage());
+  app.get("/api/storage-usage", async (req, res) => {
+    res.json(await store(req).imageUsage());
   });
 
   app.delete("/api/images/:id", async (req, res) => {
-    await storage.deleteTradeImage(Number(req.params.id));
+    await store(req).deleteTradeImage(Number(req.params.id));
     res.status(204).end();
   });
 
@@ -502,11 +516,11 @@ export async function registerRoutes(
    * contract point value and direction in a spreadsheet formula is exactly
    * where an analysis quietly goes wrong.
    */
-  app.get("/api/export.csv", async (_req, res) => {
+  app.get("/api/export.csv", async (req, res) => {
     const [trades, tags, styles] = await Promise.all([
-      storage.listTrades(),
-      storage.listMistakeTags(),
-      storage.listTradingStyles(),
+      store(req).listTrades(),
+      store(req).listMistakeTags(),
+      store(req).listTradingStyles(),
     ]);
     const stamp = new Date().toISOString().slice(0, 10);
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
@@ -532,7 +546,7 @@ export async function registerRoutes(
     for (const c of parsed.data.trades) {
       const closed = c.exitPrice != null;
       created.push(
-        await storage.createTrade(
+        await store(req).createTrade(
           {
             styleId: parsed.data.styleId ?? null,
             symbol: normalizeSymbol(c.symbol),
@@ -561,73 +575,73 @@ export async function registerRoutes(
   });
 
   /* --------------------------- trading styles --------------------------- */
-  app.get("/api/styles", async (_req, res) => {
-    res.json(await storage.listTradingStyles());
+  app.get("/api/styles", async (req, res) => {
+    res.json(await store(req).listTradingStyles());
   });
 
   app.post("/api/styles", async (req, res) => {
     const parsed = insertTradingStyleSchema.safeParse(req.body);
     if (!parsed.success)
       return res.status(400).json({ message: "Invalid style", issues: parsed.error.issues });
-    res.status(201).json(await storage.createTradingStyle(parsed.data));
+    res.status(201).json(await store(req).createTradingStyle(parsed.data));
   });
 
   app.patch("/api/styles/:id", async (req, res) => {
     const parsed = insertTradingStyleSchema.partial().safeParse(req.body);
     if (!parsed.success)
       return res.status(400).json({ message: "Invalid style", issues: parsed.error.issues });
-    const updated = await storage.updateTradingStyle(Number(req.params.id), parsed.data);
+    const updated = await store(req).updateTradingStyle(Number(req.params.id), parsed.data);
     if (!updated) return res.status(404).json({ message: "Style not found" });
     res.json(updated);
   });
 
   app.delete("/api/styles/:id", async (req, res) => {
-    await storage.deleteTradingStyle(Number(req.params.id));
+    await store(req).deleteTradingStyle(Number(req.params.id));
     res.status(204).end();
   });
 
   /* ---------------------------- mistake tags ---------------------------- */
   /* -------------------------- account settings -------------------------- */
 
-  app.get("/api/account-settings", async (_req, res) => {
-    res.json(await storage.listAccountSettings());
+  app.get("/api/account-settings", async (req, res) => {
+    res.json(await store(req).listAccountSettings());
   });
 
   app.put("/api/account-settings", async (req, res) => {
     const parsed = upsertAccountSettingsSchema.safeParse(req.body);
     if (!parsed.success)
       return res.status(400).json({ message: "Invalid account settings", issues: parsed.error.issues });
-    res.json(await storage.upsertAccountSettings(parsed.data));
+    res.json(await store(req).upsertAccountSettings(parsed.data));
   });
 
-  app.get("/api/mistake-tags", async (_req, res) => {
-    res.json(await storage.listMistakeTags());
+  app.get("/api/mistake-tags", async (req, res) => {
+    res.json(await store(req).listMistakeTags());
   });
 
   app.post("/api/mistake-tags", async (req, res) => {
     const parsed = insertMistakeTagSchema.safeParse(req.body);
     if (!parsed.success)
       return res.status(400).json({ message: "Invalid tag", issues: parsed.error.issues });
-    res.status(201).json(await storage.createMistakeTag(parsed.data));
+    res.status(201).json(await store(req).createMistakeTag(parsed.data));
   });
 
   app.patch("/api/mistake-tags/:id", async (req, res) => {
     const parsed = insertMistakeTagSchema.partial().safeParse(req.body);
     if (!parsed.success)
       return res.status(400).json({ message: "Invalid tag", issues: parsed.error.issues });
-    const updated = await storage.updateMistakeTag(Number(req.params.id), parsed.data);
+    const updated = await store(req).updateMistakeTag(Number(req.params.id), parsed.data);
     if (!updated) return res.status(404).json({ message: "Tag not found" });
     res.json(updated);
   });
 
   app.delete("/api/mistake-tags/:id", async (req, res) => {
-    await storage.deleteMistakeTag(Number(req.params.id));
+    await store(req).deleteMistakeTag(Number(req.params.id));
     res.status(204).end();
   });
 
   /* --------------------------- weekly reviews --------------------------- */
-  app.get("/api/weekly-reviews", async (_req, res) => {
-    res.json(await storage.listWeeklyReviews());
+  app.get("/api/weekly-reviews", async (req, res) => {
+    res.json(await store(req).listWeeklyReviews());
   });
 
   /**
@@ -648,7 +662,7 @@ export async function registerRoutes(
       : startOfWeek();
     const key = weekStartKey(weekDate);
 
-    const existing = (await storage.listWeeklyReviews()).find(
+    const existing = (await store(req).listWeeklyReviews()).find(
       (r) => r.weekStart === key,
     );
     if (existing?.insights && !force) {
@@ -656,9 +670,9 @@ export async function registerRoutes(
     }
 
     const [trades, tags, notes] = await Promise.all([
-      storage.listTrades(),
-      storage.listMistakeTags(),
-      storage.listDailyNotes(),
+      store(req).listTrades(),
+      store(req).listMistakeTags(),
+      store(req).listDailyNotes(),
     ]);
     const bundle = buildInsightsBundle(trades, tags, weekDate, notes);
 
@@ -683,7 +697,7 @@ export async function registerRoutes(
       );
       const insights = extractJson(text);
 
-      await storage.upsertWeeklyInsights(key, JSON.stringify(insights));
+      await store(req).upsertWeeklyInsights(key, JSON.stringify(insights));
       res.json({ ok: true, cached: false, weekStart: key, bundle, insights });
     } catch (err: any) {
       console.error("weekly-insights failed:", err?.message || err);
@@ -701,14 +715,14 @@ export async function registerRoutes(
     const parsed = insertWeeklyReviewSchema.safeParse(req.body);
     if (!parsed.success)
       return res.status(400).json({ message: "Invalid review", issues: parsed.error.issues });
-    res.status(201).json(await storage.createWeeklyReview(parsed.data));
+    res.status(201).json(await store(req).createWeeklyReview(parsed.data));
   });
 
   /* ---------------------------- daily notes ----------------------------- */
   // The list is returned whole: notes are one text per day and the client
   // renders a calendar over them, so per-day fetches would just be N trips.
-  app.get("/api/daily-notes", async (_req, res) => {
-    res.json(await storage.listDailyNotes());
+  app.get("/api/daily-notes", async (req, res) => {
+    res.json(await store(req).listDailyNotes());
   });
 
   app.put("/api/daily-notes/:day", async (req, res) => {
@@ -718,7 +732,7 @@ export async function registerRoutes(
     const parsed = upsertDailyNoteSchema.safeParse(req.body);
     if (!parsed.success)
       return res.status(400).json({ message: "Invalid note", issues: parsed.error.issues });
-    res.json(await storage.upsertDailyNote(day, parsed.data.body));
+    res.json(await store(req).upsertDailyNote(day, parsed.data.body));
   });
 
   /* ------------------------ AI screenshot parsing ----------------------- */

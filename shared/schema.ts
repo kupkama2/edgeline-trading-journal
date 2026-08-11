@@ -9,6 +9,47 @@ import {
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
+/* =============================== users ============================== */
+
+/**
+ * One row per person with a journal.
+ *
+ * Identity is Google's, not ours: `googleSub` is the stable subject id from
+ * the ID token and is the only thing joined on. Email is stored for display
+ * and for the allowlist, but never used as the key — people change the email
+ * on a Google account, and a journal that loses its owner because they renamed
+ * their mailbox would be a very expensive kind of tidy.
+ *
+ * No password column, deliberately. There is nothing here to leak, nothing to
+ * reset, and no second way in to get wrong.
+ */
+export const users = pgTable("users", {
+  id: serial("id").primaryKey(),
+  /** Google's `sub` claim — stable for the life of the account. */
+  googleSub: text("google_sub").notNull().unique(),
+  email: text("email").notNull(),
+  name: text("name"),
+  picture: text("picture"),
+  /**
+   * The account that inherited everything logged before sign-in existed.
+   * Exactly one row can carry it; see the migration in server/storage.ts.
+   */
+  isOwner: boolean("is_owner").notNull().default(false),
+  createdAt: text("created_at").notNull(),
+  lastLoginAt: text("last_login_at"),
+});
+
+export type User = typeof users.$inferSelect;
+
+/** What the client is told about itself. Never the sub, which is a secret id. */
+export interface SessionUser {
+  id: number;
+  email: string;
+  name: string | null;
+  picture: string | null;
+  isOwner: boolean;
+}
+
 /* ========================== tradingStyles =========================== */
 
 /**
@@ -19,6 +60,8 @@ import { z } from "zod";
  */
 export const tradingStyles = pgTable("trading_styles", {
   id: serial("id").primaryKey(),
+  /** Owning account. Injected by the storage layer, never by a request. */
+  userId: integer("user_id").notNull(),
   name: text("name").notNull(),
   color: text("color").notNull().default("slate"),
   sortOrder: integer("sort_order").notNull().default(0),
@@ -39,7 +82,7 @@ const hhmm = z
   .optional();
 
 export const insertTradingStyleSchema = createInsertSchema(tradingStyles)
-  .omit({ id: true })
+  .omit({ id: true, userId: true })
   .extend({ name: z.string().min(1), sessionStart: hhmm, sessionEnd: hhmm });
 
 export type InsertTradingStyle = z.infer<typeof insertTradingStyleSchema>;
@@ -49,6 +92,8 @@ export type TradingStyle = typeof tradingStyles.$inferSelect;
 
 export const trades = pgTable("trades", {
   id: serial("id").primaryKey(),
+  /** Owning account. Injected by the storage layer, never by a request. */
+  userId: integer("user_id").notNull(),
   styleId: integer("style_id"),
   symbol: text("symbol").notNull(),
   direction: text("direction").notNull(), // 'long' | 'short'
@@ -256,7 +301,7 @@ export const noManagementOutcomeEnum = z.enum([
 ]);
 
 const tradeFields = createInsertSchema(trades)
-  .omit({ id: true })
+  .omit({ id: true, userId: true })
   .extend({
     symbol: z.string().min(1),
     styleId: z.number().int().nullable().optional(),
@@ -320,6 +365,8 @@ export type Trade = typeof trades.$inferSelect;
  */
 export const accountSettings = pgTable("account_settings", {
   id: serial("id").primaryKey(),
+  /** Owning account. Injected by the storage layer, never by a request. */
+  userId: integer("user_id").notNull(),
   name: text("name").notNull(),
   feeMode: text("fee_mode").notNull().default("percent"), // 'percent' | 'perContract'
   makerFee: doublePrecision("maker_fee").notNull().default(0), // limit orders, per side
@@ -341,13 +388,15 @@ export type UpsertAccountSettings = z.infer<typeof upsertAccountSettingsSchema>;
 
 export const mistakeTags = pgTable("mistake_tags", {
   id: serial("id").primaryKey(),
+  /** Owning account. Injected by the storage layer, never by a request. */
+  userId: integer("user_id").notNull(),
   name: text("name").notNull(),
   sortOrder: integer("sort_order").notNull().default(0),
   color: text("color").notNull().default("red"),
 });
 
 export const insertMistakeTagSchema = createInsertSchema(mistakeTags)
-  .omit({ id: true })
+  .omit({ id: true, userId: true })
   .extend({ name: z.string().min(1) });
 
 export type InsertMistakeTag = z.infer<typeof insertMistakeTagSchema>;
@@ -372,6 +421,8 @@ export type TradeMistake = typeof tradeMistakes.$inferSelect;
 
 export const weeklyReviews = pgTable("weekly_reviews", {
   id: serial("id").primaryKey(),
+  /** Owning account. Injected by the storage layer, never by a request. */
+  userId: integer("user_id").notNull(),
   weekStart: text("week_start").notNull(), // yyyy-MM-dd (Monday)
   plans: text("plans"), // JSON: [{ tagId, tagName, plan }] — the manual "fix one" plan
   /** JSON WeeklyInsights — AI reading of the week's notes against its numbers. */
@@ -380,7 +431,7 @@ export const weeklyReviews = pgTable("weekly_reviews", {
 });
 
 export const insertWeeklyReviewSchema = createInsertSchema(weeklyReviews)
-  .omit({ id: true })
+  .omit({ id: true, userId: true })
   .extend({
     plans: z.string().nullable().optional(),
     insights: z.string().nullable().optional(),
@@ -402,6 +453,8 @@ export type WeeklyReview = typeof weeklyReviews.$inferSelect;
  */
 export const dailyNotes = pgTable("daily_notes", {
   id: serial("id").primaryKey(),
+  /** Owning account. Injected by the storage layer, never by a request. */
+  userId: integer("user_id").notNull(),
   day: text("day").notNull().unique(), // yyyy-MM-dd, local trading day
   body: text("body").notNull().default(""),
   updatedAt: text("updated_at").notNull(),

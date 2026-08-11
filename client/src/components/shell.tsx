@@ -11,6 +11,7 @@ import {
   Settings2,
 } from "lucide-react";
 import { XpChip, XpToaster } from "@/components/xp";
+import { AccountMenu } from "@/components/account-menu";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -184,6 +185,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
           <div className="ml-auto flex items-center gap-2">
             <XpChip />
             <ThemePicker />
+            <AccountMenu />
           </div>
         </div>
       </header>

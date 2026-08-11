@@ -18,7 +18,16 @@ services:
       # Set these in the Render dashboard — never commit their values.
       - key: DATABASE_URL
         sync: false
-      - key: APP_PASSWORD
+      # Sign-in with Google. Without these the API has no accounts and no gate.
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      # The Google account that owns the journal; also the allowlist's first
+      # entry. Unset means nobody can sign in, which is the safe default.
+      - key: OWNER_EMAIL
+        sync: false
+      - key: ALLOWED_EMAILS
         sync: false
       - key: ANTHROPIC_API_KEY
         sync: false

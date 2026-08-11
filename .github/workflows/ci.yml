@@ -16,6 +16,28 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
+
+    # A real Postgres, because the account-isolation tests are the only proof
+    # that one person's journal cannot read another's, and a suite that skips
+    # them when no database is present would go quietly green the day someone
+    # adds an unscoped query.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: edgeline_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/edgeline_test
+
     steps:
       - uses: actions/checkout@v4
 
