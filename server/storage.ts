@@ -282,6 +282,38 @@ CREATE UNIQUE INDEX IF NOT EXISTS daily_notes_user_day ON daily_notes (user_id, 
 CREATE UNIQUE INDEX IF NOT EXISTS account_settings_user_name
   ON account_settings (user_id, name);
 
+-- Undo the starter rows that a mis-ordered first sign-in left behind.
+--
+-- The owner's account used to seed its starter styles and demons BEFORE
+-- adopting the pre-sign-in journal, so it created a fresh "Crypto Swings"
+-- moments before claiming the real one — two chips, same name, history on
+-- only one. create() now claims first, but the duplicates it already made
+-- have to go.
+--
+-- Deletes only a row that (a) has no trades attached and (b) has a same-named
+-- twin belonging to the same account that either does have trades or is
+-- older. So the row carrying the history always survives, an accidental
+-- twin never outranks it, and two genuinely-used styles sharing a name are
+-- both left alone. Idempotent: once there are no unused duplicates, it is a
+-- no-op forever.
+DELETE FROM trading_styles t
+ WHERE t.user_id IS NOT NULL
+   AND NOT EXISTS (SELECT 1 FROM trades tr WHERE tr.style_id = t.id)
+   AND EXISTS (
+     SELECT 1 FROM trading_styles o
+      WHERE o.user_id = t.user_id AND o.name = t.name AND o.id <> t.id
+        AND (EXISTS (SELECT 1 FROM trades tr2 WHERE tr2.style_id = o.id) OR o.id < t.id)
+   );
+DELETE FROM mistake_tags m
+ WHERE m.user_id IS NOT NULL
+   AND NOT EXISTS (SELECT 1 FROM trade_mistakes tm WHERE tm.mistake_tag_id = m.id)
+   AND EXISTS (
+     SELECT 1 FROM mistake_tags o
+      WHERE o.user_id = m.user_id AND o.name = m.name AND o.id <> m.id
+        AND (EXISTS (SELECT 1 FROM trade_mistakes tm2 WHERE tm2.mistake_tag_id = o.id)
+             OR o.id < m.id)
+   );
+
 -- Every read is now filtered by owner, so every table wants the index.
 CREATE INDEX IF NOT EXISTS trades_user_id ON trades (user_id);
 CREATE INDEX IF NOT EXISTS trading_styles_user_id ON trading_styles (user_id);
@@ -350,6 +382,15 @@ export const accounts = {
    * Create the account and give it something to log against. A brand new
    * journal gets its own copy of the demon taxonomy and the starter styles —
    * per account, because renaming a style must not rename it for everyone.
+   *
+   * ORDER IS LOAD-BEARING. Adoption happens BEFORE seeding, because seeding
+   * only fills gaps: seed first and the owner gets a starter "Crypto Swings"
+   * created seconds before their real one is adopted, leaving two chips with
+   * the same name and the history on only one of them. Claiming first means
+   * the seed sees the journal that already exists and adds nothing.
+   *
+   * Both steps live here rather than at the call sites so the sequence cannot
+   * be reassembled in the wrong order by the next caller.
    */
   async create(p: {
     googleSub: string;
@@ -369,6 +410,7 @@ export const accounts = {
         createdAt: new Date().toISOString(),
       })
       .returning();
+    if (row.isOwner) await this.claimOwnership(row.id);
     await new DatabaseStorage(row.id).seed();
     return row;
   },
