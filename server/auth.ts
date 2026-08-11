@@ -202,9 +202,16 @@ export function setupAuth(app: Express) {
   app.get("/api/auth/google", (req: Request, res: Response) => {
     const state = randomBytes(24).toString("hex");
     req.session.oauthState = state;
+    const uri = redirectUri(req);
+    // Logged on every attempt because redirect_uri_mismatch is by far the most
+    // common way this fails, and Google's error page shows you the URI it
+    // rejected but never the one it expected. This is the string to paste into
+    // the OAuth client, character for character, with no guessing about the
+    // host, the scheme or a trailing slash.
+    console.log(`[auth] sign-in starting — redirect_uri must be registered as: ${uri}`);
     const url = new URL(AUTH_ENDPOINT);
     url.searchParams.set("client_id", GOOGLE_CLIENT_ID!);
-    url.searchParams.set("redirect_uri", redirectUri(req));
+    url.searchParams.set("redirect_uri", uri);
     url.searchParams.set("response_type", "code");
     url.searchParams.set("scope", "openid email profile");
     url.searchParams.set("state", state);
