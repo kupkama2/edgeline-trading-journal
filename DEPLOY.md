@@ -32,7 +32,10 @@ default trading styles.
    | Variable | Required | Notes |
    |---|---|---|
    | `DATABASE_URL` | **yes** | The Neon pooled string from step 1. |
-   | `APP_PASSWORD` | **yes** | The single shared password. See the warning below. |
+   | `GOOGLE_CLIENT_ID` | **yes** | OAuth client, see below. |
+   | `GOOGLE_CLIENT_SECRET` | **yes** | Same client. |
+   | `OWNER_EMAIL` | **yes** | The Google account that owns the journal. |
+   | `ALLOWED_EMAILS` | no | Anyone else allowed in, comma separated. |
    | `ANTHROPIC_API_KEY` | one of | Preferred — reads prices off a chart axis more reliably. |
    | `PERPLEXITY_API_KEY` | one of | Fallback if no Anthropic key is set. |
 
@@ -41,10 +44,31 @@ default trading styles.
 
 3. Deploy. First build takes a few minutes; subsequent ones are faster.
 
-> **`APP_PASSWORD` is not optional in production.** When it is unset the auth
-> gate disables itself and every `/api` route is open — the whole database is
-> your complete trading record. The server logs a warning at boot if you deploy
-> without it.
+## Setting up the Google OAuth client
+
+1. Google Cloud console → **APIs & Services → Credentials → Create credentials
+   → OAuth client ID → Web application**.
+2. Under **Authorised redirect URIs** add exactly:
+
+   ```
+   https://<your-render-host>/api/auth/google/callback
+   ```
+
+   Google matches this string character for character; a trailing slash or
+   `http` instead of `https` is the usual cause of `redirect_uri_mismatch`.
+3. Copy the client ID and secret into Render.
+
+> **Google is not optional in production.** With `GOOGLE_CLIENT_ID` and
+> `GOOGLE_CLIENT_SECRET` unset the app runs as one local account with no
+> sign-in and every `/api` route open — the whole database is your complete
+> trading record. The server logs a warning at boot if you deploy like that.
+
+> **`OWNER_EMAIL` decides who inherits your history.** Trades logged before
+> sign-in existed have no owner; the first account to sign in with
+> `OWNER_EMAIL` claims all of them, once. If it is unset, nobody can sign in at
+> all — deliberately, because the alternative is letting whoever finds the URL
+> first claim your record. Everyone in `ALLOWED_EMAILS` gets their own empty
+> journal and can never see yours.
 
 ## Why `--include=dev` is in the build command
 

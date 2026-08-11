@@ -8,6 +8,7 @@ import {
   tradeImages,
   tradeFills,
   accountSettings,
+  users,
 } from "@shared/schema";
 import type {
   InsertTrade,
@@ -24,11 +25,13 @@ import type {
   TradeFill,
   AccountSettings,
   UpsertAccountSettings,
+  User,
 } from "@shared/schema";
 import { DEMON_TAXONOMY, DEMON_LEGACY_ALIASES } from "@shared/demons";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
-import { eq, desc, sql as sqlx } from "drizzle-orm";
+import { and, eq, desc, inArray, isNull, sql as sqlx } from "drizzle-orm";
+import type { AnyPgColumn } from "drizzle-orm/pg-core";
 
 const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) {
@@ -243,9 +246,50 @@ CREATE TABLE IF NOT EXISTS daily_notes (
   body TEXT NOT NULL DEFAULT '',
   updated_at TEXT NOT NULL
 );
-`);
 
-  await storage.seed();
+-- ======================== accounts and ownership ========================
+-- Identity is Google's; see shared/schema.ts for why the sub and not the email
+-- is the key.
+CREATE TABLE IF NOT EXISTS users (
+  id SERIAL PRIMARY KEY,
+  google_sub TEXT NOT NULL UNIQUE,
+  email TEXT NOT NULL,
+  name TEXT,
+  picture TEXT,
+  is_owner BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TEXT NOT NULL,
+  last_login_at TEXT
+);
+
+-- Every table that owns rows gains an owner. Left nullable on purpose: the
+-- rows that predate sign-in have no owner until the first Google account
+-- claims them (see claimOwnership), and a NULL matches no scoped query, so
+-- unclaimed data is invisible rather than shared. Failing closed beats a
+-- NOT NULL that cannot be satisfied at boot.
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS user_id INTEGER;
+ALTER TABLE trading_styles ADD COLUMN IF NOT EXISTS user_id INTEGER;
+ALTER TABLE mistake_tags ADD COLUMN IF NOT EXISTS user_id INTEGER;
+ALTER TABLE account_settings ADD COLUMN IF NOT EXISTS user_id INTEGER;
+ALTER TABLE weekly_reviews ADD COLUMN IF NOT EXISTS user_id INTEGER;
+ALTER TABLE daily_notes ADD COLUMN IF NOT EXISTS user_id INTEGER;
+
+-- The two global uniques have to become per-account, or the second person to
+-- write a note on a day the first already used collides with a row they can
+-- neither see nor edit. The old constraint names are Postgres's own defaults.
+ALTER TABLE daily_notes DROP CONSTRAINT IF EXISTS daily_notes_day_key;
+ALTER TABLE account_settings DROP CONSTRAINT IF EXISTS account_settings_name_key;
+CREATE UNIQUE INDEX IF NOT EXISTS daily_notes_user_day ON daily_notes (user_id, day);
+CREATE UNIQUE INDEX IF NOT EXISTS account_settings_user_name
+  ON account_settings (user_id, name);
+
+-- Every read is now filtered by owner, so every table wants the index.
+CREATE INDEX IF NOT EXISTS trades_user_id ON trades (user_id);
+CREATE INDEX IF NOT EXISTS trading_styles_user_id ON trading_styles (user_id);
+CREATE INDEX IF NOT EXISTS mistake_tags_user_id ON mistake_tags (user_id);
+CREATE INDEX IF NOT EXISTS account_settings_user_id ON account_settings (user_id);
+CREATE INDEX IF NOT EXISTS weekly_reviews_user_id ON weekly_reviews (user_id);
+CREATE INDEX IF NOT EXISTS daily_notes_user_id ON daily_notes (user_id);
+`);
 }
 
 /**
@@ -265,6 +309,93 @@ const DEFAULT_STYLES: { name: string; color: string }[] = [
   { name: "NQ Scalps", color: "amber" },
   { name: "Crypto Swings", color: "violet" },
 ];
+
+/* ============================== accounts ============================== */
+
+/**
+ * The account table is the one thing NOT scoped to an account, for the obvious
+ * reason: sign-in has to find you before it knows who you are. It is therefore
+ * kept deliberately small and separate from DatabaseStorage, so there is no
+ * instance anywhere that can read a trade without an owner attached.
+ */
+export const accounts = {
+  async byGoogleSub(sub: string): Promise<User | undefined> {
+    const [row] = await db.select().from(users).where(eq(users.googleSub, sub));
+    return row;
+  },
+
+  async byId(id: number): Promise<User | undefined> {
+    const [row] = await db.select().from(users).where(eq(users.id, id));
+    return row;
+  },
+
+  async count(): Promise<number> {
+    const [row] = await db.select({ n: sqlx<number>`count(*)::int` }).from(users);
+    return row?.n ?? 0;
+  },
+
+  async owner(): Promise<User | undefined> {
+    const [row] = await db.select().from(users).where(eq(users.isOwner, true));
+    return row;
+  },
+
+  async touchLogin(id: number): Promise<void> {
+    await db
+      .update(users)
+      .set({ lastLoginAt: new Date().toISOString() })
+      .where(eq(users.id, id));
+  },
+
+  /**
+   * Create the account and give it something to log against. A brand new
+   * journal gets its own copy of the demon taxonomy and the starter styles —
+   * per account, because renaming a style must not rename it for everyone.
+   */
+  async create(p: {
+    googleSub: string;
+    email: string;
+    name?: string | null;
+    picture?: string | null;
+    isOwner?: boolean;
+  }): Promise<User> {
+    const [row] = await db
+      .insert(users)
+      .values({
+        googleSub: p.googleSub,
+        email: p.email,
+        name: p.name ?? null,
+        picture: p.picture ?? null,
+        isOwner: p.isOwner ?? false,
+        createdAt: new Date().toISOString(),
+      })
+      .returning();
+    await new DatabaseStorage(row.id).seed();
+    return row;
+  },
+
+  /**
+   * Adopt everything logged before sign-in existed.
+   *
+   * Runs exactly once, inside the creation of the first account, and only for
+   * the account whose email matches OWNER_EMAIL. Every unowned row becomes
+   * theirs; after this there are no unowned rows, so a second call updates
+   * nothing. Keeping it here rather than in initSchema is deliberate — at boot
+   * there is no way to know which Google account the history belongs to, and
+   * guessing at that would be the one mistake with no undo.
+   */
+  async claimOwnership(userId: number): Promise<void> {
+    // Parameterised per table rather than one interpolated multi-statement
+    // string: the id comes from our own database, but a query builder that
+    // cannot be handed a value it will not escape is one fewer thing to be
+    // careful about forever.
+    await db.update(trades).set({ userId }).where(isNull(trades.userId));
+    await db.update(tradingStyles).set({ userId }).where(isNull(tradingStyles.userId));
+    await db.update(mistakeTags).set({ userId }).where(isNull(mistakeTags.userId));
+    await db.update(accountSettings).set({ userId }).where(isNull(accountSettings.userId));
+    await db.update(weeklyReviews).set({ userId }).where(isNull(weeklyReviews.userId));
+    await db.update(dailyNotes).set({ userId }).where(isNull(dailyNotes.userId));
+  },
+};
 
 export interface IStorage {
   seed(): Promise<void>;
@@ -295,7 +426,8 @@ export interface IStorage {
   listDailyNotes(): Promise<DailyNote[]>;
   upsertDailyNote(day: string, body: string): Promise<DailyNote>;
 
-  addFill(tradeId: number, f: { kind: string; price: number; size: number; time: string; note?: string | null }): Promise<TradeFill>;
+  /** undefined when the trade is not this account's — see DatabaseStorage. */
+  addFill(tradeId: number, f: { kind: string; price: number; size: number; time: string; note?: string | null }): Promise<TradeFill | undefined>;
   deleteFill(id: number): Promise<void>;
 
   listAccountSettings(): Promise<AccountSettings[]>;
@@ -303,25 +435,42 @@ export interface IStorage {
 
   listTradeImages(tradeId: number): Promise<TradeImage[]>;
   imageUsage(): Promise<{ images: number; bytes: number }>;
-  addTradeImage(tradeId: number, kind: string, data: string): Promise<TradeImage>;
+  addTradeImage(tradeId: number, kind: string, data: string): Promise<TradeImage | undefined>;
   deleteTradeImage(id: number): Promise<void>;
 }
 
+/**
+ * Everything one account can see and do.
+ *
+ * The owner id is a constructor argument rather than a parameter on each
+ * method, and that is the entire security design: there is no instance of this
+ * class without an account attached, so there is nowhere to write a query that
+ * forgets to filter. `storageFor(userId)` is the only way to get one, and
+ * routes never touch `db` directly.
+ *
+ * Child rows — fills, images, demon links — carry no owner column. They are
+ * reached exclusively through their parent trade, so ownership has exactly one
+ * definition and cannot drift between tables. Every method that takes a raw
+ * child id therefore resolves the parent first and behaves as if the row does
+ * not exist when it belongs to someone else.
+ */
 export class DatabaseStorage implements IStorage {
-  /** Runs once at boot, after the tables exist. Idempotent. */
+  constructor(private readonly userId: number) {}
+
+  /** Runs when the account is created. Idempotent. */
   async seed() {
     await this.seedDemons();
     await this.seedStyles();
   }
 
   /**
-   * Idempotently reconcile the mistake_tags table with the demon taxonomy:
-   * rename legacy names onto their canonical demon (preserving tag ids, so
-   * existing trade links survive), then insert any canonical demon that is
-   * still missing. Custom demons the user added are left untouched.
+   * Idempotently reconcile this account's mistake_tags with the demon
+   * taxonomy: rename legacy names onto their canonical demon (preserving tag
+   * ids, so existing trade links survive), then insert any canonical demon
+   * that is still missing. Custom demons the user added are left untouched.
    */
   private async seedDemons() {
-    const existing = await db.select().from(mistakeTags);
+    const existing = await db.select().from(mistakeTags).where(this.owns(mistakeTags));
 
     for (const tag of existing) {
       const canonical = DEMON_LEGACY_ALIASES[tag.name];
@@ -345,36 +494,70 @@ export class DatabaseStorage implements IStorage {
         }
         continue;
       }
-      await db.insert(mistakeTags).values({ name, sortOrder: i, color: "red" });
+      await db.insert(mistakeTags).values({ name, sortOrder: i, color: "red", userId: this.userId });
     }
 
-    // Seed the pre-taxonomy extras only on a completely fresh database.
+    // Seed the pre-taxonomy extras only for a brand-new journal.
     if (existing.length === 0) {
       for (let i = 0; i < LEGACY_EXTRA_TAGS.length; i++) {
         await db.insert(mistakeTags).values({
           name: LEGACY_EXTRA_TAGS[i],
           sortOrder: DEMON_TAXONOMY.length + i,
           color: "red",
+          userId: this.userId,
         });
       }
     }
   }
 
-  /** Give a brand-new database something to log against; never overwrite. */
+  /** Give a brand-new journal something to log against; never overwrite. */
   private async seedStyles() {
-    const existing = await db.select().from(tradingStyles);
+    const existing = await db.select().from(tradingStyles).where(this.owns(tradingStyles));
     if (existing.length > 0) return;
     for (let i = 0; i < DEFAULT_STYLES.length; i++) {
-      await db.insert(tradingStyles).values({ ...DEFAULT_STYLES[i], sortOrder: i });
+      await db
+        .insert(tradingStyles)
+        .values({ ...DEFAULT_STYLES[i], sortOrder: i, userId: this.userId });
     }
   }
 
+  /* ------------------------------ scoping ------------------------------ */
+
+  /** The filter every query on an owning table carries. */
+  private owns(t: { userId: AnyPgColumn }) {
+    return eq(t.userId, this.userId);
+  }
+
+  /** True when this trade is ours. The gate in front of every child row. */
+  private async ownsTrade(tradeId: number): Promise<boolean> {
+    const [row] = await db
+      .select({ id: trades.id })
+      .from(trades)
+      .where(and(eq(trades.id, tradeId), this.owns(trades)));
+    return Boolean(row);
+  }
+
+  /** Our trade ids, for the child-table lookups that fan out from a list. */
+  private async myTradeIds(): Promise<number[]> {
+    const rows = await db.select({ id: trades.id }).from(trades).where(this.owns(trades));
+    return rows.map((r) => r.id);
+  }
+
+  /* --------------------------- trading styles --------------------------- */
+
   async listTradingStyles(): Promise<TradingStyle[]> {
-    return db.select().from(tradingStyles).orderBy(tradingStyles.sortOrder);
+    return db
+      .select()
+      .from(tradingStyles)
+      .where(this.owns(tradingStyles))
+      .orderBy(tradingStyles.sortOrder);
   }
 
   async createTradingStyle(s: InsertTradingStyle): Promise<TradingStyle> {
-    const [row] = await db.insert(tradingStyles).values(s as any).returning();
+    const [row] = await db
+      .insert(tradingStyles)
+      .values({ ...(s as any), userId: this.userId })
+      .returning();
     return row;
   }
 
@@ -385,16 +568,32 @@ export class DatabaseStorage implements IStorage {
     const [row] = await db
       .update(tradingStyles)
       .set(s as any)
-      .where(eq(tradingStyles.id, id))
+      .where(and(eq(tradingStyles.id, id), this.owns(tradingStyles)))
       .returning();
     return row;
   }
 
   /** Deleting a style orphans its trades rather than destroying trade history. */
   async deleteTradingStyle(id: number): Promise<void> {
-    await db.update(trades).set({ styleId: null }).where(eq(trades.styleId, id));
-    await db.delete(tradingStyles).where(eq(tradingStyles.id, id));
+    if (!(await this.ownsStyle(id))) return;
+    await db
+      .update(trades)
+      .set({ styleId: null })
+      .where(and(eq(trades.styleId, id), this.owns(trades)));
+    await db
+      .delete(tradingStyles)
+      .where(and(eq(tradingStyles.id, id), this.owns(tradingStyles)));
   }
+
+  private async ownsStyle(id: number): Promise<boolean> {
+    const [row] = await db
+      .select({ id: tradingStyles.id })
+      .from(tradingStyles)
+      .where(and(eq(tradingStyles.id, id), this.owns(tradingStyles)));
+    return Boolean(row);
+  }
+
+  /* -------------------------------- tags -------------------------------- */
 
   private async tagIdsFor(tradeId: number): Promise<number[]> {
     const rows = await db
@@ -404,23 +603,50 @@ export class DatabaseStorage implements IStorage {
     return rows.map((r) => r.mistakeTagId);
   }
 
+  /**
+   * Replace a trade's demons, ignoring any tag id that isn't ours — a request
+   * naming someone else's tag is dropped rather than honoured, so a link can
+   * never cross accounts.
+   */
   private async setTags(tradeId: number, tagIds: number[]) {
     await db.delete(tradeMistakes).where(eq(tradeMistakes.tradeId, tradeId));
-    for (const mistakeTagId of tagIds) {
+    if (!tagIds.length) return;
+    const owned = await db
+      .select({ id: mistakeTags.id })
+      .from(mistakeTags)
+      .where(and(this.owns(mistakeTags), inArray(mistakeTags.id, tagIds)));
+    for (const { id: mistakeTagId } of owned) {
       await db.insert(tradeMistakes).values({ tradeId, mistakeTagId });
     }
   }
 
+  /* ------------------------------- trades ------------------------------- */
+
   async listTrades(): Promise<TradeWithTags[]> {
-    const rows = await db.select().from(trades).orderBy(desc(trades.entryTime));
-    const links = await db.select().from(tradeMistakes);
+    const rows = await db
+      .select()
+      .from(trades)
+      .where(this.owns(trades))
+      .orderBy(desc(trades.entryTime));
+    if (rows.length === 0) return [];
+    const ids = rows.map((t) => t.id);
+
+    const links = await db
+      .select()
+      .from(tradeMistakes)
+      .where(inArray(tradeMistakes.tradeId, ids));
     // Counts only — the payloads stay in trade_images until a detail view asks.
     const counts = await db
       .select({ tradeId: tradeImages.tradeId, n: sqlx<number>`count(*)::int` })
       .from(tradeImages)
+      .where(inArray(tradeImages.tradeId, ids))
       .groupBy(tradeImages.tradeId);
     const countFor = new Map(counts.map((c) => [c.tradeId, c.n]));
-    const allFills = await db.select().from(tradeFills).orderBy(tradeFills.time);
+    const allFills = await db
+      .select()
+      .from(tradeFills)
+      .where(inArray(tradeFills.tradeId, ids))
+      .orderBy(tradeFills.time);
     return rows.map((t) => ({
       ...t,
       mistakeTagIds: links.filter((l) => l.tradeId === t.id).map((l) => l.mistakeTagId),
@@ -430,7 +656,10 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getTrade(id: number): Promise<TradeWithTags | undefined> {
-    const [t] = await db.select().from(trades).where(eq(trades.id, id));
+    const [t] = await db
+      .select()
+      .from(trades)
+      .where(and(eq(trades.id, id), this.owns(trades)));
     if (!t) return undefined;
     return {
       ...t,
@@ -441,9 +670,17 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createTrade(t: InsertTrade, tagIds: number[] = []): Promise<TradeWithTags> {
-    const [row] = await db.insert(trades).values(t as any).returning();
+    const [row] = await db
+      .insert(trades)
+      .values({ ...(t as any), userId: this.userId })
+      .returning();
     if (tagIds.length) await this.setTags(row.id, tagIds);
-    return { ...row, mistakeTagIds: tagIds, imageCount: 0, fills: [] };
+    return {
+      ...row,
+      mistakeTagIds: await this.tagIdsFor(row.id),
+      imageCount: 0,
+      fills: [],
+    };
   }
 
   async updateTrade(
@@ -454,8 +691,15 @@ export class DatabaseStorage implements IStorage {
     // Drizzle throws on an empty SET clause, so a tags-only patch just reads.
     const [row] =
       Object.keys(t).length > 0
-        ? await db.update(trades).set(t as any).where(eq(trades.id, id)).returning()
-        : await db.select().from(trades).where(eq(trades.id, id));
+        ? await db
+            .update(trades)
+            .set(t as any)
+            .where(and(eq(trades.id, id), this.owns(trades)))
+            .returning()
+        : await db
+            .select()
+            .from(trades)
+            .where(and(eq(trades.id, id), this.owns(trades)));
     if (!row) return undefined;
     if (tagIds) await this.setTags(id, tagIds);
     return {
@@ -467,11 +711,14 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteTrade(id: number): Promise<void> {
+    if (!(await this.ownsTrade(id))) return;
     await db.delete(tradeMistakes).where(eq(tradeMistakes.tradeId, id));
     await db.delete(tradeImages).where(eq(tradeImages.tradeId, id));
     await db.delete(tradeFills).where(eq(tradeFills.tradeId, id));
-    await db.delete(trades).where(eq(trades.id, id));
+    await db.delete(trades).where(and(eq(trades.id, id), this.owns(trades)));
   }
+
+  /* -------------------------------- fills ------------------------------- */
 
   private async fillsFor(tradeId: number): Promise<TradeFill[]> {
     return db
@@ -484,7 +731,8 @@ export class DatabaseStorage implements IStorage {
   async addFill(
     tradeId: number,
     f: { kind: string; price: number; size: number; time: string; note?: string | null },
-  ): Promise<TradeFill> {
+  ): Promise<TradeFill | undefined> {
+    if (!(await this.ownsTrade(tradeId))) return undefined;
     const [row] = await db
       .insert(tradeFills)
       .values({ tradeId, kind: f.kind, price: f.price, size: f.size, time: f.time, note: f.note ?? null })
@@ -493,11 +741,19 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteFill(id: number): Promise<void> {
+    const [fill] = await db.select().from(tradeFills).where(eq(tradeFills.id, id));
+    if (!fill || !(await this.ownsTrade(fill.tradeId))) return;
     await db.delete(tradeFills).where(eq(tradeFills.id, id));
   }
 
+  /* --------------------------- account settings -------------------------- */
+
   async listAccountSettings(): Promise<AccountSettings[]> {
-    return db.select().from(accountSettings).orderBy(accountSettings.name);
+    return db
+      .select()
+      .from(accountSettings)
+      .where(this.owns(accountSettings))
+      .orderBy(accountSettings.name);
   }
 
   async upsertAccountSettings(s: UpsertAccountSettings): Promise<AccountSettings> {
@@ -505,7 +761,7 @@ export class DatabaseStorage implements IStorage {
     const [existing] = await db
       .select()
       .from(accountSettings)
-      .where(eq(accountSettings.name, name));
+      .where(and(eq(accountSettings.name, name), this.owns(accountSettings)));
     if (existing) {
       const [row] = await db
         .update(accountSettings)
@@ -516,10 +772,18 @@ export class DatabaseStorage implements IStorage {
     }
     const [row] = await db
       .insert(accountSettings)
-      .values({ name, feeMode: s.feeMode, makerFee: s.makerFee, takerFee: s.takerFee })
+      .values({
+        name,
+        feeMode: s.feeMode,
+        makerFee: s.makerFee,
+        takerFee: s.takerFee,
+        userId: this.userId,
+      })
       .returning();
     return row;
   }
+
+  /* -------------------------------- images ------------------------------- */
 
   private async imageCountFor(tradeId: number): Promise<number> {
     const [row] = await db
@@ -530,21 +794,26 @@ export class DatabaseStorage implements IStorage {
   }
 
   /**
-   * How much of the database the screenshots occupy. length(data) counts the
+   * How much of the database YOUR screenshots occupy. length(data) counts the
    * base64 characters, which IS the stored size for a text column — the
-   * honest number to hold against Neon's free-tier 512 MB.
+   * honest number to hold against Neon's free-tier 512 MB. Scoped to this
+   * account: someone else's screenshots are not your storage problem.
    */
   async imageUsage(): Promise<{ images: number; bytes: number }> {
+    const ids = await this.myTradeIds();
+    if (ids.length === 0) return { images: 0, bytes: 0 };
     const [row] = await db
       .select({
         images: sqlx<number>`count(*)::int`,
         bytes: sqlx<number>`coalesce(sum(length(${tradeImages.data})), 0)::bigint`,
       })
-      .from(tradeImages);
+      .from(tradeImages)
+      .where(inArray(tradeImages.tradeId, ids));
     return { images: row?.images ?? 0, bytes: Number(row?.bytes ?? 0) };
   }
 
   async listTradeImages(tradeId: number): Promise<TradeImage[]> {
+    if (!(await this.ownsTrade(tradeId))) return [];
     return db
       .select()
       .from(tradeImages)
@@ -552,7 +821,12 @@ export class DatabaseStorage implements IStorage {
       .orderBy(tradeImages.id);
   }
 
-  async addTradeImage(tradeId: number, kind: string, data: string): Promise<TradeImage> {
+  async addTradeImage(
+    tradeId: number,
+    kind: string,
+    data: string,
+  ): Promise<TradeImage | undefined> {
+    if (!(await this.ownsTrade(tradeId))) return undefined;
     const [row] = await db
       .insert(tradeImages)
       .values({ tradeId, kind, data, createdAt: new Date().toISOString() })
@@ -561,15 +835,26 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteTradeImage(id: number): Promise<void> {
+    const [img] = await db.select().from(tradeImages).where(eq(tradeImages.id, id));
+    if (!img || !(await this.ownsTrade(img.tradeId))) return;
     await db.delete(tradeImages).where(eq(tradeImages.id, id));
   }
 
+  /* ------------------------------- demons -------------------------------- */
+
   async listMistakeTags(): Promise<MistakeTag[]> {
-    return db.select().from(mistakeTags).orderBy(mistakeTags.sortOrder);
+    return db
+      .select()
+      .from(mistakeTags)
+      .where(this.owns(mistakeTags))
+      .orderBy(mistakeTags.sortOrder);
   }
 
   async createMistakeTag(t: InsertMistakeTag): Promise<MistakeTag> {
-    const [row] = await db.insert(mistakeTags).values(t as any).returning();
+    const [row] = await db
+      .insert(mistakeTags)
+      .values({ ...(t as any), userId: this.userId })
+      .returning();
     return row;
   }
 
@@ -580,25 +865,36 @@ export class DatabaseStorage implements IStorage {
     const [row] = await db
       .update(mistakeTags)
       .set(t as any)
-      .where(eq(mistakeTags.id, id))
+      .where(and(eq(mistakeTags.id, id), this.owns(mistakeTags)))
       .returning();
     return row;
   }
 
   async deleteMistakeTag(id: number): Promise<void> {
+    const [tag] = await db
+      .select({ id: mistakeTags.id })
+      .from(mistakeTags)
+      .where(and(eq(mistakeTags.id, id), this.owns(mistakeTags)));
+    if (!tag) return;
     await db.delete(tradeMistakes).where(eq(tradeMistakes.mistakeTagId, id));
-    await db.delete(mistakeTags).where(eq(mistakeTags.id, id));
+    await db.delete(mistakeTags).where(and(eq(mistakeTags.id, id), this.owns(mistakeTags)));
   }
 
+  /* --------------------------- weekly reviews ---------------------------- */
+
   async listWeeklyReviews(): Promise<WeeklyReview[]> {
-    return db.select().from(weeklyReviews).orderBy(desc(weeklyReviews.weekStart));
+    return db
+      .select()
+      .from(weeklyReviews)
+      .where(this.owns(weeklyReviews))
+      .orderBy(desc(weeklyReviews.weekStart));
   }
 
   async createWeeklyReview(r: InsertWeeklyReview): Promise<WeeklyReview> {
     const [existing] = await db
       .select()
       .from(weeklyReviews)
-      .where(eq(weeklyReviews.weekStart, r.weekStart));
+      .where(and(eq(weeklyReviews.weekStart, r.weekStart), this.owns(weeklyReviews)));
     if (existing) {
       const [row] = await db
         .update(weeklyReviews)
@@ -607,7 +903,10 @@ export class DatabaseStorage implements IStorage {
         .returning();
       return row;
     }
-    const [row] = await db.insert(weeklyReviews).values(r as any).returning();
+    const [row] = await db
+      .insert(weeklyReviews)
+      .values({ ...(r as any), userId: this.userId })
+      .returning();
     return row;
   }
 
@@ -620,7 +919,7 @@ export class DatabaseStorage implements IStorage {
     const [existing] = await db
       .select()
       .from(weeklyReviews)
-      .where(eq(weeklyReviews.weekStart, weekStart));
+      .where(and(eq(weeklyReviews.weekStart, weekStart), this.owns(weeklyReviews)));
     if (existing) {
       const [row] = await db
         .update(weeklyReviews)
@@ -631,13 +930,24 @@ export class DatabaseStorage implements IStorage {
     }
     const [row] = await db
       .insert(weeklyReviews)
-      .values({ weekStart, insights, submittedAt: new Date().toISOString() } as any)
+      .values({
+        weekStart,
+        insights,
+        submittedAt: new Date().toISOString(),
+        userId: this.userId,
+      } as any)
       .returning();
     return row;
   }
 
+  /* ----------------------------- daily notes ----------------------------- */
+
   async listDailyNotes(): Promise<DailyNote[]> {
-    return db.select().from(dailyNotes).orderBy(desc(dailyNotes.day));
+    return db
+      .select()
+      .from(dailyNotes)
+      .where(this.owns(dailyNotes))
+      .orderBy(desc(dailyNotes.day));
   }
 
   /**
@@ -647,7 +957,10 @@ export class DatabaseStorage implements IStorage {
    */
   async upsertDailyNote(day: string, body: string): Promise<DailyNote> {
     const updatedAt = new Date().toISOString();
-    const [existing] = await db.select().from(dailyNotes).where(eq(dailyNotes.day, day));
+    const [existing] = await db
+      .select()
+      .from(dailyNotes)
+      .where(and(eq(dailyNotes.day, day), this.owns(dailyNotes)));
     if (existing) {
       const [row] = await db
         .update(dailyNotes)
@@ -658,10 +971,13 @@ export class DatabaseStorage implements IStorage {
     }
     const [row] = await db
       .insert(dailyNotes)
-      .values({ day, body, updatedAt })
+      .values({ day, body, updatedAt, userId: this.userId })
       .returning();
     return row;
   }
 }
 
-export const storage = new DatabaseStorage();
+/** The only way to get a storage instance. There is no unscoped one. */
+export function storageFor(userId: number): DatabaseStorage {
+  return new DatabaseStorage(userId);
+}
