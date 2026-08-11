@@ -125,7 +125,26 @@ export function gradeLabel(axis: Axis, grade: string | null | undefined): string
   return GRADE_META[axis].find((g) => g.grade === grade)?.label ?? null;
 }
 
+/**
+ * Whether an axis has anything to say about this trade.
+ *
+ * A trade that hit its stop never went near the target, so where the target
+ * was is not a question you failed to answer — it is a question that does not
+ * arise. Those two look identical in a nullable column and are worlds apart in
+ * a statistic: counted as ungraded they make your coverage look careless, and
+ * counted as graded-something they would need a value that does not exist.
+ *
+ * So the exit axis simply does not apply to a stopped-out trade. The entry and
+ * the stop always do — every trade has a price you got in at and a stop you
+ * chose, however it ended.
+ */
+export function axisApplies(t: Trade, axis: Axis): boolean {
+  if (axis !== "exit") return true;
+  return t.exitReason !== "stop";
+}
+
 export function gradeOf(t: Trade, axis: Axis): string | null {
+  if (!axisApplies(t, axis)) return null;
   const raw =
     axis === "entry" ? t.entryGrade : axis === "stop" ? t.stopGrade : t.exitGrade;
   if (!raw) return null;
@@ -155,6 +174,12 @@ export interface AxisReport {
   label: string;
   /** Closed trades carrying a grade on this axis. */
   graded: number;
+  /**
+   * Closed trades this axis does not apply to at all. Reported so a small
+   * denominator reads as "most of these stopped out" rather than as a gap in
+   * the record.
+   */
+  notApplicable: number;
   /** All three buckets, in taxonomy order, present even at zero. */
   buckets: GradeBucket[];
   /** The miss that dominates this axis, when one does. Null when it's clean. */
@@ -195,9 +220,11 @@ function bucketOf(
 }
 
 export function axisReport(trades: Trade[], axis: Axis): AxisReport {
-  const rows = closedTrades(trades)
+  const closed = closedTrades(trades);
+  const rows = closed
     .map((t) => ({ t, g: gradeOf(t, axis), m: computeMetrics(t) }))
     .filter((r) => r.g != null);
+  const notApplicable = closed.filter((t) => !axisApplies(t, axis)).length;
 
   const buckets = GRADE_META[axis].map((meta) =>
     bucketOf(axis, meta, rows.filter((r) => r.g === meta.grade), rows.length),
@@ -223,13 +250,15 @@ export function axisReport(trades: Trade[], axis: Axis): AxisReport {
       ? top
       : null;
 
-  return { axis, label: AXIS_LABELS[axis], graded: rows.length, buckets, lean };
+  return { axis, label: AXIS_LABELS[axis], graded: rows.length, notApplicable, buckets, lean };
 }
 
 export interface ExecutionReport {
   closed: number;
   /** Closed trades with at least one axis graded. */
   graded: number;
+  /** Of those, the ones whose take-profit grade is not a question. */
+  stoppedOut: number;
   entry: AxisReport;
   stop: AxisReport;
   exit: AxisReport;
@@ -242,6 +271,8 @@ export function executionReport(trades: Trade[]): ExecutionReport {
     graded: closed.filter(
       (t) => gradeOf(t, "entry") || gradeOf(t, "stop") || gradeOf(t, "exit"),
     ).length,
+    /** Closed trades where the take-profit question does not arise. */
+    stoppedOut: closed.filter((t) => !axisApplies(t, "exit")).length,
     entry: axisReport(trades, "entry"),
     stop: axisReport(trades, "stop"),
     exit: axisReport(trades, "exit"),

@@ -11,6 +11,7 @@
  * Selected "right" reads emerald and selected misses read amber, so a fully
  * graded trade shows its own shape at a glance without anyone reading a word.
  */
+import { useEffect } from "react";
 import { AXIS_LABELS, GRADE_META, gradeLabel, type Axis } from "@shared/grades";
 
 export interface GradeState {
@@ -28,12 +29,27 @@ function Row({
   value,
   onPick,
   testPrefix,
+  na,
 }: {
   axis: Axis;
   value: string | null;
   onPick: (grade: string | null) => void;
   testPrefix: string;
+  /** Why this row has nothing to ask, when it hasn't. */
+  na?: string;
 }) {
+  if (na) {
+    return (
+      <div className="flex items-center gap-2" data-testid={`${testPrefix}-${axis}-na`}>
+        <span className="w-20 shrink-0 text-[11px] text-muted-foreground/60">
+          {AXIS_LABELS[axis]}
+        </span>
+        <span className="flex-1 rounded-md border border-dashed border-border/60 px-2 py-1.5 text-[11px] text-muted-foreground/70">
+          {na}
+        </span>
+      </div>
+    );
+  }
   return (
     <div className="flex items-center gap-2">
       <span className="w-20 shrink-0 text-[11px] text-muted-foreground">
@@ -71,11 +87,23 @@ export function GradePicker({
   value,
   onChange,
   testPrefix = "grade",
+  exitReason,
 }: {
   value: GradeState;
   onChange: (next: GradeState) => void;
   testPrefix?: string;
+  /**
+   * How the trade ended. A stopped-out trade never reached its target, so the
+   * take-profit row asks nothing — and any answer already sitting there is
+   * cleared, because a grade that cannot be true is worse than a blank.
+   */
+  exitReason?: string | null;
 }) {
+  const exitNA = exitReason === "stop";
+  useEffect(() => {
+    if (exitNA && value.exit) onChange({ ...value, exit: null });
+  }, [exitNA, value, onChange]);
+
   return (
     <div data-testid={`section-${testPrefix}`}>
       <p className="mb-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
@@ -92,6 +120,11 @@ export function GradePicker({
             value={value[axis]}
             onPick={(g) => onChange({ ...value, [axis]: g })}
             testPrefix={testPrefix}
+            na={
+              axis === "exit" && exitNA
+                ? "n/a — it stopped out, so where the target sat didn't matter"
+                : undefined
+            }
           />
         ))}
       </div>

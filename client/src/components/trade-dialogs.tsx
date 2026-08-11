@@ -272,7 +272,12 @@ export function CloseTradeDialog({
               </div>
             </div>
 
-            <GradePicker value={grades} onChange={setGrades} testPrefix="grade-close" />
+            <GradePicker
+              value={grades}
+              onChange={setGrades}
+              testPrefix="grade-close"
+              exitReason={exitReason}
+            />
 
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1">
@@ -990,7 +995,12 @@ export function EditTradeDialog({
               </div>
             </div>
 
-            <GradePicker value={grades} onChange={setGrades} testPrefix="grade-edit" />
+            <GradePicker
+              value={grades}
+              onChange={setGrades}
+              testPrefix="grade-edit"
+              exitReason={exitReason}
+            />
 
             {/* Scaling belongs in the edit dialog too: the trade view can show
                 and remove fills, but this is where a trade gets corrected, and

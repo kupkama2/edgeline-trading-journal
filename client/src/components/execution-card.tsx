@@ -34,12 +34,17 @@ function Axis({ r }: { r: AxisReport }) {
         </span>
         <span className="font-mono text-[10px] text-muted-foreground">
           {r.graded} graded
+          {/* Without this the take-profit column reads as a gap in the record
+              when it is really a run of stop-outs, which ask nothing. */}
+          {r.notApplicable > 0 && <> · {r.notApplicable} n/a</>}
         </span>
       </div>
 
       {r.graded === 0 ? (
         <p className="text-[11px] leading-snug text-muted-foreground">
-          Not graded yet.
+          {r.notApplicable > 0 && r.axis === "exit"
+            ? "Nothing to grade — these all stopped out."
+            : "Not graded yet."}
         </p>
       ) : (
         <>
