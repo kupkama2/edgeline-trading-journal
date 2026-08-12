@@ -1213,7 +1213,12 @@ export function NewTradeCard({
               {/* A trade logged after the fact is still a trade to grade —
                   leaving it out here is how the take-profit stats end up
                   covering only the half you happened to close from the app. */}
-              <GradePicker value={grades} onChange={setGrades} testPrefix="grade-new" />
+              <GradePicker
+                value={grades}
+                onChange={setGrades}
+                testPrefix="grade-new"
+                exitReason={exitReason}
+              />
 
               <div>
                 <p className="mb-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">

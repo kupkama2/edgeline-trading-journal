@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { DEMON_RETIRED_TO_GRADE, DEMON_TAXONOMY } from "../shared/demons";
 import {
   GRADES,
+  axisApplies,
   axisReport,
   exitCost,
   executionReport,
@@ -215,6 +216,61 @@ describe("overriding the plan", () => {
     ]);
     expect(r.netR).toBeCloseTo(-3.5, 10);
     expect(r.verdict).toContain("cost");
+  });
+});
+
+describe("a stopped-out trade has no take-profit to grade", () => {
+  const stopped = (over: Record<string, unknown> = {}) =>
+    trade({ exitReason: "stop", exitPrice: 90, ...over });
+
+  it("does not ask the exit question of a trade that never got near it", () => {
+    expect(axisApplies(stopped(), "exit")).toBe(false);
+    // The entry and the stop always apply — every trade has both, however it
+    // ended, and both are exactly what a stop-out is evidence about.
+    expect(axisApplies(stopped(), "entry")).toBe(true);
+    expect(axisApplies(stopped(), "stop")).toBe(true);
+  });
+
+  it("ignores an exit grade left on a stopped trade", () => {
+    // Grade a trade, then correct its reason to "stop": the old answer is now
+    // about a target that was never reached, and counting it would put a
+    // fiction into the take-profit statistics.
+    expect(gradeOf(stopped({ exitGrade: "late" }), "exit")).toBeNull();
+    expect(gradeOf(stopped({ stopGrade: "tight" }), "stop")).toBe("tight");
+  });
+
+  it("keeps stop-outs out of the exit axis entirely", () => {
+    const r = axisReport(
+      [
+        stopped({ id: 1, exitGrade: "late" }),
+        stopped({ id: 2 }),
+        trade({ id: 3, exitReason: "target", exitGrade: "perfect" }),
+      ],
+      "exit",
+    );
+    expect(r.graded).toBe(1);
+    expect(r.notApplicable).toBe(2);
+    expect(r.buckets.find((b) => b.grade === "late")!.count).toBe(0);
+  });
+
+  it("counts a stop-out as graded once the two live questions are answered", () => {
+    // Otherwise a disciplined run of stop-outs reads as a gap in the record,
+    // and coverage that punishes you for losing trades gets ignored.
+    const r = executionReport([
+      stopped({ id: 1, entryGrade: "perfect", stopGrade: "good" }),
+      stopped({ id: 2 }),
+    ]);
+    expect(r.graded).toBe(1);
+    expect(r.stoppedOut).toBe(2);
+  });
+
+  it("leaves the early-vs-late totals untouched by stop-outs", () => {
+    const c = exitCost([
+      stopped({ id: 1, exitGrade: "late", mfe: 150 }),
+      trade({ id: 2, exitReason: "discretion", exitGrade: "late", mfe: 150 }),
+    ]);
+    expect(c.lateCount).toBe(1);
+    expect(c.lateR).toBeCloseTo(3, 10);
   });
 });
 
