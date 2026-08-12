@@ -245,10 +245,7 @@ export default function Dashboard({ embedded = false }: { embedded?: boolean } =
   // A point on the equity curve is one closed trade, and a calendar cell is
   // one day — both are doors into the log rather than pictures of it.
   const [, navigate] = useLocation();
-  const all = useMemo(
-    () => filterByScope(trades ?? [], scope),
-    [trades, activeStyleId],
-  );
+  const all = useMemo(() => filterByScope(trades ?? [], scope), [trades, scope]);
   const closed = useMemo(
     () =>
       all

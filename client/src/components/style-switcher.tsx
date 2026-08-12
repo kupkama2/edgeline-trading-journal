@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { Layers, Wallet } from "lucide-react";
 import { useStyles, useTrades } from "@/lib/data";
-import { knownAccounts, styleColor, useStyleFilter } from "@/lib/style-filter";
+import { knownAccounts, sameAccount, styleColor, useStyleFilter } from "@/lib/style-filter";
 
 /**
  * Marks which book a trade belongs to. Only rendered while viewing "All
@@ -9,9 +9,11 @@ import { knownAccounts, styleColor, useStyleFilter } from "@/lib/style-filter";
  */
 export function StyleChip({ styleId }: { styleId: number | null }) {
   const { data: styles = [] } = useStyles();
-  const { activeStyleId } = useStyleFilter();
+  const { scope } = useStyleFilter();
 
-  if (activeStyleId != null || styleId == null) return null;
+  // Redundant only when the page shows exactly one book. With two selected the
+  // label is the only thing telling the two apart.
+  if (scope.styleIds.length === 1 || styleId == null) return null;
   const style = styles.find((s) => s.id === styleId);
   if (!style) return null;
   const c = styleColor(style.color);
@@ -35,8 +37,7 @@ const pill = (on: boolean, chip?: string) =>
   }`;
 
 /**
- * Scopes the whole page: which strategy, which account, either, both, or
- * neither.
+ * Scopes the whole page: which strategies, which accounts, any combination.
  *
  * Two rows rather than one merged list, because the axes are independent and
  * crossing them is the point — "swings, on the Apex eval" is a different
@@ -44,17 +45,24 @@ const pill = (on: boolean, chip?: string) =>
  * them. The account row only appears once there is more than one account to
  * choose between; a row with one option is a row that teaches nothing.
  *
+ * Each row is a multi-select: a trade lives in exactly one book on one account,
+ * but comparing two books side by side is a question worth asking, so the
+ * filter is a set even though the trade is not. Selecting nothing on a row is
+ * "all" — a read-only overview, not a selection of none.
+ *
  * "All" is an overview only. Per-style stats never pool behind the scenes —
  * the guardrail still evaluates each book independently whatever this says.
  */
 export function StyleSwitcher() {
   const { data: styles = [] } = useStyles();
   const { data: trades = [] } = useTrades();
-  const { activeStyleId, setActiveStyleId, activeAccount, setActiveAccount } =
-    useStyleFilter();
+  const { scope, toggleStyle, toggleAccount, clearStyles, clearAccounts } = useStyleFilter();
 
   const accounts = useMemo(() => knownAccounts(trades), [trades]);
   if (styles.length === 0 && accounts.length < 2) return null;
+
+  const allStyles = scope.styleIds.length === 0;
+  const allAccounts = scope.accounts.length === 0;
 
   return (
     <div className="space-y-1.5" data-testid="style-switcher">
@@ -63,22 +71,22 @@ export function StyleSwitcher() {
           <Layers className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
           <button
             type="button"
-            onClick={() => setActiveStyleId(null)}
-            aria-pressed={activeStyleId == null}
+            onClick={clearStyles}
+            aria-pressed={allStyles}
             data-testid="button-style-all"
-            className={pill(activeStyleId == null)}
+            className={pill(allStyles)}
           >
             All styles
           </button>
 
           {styles.map((s) => {
-            const on = s.id === activeStyleId;
+            const on = scope.styleIds.includes(s.id);
             const c = styleColor(s.color);
             return (
               <button
                 key={s.id}
                 type="button"
-                onClick={() => setActiveStyleId(s.id)}
+                onClick={() => toggleStyle(s.id)}
                 aria-pressed={on}
                 data-testid={`button-style-${s.id}`}
                 className={`flex items-center gap-1.5 ${pill(on, c.chip)}`}
@@ -96,20 +104,20 @@ export function StyleSwitcher() {
           <Wallet className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
           <button
             type="button"
-            onClick={() => setActiveAccount(null)}
-            aria-pressed={activeAccount == null}
+            onClick={clearAccounts}
+            aria-pressed={allAccounts}
             data-testid="button-account-all"
-            className={pill(activeAccount == null)}
+            className={pill(allAccounts)}
           >
             All accounts
           </button>
           {accounts.map((a) => {
-            const on = activeAccount?.toLowerCase() === a.toLowerCase();
+            const on = scope.accounts.some((x) => sameAccount(x, a));
             return (
               <button
                 key={a}
                 type="button"
-                onClick={() => setActiveAccount(on ? null : a)}
+                onClick={() => toggleAccount(a)}
                 aria-pressed={on}
                 data-testid={`button-account-${a}`}
                 className={pill(on, "border-sky-500/40 bg-sky-500/10 text-sky-400")}

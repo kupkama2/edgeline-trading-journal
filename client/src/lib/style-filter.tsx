@@ -17,65 +17,129 @@ import type { TradeWithTags, TradingStyle } from "@shared/schema";
  *
  * null on an axis means "all" — a read-only overview rather than a selection.
  */
-const STYLE_KEY = "edgeline.activeStyleId";
-const ACCOUNT_KEY = "edgeline.activeAccount";
+const STYLE_KEY = "edgeline.activeStyleIds";
+const ACCOUNT_KEY = "edgeline.activeAccounts";
+/** The single-value keys this replaced; read once, then retired. */
+const LEGACY_STYLE_KEY = "edgeline.activeStyleId";
+const LEGACY_ACCOUNT_KEY = "edgeline.activeAccount";
 
 export interface Scope {
-  styleId: number | null;
-  account: string | null;
+  /** Empty means every style — a selection of none is not a filter of none. */
+  styleIds: number[];
+  accounts: string[];
 }
 
+export const EMPTY_SCOPE: Scope = { styleIds: [], accounts: [] };
+
 const StyleCtx = createContext<{
-  activeStyleId: number | null;
-  setActiveStyleId: (id: number | null) => void;
-  activeAccount: string | null;
-  setActiveAccount: (a: string | null) => void;
   scope: Scope;
+  toggleStyle: (id: number) => void;
+  toggleAccount: (a: string) => void;
+  clearStyles: () => void;
+  clearAccounts: () => void;
+  /**
+   * The one style in scope, or null when that question has no single answer.
+   *
+   * Filtering is a set; WRITING is not. A new trade belongs to exactly one
+   * book, and "which one" is only answerable when exactly one is selected —
+   * with three selected, or none, the entry card falls back to its own
+   * default rather than picking arbitrarily on your behalf.
+   */
+  activeStyleId: number | null;
+  activeAccount: string | null;
 }>({
+  scope: EMPTY_SCOPE,
+  toggleStyle: () => {},
+  toggleAccount: () => {},
+  clearStyles: () => {},
+  clearAccounts: () => {},
   activeStyleId: null,
-  setActiveStyleId: () => {},
   activeAccount: null,
-  setActiveAccount: () => {},
-  scope: { styleId: null, account: null },
 });
 
-function readStored(): number | null {
-  const raw = localStorage.getItem(STYLE_KEY);
-  if (!raw) return null;
-  const n = Number(raw);
-  return Number.isInteger(n) ? n : null;
+function readList<T>(key: string, parse: (raw: string) => T | null): T[] {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return [];
+    return arr.map((x) => parse(String(x))).filter((x): x is T => x != null);
+  } catch {
+    return [];
+  }
+}
+
+function readStyles(): number[] {
+  const stored = readList(STYLE_KEY, (r) => {
+    const n = Number(r);
+    return Number.isInteger(n) ? n : null;
+  });
+  if (stored.length) return stored;
+  // One-time carry-over from the single-select era.
+  const legacy = Number(localStorage.getItem(LEGACY_STYLE_KEY));
+  localStorage.removeItem(LEGACY_STYLE_KEY);
+  return Number.isInteger(legacy) && legacy ? [legacy] : [];
+}
+
+function readAccounts(): string[] {
+  const stored = readList(ACCOUNT_KEY, (r) => r.trim() || null);
+  if (stored.length) return stored;
+  const legacy = localStorage.getItem(LEGACY_ACCOUNT_KEY);
+  localStorage.removeItem(LEGACY_ACCOUNT_KEY);
+  return legacy ? [legacy] : [];
+}
+
+/** In or out, preserving the order the chips were picked in. */
+export function toggleStyleIn(cur: number[], id: number): number[] {
+  return cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id];
+}
+
+/**
+ * Same, for the free-text account column. Membership is compared the way the
+ * filter compares it, so clicking a chip that reads "Apex eval" turns off a
+ * stored "apex eval " rather than selecting it a second time.
+ */
+export function toggleAccountIn(cur: string[], account: string): string[] {
+  return cur.some((x) => sameAccount(x, account))
+    ? cur.filter((x) => !sameAccount(x, account))
+    : [...cur, account];
 }
 
 export function StyleFilterProvider({ children }: { children: React.ReactNode }) {
-  const [activeStyleId, setActiveStyleId] = useState<number | null>(readStored);
-  const [activeAccount, setActiveAccount] = useState<string | null>(
-    () => localStorage.getItem(ACCOUNT_KEY) || null,
-  );
+  const [styleIds, setStyleIds] = useState<number[]>(readStyles);
+  const [accounts, setAccounts] = useState<string[]>(readAccounts);
 
   useEffect(() => {
-    if (activeStyleId == null) localStorage.removeItem(STYLE_KEY);
-    else localStorage.setItem(STYLE_KEY, String(activeStyleId));
-  }, [activeStyleId]);
+    if (styleIds.length === 0) localStorage.removeItem(STYLE_KEY);
+    else localStorage.setItem(STYLE_KEY, JSON.stringify(styleIds));
+  }, [styleIds]);
 
   useEffect(() => {
-    if (!activeAccount) localStorage.removeItem(ACCOUNT_KEY);
-    else localStorage.setItem(ACCOUNT_KEY, activeAccount);
-  }, [activeAccount]);
+    if (accounts.length === 0) localStorage.removeItem(ACCOUNT_KEY);
+    else localStorage.setItem(ACCOUNT_KEY, JSON.stringify(accounts));
+  }, [accounts]);
 
-  const value = useMemo(
-    () => ({
-      activeStyleId,
-      setActiveStyleId,
-      activeAccount,
-      setActiveAccount,
-      scope: { styleId: activeStyleId, account: activeAccount },
-    }),
-    [activeStyleId, activeAccount],
-  );
+  const value = useMemo(() => {
+    const scope: Scope = { styleIds, accounts };
+    return {
+      scope,
+      toggleStyle: (id: number) => setStyleIds((cur) => toggleStyleIn(cur, id)),
+      toggleAccount: (a: string) => setAccounts((cur) => toggleAccountIn(cur, a)),
+      clearStyles: () => setStyleIds([]),
+      clearAccounts: () => setAccounts([]),
+      activeStyleId: styleIds.length === 1 ? styleIds[0] : null,
+      activeAccount: accounts.length === 1 ? accounts[0] : null,
+    };
+  }, [styleIds, accounts]);
+
   return <StyleCtx.Provider value={value}>{children}</StyleCtx.Provider>;
 }
 
 export const useStyleFilter = () => useContext(StyleCtx);
+
+/** Free-text account names, compared the way a human would read them. */
+export const sameAccount = (a: string | null | undefined, b: string | null | undefined) =>
+  (a ?? "").trim().toLowerCase() === (b ?? "").trim().toLowerCase();
 
 /** Trades belonging to `styleId`, or every trade when it is null ("All"). */
 export function filterByStyle<T extends { styleId: number | null }>(
@@ -87,18 +151,20 @@ export function filterByStyle<T extends { styleId: number | null }>(
 }
 
 /**
- * Both axes at once. Account matching is trimmed and case-insensitive because
- * the column is free text — "Apex Eval" and "apex eval " are one account that
- * happens to have been typed twice.
+ * Both axes, each a set. A trade has to satisfy every axis that has a
+ * selection, and an axis with nothing selected constrains nothing — so
+ * "neither" is the whole log rather than an empty page.
  */
 export function filterByScope<T extends { styleId: number | null; account?: string | null }>(
   trades: T[],
   scope: Scope,
 ): T[] {
-  let out = filterByStyle(trades, scope.styleId);
-  if (scope.account) {
-    const want = scope.account.trim().toLowerCase();
-    out = out.filter((t) => (t.account ?? "").trim().toLowerCase() === want);
+  let out = trades;
+  if (scope.styleIds.length) {
+    out = out.filter((t) => t.styleId != null && scope.styleIds.includes(t.styleId));
+  }
+  if (scope.accounts.length) {
+    out = out.filter((t) => scope.accounts.some((a) => sameAccount(a, t.account)));
   }
   return out;
 }

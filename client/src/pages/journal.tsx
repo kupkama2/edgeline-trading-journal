@@ -113,10 +113,7 @@ export default function Journal() {
     [tags],
   );
 
-  const scoped = useMemo(
-    () => filterByScope(trades ?? [], scope),
-    [trades, activeStyleId],
-  );
+  const scoped = useMemo(() => filterByScope(trades ?? [], scope), [trades, scope]);
   const pending = sortTrades(scoped.filter((t) => t.status === "pending"), sortBy);
   const open = sortTrades(scoped.filter((t) => t.status === "open"), sortBy);
   /**
