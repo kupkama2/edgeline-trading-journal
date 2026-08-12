@@ -39,6 +39,9 @@ function AppRouter() {
     <>
       <Switch location={onTrade ? lastPage.current : location}>
         <Route path="/" component={Journal} />
+        <Route path="/calendar" component={Daily} />
+        {/* The old address, kept working: it is in bookmarks and in every
+            "open that day" handoff written before the rename. */}
         <Route path="/daily" component={Daily} />
         {/* One tab, two halves. The old two addresses still resolve — links
             and bookmarks outlive a navigation change — each landing on the

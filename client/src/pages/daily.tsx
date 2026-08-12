@@ -154,7 +154,7 @@ export default function Daily() {
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-bold tracking-tight">Daily</h1>
+          <h1 className="text-xl font-bold tracking-tight">Calendar</h1>
           <p className="text-xs text-muted-foreground">
             One file per day. Dump anything, any time — the numbers fill themselves in.
           </p>

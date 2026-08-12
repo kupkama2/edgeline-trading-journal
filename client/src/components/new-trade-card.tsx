@@ -138,6 +138,14 @@ export function NewTradeCard({
   const [account, setAccount] = useState<string>(
     () => localStorage.getItem(ACCOUNT_KEY) ?? "",
   );
+  // Scoping the page to an account is a statement about what you are doing
+  // now, so a trade logged from that page belongs to it. Without this you can
+  // filter to the Apex eval, log a trade, and have it land on whichever
+  // account you happened to use last.
+  const { activeAccount } = useStyleFilter();
+  useEffect(() => {
+    if (activeAccount) setAccount(activeAccount);
+  }, [activeAccount]);
   // Every account name already on a trade, so picking stays one click and one
   // spelling. Free text underneath it all: no accounts table to administer.
   const knownAccounts = useMemo(() => {

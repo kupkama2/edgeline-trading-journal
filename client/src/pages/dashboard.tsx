@@ -33,7 +33,7 @@ import { WeeklyInsightsCard } from "@/components/weekly-insights";
 import { StyleSwitcher } from "@/components/style-switcher";
 import { ProgressionCard } from "@/components/xp";
 import { ExecutionCard } from "@/components/execution-card";
-import { filterByStyle, useStyleFilter } from "@/lib/style-filter";
+import { filterByScope, useStyleFilter } from "@/lib/style-filter";
 import {
   aggregate,
   computeMetrics,
@@ -241,12 +241,12 @@ function WeeklyGate({
 export default function Dashboard({ embedded = false }: { embedded?: boolean } = {}) {
   const { data: trades, isLoading } = useTrades();
   const { data: tags = [] } = useMistakeTags();
-  const { activeStyleId } = useStyleFilter();
+  const { activeStyleId, scope } = useStyleFilter();
   // A point on the equity curve is one closed trade, and a calendar cell is
   // one day — both are doors into the log rather than pictures of it.
   const [, navigate] = useLocation();
   const all = useMemo(
-    () => filterByStyle(trades ?? [], activeStyleId),
+    () => filterByScope(trades ?? [], scope),
     [trades, activeStyleId],
   );
   const closed = useMemo(
@@ -635,7 +635,7 @@ export default function Dashboard({ embedded = false }: { embedded?: boolean } =
                         data-testid={`cal-${cell.day}`}
                         onClick={() => {
                           setJumpDay(cell.day);
-                          navigate("/daily");
+                          navigate("/calendar");
                         }}
                         aria-label={`Open ${cell.day}`}
                         className="h-4 w-4 rounded-[3px] transition-transform hover:scale-125 sm:h-5 sm:w-5"
