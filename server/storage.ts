@@ -327,6 +327,30 @@ CREATE INDEX IF NOT EXISTS account_settings_user_id ON account_settings (user_id
 CREATE INDEX IF NOT EXISTS weekly_reviews_user_id ON weekly_reviews (user_id);
 CREATE INDEX IF NOT EXISTS daily_notes_user_id ON daily_notes (user_id);
 `);
+
+  await syncDemonTaxonomy();
+}
+
+/**
+ * Hand every existing journal any demon the taxonomy has grown since that
+ * account was created.
+ *
+ * seed() runs once, at account creation, which was fine while the taxonomy was
+ * frozen. The moment a demon is added, every account that already exists —
+ * including the only one that matters here — would never see it, and the new
+ * entry would silently be a feature for future users only. Reconciling on boot
+ * is what makes editing DEMON_TAXONOMY actually mean something.
+ *
+ * seedDemons is idempotent and gap-filling: it renames legacy aliases onto
+ * their canonical demon, inserts what is missing, and renumbers. Custom demons
+ * are never touched beyond their position in the list, and nothing is deleted,
+ * so a boot that changes no taxonomy changes no rows.
+ */
+export async function syncDemonTaxonomy(): Promise<void> {
+  const rows = await db.select({ id: users.id }).from(users);
+  for (const row of rows) {
+    await new DatabaseStorage(row.id).seedDemons();
+  }
 }
 
 /**
@@ -516,7 +540,7 @@ export class DatabaseStorage implements IStorage {
    * ids, so existing trade links survive), then insert any canonical demon
    * that is still missing. Custom demons the user added are left untouched.
    */
-  private async seedDemons() {
+  async seedDemons() {
     const existing = await db.select().from(mistakeTags).where(this.owns(mistakeTags));
 
     for (const tag of existing) {
@@ -542,6 +566,20 @@ export class DatabaseStorage implements IStorage {
         continue;
       }
       await db.insert(mistakeTags).values({ name, sortOrder: i, color: "red", userId: this.userId });
+    }
+
+    // Everything that is not canonical sits after the taxonomy block, keeping
+    // its own relative order. Without this, growing the taxonomy walks a new
+    // demon onto a sort_order a custom tag already holds, and the list order
+    // flaps between page loads for as long as the tie lasts.
+    const customs = existing
+      .filter((t) => !DEMON_TAXONOMY.includes(t.name))
+      .sort((a, b) => a.sortOrder - b.sortOrder || a.id - b.id);
+    for (let i = 0; i < customs.length; i++) {
+      const want = DEMON_TAXONOMY.length + i;
+      if (customs[i].sortOrder !== want) {
+        await db.update(mistakeTags).set({ sortOrder: want }).where(eq(mistakeTags.id, customs[i].id));
+      }
     }
 
     // Seed the pre-taxonomy extras only for a brand-new journal.
@@ -894,7 +932,9 @@ export class DatabaseStorage implements IStorage {
       .select()
       .from(mistakeTags)
       .where(this.owns(mistakeTags))
-      .orderBy(mistakeTags.sortOrder);
+      // id breaks ties: sort_order alone leaves the order of equal rows to the
+      // planner, so a list can come back shuffled between two identical reads.
+      .orderBy(mistakeTags.sortOrder, mistakeTags.id);
   }
 
   async createMistakeTag(t: InsertMistakeTag): Promise<MistakeTag> {
