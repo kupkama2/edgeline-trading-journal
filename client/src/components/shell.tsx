@@ -107,7 +107,7 @@ export function Logo({ className = "" }: { className?: string }) {
 
 const NAV = [
   { href: "/", label: "Journal", icon: NotebookPen },
-  { href: "/daily", label: "Daily", icon: CalendarDays },
+  { href: "/calendar", label: "Calendar", icon: CalendarDays },
   { href: "/stats", label: "Stats", icon: BarChart3 },
   { href: "/settings", label: "Settings", icon: Settings2 },
 ];
@@ -163,7 +163,10 @@ export function Shell({ children }: { children: React.ReactNode }) {
 
           <nav className="ml-2 flex items-center gap-1 overflow-x-auto">
             {NAV.map(({ href, label, icon: Icon }) => {
-              const active = location === href;
+              // /daily still resolves to the same page, so it must still
+              // light the tab that replaced it.
+              const active =
+                location === href || (href === "/calendar" && location === "/daily");
               return (
                 <Link key={href} href={href}>
                   <a

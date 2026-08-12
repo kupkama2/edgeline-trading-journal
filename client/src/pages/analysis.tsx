@@ -276,7 +276,7 @@ export default function Analysis({ embedded = false }: { embedded?: boolean } = 
               points={dd.equityR}
               onSelect={(day) => {
                 setJumpDay(day);
-                navigate("/daily");
+                navigate("/calendar");
               }}
             />
           </div>

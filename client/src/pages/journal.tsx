@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ChevronDown, ClipboardPaste, Eye, EyeOff } from "lucide-react";
 import { useTrades, useMistakeTags } from "@/lib/data";
-import { filterByStyle, useStyleFilter } from "@/lib/style-filter";
+import { filterByScope, useStyleFilter } from "@/lib/style-filter";
 import { type TradeWithTags } from "@shared/schema";
 import { computeMetrics } from "@shared/metrics";
 import { DailyGuardCard } from "@/components/daily-guard";
@@ -91,7 +91,7 @@ function SortControl({
 export default function Journal() {
   const { data: trades, isLoading } = useTrades();
   const { data: tags = [] } = useMistakeTags();
-  const { activeStyleId } = useStyleFilter();
+  const { activeStyleId, scope } = useStyleFilter();
   const [closing, setClosing] = useState<TradeWithTags | null>(null);
   const [, navigate] = useLocation();
   const [editing, setEditing] = useState<TradeWithTags | null>(null);
@@ -113,10 +113,7 @@ export default function Journal() {
     [tags],
   );
 
-  const scoped = useMemo(
-    () => filterByStyle(trades ?? [], activeStyleId),
-    [trades, activeStyleId],
-  );
+  const scoped = useMemo(() => filterByScope(trades ?? [], scope), [trades, scope]);
   const pending = sortTrades(scoped.filter((t) => t.status === "pending"), sortBy);
   const open = sortTrades(scoped.filter((t) => t.status === "open"), sortBy);
   /**
