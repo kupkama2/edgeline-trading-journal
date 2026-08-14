@@ -23,7 +23,7 @@ import { collapseFills, positionLedger } from "@shared/fills";
 import { TradeImageGallery } from "@/components/trade-images";
 import { parseExtraTargets, parsePlaybook, type TradeWithTags } from "@shared/schema";
 import { computeMetrics, fmtFees, fmtMoney, fmtR, EXIT_REASON_LABELS } from "@shared/metrics";
-import { Dropzone, EXIT_REASONS, RationaleTags, localNow, num, parseTags, toIso } from "@/components/trade-shared";
+import { Dropzone, EXIT_REASONS, RationaleTags, TimeField, localNow, num, parseTags, toIso } from "@/components/trade-shared";
 import { EMPTY_GRADES, GradePicker, type GradeState } from "@/components/grade-picker";
 
 /* ============================ close dialog ============================ */
@@ -294,18 +294,12 @@ export function CloseTradeDialog({
                   data-testid="input-exit-price"
                 />
               </div>
-              <div className="space-y-1">
-                <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                  Exit time
-                </label>
-                <Input
-                  type="datetime-local"
-                  value={exitTime}
-                  onChange={(e) => setExitTime(e.target.value)}
-                  className="h-9 font-mono text-xs"
-                  data-testid="input-exit-time"
-                />
-              </div>
+              <TimeField
+                label="Exit time"
+                value={exitTime}
+                onChange={setExitTime}
+                testId="input-exit-time"
+              />
               <div className="space-y-1">
                 <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
                   MAE (worst price)
@@ -914,7 +908,12 @@ export function EditTradeDialog({
                 </div>
               ))}
               {field("entryTime", "Entry time", "datetime-local")}
-              {field("exitTime", "Exit time", "datetime-local")}
+              <TimeField
+                label="Exit time"
+                value={f.exitTime ?? ""}
+                onChange={(v) => setF((p) => ({ ...p, exitTime: v }))}
+                testId="input-edit-exitTime"
+              />
               {field("exitPrice", "Exit price")}
               <div className="space-y-1">
                 <label className="text-[10px] uppercase tracking-wider text-muted-foreground">

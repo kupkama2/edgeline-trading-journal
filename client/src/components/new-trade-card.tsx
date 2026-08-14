@@ -26,7 +26,7 @@ import {
   pointValueFor,
 } from "@shared/symbols";
 import { dropBracketLegs, type ImportCandidate } from "@shared/import-parse";
-import { Dropzone, EXIT_REASONS, RationaleTags, localNow, num, parseTags, toIso } from "@/components/trade-shared";
+import { Dropzone, EXIT_REASONS, RationaleTags, TimeField, localNow, num, parseTags, toIso } from "@/components/trade-shared";
 import { EMPTY_GRADES, GradePicker, type GradeState } from "@/components/grade-picker";
 import { AccountPicker, HighlightPicker } from "@/components/trade-pickers";
 import { SymbolPicker } from "@/components/symbol-picker";
@@ -1183,18 +1183,12 @@ export function NewTradeCard({
                     data-testid="input-new-exit-price"
                   />
                 </div>
-                <div className="space-y-1">
-                  <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                    Exit time
-                  </label>
-                  <Input
-                    type="datetime-local"
-                    value={exitTime}
-                    onChange={(e) => setExitTime(e.target.value)}
-                    className="h-9 font-mono text-xs"
-                    data-testid="input-new-exit-time"
-                  />
-                </div>
+                <TimeField
+                  label="Exit time"
+                  value={exitTime}
+                  onChange={setExitTime}
+                  testId="input-new-exit-time"
+                />
               </div>
 
               <div>
