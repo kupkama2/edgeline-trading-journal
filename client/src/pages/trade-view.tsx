@@ -44,7 +44,8 @@ import { GradeBadges } from "@/components/grade-picker";
 import { StyleChip } from "@/components/style-switcher";
 import { TradeImageGallery } from "@/components/trade-images";
 import { RationaleTags, num, parseTags } from "@/components/trade-shared";
-import { CloseTradeDialog, EditTradeDialog } from "@/components/trade-dialogs";
+import { TradeEditor } from "@/components/trade-dialogs";
+import { NewTradeCard } from "@/components/new-trade-card";
 import { FillDialog } from "@/components/fill-dialog";
 import { ResolveTradeDialog } from "@/components/resolve-trade";
 
@@ -79,13 +80,24 @@ function Fig({
 }
 
 export default function TradeView({ under = "/" }: { under?: string }) {
+  const [isNew] = useRoute("/trade/new");
   const [, params] = useRoute("/trade/:id");
+  /*
+   * Editing has its own address rather than its own window.
+   *
+   * Same surface, one segment deeper — which makes the back button leave the
+   * editor instead of the trade, lets "edit this trade" be a link the journal
+   * rows can point at, and survives a refresh. A boolean in component state
+   * could do none of those.
+   */
+  const [isEditRoute, editParams] = useRoute("/trade/:id/edit");
   const [, navigate] = useLocation();
-  const id = Number(params?.id);
+  const id = isNew ? NaN : Number(editParams?.id ?? params?.id);
   const { data: trades, isLoading } = useTrades();
 
-  const [editing, setEditing] = useState(false);
-  const [closing, setClosing] = useState(false);
+  const editing = isEditRoute;
+  const setEditing = (on: boolean) =>
+    navigate(on ? `/trade/${id}/edit` : `/trade/${id}`, { replace: true });
   const [resolving, setResolving] = useState(false);
   const [filling, setFilling] = useState<"add" | "partial" | null>(null);
 
@@ -99,7 +111,10 @@ export default function TradeView({ under = "/" }: { under?: string }) {
   const close = () => navigate(under, { replace: true });
   // While a write dialog is stacked on top, a click inside it counts as
   // "outside" the overlay; without this guard, editing would dismiss both.
-  const innerOpen = editing || closing || resolving || filling != null;
+  // Editing happens INSIDE this overlay now, so it is not an inner window:
+  // counting it as one would make Escape refuse to close the trade while the
+  // editor is showing, with nothing on top to close instead.
+  const innerOpen = resolving || filling != null;
 
   /*
    * Escape is handled here rather than left to the dialog primitive. Landing
@@ -152,7 +167,16 @@ export default function TradeView({ under = "/" }: { under?: string }) {
             {trade ? `${trade.symbol} trade` : "Trade"}
           </DialogTitle>
 
-          {isLoading ? (
+          {/* Creating has an address too, so "log a trade" is a link rather
+              than a state only the journal can reach. Same window as viewing
+              and editing one. */}
+          {isNew ? (
+            <NewTradeCard
+              defaultExpanded
+              onOrdersDetected={() => {}}
+              onCreated={(newId) => navigate(`/trade/${newId}`, { replace: true })}
+            />
+          ) : isLoading ? (
             <div className="space-y-4">
               <Skeleton className="h-8 w-40" />
               <Skeleton className="h-64 w-full" />
@@ -175,22 +199,28 @@ export default function TradeView({ under = "/" }: { under?: string }) {
               </Button>
             </div>
           ) : (
-            <TradeBody
-              trade={trade}
-              onEdit={() => setEditing(true)}
-              onCloseTrade={() => setClosing(true)}
-              onResolve={() => setResolving(true)}
-              onFill={setFilling}
-              onDeleted={close}
-            />
+            /* One surface, two states. Viewing and editing are the same
+               window showing the same trade, which is the whole point:
+               "close this trade" is just editing it and filling in the exit,
+               so it lands here too rather than opening a third thing. */
+            editing ? (
+              <TradeEditor trade={trade} onClose={() => setEditing(false)} />
+            ) : (
+              <TradeBody
+                trade={trade}
+                onEdit={() => setEditing(true)}
+                onCloseTrade={() => setEditing(true)}
+                onResolve={() => setResolving(true)}
+                onFill={setFilling}
+                onDeleted={close}
+              />
+            )
           )}
         </DialogContent>
       </Dialog>
 
       {/* Stacked above the overlay, not inside it: each is its own root, so
           Escape closes the top one and the trade stays open behind it. */}
-      <EditTradeDialog trade={editing ? trade : null} onClose={() => setEditing(false)} />
-      <CloseTradeDialog trade={closing ? trade : null} onClose={() => setClosing(false)} />
       <ResolveTradeDialog trade={resolving ? trade : null} onClose={() => setResolving(false)} />
       <FillDialog
         trade={filling ? trade : null}

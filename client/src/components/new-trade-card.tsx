@@ -28,7 +28,8 @@ import {
 import { dropBracketLegs, type ImportCandidate } from "@shared/import-parse";
 import { Dropzone, EXIT_REASONS, RationaleTags, TimeField, localNow, num, parseTags, toIso } from "@/components/trade-shared";
 import { EMPTY_GRADES, GradePicker, type GradeState } from "@/components/grade-picker";
-import { AccountPicker, HighlightPicker } from "@/components/trade-pickers";
+import { AccountPicker, HighlightPicker, SetupTagPicker } from "@/components/trade-pickers";
+import { normalizeSetupTags } from "@shared/setups";
 import { SymbolPicker } from "@/components/symbol-picker";
 import { knownHighlights, serializeHighlights } from "@shared/highlights";
 import { suggestSize } from "@shared/sizing";
@@ -55,10 +56,16 @@ const ACCOUNT_KEY = "edgeline.lastAccount";
 export function NewTradeCard({
   onOrdersDetected,
   onExpandedChange,
+  defaultExpanded = false,
+  onCreated,
 }: {
   onOrdersDetected: (rows: ImportCandidate[]) => void;
   /** So the page can give the column back when the form is closed. */
   onExpandedChange?: (open: boolean) => void;
+  /** Open from the start at /trade/new, where the form IS the page. */
+  defaultExpanded?: boolean;
+  /** Fired after a successful save, so the overlay can step out of the way. */
+  onCreated?: (id: number) => void;
 }) {
   const { toast } = useToast();
   const createTrade = useCreateTrade();
@@ -72,13 +79,26 @@ export function NewTradeCard({
    * single line and opens on demand: a click, or a chart pasted anywhere on
    * the page, which is how a trade usually starts anyway.
    */
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(defaultExpanded);
   useEffect(() => onExpandedChange?.(expanded), [expanded, onExpandedChange]);
 
   /* One-step closed-trade logging: when the screenshot already shows an exit
      (or the user flips the toggle) we skip CloseTradeDialog entirely and write
      the trade straight to the log with status="closed". */
-  const [closedMode, setClosedMode] = useState(false);
+  /**
+   * Where the trade is in its life, chosen at logging time.
+   *
+   * A trade goes: placed but not filled -> live -> done. All three are worth
+   * logging, and which one you are in decides what the form even asks: a
+   * resting order has no exit to grade, and a trade you are recording after
+   * the fact should not need creating and then closing as two separate acts.
+   */
+  const [lifecycle, setLifecycle] = useState<"pending" | "open" | "closed">("open");
+  const closedMode = lifecycle === "closed";
+  const setClosedMode = (v: boolean | ((c: boolean) => boolean)) =>
+    setLifecycle((cur) =>
+      (typeof v === "function" ? v(cur === "closed") : v) ? "closed" : "open",
+    );
   const [autoClosed, setAutoClosed] = useState(false);
   const [exitPrice, setExitPrice] = useState("");
   const [exitTime, setExitTime] = useState(localNow());
@@ -142,12 +162,26 @@ export function NewTradeCard({
   // now, so a trade logged from that page belongs to it. Without this you can
   // filter to the Apex eval, log a trade, and have it land on whichever
   // account you happened to use last.
-  const { activeAccount } = useStyleFilter();
+  const { activeAccount, activeSource } = useStyleFilter();
   useEffect(() => {
     if (activeAccount) setAccount(activeAccount);
   }, [activeAccount]);
+  // Same reasoning for the source: reading Severin's trades and then logging
+  // one is almost always logging one of his.
+  useEffect(() => {
+    if (activeSource) setSource(activeSource);
+  }, [activeSource]);
   // Every account name already on a trade, so picking stays one click and one
   // spelling. Free text underneath it all: no accounts table to administer.
+  const [source, setSource] = useState("");
+  /** Setups tapped as chips. Merged with whatever the rationale parser finds. */
+  const [setupTags, setSetupTags] = useState<string[]>([]);
+  const knownSources = useMemo(() => {
+    const s = new Set<string>();
+    for (const t of allTrades) if (t.source?.trim()) s.add(t.source.trim());
+    return Array.from(s).sort();
+  }, [allTrades]);
+
   const knownAccounts = useMemo(() => {
     const names = new Set<string>();
     for (const t of allTrades) if (t.account?.trim()) names.add(t.account.trim());
@@ -417,6 +451,10 @@ export function NewTradeCard({
       rationaleTags = await analyzeRationale(rationale);
       setAnalyzingRationale(false);
     }
+    // Chips first, so a setup you tapped deliberately outranks one the parser
+    // guessed at; normalising the union means "cc" from the sentence and the
+    // "61.8 Fib" chip collapse to one tag instead of two rows in the table.
+    rationaleTags = normalizeSetupTags([...setupTags, ...rationaleTags]);
     const playbookPayload = {
       setupName: pb.setupName.trim() || undefined,
       stopLogic: pb.stopLogic.trim() || undefined,
@@ -454,6 +492,7 @@ export function NewTradeCard({
         initialTarget: data.initialTarget,
         extraTargets: extras.length ? JSON.stringify(extras) : null,
         account: account.trim() || null,
+        source: source.trim() || null,
         highlights: loggingClosed ? serializeHighlights(highlights) : null,
         entryTime: toIso(data.entryTime),
         // Screenshots are parsed, not kept. A base64 chart is ~300x the size of
@@ -474,7 +513,7 @@ export function NewTradeCard({
               stopGrade: grades.stop as any,
               exitGrade: grades.exit as any,
             }
-          : { status: "open" as const }),
+          : { status: lifecycle === "pending" ? ("pending" as const) : ("open" as const) }),
       },
       mistakeTagIds: loggingClosed ? selectedDemons : [],
     });
@@ -493,9 +532,12 @@ export function NewTradeCard({
             title: "Closed trade logged",
             description: `${data.symbol.toUpperCase()} recorded end-to-end.`,
           }
-        : { title: "Trade open", description: `${data.symbol.toUpperCase()} logged.` },
+        : lifecycle === "pending"
+          ? { title: "Order placed", description: `${data.symbol.toUpperCase()} waiting for a fill.` }
+          : { title: "Trade open", description: `${data.symbol.toUpperCase()} logged.` },
     );
-    setClosedMode(false);
+    if (created?.id) onCreated?.(created.id);
+    setLifecycle("open");
     setAutoClosed(false);
     setExitPrice("");
     setExitTime(localNow());
@@ -503,6 +545,7 @@ export function NewTradeCard({
     setGrades(EMPTY_GRADES);
     setSelectedDemons([]);
     setHighlights([]);
+    setSetupTags([]);
     setPickedStyleId(null);
     setExtraTps([]);
     // The account survives the reset on purpose — next trade, same account.
@@ -588,21 +631,35 @@ export function NewTradeCard({
               AI pre-filled · verify
             </Badge>
           )}
-          <Button
-            type="button"
-            size="sm"
-            variant={closedMode ? "default" : "outline"}
-            className="h-7 gap-1.5 px-2 text-[11px]"
-            onClick={() => {
-              setClosedMode((c) => !c);
-              setAutoClosed(false);
-            }}
-            data-testid="button-toggle-closed"
-            aria-pressed={closedMode}
-          >
-            <CheckCircle2 className="h-3.5 w-3.5" />
-            Already closed
-          </Button>
+          {/* The three states a trade can be logged in. A resting order and a
+              trade you are recording after the fact are both real things to
+              write down, and neither was reachable before: everything was
+              born open, so a pending order had to be logged as live and a
+              finished trade had to be created and then closed as two acts. */}
+          {(
+            [
+              { id: "pending", label: "Waiting to fill", icon: Clock3 },
+              { id: "open", label: "Open", icon: ArrowUpRight },
+              { id: "closed", label: "Closed", icon: CheckCircle2 },
+            ] as const
+          ).map(({ id, label, icon: Icon }) => (
+            <Button
+              key={id}
+              type="button"
+              size="sm"
+              variant={lifecycle === id ? "default" : "outline"}
+              className="h-7 gap-1.5 px-2 text-[11px]"
+              onClick={() => {
+                setLifecycle(id);
+                setAutoClosed(false);
+              }}
+              data-testid={`button-lifecycle-${id}`}
+              aria-pressed={lifecycle === id}
+            >
+              <Icon className="h-3.5 w-3.5" />
+              {label}
+            </Button>
+          ))}
         </div>
       </div>
 
@@ -643,6 +700,15 @@ export function NewTradeCard({
                 <p className="text-[10px] leading-snug text-muted-foreground">
                   Type it however you'd say it — tags get pulled out automatically on save.
                 </p>
+                <SetupTagPicker
+                  selected={setupTags}
+                  onToggle={(name) =>
+                    setSetupTags((cur) =>
+                      cur.includes(name) ? cur.filter((x) => x !== name) : [...cur, name],
+                    )
+                  }
+                  testIdPrefix="new-setup"
+                />
               </FormItem>
             )}
           />
@@ -783,11 +849,27 @@ export function NewTradeCard({
             </div>
           )}
 
-          <div className="space-y-1" data-testid="section-account-picker">
-            <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
-              Account
-            </p>
-            <AccountPicker value={account} onChange={setAccount} known={knownAccounts} />
+          <div className="flex flex-wrap gap-4">
+            <div className="space-y-1" data-testid="section-account-picker">
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                Account
+              </p>
+              <AccountPicker value={account} onChange={setAccount} known={knownAccounts} />
+            </div>
+            <div className="space-y-1" data-testid="section-source-picker">
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                Source
+              </p>
+              <AccountPicker
+                value={source}
+                onChange={setSource}
+                known={knownSources}
+                testIdPrefix="source"
+                placeholder="e.g. Daniel, Severin, CBS, UB"
+                emptyLabel="My own idea"
+                newLabel="+ New source…"
+              />
+            </div>
           </div>
 
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -1326,11 +1408,15 @@ export function NewTradeCard({
               {(createTrade.isPending || analyzingRationale) && (
                 <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
               )}
+              {/* The button says what it will actually do, because the three
+                  lifecycles produce three different records. */}
               {guard.locked
                 ? "Locked — acknowledge the demon"
-                : closedMode
+                : lifecycle === "closed"
                   ? "Log closed trade"
-                  : "Open trade"}
+                  : lifecycle === "pending"
+                    ? "Place order"
+                    : "Open trade"}
             </Button>
             {preview && (
               <div

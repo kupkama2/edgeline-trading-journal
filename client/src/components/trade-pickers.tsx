@@ -1,6 +1,6 @@
 /**
- * Two small pickers shared by the entry card and the trade dialogs: which
- * account a trade ran in, and what went right on it.
+ * Small pickers shared by the entry card and the trade dialogs: which account
+ * a trade ran in, whose idea it was, which setup it was, and what went right.
  */
 import { useState } from "react";
 import { Input } from "@/components/ui/input";
@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/select";
 import { Sparkles } from "lucide-react";
 import { HIGHLIGHT_TAXONOMY } from "@shared/highlights";
+import { SETUP_TAGS } from "@shared/setups";
 
 const NEW_ACCOUNT = "__new__";
 const NO_ACCOUNT = "__none__";
@@ -31,11 +32,19 @@ export function AccountPicker({
   onChange,
   known,
   testIdPrefix = "account",
+  placeholder = "e.g. Apex eval, Binance Futures",
+  emptyLabel = "No account",
+  newLabel = "+ New account…",
 }: {
   value: string;
   onChange: (v: string) => void;
   known: string[];
   testIdPrefix?: string;
+  /** Overridden by the source picker, which asks a different question of the
+      same shape: one identity, chosen from what you have used before. */
+  placeholder?: string;
+  emptyLabel?: string;
+  newLabel?: string;
 }) {
   // Typing mode is sticky while the box is non-empty, so a half-typed name
   // isn't yanked away the moment it matches nothing.
@@ -52,7 +61,7 @@ export function AccountPicker({
           autoFocus={typing}
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          placeholder="e.g. Apex eval, Binance Futures"
+          placeholder={placeholder}
           className="h-9 w-56 text-xs"
           data-testid={`input-${testIdPrefix}`}
         />
@@ -84,11 +93,11 @@ export function AccountPicker({
       }}
     >
       <SelectTrigger className="h-9 w-56 text-xs" data-testid={`select-${testIdPrefix}`}>
-        <SelectValue placeholder="No account" />
+        <SelectValue placeholder={emptyLabel} />
       </SelectTrigger>
       <SelectContent>
         <SelectItem value={NO_ACCOUNT} className="text-xs text-muted-foreground">
-          No account
+          {emptyLabel}
         </SelectItem>
         {known.map((a) => (
           <SelectItem key={a} value={a} className="text-xs" data-testid={`option-${testIdPrefix}-${a}`}>
@@ -96,7 +105,7 @@ export function AccountPicker({
           </SelectItem>
         ))}
         <SelectItem value={NEW_ACCOUNT} className="text-xs text-primary">
-          + New account…
+          {newLabel}
         </SelectItem>
       </SelectContent>
     </Select>
@@ -148,6 +157,50 @@ export function HighlightPicker({
           );
         })}
       </div>
+    </div>
+  );
+}
+
+/**
+ * The handful of setups that are most of the book, as one-tap chips.
+ *
+ * Sits next to the free-text rationale rather than replacing it: the sentence
+ * is how you actually think about a trade, and the chips are how the Setup
+ * breakdown gets a sample size worth reading. Tapping one toggles the
+ * canonical tag, so the same setup never lands in the table twice under two
+ * spellings.
+ */
+export function SetupTagPicker({
+  selected,
+  onToggle,
+  testIdPrefix = "setup",
+}: {
+  selected: string[];
+  onToggle: (name: string) => void;
+  testIdPrefix?: string;
+}) {
+  const on = (name: string) =>
+    selected.some((s) => s.trim().toLowerCase() === name.toLowerCase());
+
+  return (
+    <div className="flex flex-wrap gap-1.5" data-testid={`${testIdPrefix}-picker`}>
+      {SETUP_TAGS.map((s) => (
+        <button
+          key={s.name}
+          type="button"
+          onClick={() => onToggle(s.name)}
+          aria-pressed={on(s.name)}
+          data-testid={`chip-${testIdPrefix}-${s.name}`}
+          className={`rounded-full border px-2.5 py-1 text-[11px] leading-tight transition-colors ${
+            on(s.name)
+              ? "border-primary/40 bg-primary/10 text-primary"
+              : "border-border text-muted-foreground hover:border-primary/40 hover:text-foreground"
+          }`}
+        >
+          {s.name}
+          {s.hint && <span className="ml-1 opacity-60">{s.hint}</span>}
+        </button>
+      ))}
     </div>
   );
 }

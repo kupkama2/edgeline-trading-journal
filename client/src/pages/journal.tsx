@@ -18,7 +18,6 @@ import { FillDialog } from "@/components/fill-dialog";
 import { ResolveTradeDialog } from "@/components/resolve-trade";
 import { type ImportCandidate } from "@shared/import-parse";
 import { NewTradeCard } from "@/components/new-trade-card";
-import { CloseTradeDialog, EditTradeDialog } from "@/components/trade-dialogs";
 import { useLocation } from "wouter";
 import { ClosedTradeRow, OpenTradeRow, PendingTradeRow } from "@/components/trade-rows";
 import { num } from "@/components/trade-shared";
@@ -92,9 +91,10 @@ export default function Journal() {
   const { data: trades, isLoading } = useTrades();
   const { data: tags = [] } = useMistakeTags();
   const { activeStyleId, scope } = useStyleFilter();
-  const [closing, setClosing] = useState<TradeWithTags | null>(null);
   const [, navigate] = useLocation();
-  const [editing, setEditing] = useState<TradeWithTags | null>(null);
+  /* Editing a trade from a row opens the trade, not a window over the row.
+     One address, one editor: the journal is a list of links into it. */
+  const openTrade = (t: TradeWithTags) => navigate(`/trade/${t.id}/edit`);
   const [importing, setImporting] = useState(false);
   const [loggingMissed, setLoggingMissed] = useState(false);
   const [resolving, setResolving] = useState<TradeWithTags | null>(null);
@@ -220,9 +220,9 @@ export default function Journal() {
                 <OpenTradeRow
                   key={t.id}
                   t={t}
-                  onSelect={() => setClosing(t)}
+                  onSelect={() => openTrade(t)}
                   onView={() => navigate(`/trade/${t.id}`)}
-                  onEdit={() => setEditing(t)}
+                  onEdit={() => openTrade(t)}
                   onResolve={() => setResolving(t)}
                   onAdd={() => setFilling({ trade: t, kind: "add" })}
                   onTake={() => setFilling({ trade: t, kind: "partial" })}
@@ -251,7 +251,7 @@ export default function Journal() {
               <PendingTradeRow
                 key={t.id}
                 t={t}
-                onEdit={() => setEditing(t)}
+                onEdit={() => openTrade(t)}
                 onResolve={() => setResolving(t)}
               />
             ))}
@@ -295,7 +295,7 @@ export default function Journal() {
                     t={t}
                     tagNames={tagNames}
                     onView={() => navigate(`/trade/${t.id}`)}
-                    onEdit={() => setEditing(t)}
+                    onEdit={() => openTrade(t)}
                   />
                 ))}
               </div>
@@ -355,8 +355,6 @@ export default function Journal() {
         </details>
       )}
 
-      <CloseTradeDialog trade={closing} onClose={() => setClosing(null)} />
-      <EditTradeDialog trade={editing} onClose={() => setEditing(null)} />
       <ImportTradesDialog
         open={importing}
         seedRows={importSeed}

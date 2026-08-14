@@ -16,7 +16,8 @@ import { Loader2, Pencil, Trash2 } from "lucide-react";
 import { useAccountSettings, useMistakeTags, useUpdateTrade, useAddTradeImage, archiveDataUrl, parseScreenshot, fileToDownscaledDataUrl } from "@/lib/data";
 import { suggestFees } from "@shared/fees";
 import { knownHighlights, parseHighlights, serializeHighlights } from "@shared/highlights";
-import { AccountPicker, HighlightPicker } from "@/components/trade-pickers";
+import { AccountPicker, HighlightPicker, SetupTagPicker } from "@/components/trade-pickers";
+import { normalizeSetupTags } from "@shared/setups";
 import { useDeleteFill, useStyles, useTrades } from "@/lib/data";
 import { styleColor } from "@/lib/style-filter";
 import { collapseFills, positionLedger } from "@shared/fills";
@@ -530,7 +531,20 @@ function toLocalInput(iso: string | null | undefined) {
  * there is no cached metric to rebuild — invalidating the trades query after
  * the PATCH is enough for every number in the app to recompute.
  */
-export function EditTradeDialog({
+/**
+ * Editing a trade, as a panel rather than a window.
+ *
+ * This used to be a dialog stacked on top of the trade overlay, which is why
+ * viewing and editing felt like two different places: you were two modals
+ * deep, looking at the same trade twice. Now the overlay swaps its read-only
+ * body for this and you stay exactly where you were.
+ *
+ * Closing a trade is not a separate flow either — it is editing one and
+ * filling in the exit. That is all "closing" ever was; the second dialog only
+ * existed to ask a subset of these questions with a different button on the
+ * bottom, and having two writers for one row is how they drift apart.
+ */
+export function TradeEditor({
   trade,
   onClose,
 }: {
@@ -622,6 +636,12 @@ export function EditTradeDialog({
     for (const t of allTrades) if (t.account?.trim()) s.add(t.account.trim());
     return Array.from(s).sort();
   }, [allTrades]);
+  const knownSources = useMemo(() => {
+    const s = new Set<string>();
+    for (const t of allTrades) if (t.source?.trim()) s.add(t.source.trim());
+    return Array.from(s).sort();
+  }, [allTrades]);
+  const [source, setSource] = useState("");
 
   useEffect(() => {
     if (!trade) return;
@@ -656,6 +676,7 @@ export function EditTradeDialog({
       exit: trade.exitGrade ?? null,
     });
     setAccount(trade.account ?? "");
+    setSource(trade.source ?? "");
     setStyleId(trade.styleId ?? null);
     setSizeUnit(trade.sizeUnit === "quote" ? "quote" : "base");
   }, [trade]);
@@ -706,10 +727,7 @@ export function EditTradeDialog({
       toast({ title: "A live trade needs a stop and a target", variant: "destructive" });
       return;
     }
-    const rTags = f.rationaleTags
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
+    const rTags = normalizeSetupTags(f.rationaleTags.split(","));
 
     await updateTrade.mutateAsync({
       id: trade.id,
@@ -736,6 +754,7 @@ export function EditTradeDialog({
         rationaleTags: rTags.length ? JSON.stringify(rTags) : null,
         notes: f.notes.trim() || null,
         account: account.trim() || null,
+        source: source.trim() || null,
         styleId,
         fees: numOrNull(f.fees ?? ""),
         highlights: serializeHighlights(highlights),
@@ -769,14 +788,12 @@ export function EditTradeDialog({
   );
 
   return (
-    <Dialog open={trade != null} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-h-[92vh] max-w-lg overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2 text-base">
-            <Pencil className="h-4 w-4 text-muted-foreground" />
-            Edit {trade?.symbol}
-          </DialogTitle>
-        </DialogHeader>
+    <div className="space-y-4" data-testid="panel-trade-editor">
+      <div>
+        <div className="flex items-center gap-2 text-base font-semibold">
+          <Pencil className="h-4 w-4 text-muted-foreground" />
+          Edit {trade?.symbol}
+        </div>
 
         {trade && (
           <div className="space-y-4">
@@ -924,6 +941,20 @@ export function EditTradeDialog({
                   onChange={setAccount}
                   known={knownAccounts}
                   testIdPrefix="edit-account"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  Source
+                </label>
+                <AccountPicker
+                  value={source}
+                  onChange={setSource}
+                  known={knownSources}
+                  testIdPrefix="edit-source"
+                  placeholder="e.g. Daniel, Severin, CBS, UB"
+                  emptyLabel="My own idea"
+                  newLabel="+ New source…"
                 />
               </div>
               {styles.length > 0 && (
@@ -1176,6 +1207,27 @@ export function EditTradeDialog({
                 className="h-9 text-sm"
                 data-testid="input-edit-rationale-tags"
               />
+              {/* Same chips as the entry card, writing into the same list — a
+                  setup you can tap when logging must be tappable when
+                  correcting, or the correction path quietly re-introduces the
+                  spellings the chips exist to prevent. */}
+              <SetupTagPicker
+                selected={(f.rationaleTags ?? "").split(",").map((x) => x.trim()).filter(Boolean)}
+                onToggle={(name) =>
+                  setF((p) => {
+                    const cur = (p.rationaleTags ?? "")
+                      .split(",")
+                      .map((x) => x.trim())
+                      .filter(Boolean);
+                    const has = cur.some((x) => x.toLowerCase() === name.toLowerCase());
+                    const next = has
+                      ? cur.filter((x) => x.toLowerCase() !== name.toLowerCase())
+                      : [...cur, name];
+                    return { ...p, rationaleTags: next.join(", ") };
+                  })
+                }
+                testIdPrefix="edit-setup"
+              />
             </div>
 
             <Textarea
@@ -1247,18 +1299,44 @@ export function EditTradeDialog({
               <TradeImageGallery tradeId={trade.id} />
             </div>
 
-            <Button
-              className="h-10 w-full text-xs font-semibold"
-              onClick={save}
-              disabled={updateTrade.isPending}
-              data-testid="button-edit-save"
-            >
-              {updateTrade.isPending && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
-              Save changes
-            </Button>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                className="h-10 text-xs font-semibold"
+                onClick={onClose}
+                data-testid="button-edit-cancel"
+              >
+                Cancel
+              </Button>
+              <Button
+                className="h-10 flex-1 text-xs font-semibold"
+                onClick={save}
+                disabled={updateTrade.isPending}
+                data-testid="button-edit-save"
+              >
+                {updateTrade.isPending && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
+                Save changes
+              </Button>
+            </div>
           </div>
         )}
-      </DialogContent>
-    </Dialog>
+      </div>
+    </div>
   );
+}
+
+/**
+ * The old name, kept only so nothing breaks mid-refactor. Everything should
+ * reach for TradeEditor; this wrapper renders it in place with no window of
+ * its own, which is the whole point of the change.
+ */
+export function EditTradeDialog({
+  trade,
+  onClose,
+}: {
+  trade: TradeWithTags | null;
+  onClose: () => void;
+}) {
+  if (!trade) return null;
+  return <TradeEditor trade={trade} onClose={onClose} />;
 }
