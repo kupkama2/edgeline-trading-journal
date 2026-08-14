@@ -16,6 +16,7 @@ import { setJumpDay } from "@/lib/jump";
 import { useLocation } from "wouter";
 import {
   byAccount,
+  bySource,
   byHighlight,
   byHour,
   byMistake,
@@ -49,6 +50,7 @@ const TABS = [
   { id: "weekday", label: "Weekday" },
   { id: "symbol", label: "Instrument" },
   { id: "account", label: "Account" },
+  { id: "source", label: "Source" },
   { id: "setup", label: "Setup" },
   { id: "mistake", label: "Demon" },
   { id: "highlight", label: "Green flag" },
@@ -210,6 +212,8 @@ export default function Analysis({ embedded = false }: { embedded?: boolean } = 
         return bySymbol(scoped);
       case "account":
         return byAccount(scoped);
+      case "source":
+        return bySource(scoped);
       case "setup":
         return bySetup(scoped);
       case "mistake":
@@ -478,7 +482,9 @@ export default function Analysis({ embedded = false }: { embedded?: boolean } = 
                   ? "Nothing marked as done right yet — flag what you nailed when closing a trade."
                   : tab === "account"
                     ? "No accounts recorded yet — pick one when logging a trade and it shows up here."
-                    : "No closed trades yet."
+                    : tab === "source"
+                      ? "No closed trades yet — once you have some, this splits them by whose idea they were."
+                      : "No closed trades yet."
           }
         />
         {(tab === "mistake" || tab === "setup" || tab === "highlight") && rows.length > 0 && (

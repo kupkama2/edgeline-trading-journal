@@ -141,6 +141,10 @@ ALTER TABLE trades ADD COLUMN IF NOT EXISTS style_id INTEGER;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS extra_targets TEXT;
 -- Which account the trade ran in ("Binance Futures", "Apex eval", …).
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS account TEXT;
+-- Whose idea it was — a coach or group whose calls you copy. NULL = your own,
+-- which is both the honest default for all history and the baseline every
+-- source is measured against.
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS source TEXT;
 -- Commission paid on the trade, both sides, in dollars. Deducted in metrics.
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS fees DOUBLE PRECISION;
 -- Green flags: JSON string[] of what went right on the trade.
