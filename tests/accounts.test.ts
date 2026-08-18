@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
+import { eq } from "drizzle-orm";
 
 /**
  * The test that has to exist.
@@ -356,5 +357,103 @@ describe("the routes cannot reach the database directly", () => {
     const calls = src.match(/(\w+(?:\(\w+\))?)\.(listTrades|getTrade|createTrade)\(/g) ?? [];
     expect(calls.length).toBeGreaterThan(0);
     for (const call of calls) expect(call.startsWith("store(req).")).toBe(true);
+  });
+});
+
+/**
+ * The taxonomy is allowed to grow.
+ *
+ * seed() runs once, when an account is created. That was invisible while the
+ * demon list was frozen, and it becomes a silent no-op the moment a demon is
+ * added: every existing journal — in this app, the only journal that has any
+ * history — would never receive it, and the new entry would ship as a feature
+ * for future users exclusively. These tests pin the boot-time reconcile that
+ * closes that gap, and the two things it must not break on the way.
+ */
+describe.skipIf(!DB)("a demon added to the taxonomy reaches journals that already exist", () => {
+  it("hands an existing account a demon created after it was, on boot", async () => {
+    // Deliberately goes through initSchema() rather than calling the reconcile
+    // directly: the reconcile working is not the feature, the reconcile being
+    // WIRED INTO BOOT is. A test that called it by hand would stay green if the
+    // call site were dropped, which is the only way this can actually break.
+    const { initSchema, accounts, db, storageFor } = await import("../server/storage");
+    const { mistakeTags } = await import("../shared/schema");
+    const { DEMON_TAXONOMY } = await import("../shared/demons");
+    await initSchema();
+
+    const user = await accounts.create({
+      googleSub: `grow-${stamp}`,
+      email: `grow-${stamp}@x.test`,
+    });
+
+    // Rewind this account to before the newest demon existed, which is exactly
+    // the state every real account is in the first time it boots new code.
+    const newest = DEMON_TAXONOMY[DEMON_TAXONOMY.length - 1];
+    const before = await storageFor(user.id).listMistakeTags();
+    const target = before.find((t) => t.name === newest)!;
+    expect(target).toBeDefined();
+    await db.delete(mistakeTags).where(eq(mistakeTags.id, target.id));
+    expect(
+      (await storageFor(user.id).listMistakeTags()).some((t) => t.name === newest),
+    ).toBe(false);
+
+    await initSchema();
+
+    const after = await storageFor(user.id).listMistakeTags();
+    expect(after.filter((t) => t.name === newest)).toHaveLength(1);
+    // Every canonical demon present exactly once — a reconcile that inserts a
+    // second copy of anything is worse than one that inserts nothing.
+    for (const name of DEMON_TAXONOMY) {
+      expect(after.filter((t) => t.name === name)).toHaveLength(1);
+    }
+  });
+
+  it("leaves a custom demon and its tagged trades alone", async () => {
+    const { initSchema, accounts, storageFor, syncDemonTaxonomy } = await import(
+      "../server/storage"
+    );
+    await initSchema();
+
+    const user = await accounts.create({
+      googleSub: `custom-${stamp}`,
+      email: `custom-${stamp}@x.test`,
+    });
+    const store = storageFor(user.id);
+    const mine = await store.createMistakeTag({ name: `Chased ${stamp}`, color: "red" } as any);
+    const trade = await store.createTrade({ ...baseTrade } as any, [mine.id]);
+
+    await syncDemonTaxonomy();
+
+    const tags = await store.listMistakeTags();
+    const still = tags.find((t) => t.id === mine.id);
+    expect(still?.name).toBe(`Chased ${stamp}`);
+    // The link is the part with no undo: renumbering must not detach history.
+    const reread = await store.getTrade(trade.id);
+    expect(reread?.mistakeTagIds).toContain(mine.id);
+  });
+
+  it("gives the list one unambiguous order", async () => {
+    const { initSchema, accounts, storageFor, syncDemonTaxonomy } = await import(
+      "../server/storage"
+    );
+    const { DEMON_TAXONOMY } = await import("../shared/demons");
+    await initSchema();
+
+    const user = await accounts.create({
+      googleSub: `order-${stamp}`,
+      email: `order-${stamp}@x.test`,
+    });
+    const store = storageFor(user.id);
+    await store.createMistakeTag({ name: `Zed ${stamp}`, color: "red" } as any);
+    await syncDemonTaxonomy();
+
+    const tags = await store.listMistakeTags();
+    // Canonical demons first, in taxonomy order, then everything else. A tie on
+    // sort_order would let Postgres return these in either order, so the list
+    // could reshuffle between two identical page loads.
+    expect(tags.slice(0, DEMON_TAXONOMY.length).map((t) => t.name)).toEqual(DEMON_TAXONOMY);
+    const orders = tags.map((t) => t.sortOrder);
+    expect(new Set(orders).size).toBe(orders.length);
+    expect(orders).toEqual([...orders].sort((a, b) => a - b));
   });
 });

@@ -15,7 +15,16 @@ import type { MistakeTag, TradeWithTags } from "./schema";
 
 /**
  * The canonical list, in Tom Dante's original order — minus the four timing
- * demons, which the execution grades now own (see DEMON_RETIRED_TO_GRADE).
+ * demons, which the execution grades now own (see DEMON_RETIRED_TO_GRADE),
+ * plus one of our own at the end.
+ *
+ * "Roundtripped" is deliberately NOT a re-run of the retired "Exited Too Late".
+ * That demon was retired because it was word-for-word the same claim as an exit
+ * graded late, recorded twice. This is the severe tail of that claim rather
+ * than the claim itself: giving back 0.5R of a 3R winner is a late exit and
+ * still a good trade, while watching the whole thing come back to scratch is
+ * the failure worth counting streaks on. A late exit that roundtrips carries
+ * both, and that is the point — the grade prices it, the demon names it.
  */
 export const DEMON_TAXONOMY: string[] = [
   "Poor Risk/Reward",
@@ -23,6 +32,7 @@ export const DEMON_TAXONOMY: string[] = [
   "Bet Too Large",
   "Bet Too Small",
   "Didn't Take Planned Trade",
+  "Roundtripped",
 ];
 
 /** Earlier free-form tag names that map onto a canonical demon. */

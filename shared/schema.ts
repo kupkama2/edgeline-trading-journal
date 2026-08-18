@@ -174,6 +174,22 @@ export const trades = pgTable("trades", {
    */
   account: text("account"),
   /**
+   * Where the IDEA came from — a coach, a group, a person whose calls you
+   * copy or trade alongside. "Daniel", "Severin", "CBS", "UB".
+   *
+   * Its own column rather than a tag, because the question it answers is
+   * arithmetic and not description: following someone is a decision with an
+   * expectancy, and "is this person +EV for me" needs a clean partition of
+   * the log — every trade has exactly one origin, and a tag can be applied
+   * twice or collide with a setup name. Free text with a picker of what you
+   * have used before, exactly like `account`: the roster changes as groups
+   * do, and a managed table would make every new name a chore.
+   *
+   * NULL means your own idea, which is the honest default and the baseline
+   * every source gets compared against.
+   */
+  source: text("source"),
+  /**
    * Total commission/fees paid on this trade, in dollars, both sides
    * included. When present it is DEDUCTED inside computeMetrics, so the R
    * and P&L shown everywhere are net — the number that actually hits the

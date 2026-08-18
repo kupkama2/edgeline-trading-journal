@@ -6,7 +6,8 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Camera, Loader2, X } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Camera, Clock, Loader2, X } from "lucide-react";
 
 /* ============================== helpers ============================== */
 
@@ -74,6 +75,56 @@ export function localNow() {
 
 export function toIso(local: string) {
   return local ? new Date(local).toISOString() : new Date().toISOString();
+}
+
+/**
+ * A datetime field with a one-tap "Now".
+ *
+ * A trade is almost always logged within a minute of it closing, so "now" is
+ * the true answer nearly every time — and it is the one value a datetime-local
+ * input makes you assemble by hand, four spinners deep, on the phone where
+ * this gets used most. The button sits on the label row rather than beside the
+ * input so the field itself keeps its full width.
+ *
+ * Entry time deliberately has no equivalent: on a new trade it already
+ * defaults to now, and on an edit it is a past moment you are correcting.
+ */
+export function TimeField({
+  label,
+  value,
+  onChange,
+  testId,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  testId: string;
+}) {
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between gap-2">
+        <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+          {label}
+        </label>
+        <button
+          type="button"
+          onClick={() => onChange(localNow())}
+          data-testid={`${testId}-now`}
+          className="flex items-center gap-1 rounded px-1 py-0.5 text-[10px] uppercase tracking-wider text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+        >
+          <Clock className="h-2.5 w-2.5" />
+          Now
+        </button>
+      </div>
+      <Input
+        type="datetime-local"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="h-9 font-mono text-xs"
+        data-testid={testId}
+      />
+    </div>
+  );
 }
 
 export function parseTags(json: string | null | undefined): string[] {

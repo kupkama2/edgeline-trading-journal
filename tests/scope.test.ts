@@ -3,7 +3,9 @@ import {
   EMPTY_SCOPE,
   filterByScope,
   filterByStyle,
+  OWN_IDEA,
   knownAccounts,
+  knownSources,
   toggleAccountIn,
   toggleStyleIn,
 } from "../client/src/lib/style-filter";
@@ -131,5 +133,64 @@ describe("the account list", () => {
     expect(knownAccounts([{ account: null }, { account: "   " }, { account: "IBKR" }])).toEqual([
       "IBKR",
     ]);
+  });
+});
+
+/**
+ * Source — whose idea the trade was.
+ *
+ * The interesting case is the empty one. A trade with no source is not
+ * missing data, it is your own idea, and it is the baseline every followed
+ * call is measured against; "am I better off on my own than following
+ * Severin" is unanswerable if the only thing you can isolate is Severin.
+ */
+const sourced = [
+  { id: 1, styleId: 1, account: "Apex eval", source: "Severin" },
+  { id: 2, styleId: 1, account: "Apex eval", source: "Daniel" },
+  { id: 3, styleId: 2, account: "Binance Futures", source: null },
+  { id: 4, styleId: 2, account: "Apex eval", source: "  severin " },
+  { id: 5, styleId: 1, account: "Binance Futures", source: "   " },
+] as any[];
+
+describe("scoping by source", () => {
+  it("picks out one person's calls, however the name was typed", () => {
+    expect(
+      ids(filterByScope(sourced, { styleIds: [], accounts: [], sources: ["Severin"] })),
+    ).toEqual([1, 4]);
+  });
+
+  it("unions several people", () => {
+    expect(
+      ids(filterByScope(sourced, { styleIds: [], accounts: [], sources: ["Severin", "Daniel"] })),
+    ).toEqual([1, 2, 4]);
+  });
+
+  it("isolates your own ideas, including a source that is only whitespace", () => {
+    // Trade 5 has "   " in the column — written, but saying nothing. Treating
+    // that as a source called "   " would put a blank row in the breakdown and
+    // quietly keep the trade out of your own baseline.
+    expect(ids(filterByScope(sourced, { styleIds: [], accounts: [], sources: [OWN_IDEA] }))).toEqual(
+      [3, 5],
+    );
+  });
+
+  it("crosses source with the other axes", () => {
+    expect(
+      ids(
+        filterByScope(sourced, {
+          styleIds: [2],
+          accounts: ["Apex eval"],
+          sources: ["Severin"],
+        }),
+      ),
+    ).toEqual([4]);
+  });
+
+  it("selecting nobody is everyone", () => {
+    expect(filterByScope(sourced, EMPTY_SCOPE)).toHaveLength(5);
+  });
+
+  it("offers each source once for the picker, ignoring blanks", () => {
+    expect(knownSources(sourced)).toEqual(["Daniel", "Severin"]);
   });
 });

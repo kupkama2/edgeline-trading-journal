@@ -26,9 +26,11 @@ import {
   pointValueFor,
 } from "@shared/symbols";
 import { dropBracketLegs, type ImportCandidate } from "@shared/import-parse";
-import { Dropzone, EXIT_REASONS, RationaleTags, localNow, num, parseTags, toIso } from "@/components/trade-shared";
+import { Dropzone, EXIT_REASONS, RationaleTags, TimeField, localNow, num, parseTags, toIso } from "@/components/trade-shared";
 import { EMPTY_GRADES, GradePicker, type GradeState } from "@/components/grade-picker";
-import { AccountPicker, HighlightPicker } from "@/components/trade-pickers";
+import { AccountPicker, SetupTagPicker } from "@/components/trade-pickers";
+import { TradeOutcomeFields } from "@/components/trade-outcome";
+import { normalizeSetupTags } from "@shared/setups";
 import { SymbolPicker } from "@/components/symbol-picker";
 import { knownHighlights, serializeHighlights } from "@shared/highlights";
 import { suggestSize } from "@shared/sizing";
@@ -55,10 +57,16 @@ const ACCOUNT_KEY = "edgeline.lastAccount";
 export function NewTradeCard({
   onOrdersDetected,
   onExpandedChange,
+  defaultExpanded = false,
+  onCreated,
 }: {
   onOrdersDetected: (rows: ImportCandidate[]) => void;
   /** So the page can give the column back when the form is closed. */
   onExpandedChange?: (open: boolean) => void;
+  /** Open from the start at /trade/new, where the form IS the page. */
+  defaultExpanded?: boolean;
+  /** Fired after a successful save, so the overlay can step out of the way. */
+  onCreated?: (id: number) => void;
 }) {
   const { toast } = useToast();
   const createTrade = useCreateTrade();
@@ -72,13 +80,23 @@ export function NewTradeCard({
    * single line and opens on demand: a click, or a chart pasted anywhere on
    * the page, which is how a trade usually starts anyway.
    */
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(defaultExpanded);
   useEffect(() => onExpandedChange?.(expanded), [expanded, onExpandedChange]);
 
-  /* One-step closed-trade logging: when the screenshot already shows an exit
-     (or the user flips the toggle) we skip CloseTradeDialog entirely and write
-     the trade straight to the log with status="closed". */
-  const [closedMode, setClosedMode] = useState(false);
+  /**
+   * Where the trade is in its life, chosen at logging time.
+   *
+   * A trade goes: placed but not filled -> live -> done. All three are worth
+   * logging, and which one you are in decides what the form even asks: a
+   * resting order has no exit to grade, and a trade you are recording after
+   * the fact should not need creating and then closing as two separate acts.
+   */
+  const [lifecycle, setLifecycle] = useState<"pending" | "open" | "closed">("open");
+  const closedMode = lifecycle === "closed";
+  const setClosedMode = (v: boolean | ((c: boolean) => boolean)) =>
+    setLifecycle((cur) =>
+      (typeof v === "function" ? v(cur === "closed") : v) ? "closed" : "open",
+    );
   const [autoClosed, setAutoClosed] = useState(false);
   const [exitPrice, setExitPrice] = useState("");
   const [exitTime, setExitTime] = useState(localNow());
@@ -86,6 +104,10 @@ export function NewTradeCard({
   const [grades, setGrades] = useState<GradeState>(EMPTY_GRADES);
   const [selectedDemons, setSelectedDemons] = useState<number[]>([]);
   const [highlights, setHighlights] = useState<string[]>([]);
+  const [mae, setMae] = useState("");
+  const [mfe, setMfe] = useState("");
+  const [nmo, setNmo] = useState<string | null>(null);
+  const [fees, setFees] = useState("");
   const { data: demons = [] } = useMistakeTags();
 
   /* Optional playbook / edge checklist — never required. */
@@ -142,12 +164,26 @@ export function NewTradeCard({
   // now, so a trade logged from that page belongs to it. Without this you can
   // filter to the Apex eval, log a trade, and have it land on whichever
   // account you happened to use last.
-  const { activeAccount } = useStyleFilter();
+  const { activeAccount, activeSource } = useStyleFilter();
   useEffect(() => {
     if (activeAccount) setAccount(activeAccount);
   }, [activeAccount]);
+  // Same reasoning for the source: reading Severin's trades and then logging
+  // one is almost always logging one of his.
+  useEffect(() => {
+    if (activeSource) setSource(activeSource);
+  }, [activeSource]);
   // Every account name already on a trade, so picking stays one click and one
   // spelling. Free text underneath it all: no accounts table to administer.
+  const [source, setSource] = useState("");
+  /** Setups tapped as chips. Merged with whatever the rationale parser finds. */
+  const [setupTags, setSetupTags] = useState<string[]>([]);
+  const knownSources = useMemo(() => {
+    const s = new Set<string>();
+    for (const t of allTrades) if (t.source?.trim()) s.add(t.source.trim());
+    return Array.from(s).sort();
+  }, [allTrades]);
+
   const knownAccounts = useMemo(() => {
     const names = new Set<string>();
     for (const t of allTrades) if (t.account?.trim()) names.add(t.account.trim());
@@ -417,6 +453,10 @@ export function NewTradeCard({
       rationaleTags = await analyzeRationale(rationale);
       setAnalyzingRationale(false);
     }
+    // Chips first, so a setup you tapped deliberately outranks one the parser
+    // guessed at; normalising the union means "cc" from the sentence and the
+    // "61.8 Fib" chip collapse to one tag instead of two rows in the table.
+    rationaleTags = normalizeSetupTags([...setupTags, ...rationaleTags]);
     const playbookPayload = {
       setupName: pb.setupName.trim() || undefined,
       stopLogic: pb.stopLogic.trim() || undefined,
@@ -454,6 +494,7 @@ export function NewTradeCard({
         initialTarget: data.initialTarget,
         extraTargets: extras.length ? JSON.stringify(extras) : null,
         account: account.trim() || null,
+        source: source.trim() || null,
         highlights: loggingClosed ? serializeHighlights(highlights) : null,
         entryTime: toIso(data.entryTime),
         // Screenshots are parsed, not kept. A base64 chart is ~300x the size of
@@ -470,11 +511,15 @@ export function NewTradeCard({
               exitPrice: Number(exitPrice),
               exitTime: toIso(exitTime),
               exitReason: (exitReason as any) ?? "other",
+              mae: mae.trim() && isFinite(Number(mae)) ? Number(mae) : null,
+              mfe: mfe.trim() && isFinite(Number(mfe)) ? Number(mfe) : null,
+              noManagementOutcome: (nmo as any) ?? null,
+              fees: fees.trim() && isFinite(Number(fees)) ? Number(fees) : null,
               entryGrade: grades.entry as any,
               stopGrade: grades.stop as any,
               exitGrade: grades.exit as any,
             }
-          : { status: "open" as const }),
+          : { status: lifecycle === "pending" ? ("pending" as const) : ("open" as const) }),
       },
       mistakeTagIds: loggingClosed ? selectedDemons : [],
     });
@@ -493,9 +538,12 @@ export function NewTradeCard({
             title: "Closed trade logged",
             description: `${data.symbol.toUpperCase()} recorded end-to-end.`,
           }
-        : { title: "Trade open", description: `${data.symbol.toUpperCase()} logged.` },
+        : lifecycle === "pending"
+          ? { title: "Order placed", description: `${data.symbol.toUpperCase()} waiting for a fill.` }
+          : { title: "Trade open", description: `${data.symbol.toUpperCase()} logged.` },
     );
-    setClosedMode(false);
+    if (created?.id) onCreated?.(created.id);
+    setLifecycle("open");
     setAutoClosed(false);
     setExitPrice("");
     setExitTime(localNow());
@@ -503,6 +551,11 @@ export function NewTradeCard({
     setGrades(EMPTY_GRADES);
     setSelectedDemons([]);
     setHighlights([]);
+    setMae("");
+    setMfe("");
+    setNmo(null);
+    setFees("");
+    setSetupTags([]);
     setPickedStyleId(null);
     setExtraTps([]);
     // The account survives the reset on purpose — next trade, same account.
@@ -588,21 +641,35 @@ export function NewTradeCard({
               AI pre-filled · verify
             </Badge>
           )}
-          <Button
-            type="button"
-            size="sm"
-            variant={closedMode ? "default" : "outline"}
-            className="h-7 gap-1.5 px-2 text-[11px]"
-            onClick={() => {
-              setClosedMode((c) => !c);
-              setAutoClosed(false);
-            }}
-            data-testid="button-toggle-closed"
-            aria-pressed={closedMode}
-          >
-            <CheckCircle2 className="h-3.5 w-3.5" />
-            Already closed
-          </Button>
+          {/* The three states a trade can be logged in. A resting order and a
+              trade you are recording after the fact are both real things to
+              write down, and neither was reachable before: everything was
+              born open, so a pending order had to be logged as live and a
+              finished trade had to be created and then closed as two acts. */}
+          {(
+            [
+              { id: "pending", label: "Waiting to fill", icon: Clock3 },
+              { id: "open", label: "Open", icon: ArrowUpRight },
+              { id: "closed", label: "Closed", icon: CheckCircle2 },
+            ] as const
+          ).map(({ id, label, icon: Icon }) => (
+            <Button
+              key={id}
+              type="button"
+              size="sm"
+              variant={lifecycle === id ? "default" : "outline"}
+              className="h-7 gap-1.5 px-2 text-[11px]"
+              onClick={() => {
+                setLifecycle(id);
+                setAutoClosed(false);
+              }}
+              data-testid={`button-lifecycle-${id}`}
+              aria-pressed={lifecycle === id}
+            >
+              <Icon className="h-3.5 w-3.5" />
+              {label}
+            </Button>
+          ))}
         </div>
       </div>
 
@@ -643,6 +710,15 @@ export function NewTradeCard({
                 <p className="text-[10px] leading-snug text-muted-foreground">
                   Type it however you'd say it — tags get pulled out automatically on save.
                 </p>
+                <SetupTagPicker
+                  selected={setupTags}
+                  onToggle={(name) =>
+                    setSetupTags((cur) =>
+                      cur.includes(name) ? cur.filter((x) => x !== name) : [...cur, name],
+                    )
+                  }
+                  testIdPrefix="new-setup"
+                />
               </FormItem>
             )}
           />
@@ -783,11 +859,27 @@ export function NewTradeCard({
             </div>
           )}
 
-          <div className="space-y-1" data-testid="section-account-picker">
-            <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
-              Account
-            </p>
-            <AccountPicker value={account} onChange={setAccount} known={knownAccounts} />
+          <div className="flex flex-wrap gap-4">
+            <div className="space-y-1" data-testid="section-account-picker">
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                Account
+              </p>
+              <AccountPicker value={account} onChange={setAccount} known={knownAccounts} />
+            </div>
+            <div className="space-y-1" data-testid="section-source-picker">
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                Source
+              </p>
+              <AccountPicker
+                value={source}
+                onChange={setSource}
+                known={knownSources}
+                testIdPrefix="source"
+                placeholder="e.g. Daniel, Severin, CBS, UB"
+                emptyLabel="My own idea"
+                newLabel="+ New source…"
+              />
+            </div>
           </div>
 
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -1168,109 +1260,33 @@ export function NewTradeCard({
                 </p>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                    Exit price
-                  </label>
-                  <Input
-                    type="number"
-                    step="any"
-                    inputMode="decimal"
-                    value={exitPrice}
-                    onChange={(e) => setExitPrice(e.target.value)}
-                    className="h-9 font-mono text-sm"
-                    data-testid="input-new-exit-price"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                    Exit time
-                  </label>
-                  <Input
-                    type="datetime-local"
-                    value={exitTime}
-                    onChange={(e) => setExitTime(e.target.value)}
-                    className="h-9 font-mono text-xs"
-                    data-testid="input-new-exit-time"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <p className="mb-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
-                  How did it end?
-                </p>
-                <div className="flex flex-wrap gap-1.5">
-                  {EXIT_REASONS.map((r) => (
-                    <Button
-                      key={r}
-                      type="button"
-                      size="sm"
-                      variant={exitReason === r ? "default" : "outline"}
-                      className="h-8 text-[11px]"
-                      onClick={() => setExitReason(exitReason === r ? null : r)}
-                      data-testid={`button-new-exit-${r}`}
-                    >
-                      {EXIT_REASON_LABELS[r]}
-                    </Button>
-                  ))}
-                </div>
-              </div>
-
-              {/* A trade logged after the fact is still a trade to grade —
-                  leaving it out here is how the take-profit stats end up
-                  covering only the half you happened to close from the app. */}
-              <GradePicker
-                value={grades}
-                onChange={setGrades}
-                testPrefix="grade-new"
+              {/* The same questions, in the same order, as closing a trade
+                  that was already open — because they are the same act. */}
+              <TradeOutcomeFields
+                exitPrice={exitPrice}
+                setExitPrice={setExitPrice}
+                exitTime={exitTime}
+                setExitTime={setExitTime}
                 exitReason={exitReason}
+                setExitReason={setExitReason}
+                mae={mae}
+                setMae={setMae}
+                mfe={mfe}
+                setMfe={setMfe}
+                nmo={nmo}
+                setNmo={setNmo}
+                fees={fees}
+                setFees={setFees}
+                grades={grades}
+                setGrades={setGrades}
+                demons={demons}
+                demonIds={selectedDemons}
+                setDemonIds={setSelectedDemons}
+                highlights={highlights}
+                setHighlights={setHighlights}
+                extraHighlights={knownHighlights(allTrades)}
+                testPrefix="new"
               />
-
-              <div>
-                <p className="mb-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
-                  Demons on this trade
-                </p>
-                <div className="flex flex-wrap gap-1.5">
-                  {demons.map((d) => {
-                    const on = selectedDemons.includes(d.id);
-                    return (
-                      <button
-                        key={d.id}
-                        type="button"
-                        onClick={() =>
-                          setSelectedDemons((s) =>
-                            on ? s.filter((x) => x !== d.id) : [...s, d.id],
-                          )
-                        }
-                        data-testid={`chip-new-demon-${d.id}`}
-                        className={`rounded-full border px-2.5 py-1 text-[11px] leading-tight transition-colors ${
-                          on
-                            ? "border-primary/60 bg-primary/15 text-primary"
-                            : "border-border text-muted-foreground hover:border-primary/40 hover:text-foreground"
-                        }`}
-                      >
-                        {d.name}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <HighlightPicker
-                selected={highlights}
-                extra={knownHighlights(allTrades).filter((h) => !highlights.includes(h))}
-                onToggle={(h) =>
-                  setHighlights((s) => (s.includes(h) ? s.filter((x) => x !== h) : [...s, h]))
-                }
-                testIdPrefix="new-highlight"
-              />
-
-              <p className="text-[10px] leading-snug text-muted-foreground">
-                MAE / MFE and the no-management verdict stay optional — add them later
-                from the trade's Edit dialog if you want the full scorecard.
-              </p>
             </div>
           )}
 
@@ -1332,11 +1348,15 @@ export function NewTradeCard({
               {(createTrade.isPending || analyzingRationale) && (
                 <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
               )}
+              {/* The button says what it will actually do, because the three
+                  lifecycles produce three different records. */}
               {guard.locked
                 ? "Locked — acknowledge the demon"
-                : closedMode
+                : lifecycle === "closed"
                   ? "Log closed trade"
-                  : "Open trade"}
+                  : lifecycle === "pending"
+                    ? "Place order"
+                    : "Open trade"}
             </Button>
             {preview && (
               <div

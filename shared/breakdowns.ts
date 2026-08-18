@@ -149,6 +149,28 @@ export function byAccount(trades: TradeWithTags[]): Slice[] {
 }
 
 /**
+ * By whose idea it was.
+ *
+ * Unlike every other breakdown here, the EMPTY bucket is the point. A trade
+ * with no source is not missing data — it is your own idea, and it is the
+ * baseline the followed calls have to beat. Dropping it the way byAccount
+ * drops accountless trades would leave a table of coaches with nothing to
+ * compare them against, which is the only comparison that matters: following
+ * someone is only worth it if it beats not following them.
+ *
+ * Labelled rather than keyed on null so it sorts, renders and links like any
+ * other row.
+ */
+export const OWN_IDEA_LABEL = "My own ideas";
+
+export function bySource(trades: TradeWithTags[]): Slice[] {
+  return sliceBy(trades, (t) => {
+    const s = t.source?.trim();
+    return s ? { key: s, label: s } : { key: "", label: OWN_IDEA_LABEL };
+  }).sort((a, b) => b.count - a.count);
+}
+
+/**
  * By green flag. Same overlapping shape as demons — a trade with a perfect
  * entry AND a perfect stop counts in both — and the same purpose inverted:
  * this is what turns "I executed well" into an expectancy you can check.

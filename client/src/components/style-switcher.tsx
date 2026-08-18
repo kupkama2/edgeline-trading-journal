@@ -1,7 +1,14 @@
 import { useMemo } from "react";
-import { Layers, Wallet } from "lucide-react";
+import { Layers, Users, Wallet } from "lucide-react";
 import { useStyles, useTrades } from "@/lib/data";
-import { knownAccounts, sameAccount, styleColor, useStyleFilter } from "@/lib/style-filter";
+import {
+  OWN_IDEA,
+  knownAccounts,
+  knownSources,
+  sameAccount,
+  styleColor,
+  useStyleFilter,
+} from "@/lib/style-filter";
 
 /**
  * Marks which book a trade belongs to. Only rendered while viewing "All
@@ -56,13 +63,23 @@ const pill = (on: boolean, chip?: string) =>
 export function StyleSwitcher() {
   const { data: styles = [] } = useStyles();
   const { data: trades = [] } = useTrades();
-  const { scope, toggleStyle, toggleAccount, clearStyles, clearAccounts } = useStyleFilter();
+  const {
+    scope,
+    toggleStyle,
+    toggleAccount,
+    toggleSource,
+    clearStyles,
+    clearAccounts,
+    clearSources,
+  } = useStyleFilter();
 
   const accounts = useMemo(() => knownAccounts(trades), [trades]);
-  if (styles.length === 0 && accounts.length < 2) return null;
+  const sources = useMemo(() => knownSources(trades), [trades]);
+  if (styles.length === 0 && accounts.length < 2 && sources.length === 0) return null;
 
   const allStyles = scope.styleIds.length === 0;
   const allAccounts = scope.accounts.length === 0;
+  const allSources = scope.sources.length === 0;
 
   return (
     <div className="space-y-1.5" data-testid="style-switcher">
@@ -123,6 +140,50 @@ export function StyleSwitcher() {
                 className={pill(on, "border-sky-500/40 bg-sky-500/10 text-sky-400")}
               >
                 {a}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {sources.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2" data-testid="source-switcher">
+          <Users className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          <button
+            type="button"
+            onClick={clearSources}
+            aria-pressed={allSources}
+            data-testid="button-source-all"
+            className={pill(allSources)}
+          >
+            Any source
+          </button>
+          {/* Your own ideas are a source like any other — and the one every
+              followed call is really being measured against. */}
+          <button
+            type="button"
+            onClick={() => toggleSource(OWN_IDEA)}
+            aria-pressed={scope.sources.some((x) => sameAccount(x, OWN_IDEA))}
+            data-testid="button-source-own"
+            className={pill(
+              scope.sources.some((x) => sameAccount(x, OWN_IDEA)),
+              "border-emerald-500/40 bg-emerald-500/10 text-emerald-400",
+            )}
+          >
+            My own
+          </button>
+          {sources.map((s) => {
+            const on = scope.sources.some((x) => sameAccount(x, s));
+            return (
+              <button
+                key={s}
+                type="button"
+                onClick={() => toggleSource(s)}
+                aria-pressed={on}
+                data-testid={`button-source-${s}`}
+                className={pill(on, "border-amber-500/40 bg-amber-500/10 text-amber-400")}
+              >
+                {s}
               </button>
             );
           })}

@@ -19,6 +19,7 @@ import type { TradeWithTags, TradingStyle } from "@shared/schema";
  */
 const STYLE_KEY = "edgeline.activeStyleIds";
 const ACCOUNT_KEY = "edgeline.activeAccounts";
+const SOURCE_KEY = "edgeline.activeSources";
 /** The single-value keys this replaced; read once, then retired. */
 const LEGACY_STYLE_KEY = "edgeline.activeStyleId";
 const LEGACY_ACCOUNT_KEY = "edgeline.activeAccount";
@@ -27,9 +28,22 @@ export interface Scope {
   /** Empty means every style — a selection of none is not a filter of none. */
   styleIds: number[];
   accounts: string[];
+  /** Whose idea it was. Same free-text matching rules as accounts. */
+  sources: string[];
 }
 
-export const EMPTY_SCOPE: Scope = { styleIds: [], accounts: [] };
+export const EMPTY_SCOPE: Scope = { styleIds: [], accounts: [], sources: [] };
+
+/**
+ * Stands for "no source recorded" in the sources filter — your own ideas.
+ *
+ * A sentinel rather than a real name because the absence of a source IS the
+ * answer, and it is the one every followed call gets compared against: "am I
+ * better off on my own than following Severin" is unanswerable if the only
+ * thing you can isolate is Severin. Prefixed and underscored so it cannot
+ * collide with anyone actually called that.
+ */
+export const OWN_IDEA = "__own__";
 
 const StyleCtx = createContext<{
   scope: Scope;
@@ -47,6 +61,9 @@ const StyleCtx = createContext<{
    */
   activeStyleId: number | null;
   activeAccount: string | null;
+  toggleSource: (s: string) => void;
+  clearSources: () => void;
+  activeSource: string | null;
 }>({
   scope: EMPTY_SCOPE,
   toggleStyle: () => {},
@@ -55,6 +72,9 @@ const StyleCtx = createContext<{
   clearAccounts: () => {},
   activeStyleId: null,
   activeAccount: null,
+  toggleSource: () => {},
+  clearSources: () => {},
+  activeSource: null,
 });
 
 function readList<T>(key: string, parse: (raw: string) => T | null): T[] {
@@ -95,9 +115,9 @@ export function toggleStyleIn(cur: number[], id: number): number[] {
 }
 
 /**
- * Same, for the free-text account column. Membership is compared the way the
- * filter compares it, so clicking a chip that reads "Apex eval" turns off a
- * stored "apex eval " rather than selecting it a second time.
+ * Same, for the free-text columns. Membership is compared the way the filter
+ * compares it, so clicking a chip that reads "Apex eval" turns off a stored
+ * "apex eval " rather than selecting it a second time.
  */
 export function toggleAccountIn(cur: string[], account: string): string[] {
   return cur.some((x) => sameAccount(x, account))
@@ -108,6 +128,9 @@ export function toggleAccountIn(cur: string[], account: string): string[] {
 export function StyleFilterProvider({ children }: { children: React.ReactNode }) {
   const [styleIds, setStyleIds] = useState<number[]>(readStyles);
   const [accounts, setAccounts] = useState<string[]>(readAccounts);
+  const [sources, setSources] = useState<string[]>(() =>
+    readList(SOURCE_KEY, (r) => r.trim() || null),
+  );
 
   useEffect(() => {
     if (styleIds.length === 0) localStorage.removeItem(STYLE_KEY);
@@ -119,18 +142,26 @@ export function StyleFilterProvider({ children }: { children: React.ReactNode })
     else localStorage.setItem(ACCOUNT_KEY, JSON.stringify(accounts));
   }, [accounts]);
 
+  useEffect(() => {
+    if (sources.length === 0) localStorage.removeItem(SOURCE_KEY);
+    else localStorage.setItem(SOURCE_KEY, JSON.stringify(sources));
+  }, [sources]);
+
   const value = useMemo(() => {
-    const scope: Scope = { styleIds, accounts };
+    const scope: Scope = { styleIds, accounts, sources };
     return {
       scope,
       toggleStyle: (id: number) => setStyleIds((cur) => toggleStyleIn(cur, id)),
       toggleAccount: (a: string) => setAccounts((cur) => toggleAccountIn(cur, a)),
+      toggleSource: (s: string) => setSources((cur) => toggleAccountIn(cur, s)),
       clearStyles: () => setStyleIds([]),
       clearAccounts: () => setAccounts([]),
+      clearSources: () => setSources([]),
       activeStyleId: styleIds.length === 1 ? styleIds[0] : null,
       activeAccount: accounts.length === 1 ? accounts[0] : null,
+      activeSource: sources.length === 1 ? sources[0] : null,
     };
-  }, [styleIds, accounts]);
+  }, [styleIds, accounts, sources]);
 
   return <StyleCtx.Provider value={value}>{children}</StyleCtx.Provider>;
 }
@@ -151,20 +182,26 @@ export function filterByStyle<T extends { styleId: number | null }>(
 }
 
 /**
- * Both axes, each a set. A trade has to satisfy every axis that has a
+ * Every axis, each a set. A trade has to satisfy every axis that has a
  * selection, and an axis with nothing selected constrains nothing — so
- * "neither" is the whole log rather than an empty page.
+ * "none of them" is the whole log rather than an empty page.
  */
-export function filterByScope<T extends { styleId: number | null; account?: string | null }>(
-  trades: T[],
-  scope: Scope,
-): T[] {
+export function filterByScope<
+  T extends { styleId: number | null; account?: string | null; source?: string | null },
+>(trades: T[], scope: Scope): T[] {
   let out = trades;
   if (scope.styleIds.length) {
     out = out.filter((t) => t.styleId != null && scope.styleIds.includes(t.styleId));
   }
   if (scope.accounts.length) {
     out = out.filter((t) => scope.accounts.some((a) => sameAccount(a, t.account)));
+  }
+  if (scope.sources?.length) {
+    out = out.filter((t) =>
+      scope.sources.some((s) =>
+        s === OWN_IDEA ? !t.source?.trim() : sameAccount(s, t.source),
+      ),
+    );
   }
   return out;
 }
@@ -178,10 +215,20 @@ export function filterByScope<T extends { styleId: number | null; account?: stri
  * the only thing to optimise for.
  */
 export function knownAccounts(trades: { account?: string | null }[]): string[] {
+  return knownValues(trades.map((t) => t.account));
+}
+
+/** The same, for whoever's idea the trade was. */
+export function knownSources(trades: { source?: string | null }[]): string[] {
+  return knownValues(trades.map((t) => t.source));
+}
+
+/** Shared by both free-text pickers: trim, dedupe case-insensitively, sort. */
+export function knownValues(raw: (string | null | undefined)[]): string[] {
   const seen = new Map<string, string>();
-  for (const t of trades) {
-    const raw = t.account?.trim();
-    if (raw && !seen.has(raw.toLowerCase())) seen.set(raw.toLowerCase(), raw);
+  for (const value of raw) {
+    const v = value?.trim();
+    if (v && !seen.has(v.toLowerCase())) seen.set(v.toLowerCase(), v);
   }
   return Array.from(seen.values()).sort((a, b) => a.localeCompare(b));
 }
