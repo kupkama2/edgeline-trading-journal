@@ -143,13 +143,16 @@ The trade's ORIGINAL plan was:
 - original stop loss: ${ctx.initialStop ?? "unknown"}
 - original target: ${ctx.initialTarget ?? "unknown"}
 
-Determine, from the visible price path AFTER entry:
-1. mae — the worst price reached against the position (lowest low for a long, highest high for a short).
-2. mfe — the best price reached in favour of the position (highest high for a long, lowest low for a short).
-3. noManagementOutcome — if the ORIGINAL stop and target levels above had been left untouched, which level would price have crossed FIRST? "target_first", "stop_first", or "undetermined" if the visible path never reaches either level or it is not legible.
+Determine, from the visible price path. mae and mfe cover ONLY the stretch
+between entry and exit — anything after the exit belongs to postExitPeak, never
+to mfe. Mixing them inverts the trade's story.
+1. mae — the worst price reached against the position WHILE IT WAS OPEN (lowest low for a long, highest high for a short, between entry and exit).
+2. mfe — the best price reached in favour of the position WHILE IT WAS OPEN (highest high for a long, lowest low for a short, between entry and exit).
+3. postExitPeak — AFTER the exit, the best price reached in the position's favour before price traded beyond the original stop level. null if the exit or the aftermath is not visible.
+4. noManagementOutcome — if the ORIGINAL stop and target levels above had been left untouched, which level would price have crossed FIRST? "target_first", "stop_first", or "undetermined" if the visible path never reaches either level or it is not legible.
 
 Respond with STRICT JSON only, no prose, no markdown fences:
-{"mae": number|null, "mfe": number|null, "noManagementOutcome": "target_first"|"stop_first"|"undetermined"|null}
+{"mae": number|null, "mfe": number|null, "postExitPeak": number|null, "noManagementOutcome": "target_first"|"stop_first"|"undetermined"|null}
 
 Numbers must be plain JSON numbers. Use null when a value is not legible.`;
 }

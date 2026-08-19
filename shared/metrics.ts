@@ -20,8 +20,20 @@ export interface TradeMetrics {
   managementDeltaDollars: number | null;
   captureRatio: number | null; // raw
   captureRatioClipped: number | null; // clipped to [0,1]
+  /**
+   * The LATE cost: in-trade peak minus exit, in R. What was reached while you
+   * were in and then handed back. mfe is strictly in-trade, so this can no
+   * longer be inflated by a run that happened after you were out.
+   */
   rLeftOnTable: number | null;
   dollarsLeftOnTable: number | null;
+  /**
+   * The EARLY cost: post-exit peak minus exit, in R, clamped ≥ 0. What the
+   * move did after you left, before your stop level broke. The other half of
+   * "it went higher" — the half you were not in for.
+   */
+  leftBehindR: number | null;
+  dollarsLeftBehind: number | null;
 }
 
 /**
@@ -105,6 +117,12 @@ export function computeMetrics(t: Trade & { fills?: TradeFill[] }): TradeMetrics
   const captureRatio =
     actualR != null && mfeR != null && mfeR !== 0 ? actualR / mfeR : null;
   const rLeftOnTable = actualR != null && mfeR != null ? mfeR - actualR : null;
+  // Clamped: a post-exit peak on the wrong side of the exit means the move
+  // died the moment you left, which is zero cost, not negative cost.
+  const leftBehindR =
+    safe && t.postExitPeak != null && t.exitPrice != null
+      ? Math.max(0, (sign * (t.postExitPeak - t.exitPrice)) / risk)
+      : null;
 
   return {
     risk,
@@ -125,7 +143,63 @@ export function computeMetrics(t: Trade & { fills?: TradeFill[] }): TradeMetrics
       captureRatio != null ? Math.max(0, Math.min(1, captureRatio)) : null,
     rLeftOnTable,
     dollarsLeftOnTable: rLeftOnTable != null ? rLeftOnTable * riskDollars : null,
+    leftBehindR,
+    dollarsLeftBehind: leftBehindR != null ? leftBehindR * riskDollars : null,
   };
+}
+
+/* --------------------------- exit timing read --------------------------- */
+
+/** A cost below this is noise, not a verdict. Half an R is real money. */
+export const EXIT_TIMING_MEANINGFUL_R = 0.5;
+
+export interface ExitTimingRead {
+  verdict: "early" | "late" | "clean";
+  /** Given back: in-trade peak to exit, ≥ 0. Null when MFE wasn't recorded. */
+  giveBackR: number | null;
+  /** Left behind: exit to post-exit peak, ≥ 0. Null when not recorded. */
+  leftBehindR: number | null;
+}
+
+/**
+ * What the numbers say the exit was — the arithmetic counterpart to the
+ * self-reported exit grade, from the two halves of "it went higher":
+ *
+ *   gave back    reached WHILE IN, closed below it   -> late
+ *   left behind  ran on AFTER the exit               -> early
+ *
+ * The larger meaningful cost wins; both under the threshold is a clean exit.
+ * Null when neither leg was recorded — no data is not a verdict, and a trade
+ * with only one leg measured is judged on the leg it has.
+ *
+ * This exists because the grade is filled in by hand and the fields can be
+ * mislogged in exactly the way that inverts the story (a post-exit run typed
+ * into MFE turns "early" into "late"). Showing the arithmetic reading beside
+ * the grade catches the disagreement at entry time instead of in next month's
+ * stats.
+ */
+export function exitTimingRead(m: TradeMetrics): ExitTimingRead | null {
+  return exitTimingVerdict(
+    m.rLeftOnTable != null ? Math.max(0, m.rLeftOnTable) : null,
+    m.leftBehindR,
+  );
+}
+
+/** The core rule, on raw R values, so a form can ask before a trade is saved. */
+export function exitTimingVerdict(
+  giveBackR: number | null,
+  leftBehindR: number | null,
+): ExitTimingRead | null {
+  if (giveBackR == null && leftBehindR == null) return null;
+  const gb = giveBackR ?? 0;
+  const lb = leftBehindR ?? 0;
+  const verdict =
+    lb >= EXIT_TIMING_MEANINGFUL_R && lb > gb
+      ? "early"
+      : gb >= EXIT_TIMING_MEANINGFUL_R
+        ? "late"
+        : "clean";
+  return { verdict, giveBackR, leftBehindR };
 }
 
 export function rToDollars(r: number, t: Trade): number {

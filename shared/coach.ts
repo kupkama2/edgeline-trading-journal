@@ -108,6 +108,23 @@ export function reviewStyle(
       }
     }
 
+    /* ---- exits, the other half: moves that ran on after you left ---- */
+    const runsMissed = closed
+      .map((t) => computeMetrics(t))
+      .filter((m) => (m.leftBehindR ?? 0) >= 0.5);
+    if (runsMissed.length >= 3) {
+      const missed = runsMissed.reduce((a, m) => a + (m.leftBehindR ?? 0), 0);
+      findings.push({
+        id: `early-exits:${styleId}`,
+        kind: "exits",
+        costR: missed,
+        title: "You close, and the move keeps going",
+        detail: `${runsMissed.length} exits ran on at least another 0.5R after you left — ${missed.toFixed(
+          1,
+        )}R you were positioned for and didn't take. The entries are finding these moves; the exits are cutting them loose. Hold to the plan, or trail instead of closing flat.`,
+      });
+    }
+
     /* ---- stops: winners that had to survive deep heat ---- */
     const winnersDeepHeat = closed
       .map((t) => computeMetrics(t))

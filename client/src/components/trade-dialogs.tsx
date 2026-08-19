@@ -167,6 +167,7 @@ export function TradeEditor({
       exitTime: toLocalInput(trade.exitTime),
       mae: trade.mae != null ? String(trade.mae) : "",
       mfe: trade.mfe != null ? String(trade.mfe) : "",
+      postExitPeak: trade.postExitPeak != null ? String(trade.postExitPeak) : "",
       rationale: trade.rationale ?? "",
       rationaleTags: parseTags(trade.rationaleTags).join(", "),
       notes: trade.notes ?? "",
@@ -260,6 +261,7 @@ export function TradeEditor({
         exitReason: (exitReason as any) ?? null,
         mae: numOrNull(f.mae),
         mfe: numOrNull(f.mfe),
+        postExitPeak: numOrNull(f.postExitPeak ?? ""),
         noManagementOutcome: (nmo as any) ?? null,
         rationale: f.rationale.trim() || null,
         rationaleTags: rTags.length ? JSON.stringify(rTags) : null,
@@ -519,6 +521,8 @@ export function TradeEditor({
               setMae={(v: string) => setF((p) => ({ ...p, mae: v }))}
               mfe={f.mfe ?? ""}
               setMfe={(v: string) => setF((p) => ({ ...p, mfe: v }))}
+              postExitPeak={f.postExitPeak ?? ""}
+              setPostExitPeak={(v: string) => setF((p) => ({ ...p, postExitPeak: v }))}
               nmo={nmo}
               setNmo={setNmo}
               fees={f.fees ?? ""}
@@ -532,6 +536,11 @@ export function TradeEditor({
               setHighlights={setHighlights}
               extraHighlights={knownHighlights(allTrades)}
               testPrefix="edit"
+              timing={{
+                direction,
+                entryPrice: numOrNull(f.entryPrice ?? ""),
+                initialStop: numOrNull(f.initialStop ?? ""),
+              }}
             />
 
             {/* Scaling belongs in the edit dialog too: the trade view can show

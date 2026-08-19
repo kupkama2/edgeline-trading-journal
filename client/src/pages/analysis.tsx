@@ -29,7 +29,7 @@ import {
 import { drawdown, streaks } from "@shared/streaks";
 import { MIN_SAMPLE, simulate } from "@shared/montecarlo";
 import { missedStats } from "@shared/missed";
-import { excursions, summariseExcursions } from "@shared/excursion";
+import { excursions, exitTimingSummary, summariseExcursions } from "@shared/excursion";
 import { fmtFees, fmtMoney, fmtR } from "@shared/metrics";
 
 /**
@@ -201,6 +201,7 @@ export default function Analysis({ embedded = false }: { embedded?: boolean } = 
   const shape = useMemo(() => (dist ? describeShape(dist) : null), [dist]);
   const exc = useMemo(() => excursions(scoped), [scoped]);
   const excSummary = useMemo(() => summariseExcursions(exc), [exc]);
+  const timing = useMemo(() => exitTimingSummary(scoped), [scoped]);
 
   const rows = useMemo(() => {
     switch (tab) {
@@ -443,6 +444,33 @@ export default function Analysis({ embedded = false }: { embedded?: boolean } = 
                   value={`${fmtR(excSummary.deepestWinnerMaeR)}`}
                   hint="how tight is too tight"
                 />
+              </div>
+            )}
+            {/* The two halves of "it went higher", finally separated: given
+                back is the late story (in-trade peak, closed below it), left
+                behind is the early one (it ran on after the exit). Which total
+                is chronically bigger answers "do I cut winners or hold them
+                past the move" with a number instead of a feeling. */}
+            {timing && (timing.gaveBackTrades > 0 || timing.leftBehindTrades > 0) && (
+              <div
+                className="mt-3 rounded-md border border-border/60 px-3 py-2 text-[11px]"
+                data-testid="exit-timing-summary"
+              >
+                <span className="font-semibold">Exit timing:</span>{" "}
+                gave back {timing.gaveBackTotalR.toFixed(1)}R across {timing.gaveBackTrades}{" "}
+                {timing.gaveBackTrades === 1 ? "trade" : "trades"} · left behind{" "}
+                {timing.leftBehindTotalR.toFixed(1)}R across {timing.leftBehindTrades}{" "}
+                {timing.leftBehindTrades === 1 ? "trade" : "trades"}
+                {timing.lean === "early" && (
+                  <span className="text-amber-500">
+                    {" "}— the bigger cost is closing early. The data agrees with letting them run.
+                  </span>
+                )}
+                {timing.lean === "late" && (
+                  <span className="text-amber-500">
+                    {" "}— the bigger cost is holding past the move.
+                  </span>
+                )}
               </div>
             )}
             <p className="mt-2 text-[10px] leading-snug text-muted-foreground">

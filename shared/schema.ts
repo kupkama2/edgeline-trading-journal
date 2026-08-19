@@ -156,8 +156,31 @@ export const trades = pgTable("trades", {
    * rather than merely annoying — missing a winner is the expensive half.
    */
   wouldHaveHitTarget: boolean("would_have_hit_target"),
+  /**
+   * Worst and best price WHILE THE TRADE WAS ON — entry to exit, nothing
+   * after. The distinction is load-bearing: "it went higher" is two different
+   * events. Higher BEFORE the exit and back down is giving a move back (a
+   * late exit, the roundtrip family); higher AFTER the exit is a move you
+   * were no longer in (an early exit). One field holding both reads every
+   * missed run as a surrendered one, which inverts the verdict — the exact
+   * bug that motivated postExitPeak below.
+   */
   mae: doublePrecision("mae"),
   mfe: doublePrecision("mfe"),
+  /**
+   * The favourable extreme AFTER the exit, before price traded beyond the
+   * original stop level. The endpoint is the thesis dying by the trade's own
+   * definition — without one, "it would have gone higher" is true of
+   * everything eventually and the field would measure patience, not exits.
+   *
+   * One rule covers both exit kinds. Closed at profit: how far it ran without
+   * you before your stop level broke. Stopped out: you exited AT the stop, so
+   * any further adverse print ends the counterfactual immediately — a value
+   * here means price reversed from your stop without a new extreme first,
+   * i.e. you were wicked out of a working trade. ≈exit means the stop was
+   * right: it never came back.
+   */
+  postExitPeak: doublePrecision("post_exit_peak"),
   noManagementOutcome: text("no_management_outcome"), // 'target_first' | 'stop_first' | 'undetermined'
   setupScreenshot: text("setup_screenshot"),
   outcomeScreenshot: text("outcome_screenshot"),
@@ -654,6 +677,7 @@ export interface SetupParseResult {
 export interface OutcomeParseResult {
   mae: number | null;
   mfe: number | null;
+  postExitPeak?: number | null;
   noManagementOutcome: "target_first" | "stop_first" | "undetermined" | null;
 }
 
