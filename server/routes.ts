@@ -1,6 +1,11 @@
 import type { Express } from "express";
 import type { Server } from "node:http";
 import { storageFor } from "./storage";
+// Deliberately unscoped, and the one exception that proves the rule: the
+// allowlist is consulted before there is an account to scope to. It holds no
+// trade data, so the isolation guarantee is untouched.
+import { invitations } from "./storage";
+import { envAllowlist } from "./auth";
 
 /**
  * The account's storage for this request.
@@ -850,6 +855,68 @@ export async function registerRoutes(
       console.error("analyze-rationale failed:", err?.message || err);
       res.status(502).json({ ok: false, tags: [], message: "Could not analyze that comment." });
     }
+  });
+
+  /* ------------------------------ members ------------------------------ */
+
+  /**
+   * Who may sign in. Owner only — everyone else gets a 404 rather than a 403,
+   * so the endpoint does not confirm it exists to someone who may not use it.
+   */
+  function ownerOnly(req: any, res: any): boolean {
+    if (req.account?.isOwner) return true;
+    res.status(404).json({ message: "Not found" });
+    return false;
+  }
+
+  app.get("/api/members", async (req, res) => {
+    if (!ownerOnly(req, res)) return;
+    const [accountsList, invited] = await Promise.all([
+      invitations.members(),
+      invitations.list(),
+    ]);
+    const joined = new Set(accountsList.map((u) => u.email.trim().toLowerCase()));
+    res.json({
+      members: accountsList.map((u) => ({
+        id: u.id,
+        email: u.email,
+        name: u.name,
+        picture: u.picture,
+        isOwner: u.isOwner,
+        lastLoginAt: u.lastLoginAt,
+      })),
+      // Invited but never signed in. Shown separately because "invited" and
+      // "using it" are different states and conflating them hides whether the
+      // person ever actually got in.
+      pending: invited.filter((i) => !joined.has(i.email)).map((i) => i.email),
+      /** Env-var entries can't be removed from in here; the UI says so. */
+      fromEnv: envAllowlist(),
+    });
+  });
+
+  app.post("/api/members", async (req, res) => {
+    if (!ownerOnly(req, res)) return;
+    const email = String(req.body?.email ?? "").trim().toLowerCase();
+    // Deliberately loose: Google decides what a real address is, and a typo
+    // here costs nothing — an invite nobody can use is inert.
+    if (!email || !email.includes("@") || email.length > 320) {
+      return res.status(400).json({ message: "That does not look like an email address" });
+    }
+    const row = await invitations.add(email, req.userId ?? null);
+    res.json({ ok: true, email: row?.email ?? email });
+  });
+
+  app.delete("/api/members/:email", async (req, res) => {
+    if (!ownerOnly(req, res)) return;
+    const email = String(req.params.email ?? "").trim().toLowerCase();
+    const owner = req.account?.email?.trim().toLowerCase();
+    // Removing yourself would lock you out of your own journal, and the owner
+    // is allowed by OWNER_EMAIL anyway, so this could only ever confuse.
+    if (email && email === owner) {
+      return res.status(400).json({ message: "You cannot remove your own access" });
+    }
+    await invitations.remove(email);
+    res.json({ ok: true });
   });
 
   return httpServer;

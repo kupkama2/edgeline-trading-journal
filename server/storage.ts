@@ -9,6 +9,7 @@ import {
   tradeFills,
   accountSettings,
   users,
+  invites,
 } from "@shared/schema";
 import type {
   InsertTrade,
@@ -26,6 +27,7 @@ import type {
   AccountSettings,
   UpsertAccountSettings,
   User,
+  Invite,
 } from "@shared/schema";
 import { DEMON_TAXONOMY, DEMON_LEGACY_ALIASES } from "@shared/demons";
 import { drizzle } from "drizzle-orm/postgres-js";
@@ -323,6 +325,16 @@ DELETE FROM mistake_tags m
              OR o.id < m.id)
    );
 
+-- Who may sign in, beyond the owner. Not owner-scoped: it is consulted before
+-- we know who is knocking. Email is the identity, lowercased on the way in so
+-- the UNIQUE index makes "one person, one invite" true regardless of spelling.
+CREATE TABLE IF NOT EXISTS invites (
+  id SERIAL PRIMARY KEY,
+  email TEXT NOT NULL UNIQUE,
+  invited_by INTEGER,
+  created_at TEXT NOT NULL
+);
+
 -- Every read is now filtered by owner, so every table wants the index.
 CREATE INDEX IF NOT EXISTS trades_user_id ON trades (user_id);
 CREATE INDEX IF NOT EXISTS trading_styles_user_id ON trading_styles (user_id);
@@ -469,6 +481,49 @@ export const accounts = {
     await db.update(accountSettings).set({ userId }).where(isNull(accountSettings.userId));
     await db.update(weeklyReviews).set({ userId }).where(isNull(weeklyReviews.userId));
     await db.update(dailyNotes).set({ userId }).where(isNull(dailyNotes.userId));
+  },
+};
+
+/**
+ * The allowlist, as data rather than as an environment variable.
+ *
+ * Sits beside `accounts` and outside DatabaseStorage for the same reason:
+ * both are consulted before there is an account to scope to. Everything here
+ * is owner-gated at the route, not here — this layer only stores rows.
+ */
+export const invitations = {
+  async list(): Promise<Invite[]> {
+    return db.select().from(invites).orderBy(invites.email);
+  },
+
+  async has(email: string): Promise<boolean> {
+    const e = email.trim().toLowerCase();
+    if (!e) return false;
+    const [row] = await db.select({ id: invites.id }).from(invites).where(eq(invites.email, e));
+    return Boolean(row);
+  },
+
+  /** Idempotent: inviting someone already invited is a no-op, not an error. */
+  async add(email: string, invitedBy: number | null): Promise<Invite | undefined> {
+    const e = email.trim().toLowerCase();
+    if (!e) return undefined;
+    const [row] = await db
+      .insert(invites)
+      .values({ email: e, invitedBy, createdAt: new Date().toISOString() })
+      .onConflictDoNothing()
+      .returning();
+    if (row) return row;
+    const [existing] = await db.select().from(invites).where(eq(invites.email, e));
+    return existing;
+  },
+
+  async remove(email: string): Promise<void> {
+    await db.delete(invites).where(eq(invites.email, email.trim().toLowerCase()));
+  },
+
+  /** Every account that exists, for the members list. */
+  async members(): Promise<User[]> {
+    return db.select().from(users).orderBy(users.id);
   },
 };
 
