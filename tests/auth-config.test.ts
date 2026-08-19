@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { authConfigError } from "../server/auth";
+import { allowsEmail, authConfigError } from "../server/auth";
 
 /**
  * The deploy-time guard.
@@ -61,5 +61,61 @@ describe("production refuses to run without sign-in", () => {
         prod({ GOOGLE_CLIENT_ID: "x", GOOGLE_CLIENT_SECRET: "y", ALLOWED_EMAILS: "a@b.test" }),
       ),
     ).toBeNull();
+  });
+});
+
+/**
+ * Who the door opens for.
+ *
+ * The three sources are not equal and the order is the whole point. The owner
+ * is allowed by a value that lives outside the database, so no amount of
+ * clicking inside the app — theirs or anyone's — can lock them out of their
+ * own history. Everything else is revocable, which is what makes a Remove
+ * button honest.
+ */
+describe("who may sign in", () => {
+  const OWNER = "me@example.com";
+
+  it("lets the owner in with nothing else configured", () => {
+    expect(allowsEmail(OWNER, { ownerEmail: OWNER })).toBe(true);
+  });
+
+  it("lets the owner in even when the invite list says otherwise", () => {
+    // The property that matters: nothing revocable can revoke the owner.
+    expect(allowsEmail(OWNER, { ownerEmail: OWNER, envList: [], invited: false })).toBe(true);
+  });
+
+  it("still honours the environment variable", () => {
+    // Kept as a bootstrap so an empty database is never a locked door.
+    expect(allowsEmail("friend@x.com", { ownerEmail: OWNER, envList: ["friend@x.com"] })).toBe(
+      true,
+    );
+  });
+
+  it("lets an invited address in", () => {
+    expect(allowsEmail("friend@x.com", { ownerEmail: OWNER, invited: true })).toBe(true);
+  });
+
+  it("keeps a stranger out", () => {
+    expect(allowsEmail("stranger@x.com", { ownerEmail: OWNER, envList: ["friend@x.com"] })).toBe(
+      false,
+    );
+  });
+
+  it("shuts the door again when an invite is withdrawn", () => {
+    // Revocation is the reason this function exists rather than a one-time
+    // check at account creation, which is what it used to be.
+    expect(allowsEmail("friend@x.com", { ownerEmail: OWNER, invited: false })).toBe(false);
+  });
+
+  it("ignores case and padding on every source", () => {
+    expect(allowsEmail("  ME@Example.com ", { ownerEmail: OWNER })).toBe(true);
+    expect(allowsEmail("Friend@X.com", { envList: ["  friend@x.com  "] })).toBe(true);
+  });
+
+  it("never admits a blank address", () => {
+    // An account with no email must not match an empty owner or env entry.
+    expect(allowsEmail("", { ownerEmail: "", envList: [""], invited: false })).toBe(false);
+    expect(allowsEmail("   ", { ownerEmail: OWNER })).toBe(false);
   });
 });

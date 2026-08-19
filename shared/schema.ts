@@ -383,6 +383,32 @@ export type InsertTrade = z.infer<typeof insertTradeSchema>;
 export type UpdateTrade = z.infer<typeof updateTradeSchema>;
 export type Trade = typeof trades.$inferSelect;
 
+/* ============================== invites ============================= */
+
+/**
+ * Who is allowed to sign in, beyond the owner.
+ *
+ * NOT scoped to an account, for the same reason the users table isn't:
+ * sign-in has to decide whether to let someone in before it knows who they
+ * are. Only the owner can read or write it.
+ *
+ * An email rather than a token, because the gate is Google's identity, not a
+ * secret we hand out: the invite says "if this Google account shows up, let it
+ * in", and a link that anyone could forward would undo that. Stored
+ * lowercased so the UNIQUE index does the case-insensitivity for us — one
+ * person cannot be invited twice under two spellings.
+ */
+export const invites = pgTable("invites", {
+  id: serial("id").primaryKey(),
+  /** Lowercased on the way in; the column is the identity. */
+  email: text("email").notNull().unique(),
+  /** Who added them. Null for rows created from the ALLOWED_EMAILS env var. */
+  invitedBy: integer("invited_by"),
+  createdAt: text("created_at").notNull(),
+});
+
+export type Invite = typeof invites.$inferSelect;
+
 /* ========================== account settings ======================== */
 
 /**

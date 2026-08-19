@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { MembersCard } from "@/components/members-card";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -638,6 +639,9 @@ export default function Settings() {
       </Card>
 
       <StorageCard />
+
+      {/* Owner only; renders nothing for everyone else. */}
+      <MembersCard />
     </div>
   );
 }

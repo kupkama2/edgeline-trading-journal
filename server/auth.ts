@@ -3,7 +3,7 @@ import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { ProxyAgent, fetch as undiciFetch } from "undici";
-import { accounts, storageFor } from "./storage";
+import { accounts, invitations, storageFor } from "./storage";
 import type { SessionUser, User } from "@shared/schema";
 
 /**
@@ -38,6 +38,11 @@ const ALLOWED_EMAILS = (process.env.ALLOWED_EMAILS ?? "")
 const PUBLIC_URL = process.env.PUBLIC_URL?.replace(/\/$/, "");
 
 export const authEnabled = Boolean(GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET);
+
+/** Allowlist entries that live in the environment — shown, never editable. */
+export function envAllowlist(): string[] {
+  return [...(OWNER_EMAIL ? [OWNER_EMAIL] : []), ...ALLOWED_EMAILS];
+}
 
 /**
  * Refuse to boot a production server that has no way to sign anyone in.
@@ -98,11 +103,36 @@ function dispatcher(): ProxyAgent | undefined {
   return proxyDispatcher;
 }
 
-function mayEnter(email: string): boolean {
+/**
+ * May this address use the journal?
+ *
+ * Three sources, in order of authority:
+ *   1. OWNER_EMAIL — always, and can never be revoked from inside the app.
+ *      A journal whose owner can lock themselves out of their own history is
+ *      one bad click from unrecoverable.
+ *   2. ALLOWED_EMAILS — the env var. Kept as a bootstrap so an empty database
+ *      is never a locked door, and so nothing that worked before stops.
+ *   3. The invites table — what the members panel writes.
+ */
+export function allowsEmail(
+  email: string,
+  src: { ownerEmail?: string; envList?: string[]; invited?: boolean },
+): boolean {
   const e = email.trim().toLowerCase();
   if (!e) return false;
-  if (OWNER_EMAIL && e === OWNER_EMAIL) return true;
-  return ALLOWED_EMAILS.includes(e);
+  // The owner check comes first and consults nothing revocable on purpose.
+  if (src.ownerEmail && e === src.ownerEmail.trim().toLowerCase()) return true;
+  if ((src.envList ?? []).some((x) => x.trim().toLowerCase() === e)) return true;
+  return src.invited === true;
+}
+
+async function mayEnter(email: string): Promise<boolean> {
+  const e = email.trim().toLowerCase();
+  if (!e) return false;
+  // Only reach for the database when the cheap sources have not decided —
+  // this runs on every API request.
+  if (allowsEmail(e, { ownerEmail: OWNER_EMAIL, envList: ALLOWED_EMAILS })) return true;
+  return invitations.has(e);
 }
 
 export function toSessionUser(u: User): SessionUser {
@@ -134,12 +164,19 @@ async function resolveAccount(profile: {
   name?: string | null;
   picture?: string | null;
 }): Promise<User | null> {
+  // The allowlist is checked for EVERY sign-in, not only the first.
+  //
+  // This used to return early for an existing account, which meant removing
+  // someone from the allowlist did nothing at all: whoever got in once was in
+  // forever. Harmless while the list only ever grew by hand in Render; a lie
+  // the moment there is a Remove button.
+  if (!(await mayEnter(profile.email))) return null;
+
   const existing = await accounts.byGoogleSub(profile.sub);
   if (existing) {
     await accounts.touchLogin(existing.id);
     return existing;
   }
-  if (!mayEnter(profile.email)) return null;
 
   // The owner claims the pre-sign-in history; everyone else starts empty.
   const isOwner = Boolean(OWNER_EMAIL && profile.email.toLowerCase() === OWNER_EMAIL);
@@ -316,6 +353,12 @@ async function requireUser(req: Request, res: Response, next: NextFunction) {
   const user = await accounts.byId(id);
   // The account was deleted out from under a live cookie.
   if (!user) return res.status(401).json({ message: "Not signed in" });
+  // Access can be taken away mid-session. The cookie lasts 30 days, so without
+  // this a revoked person keeps the journal open for a month.
+  if (authEnabled && !(await mayEnter(user.email))) {
+    req.session?.destroy(() => {});
+    return res.status(401).json({ message: "Access removed" });
+  }
   req.userId = user.id;
   req.account = toSessionUser(user);
   next();
