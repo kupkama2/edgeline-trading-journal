@@ -147,6 +147,11 @@ ALTER TABLE trades ADD COLUMN IF NOT EXISTS account TEXT;
 -- which is both the honest default for all history and the baseline every
 -- source is measured against.
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS source TEXT;
+-- The favourable extreme AFTER exit, before the original stop level broke.
+-- MAE/MFE are strictly in-trade; this is the counterfactual leg. NULL for all
+-- history, which is honest: old MFE values are ambiguous about which side of
+-- the exit they came from, and nothing can recover that after the fact.
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS post_exit_peak DOUBLE PRECISION;
 -- Commission paid on the trade, both sides, in dollars. Deducted in metrics.
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS fees DOUBLE PRECISION;
 -- Green flags: JSON string[] of what went right on the trade.

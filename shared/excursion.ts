@@ -18,6 +18,7 @@
  */
 import type { TradeWithTags } from "./schema";
 import { computeMetrics } from "./metrics";
+import { EXIT_TIMING_MEANINGFUL_R } from "./metrics";
 
 export interface Excursion {
   tradeId: number;
@@ -98,4 +99,60 @@ export function summariseExcursions(rows: Excursion[]): ExcursionSummary | null 
     avgCapture: captures.length ? mean(captures) : null,
     deepestWinnerMaeR: winnerMaes.length ? Math.min(...winnerMaes) : 0,
   };
+}
+
+/* ----------------------------- exit timing ----------------------------- */
+
+/**
+ * The two costs an exit can have, summed across the log.
+ *
+ * GAVE BACK is the late story: reached while in the trade, closed below it.
+ * LEFT BEHIND is the early story: the move carried on after the exit, before
+ * the stop level broke. They come from different fields, so a trade
+ * contributes only the legs it measured — and which total is chronically
+ * bigger is the answer to "do I close too early or too late", as a number
+ * instead of a hunch.
+ */
+export interface ExitTimingSummary {
+  /** Closed trades with at least one leg measured. */
+  measured: number;
+  gaveBackTotalR: number;
+  gaveBackTrades: number;
+  leftBehindTotalR: number;
+  leftBehindTrades: number;
+  /** Which cost dominates, or null when neither clears the meaningful bar. */
+  lean: "early" | "late" | null;
+}
+
+export function exitTimingSummary(trades: TradeWithTags[]): ExitTimingSummary | null {
+  let measured = 0;
+  let gaveBackTotalR = 0;
+  let gaveBackTrades = 0;
+  let leftBehindTotalR = 0;
+  let leftBehindTrades = 0;
+
+  for (const t of trades) {
+    if (t.status !== "closed" || t.exitPrice == null) continue;
+    const m = computeMetrics(t);
+    const gb = m.rLeftOnTable != null ? Math.max(0, m.rLeftOnTable) : null;
+    const lb = m.leftBehindR;
+    if (gb == null && lb == null) continue;
+    measured++;
+    if (gb != null && gb >= EXIT_TIMING_MEANINGFUL_R) {
+      gaveBackTotalR += gb;
+      gaveBackTrades++;
+    }
+    if (lb != null && lb >= EXIT_TIMING_MEANINGFUL_R) {
+      leftBehindTotalR += lb;
+      leftBehindTrades++;
+    }
+  }
+  if (!measured) return null;
+  const lean =
+    leftBehindTotalR === 0 && gaveBackTotalR === 0
+      ? null
+      : leftBehindTotalR > gaveBackTotalR
+        ? "early"
+        : "late";
+  return { measured, gaveBackTotalR, gaveBackTrades, leftBehindTotalR, leftBehindTrades, lean };
 }

@@ -106,6 +106,7 @@ export function NewTradeCard({
   const [highlights, setHighlights] = useState<string[]>([]);
   const [mae, setMae] = useState("");
   const [mfe, setMfe] = useState("");
+  const [postExitPeak, setPostExitPeak] = useState("");
   const [nmo, setNmo] = useState<string | null>(null);
   const [fees, setFees] = useState("");
   const { data: demons = [] } = useMistakeTags();
@@ -513,6 +514,8 @@ export function NewTradeCard({
               exitReason: (exitReason as any) ?? "other",
               mae: mae.trim() && isFinite(Number(mae)) ? Number(mae) : null,
               mfe: mfe.trim() && isFinite(Number(mfe)) ? Number(mfe) : null,
+              postExitPeak:
+                postExitPeak.trim() && isFinite(Number(postExitPeak)) ? Number(postExitPeak) : null,
               noManagementOutcome: (nmo as any) ?? null,
               fees: fees.trim() && isFinite(Number(fees)) ? Number(fees) : null,
               entryGrade: grades.entry as any,
@@ -553,6 +556,7 @@ export function NewTradeCard({
     setHighlights([]);
     setMae("");
     setMfe("");
+    setPostExitPeak("");
     setNmo(null);
     setFees("");
     setSetupTags([]);
@@ -1273,6 +1277,8 @@ export function NewTradeCard({
                 setMae={setMae}
                 mfe={mfe}
                 setMfe={setMfe}
+                postExitPeak={postExitPeak}
+                setPostExitPeak={setPostExitPeak}
                 nmo={nmo}
                 setNmo={setNmo}
                 fees={fees}
@@ -1286,6 +1292,11 @@ export function NewTradeCard({
                 setHighlights={setHighlights}
                 extraHighlights={knownHighlights(allTrades)}
                 testPrefix="new"
+                timing={{
+                  direction: v.direction === "short" ? "short" : "long",
+                  entryPrice: isFinite(Number(v.entryPrice)) ? Number(v.entryPrice) : null,
+                  initialStop: isFinite(Number(v.initialStop)) ? Number(v.initialStop) : null,
+                }}
               />
             </div>
           )}

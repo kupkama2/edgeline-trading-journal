@@ -427,6 +427,17 @@ function TradeBody({
             value={m.maeR != null ? fmtR(m.maeR) : "—"}
             hint="heat taken"
           />
+          {/* The counterfactual leg: what the move did after you left. This is
+              the number that says "if I had not closed it, it reached X" —
+              distinct from Best reach, which is only what you were IN for. */}
+          {m.leftBehindR != null && (
+            <Fig
+              label="After exit"
+              value={fmtR(m.leftBehindR)}
+              hint={m.leftBehindR >= 0.5 ? "ran on without you" : "died on cue"}
+              testId="view-left-behind"
+            />
+          )}
         </div>
 
         {/* How you graded it, and — where the log allows — whether the grade

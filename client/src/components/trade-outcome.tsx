@@ -24,7 +24,8 @@
  */
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { EXIT_REASON_LABELS } from "@shared/metrics";
+import { EXIT_REASON_LABELS, exitTimingVerdict } from "@shared/metrics";
+import { gradeLabel } from "@shared/grades";
 import { EXIT_REASONS, TimeField } from "@/components/trade-shared";
 import { GradePicker, type GradeState } from "@/components/grade-picker";
 import { HighlightPicker } from "@/components/trade-pickers";
@@ -43,6 +44,8 @@ export interface OutcomeFieldsProps {
   setMae: (v: string) => void;
   mfe: string;
   setMfe: (v: string) => void;
+  postExitPeak: string;
+  setPostExitPeak: (v: string) => void;
   nmo: string | null;
   setNmo: (v: string | null) => void;
   fees: string;
@@ -61,6 +64,16 @@ export interface OutcomeFieldsProps {
   testPrefix: string;
   /** Prefills a price when a reason implies one ("stopped out" => the stop). */
   onPickReason?: (reason: string) => void;
+  /**
+   * Enough of the plan to turn the excursion fields into R, so the form can
+   * say what the numbers think of the exit while it is being graded — the
+   * moment a mislog is cheapest to catch.
+   */
+  timing?: {
+    direction: "long" | "short";
+    entryPrice: number | null;
+    initialStop: number | null;
+  };
 }
 
 /**
@@ -106,6 +119,29 @@ export function statusAfterEdit(
 
 export function TradeOutcomeFields(p: OutcomeFieldsProps) {
   const { priced, explained } = outcomeStage(p.exitPrice, p.exitReason);
+
+  /**
+   * The arithmetic reading of this exit, from the form's own fields.
+   *
+   * Both legs clamp at zero: MFE below the exit or a post-exit peak on the
+   * wrong side mean "that cost was nothing", never negative. Null legs stay
+   * null — an unmeasured leg is not a zero-cost leg, and the verdict function
+   * knows the difference.
+   */
+  const timingRead = (() => {
+    if (!p.timing) return null;
+    const { direction, entryPrice, initialStop } = p.timing;
+    const exit = Number(p.exitPrice);
+    if (entryPrice == null || initialStop == null || !isFinite(exit)) return null;
+    const risk = Math.abs(entryPrice - initialStop);
+    if (!(risk > 0)) return null;
+    const sign = direction === "short" ? -1 : 1;
+    const leg = (raw: string) => {
+      const v = Number(raw);
+      return raw.trim() !== "" && isFinite(v) ? Math.max(0, (sign * (v - exit)) / risk) : null;
+    };
+    return exitTimingVerdict(leg(p.mfe), leg(p.postExitPeak));
+  })();
 
   const toggleDemon = (id: number) =>
     p.setDemonIds(
@@ -163,7 +199,7 @@ export function TradeOutcomeFields(p: OutcomeFieldsProps) {
 
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
-              <label className={LABEL}>MAE (worst price)</label>
+              <label className={LABEL}>MAE — worst while in the trade</label>
               <Input
                 type="number"
                 step="any"
@@ -175,7 +211,7 @@ export function TradeOutcomeFields(p: OutcomeFieldsProps) {
               />
             </div>
             <div className="space-y-1">
-              <label className={LABEL}>MFE (best price)</label>
+              <label className={LABEL}>MFE — best while in the trade</label>
               <Input
                 type="number"
                 step="any"
@@ -186,6 +222,23 @@ export function TradeOutcomeFields(p: OutcomeFieldsProps) {
                 data-testid={`input-${p.testPrefix}-mfe`}
               />
             </div>
+          </div>
+
+          <div className="space-y-1">
+            <label className={LABEL}>After exit, before your stop level broke, it reached…</label>
+            <Input
+              type="number"
+              step="any"
+              inputMode="decimal"
+              value={p.postExitPeak}
+              onChange={(e) => p.setPostExitPeak(e.target.value)}
+              className="h-9 font-mono text-sm"
+              data-testid={`input-${p.testPrefix}-post-exit-peak`}
+            />
+            <p className="text-[10px] leading-snug text-muted-foreground">
+              The half of "it went higher" you were not in for. On a stop-out: where it got
+              to before making a new extreme — ≈ your exit means the stop was right.
+            </p>
           </div>
 
           <div className="space-y-1">
@@ -246,6 +299,40 @@ export function TradeOutcomeFields(p: OutcomeFieldsProps) {
       {/* ---- stage 3: judgements about those facts ---- */}
       {explained && (
         <>
+          {/* What the numbers say, right where the grade is picked. The grade
+              stays yours — but a post-exit run typed into MFE flips "early"
+              into "late", and the cheapest moment to catch that is while both
+              answers are on the same screen. */}
+          {timingRead && (
+            <p
+              className={`rounded-md border px-2.5 py-1.5 text-[11px] leading-snug ${
+                timingRead.verdict === "clean"
+                  ? "border-emerald-500/30 bg-emerald-500/5 text-emerald-400"
+                  : "border-amber-500/30 bg-amber-500/5 text-amber-500"
+              }`}
+              data-testid={`text-${p.testPrefix}-timing-read`}
+            >
+              {timingRead.verdict === "early" &&
+                `Numbers read this exit as EARLY — it ran another ${timingRead.leftBehindR!.toFixed(1)}R after you left${
+                  (timingRead.giveBackR ?? 0) > 0.05
+                    ? ` (and ${timingRead.giveBackR!.toFixed(1)}R was given back before it)`
+                    : ""
+                }.`}
+              {timingRead.verdict === "late" &&
+                `Numbers read this exit as LATE — it reached ${timingRead.giveBackR!.toFixed(1)}R above your exit while you were in and came back.`}
+              {timingRead.verdict === "clean" &&
+                "Numbers read this exit as clean — nothing meaningful given back or left behind."}
+              {timingRead.verdict !== "clean" &&
+                p.grades.exit != null &&
+                p.grades.exit !== timingRead.verdict && (
+                  <span className="font-semibold">
+                    {" "}Your grade says {gradeLabel("exit", p.grades.exit)?.toLowerCase()} — one of
+                    the two is wrong.
+                  </span>
+                )}
+            </p>
+          )}
+
           <GradePicker
             value={p.grades}
             onChange={p.setGrades}
