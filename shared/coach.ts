@@ -20,7 +20,7 @@ import { closedTrades, computeMetrics } from "./metrics";
 import { byHour, byMistake } from "./breakdowns";
 import { inSessionWindow } from "./session";
 import { isMissed, missedStats } from "./missed";
-import { MIN_GRADED, axisReport, exitCost, overrideReport } from "./grades";
+import { MIN_GRADED, axisReport, exitCost, overrideReport, overrodeThePlan } from "./grades";
 
 export interface Finding {
   /** Stable id so the UI can key and dismiss. */
@@ -30,6 +30,23 @@ export interface Finding {
   /** Estimated R currently lost to this, always ≥ 0. */
   costR: number;
   kind: "timing" | "demon" | "exits" | "stops" | "sizing" | "skipped" | "process";
+  /**
+   * The trades the figure was computed FROM, newest first, so a finding is a
+   * door into its own evidence rather than a verdict to take on faith. A
+   * claim like "3 exits ran on after you left" is only useful if those three
+   * trades are one click away — reviewing them is the entire point of being
+   * told. Absent on the few findings about the book's overall shape, where
+   * "the evidence" would just be every trade.
+   */
+  tradeIds?: number[];
+}
+
+/** Newest first — the trade you can still remember comes up first. */
+function evidence(ts: { id: number; entryTime: string; exitTime?: string | null }[]): number[] {
+  return ts
+    .slice()
+    .sort((a, b) => (b.exitTime ?? b.entryTime).localeCompare(a.exitTime ?? a.entryTime))
+    .map((t) => t.id);
 }
 
 export interface StyleReview {
@@ -62,6 +79,11 @@ export function reviewStyle(
       findings.push({
         id: `hour:${styleId}:${worstHour.key}`,
         kind: "timing",
+        tradeIds: evidence(
+          closed.filter(
+            (t) => String(new Date(t.entryTime).getHours()).padStart(2, "0") === worstHour.key,
+          ),
+        ),
         costR: -worstHour.totalR,
         title: `${worstHour.label} is where this book leaks`,
         detail: `${worstHour.count} trades in that hour, ${(worstHour.winRate * 100).toFixed(
@@ -77,6 +99,9 @@ export function reviewStyle(
       findings.push({
         id: `demon:${styleId}:${worstDemon.key}`,
         kind: "demon",
+        tradeIds: evidence(
+          closed.filter((t) => t.mistakeTagIds.includes(Number(worstDemon.key))),
+        ),
         costR: -worstDemon.totalR,
         title: `"${worstDemon.label}" is the expensive habit here`,
         detail: `${worstDemon.count} trades carry it, averaging ${worstDemon.expectancyR.toFixed(
@@ -87,16 +112,21 @@ export function reviewStyle(
 
     /* ---- exits: how much of the move is handed back ---- */
     const withPath = closed
-      .map((t) => computeMetrics(t))
-      .filter((m) => m.captureRatioClipped != null && m.mfeR != null && m.mfeR > 0);
+      .map((t) => ({ t, m: computeMetrics(t) }))
+      .filter(({ m }) => m.captureRatioClipped != null && m.mfeR != null && m.mfeR > 0);
     if (withPath.length >= MIN_BUCKET) {
       const capture =
-        withPath.reduce((a, m) => a + (m.captureRatioClipped ?? 0), 0) / withPath.length;
-      const leftOnTable = withPath.reduce((a, m) => a + Math.max(0, m.rLeftOnTable ?? 0), 0);
+        withPath.reduce((a, { m }) => a + (m.captureRatioClipped ?? 0), 0) / withPath.length;
+      const leftOnTable = withPath.reduce((a, { m }) => a + Math.max(0, m.rLeftOnTable ?? 0), 0);
       if (capture < 0.45) {
         findings.push({
           id: `exits:${styleId}`,
           kind: "exits",
+          // The givers-back specifically, not every measured trade — evidence
+          // should be the trades that put the number on the card.
+          tradeIds: evidence(
+            withPath.filter(({ m }) => (m.rLeftOnTable ?? 0) > 0).map(({ t }) => t),
+          ),
           costR: leftOnTable,
           title: "You are keeping less than half of what these moves offer",
           detail: `Average capture ${Math.round(capture * 100)}% across ${
@@ -110,13 +140,14 @@ export function reviewStyle(
 
     /* ---- exits, the other half: moves that ran on after you left ---- */
     const runsMissed = closed
-      .map((t) => computeMetrics(t))
-      .filter((m) => (m.leftBehindR ?? 0) >= 0.5);
+      .map((t) => ({ t, m: computeMetrics(t) }))
+      .filter(({ m }) => (m.leftBehindR ?? 0) >= 0.5);
     if (runsMissed.length >= 3) {
-      const missed = runsMissed.reduce((a, m) => a + (m.leftBehindR ?? 0), 0);
+      const missed = runsMissed.reduce((a, { m }) => a + (m.leftBehindR ?? 0), 0);
       findings.push({
         id: `early-exits:${styleId}`,
         kind: "exits",
+        tradeIds: evidence(runsMissed.map(({ t }) => t)),
         costR: missed,
         title: "You close, and the move keeps going",
         detail: `${runsMissed.length} exits ran on at least another 0.5R after you left — ${missed.toFixed(
@@ -127,8 +158,8 @@ export function reviewStyle(
 
     /* ---- stops: winners that had to survive deep heat ---- */
     const winnersDeepHeat = closed
-      .map((t) => computeMetrics(t))
-      .filter((m) => (m.actualR ?? 0) > 0 && (m.maeR ?? 0) < -0.7);
+      .map((t) => ({ t, m: computeMetrics(t) }))
+      .filter(({ m }) => (m.actualR ?? 0) > 0 && (m.maeR ?? 0) < -0.7);
     const losersAtFullStop = closed
       .map((t) => computeMetrics(t))
       .filter((m) => (m.actualR ?? 0) <= -0.95);
@@ -136,6 +167,7 @@ export function reviewStyle(
       findings.push({
         id: `stops:${styleId}`,
         kind: "stops",
+        tradeIds: evidence(winnersDeepHeat.map(({ t }) => t)),
         costR: losersAtFullStop.length * 0.25,
         title: "Your winners are surviving the stop by a hair",
         detail: `${winnersDeepHeat.length} winners dipped past −0.7R before working. A stop that close is being paid for in full-loss trades that were right — widen it and cut size to keep 1R the same.`,
@@ -175,6 +207,7 @@ export function reviewStyle(
     findings.push({
       id: `skipped:${styleId}`,
       kind: "skipped",
+      tradeIds: evidence(scoped.filter(isMissed)),
       costR: missed.netR,
       title: "The setups you talk yourself out of are winners",
       detail: `${missed.resolved} resolved skips net ${missed.netR.toFixed(
@@ -190,6 +223,7 @@ export function reviewStyle(
       findings.push({
         id: `process:${styleId}`,
         kind: "process",
+        tradeIds: evidence(closed.filter((t) => !t.rationale?.trim())),
         costR: 0,
         title: `${Math.round((noWhy / closed.length) * 100)}% of these have no rationale`,
         detail:
@@ -217,6 +251,7 @@ export function reviewStyle(
  */
 function gradeFindings(scoped: TradeWithTags[], styleId: number | null): Finding[] {
   const out: Finding[] = [];
+  const closed = closedTrades(scoped);
 
   /* ---- take profit: the two sins, priced against each other ---- */
   const exits = axisReport(scoped, "exit");
@@ -228,6 +263,7 @@ function gradeFindings(scoped: TradeWithTags[], styleId: number | null): Finding
       out.push({
         id: `tp:${styleId}:${cost.worse}`,
         kind: "exits",
+        tradeIds: evidence(closed.filter((t) => t.exitGrade === (late ? "late" : "early"))),
         costR: worst,
         title: late
           ? "You hold winners past the point they pay"
@@ -254,6 +290,7 @@ function gradeFindings(scoped: TradeWithTags[], styleId: number | null): Finding
     out.push({
       id: `stopgrade:${styleId}`,
       kind: "stops",
+      tradeIds: evidence(closed.filter((t) => t.stopGrade === "tight")),
       costR: tight.missedPlanR,
       title: "Your stop keeps taking you out of trades that were right",
       detail: `${tight.count} trades you graded "too tight" would have paid ${tight.missedPlanR.toFixed(
@@ -275,6 +312,7 @@ function gradeFindings(scoped: TradeWithTags[], styleId: number | null): Finding
     out.push({
       id: `entrygrade:${styleId}`,
       kind: "timing",
+      tradeIds: evidence(closed.filter((t) => t.entryGrade === "late")),
       costR: -lateEntry.totalR,
       title: "The ones you chase are the ones that lose",
       detail: `${Math.round(lateEntry.share * 100)}% of your graded entries here are late, and they average ${lateEntry.expectancyR.toFixed(
@@ -289,6 +327,9 @@ function gradeFindings(scoped: TradeWithTags[], styleId: number | null): Finding
     out.push({
       id: `override:${styleId}`,
       kind: "exits",
+      tradeIds: evidence(
+        closed.filter((t) => overrodeThePlan(t) && computeMetrics(t).managementDeltaR != null),
+      ),
       costR: -ov.netR,
       title: "Leaving your own plan alone would have paid more",
       detail: `${ov.judged} exits here were your call rather than the target or the stop, and together they came out ${ov.netR.toFixed(
