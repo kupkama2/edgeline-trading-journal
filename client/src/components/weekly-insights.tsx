@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
@@ -20,10 +20,12 @@ import { useDailyNotes, useWeeklyInsights, useWeeklyReviews } from "@/lib/data";
  * record. Contradictions lead, because a belief the data doesn't support is the
  * most expensive thing in a journal and the only part neither source shows alone.
  *
- * Generation is on demand rather than scheduled: the host sleeps when idle, so a
- * weekly timer would fire unreliably, and a result nobody reads still costs a
- * model call. The result is cached per week, so pressing the button twice on a
- * Thursday does not pay twice.
+ * Generation is automatic once per week, from the first visit that has
+ * material to read — not from a timer, because the host sleeps when idle and a
+ * result nobody is looking at still costs a model call. Opening the page IS
+ * the evidence somebody is looking. The server caches per week, so the auto
+ * run costs one call weekly at most, and the button remains for regenerating
+ * after logging more of the week.
  */
 export function WeeklyInsightsCard({
   trades,
@@ -34,7 +36,7 @@ export function WeeklyInsightsCard({
 }) {
   const [insights, setInsights] = useState<WeeklyInsights | null>(null);
   const generate = useWeeklyInsights();
-  const { data: reviews = [] } = useWeeklyReviews();
+  const { data: reviews = [], isFetched: reviewsReady } = useWeeklyReviews();
   const { data: dailyNotes = [] } = useDailyNotes();
   const { toast } = useToast();
 
@@ -58,6 +60,32 @@ export function WeeklyInsightsCard({
   }, [reviews, bundle.weekStart]);
 
   const shown = insights ?? stored;
+
+  /*
+   * Fire the week's one generation on arrival, when there is something to
+   * read and no cached result. Guarded three ways: a ref so one mount asks
+   * once; sessionStorage per week so a failing model is not re-paid on every
+   * navigation; and the reviews query having SETTLED — before it resolves,
+   * `stored` is empty whether or not the week is cached, and firing then
+   * would race the cache it exists to respect.
+   */
+  const autoTried = useRef(false);
+  useEffect(() => {
+    if (autoTried.current || !reviewsReady) return;
+    if (!hasMaterial || stored || insights || generate.isPending) return;
+    const guard = `edgeline.autoInsights.${bundle.weekStart}`;
+    if (sessionStorage.getItem(guard)) return;
+    autoTried.current = true;
+    sessionStorage.setItem(guard, "1");
+    // Quietly: an auto run that fails should not toast over the journal.
+    generate
+      .mutateAsync({ weekStart: bundle.weekStart, force: false })
+      .then((res) => {
+        if (res.ok && res.insights) setInsights(res.insights);
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reviewsReady, hasMaterial, stored, insights, bundle.weekStart]);
 
   async function run(force = false) {
     const res = await generate.mutateAsync({ weekStart: bundle.weekStart, force });

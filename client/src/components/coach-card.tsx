@@ -11,12 +11,14 @@
  * away on Tuesday does not silence next Monday.
  */
 import { useMemo, useState } from "react";
+import { useLocation } from "wouter";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ChevronDown, Target, X } from "lucide-react";
 import { useMistakeTags, useStyles, useTrades } from "@/lib/data";
 import { reviewAll } from "@shared/coach";
+import { computeMetrics, fmtR } from "@shared/metrics";
 import { styleColor } from "@/lib/style-filter";
 
 /** Monday-anchored week key, so "this week" means the same all week. */
@@ -37,6 +39,11 @@ export function CoachCard() {
     () => localStorage.getItem(DISMISS_KEY) === week,
   );
   const [open, setOpen] = useState(true);
+  /* Which finding is showing its trades. One at a time: the card is a read,
+     not a tree view, and two open evidence lists push everything else away. */
+  const [openFinding, setOpenFinding] = useState<string | null>(null);
+  const [, navigate] = useLocation();
+  const tradeById = useMemo(() => new Map(trades.map((t) => [t.id, t])), [trades]);
 
   const reviews = useMemo(
     () => reviewAll(trades, tags, styles),
@@ -102,28 +109,84 @@ export function CoachCard() {
                   </span>
                 </div>
                 <ul className="space-y-1.5">
-                  {r.findings.map((f) => (
-                    <li
-                      key={f.id}
-                      className="rounded-md border border-border/60 bg-secondary/20 p-2.5"
-                      data-testid={`coach-finding-${f.id}`}
-                    >
-                      <div className="flex flex-wrap items-baseline gap-2">
-                        <span className="text-xs font-medium">{f.title}</span>
-                        {f.costR > 0 && (
-                          <Badge
-                            variant="outline"
-                            className="border-primary/40 font-mono text-[10px] font-normal text-primary"
+                  {r.findings.map((f) => {
+                    const hasEvidence = !!f.tradeIds?.length;
+                    const showing = openFinding === f.id;
+                    return (
+                      <li
+                        key={f.id}
+                        className="rounded-md border border-border/60 bg-secondary/20 p-2.5"
+                        data-testid={`coach-finding-${f.id}`}
+                      >
+                        {/* The whole finding is the button: a claim about your
+                            trades should open the trades it is about. */}
+                        <button
+                          type="button"
+                          disabled={!hasEvidence}
+                          onClick={() => setOpenFinding(showing ? null : f.id)}
+                          aria-expanded={showing}
+                          className="block w-full text-left"
+                          data-testid={`button-coach-evidence-${f.id}`}
+                        >
+                          <div className="flex flex-wrap items-baseline gap-2">
+                            <span className="text-xs font-medium">{f.title}</span>
+                            {f.costR > 0 && (
+                              <Badge
+                                variant="outline"
+                                className="border-primary/40 font-mono text-[10px] font-normal text-primary"
+                              >
+                                {f.costR.toFixed(1)}R
+                              </Badge>
+                            )}
+                            {hasEvidence && (
+                              <span className="ml-auto flex items-center gap-1 text-[10px] text-muted-foreground">
+                                {f.tradeIds!.length} {f.tradeIds!.length === 1 ? "trade" : "trades"}
+                                <ChevronDown
+                                  className={`h-3 w-3 transition-transform ${showing ? "rotate-180" : ""}`}
+                                />
+                              </span>
+                            )}
+                          </div>
+                          <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
+                            {f.detail}
+                          </p>
+                        </button>
+
+                        {showing && hasEvidence && (
+                          <div
+                            className="mt-2 flex flex-wrap gap-1.5 border-t border-border/40 pt-2"
+                            data-testid={`coach-evidence-${f.id}`}
                           >
-                            {f.costR.toFixed(1)}R
-                          </Badge>
+                            {f.tradeIds!.map((id) => {
+                              const t = tradeById.get(id);
+                              if (!t) return null;
+                              const r = computeMetrics(t).actualR;
+                              const when = (t.exitTime ?? t.entryTime).slice(5, 10);
+                              return (
+                                <button
+                                  key={id}
+                                  type="button"
+                                  onClick={() => navigate(`/trade/${id}`)}
+                                  className="rounded-md border border-border px-2 py-1 text-left text-[10px] leading-tight transition-colors hover:border-primary/50"
+                                  data-testid={`coach-evidence-trade-${id}`}
+                                >
+                                  <span className="font-medium">{t.symbol}</span>{" "}
+                                  <span
+                                    className={
+                                      r != null && r < 0 ? "text-red-400" : "text-emerald-400"
+                                    }
+                                  >
+                                    {r != null ? fmtR(r) : "—"}
+                                  </span>{" "}
+                                  <span className="text-muted-foreground">{when}</span>
+                                </button>
+                              );
+                            })}
+                          </div>
                         )}
-                      </div>
-                      <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
-                        {f.detail}
-                      </p>
-                    </li>
-                  ))}
+                      </li>
+                    );
+                  })}
                 </ul>
               </div>
             );

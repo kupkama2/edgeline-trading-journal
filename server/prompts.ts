@@ -117,6 +117,7 @@ Produce four things:
 Rules:
 - Ground every claim in the data you were given. Never infer trades, prices, or events that are not present.
 - A negative totalDeltaR means their management LOST money versus leaving the trade alone; positive means it gained.
+- Each reflection may carry exitGrade (the trader's own verdict on the exit) and exitTiming (what the measured price path says: "early" = the move ran on after they left, "late" = it peaked while they were in and they closed below it, "clean" = neither cost was meaningful). When the two disagree, that IS a contradiction — report it.
 - Do not moralise, and do not give generic trading advice. Say only what this week's evidence supports.
 - Write in second person, plainly, no preamble.
 - Output ONLY this JSON object, no prose and no markdown fences:

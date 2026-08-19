@@ -12,7 +12,7 @@
  * is sent, and the server derives the same bundle rather than trusting a payload.
  */
 import type { MistakeTag, TradeWithTags } from "./schema";
-import { aggregate, computeMetrics, mistakeCostLeaderboard } from "./metrics";
+import { aggregate, computeMetrics, exitTimingRead, mistakeCostLeaderboard } from "./metrics";
 import { demonCountsInRange } from "./demons";
 import { dayKey } from "./daily";
 
@@ -37,6 +37,15 @@ export interface ReflectionEntry {
   r: number | null;
   demons: string[];
   note: string;
+  /** Self-reported exit grade, when given — the trader's opinion. */
+  exitGrade?: string | null;
+  /**
+   * What the arithmetic says the exit was (early/late/clean), when the path
+   * was measured. Beside exitGrade on purpose: "notes say held too long,
+   * numbers say cut too soon" is exactly the contradiction the model is
+   * instructed to hunt for, and it cannot hunt for what it was not shown.
+   */
+  exitTiming?: string | null;
 }
 
 /** One end-of-day review from the daily page, trimmed for the model. */
@@ -115,12 +124,17 @@ export function buildInsightsBundle(
     })
     .filter((x) => x.note.length > 0)
     .slice(0, MAX_REFLECTIONS)
-    .map(({ t, note }) => ({
-      symbol: t.symbol,
-      r: computeMetrics(t).actualR,
-      demons: t.mistakeTagIds.map((id) => tagNames[id]).filter(Boolean),
-      note: note.slice(0, MAX_NOTE_CHARS),
-    }));
+    .map(({ t, note }) => {
+      const m = computeMetrics(t);
+      return {
+        symbol: t.symbol,
+        r: m.actualR,
+        demons: t.mistakeTagIds.map((id) => tagNames[id]).filter(Boolean),
+        note: note.slice(0, MAX_NOTE_CHARS),
+        exitGrade: t.exitGrade ?? null,
+        exitTiming: exitTimingRead(m)?.verdict ?? null,
+      };
+    });
 
   const weekStart = weekStartKey(weekStartDate);
   const weekEnd = weekStartKey(new Date(end.getTime() - 86400000));
