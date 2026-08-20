@@ -21,6 +21,7 @@ import { suggestFees } from "@shared/fees";
 import { knownHighlights, parseHighlights, serializeHighlights } from "@shared/highlights";
 import { AccountPicker, HighlightPicker, SetupTagPicker } from "@/components/trade-pickers";
 import { normalizeSetupTags } from "@shared/setups";
+import { splitSourceFromTags } from "@shared/sources";
 import { useDeleteFill, useStyles, useTrades } from "@/lib/data";
 import { styleColor } from "@/lib/style-filter";
 import { collapseFills, positionLedger } from "@shared/fills";
@@ -237,7 +238,14 @@ export function TradeEditor({
       toast({ title: "A live trade needs a stop and a target", variant: "destructive" });
       return;
     }
-    const rTags = normalizeSetupTags(f.rationaleTags.split(","));
+    // Same promotion as the entry card: a source name typed into the tag
+    // field moves to the source column rather than becoming a fake setup.
+    const promoted = splitSourceFromTags(
+      normalizeSetupTags(f.rationaleTags.split(",")),
+      knownSources,
+      source.trim() || null,
+    );
+    const rTags = promoted.tags;
 
     await updateTrade.mutateAsync({
       id: trade.id,
@@ -267,7 +275,7 @@ export function TradeEditor({
         rationaleTags: rTags.length ? JSON.stringify(rTags) : null,
         notes: f.notes.trim() || null,
         account: account.trim() || null,
-        source: source.trim() || null,
+        source: promoted.source,
         styleId,
         fees: numOrNull(f.fees ?? ""),
         highlights: serializeHighlights(highlights),

@@ -31,6 +31,7 @@ import { EMPTY_GRADES, GradePicker, type GradeState } from "@/components/grade-p
 import { AccountPicker, SetupTagPicker } from "@/components/trade-pickers";
 import { TradeOutcomeFields } from "@/components/trade-outcome";
 import { normalizeSetupTags } from "@shared/setups";
+import { splitSourceFromTags } from "@shared/sources";
 import { SymbolPicker } from "@/components/symbol-picker";
 import { knownHighlights, serializeHighlights } from "@shared/highlights";
 import { suggestSize } from "@shared/sizing";
@@ -458,6 +459,12 @@ export function NewTradeCard({
     // guessed at; normalising the union means "cc" from the sentence and the
     // "61.8 Fib" chip collapse to one tag instead of two rows in the table.
     rationaleTags = normalizeSetupTags([...setupTags, ...rationaleTags]);
+    // A source name typed as a tag is a source, not a setup — same promotion
+    // the boot migration did once for history, applied at the door forever,
+    // against this journal's own roster of sources.
+    const promoted = splitSourceFromTags(rationaleTags, knownSources, source.trim() || null);
+    rationaleTags = promoted.tags;
+    const finalSource = promoted.source;
     const playbookPayload = {
       setupName: pb.setupName.trim() || undefined,
       stopLogic: pb.stopLogic.trim() || undefined,
@@ -495,7 +502,7 @@ export function NewTradeCard({
         initialTarget: data.initialTarget,
         extraTargets: extras.length ? JSON.stringify(extras) : null,
         account: account.trim() || null,
-        source: source.trim() || null,
+        source: finalSource,
         highlights: loggingClosed ? serializeHighlights(highlights) : null,
         entryTime: toIso(data.entryTime),
         // Screenshots are parsed, not kept. A base64 chart is ~300x the size of
