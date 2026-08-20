@@ -350,6 +350,60 @@ CREATE INDEX IF NOT EXISTS daily_notes_user_id ON daily_notes (user_id);
 `);
 
   await syncDemonTaxonomy();
+  await promoteSourceTagsOnce();
+}
+
+/**
+ * The names that were being written as rationale TAGS before `source` was a
+ * column: the trader tagged whose call it was because there was nowhere else
+ * to put it. One-time promotion list — going forward the save paths promote
+ * against each account's own source roster instead, so this list never needs
+ * a fifth name.
+ */
+const LEGACY_SOURCE_TAGS = ["Severin", "Daniel", "CBS", "UB"];
+
+/**
+ * Move source names out of the tag lists and into the source column, on boot.
+ *
+ * Runs across every account, because it is a data-shape migration like the
+ * demon split, not a preference: a tag that IS one of these names means the
+ * same thing in any journal, and for a journal that never used them it is a
+ * no-op. Row-by-row in TS rather than SQL because rationale_tags is a JSON
+ * string and the app's own parser is the authority on what it holds.
+ *
+ * Only an unambiguous trade moves: no source set, exactly one of the names in
+ * its tags. Two different names on one trade is a question, not an answer,
+ * and a migration must never answer questions. Idempotent — once the tag has
+ * moved out, the trade no longer matches.
+ */
+export async function promoteSourceTagsOnce(): Promise<number> {
+  const rows = await db
+    .select({ id: trades.id, tags: trades.rationaleTags, source: trades.source })
+    .from(trades)
+    .where(and(isNull(trades.source), sqlx`${trades.rationaleTags} IS NOT NULL`));
+
+  let moved = 0;
+  for (const row of rows) {
+    let arr: string[];
+    try {
+      const parsed = JSON.parse(row.tags ?? "[]");
+      arr = Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === "string") : [];
+    } catch {
+      continue;
+    }
+    const hits = LEGACY_SOURCE_TAGS.filter((n) =>
+      arr.some((t) => t.trim().toLowerCase() === n.toLowerCase()),
+    );
+    if (hits.length !== 1) continue;
+    const name = hits[0];
+    const rest = arr.filter((t) => t.trim().toLowerCase() !== name.toLowerCase());
+    await db
+      .update(trades)
+      .set({ source: name, rationaleTags: rest.length ? JSON.stringify(rest) : null })
+      .where(eq(trades.id, row.id));
+    moved++;
+  }
+  return moved;
 }
 
 /**
