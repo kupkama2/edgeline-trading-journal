@@ -34,6 +34,11 @@ export interface Scope {
 
 export const EMPTY_SCOPE: Scope = { styleIds: [], accounts: [], sources: [] };
 
+/** Any axis narrowed at all — the page is showing a subset, not the log. */
+export function scopeActive(scope: Scope): boolean {
+  return scope.styleIds.length > 0 || scope.accounts.length > 0 || scope.sources.length > 0;
+}
+
 /**
  * Stands for "no source recorded" in the sources filter — your own ideas.
  *
@@ -146,6 +151,16 @@ export function StyleFilterProvider({ children }: { children: React.ReactNode })
     if (sources.length === 0) localStorage.removeItem(SOURCE_KEY);
     else localStorage.setItem(SOURCE_KEY, JSON.stringify(sources));
   }, [sources]);
+
+  // The whole-viewport "you are filtered" glow (see index.css). On the root
+  // element rather than any component, because the signal is about every page
+  // at once and must survive navigation between them.
+  useEffect(() => {
+    document.documentElement.toggleAttribute(
+      "data-scoped",
+      scopeActive({ styleIds, accounts, sources }),
+    );
+  }, [styleIds, accounts, sources]);
 
   const value = useMemo(() => {
     const scope: Scope = { styleIds, accounts, sources };

@@ -4,6 +4,7 @@ import {
   filterByScope,
   filterByStyle,
   OWN_IDEA,
+  scopeActive,
   knownAccounts,
   knownSources,
   toggleAccountIn,
@@ -192,5 +193,19 @@ describe("scoping by source", () => {
 
   it("offers each source once for the picker, ignoring blanks", () => {
     expect(knownSources(sourced)).toEqual(["Daniel", "Severin"]);
+  });
+});
+
+describe("whether the page is narrowed at all", () => {
+  // Drives the whole-viewport glow: a filter you forgot is on quietly changes
+  // what every number means, so "any axis narrowed" has to be exactly right in
+  // both directions — a glow with nothing filtered teaches you to ignore it.
+  it("is off for the empty scope", () => {
+    expect(scopeActive(EMPTY_SCOPE)).toBe(false);
+  });
+  it("is on when any single axis has a selection", () => {
+    expect(scopeActive({ styleIds: [1], accounts: [], sources: [] })).toBe(true);
+    expect(scopeActive({ styleIds: [], accounts: ["Apex eval"], sources: [] })).toBe(true);
+    expect(scopeActive({ styleIds: [], accounts: [], sources: [OWN_IDEA] })).toBe(true);
   });
 });
