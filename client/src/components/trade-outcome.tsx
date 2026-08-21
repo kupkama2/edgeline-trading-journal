@@ -93,28 +93,31 @@ export function outcomeStage(
   return { priced, explained: priced && exitReason != null };
 }
 
+export type Lifecycle = "pending" | "open" | "closed";
+
 /**
- * What the trade's status becomes after an edit.
+ * Reconcile the lifecycle you picked with the exit price you typed.
  *
- * Closing is editing now, so the editor has to do what the close dialog used
- * to: an exit price IS the trade being over. Without this the editor happily
- * saved an exit, a reason and a grade onto a trade that stayed "open" — every
- * number correct, the trade still sitting in the open list, and excluded from
- * every closed-trade statistic in the app.
- *
- * The inverse matters too. Clearing the exit price off a closed trade puts it
- * back to open, because "closed with no exit" is not a state the metrics can
- * read — better to reopen it than to keep a row that quietly computes nothing.
- * A pending order with no exit stays pending; one WITH an exit filled and
- * finished, so it closes like anything else.
+ * The two can contradict each other, and silently preferring one is how a
+ * trade ends up closed with no exit (every metric reads nothing) or open with
+ * an exit price sitting on it (invisible to every closed-trade statistic).
+ * Neither state is reachable through this: the contradiction is reported and
+ * the save is refused, so the trader decides which half they meant.
  */
-export function statusAfterEdit(
-  current: string,
+export function resolveLifecycle(
+  picked: Lifecycle,
   exitPrice: string,
-): "pending" | "open" | "closed" {
-  if (outcomeStage(exitPrice, null).priced) return "closed";
-  if (current === "closed") return "open";
-  return current === "pending" ? "pending" : "open";
+): { status: Lifecycle } | { error: string } {
+  const { priced } = outcomeStage(exitPrice, null);
+  if (picked === "closed" && !priced) {
+    return { error: "A closed trade needs an exit price — or mark it open again." };
+  }
+  if (picked !== "closed" && priced) {
+    return {
+      error: `Clear the exit price to mark this ${picked === "pending" ? "waiting to fill" : "open"}.`,
+    };
+  }
+  return { status: picked };
 }
 
 export function TradeOutcomeFields(p: OutcomeFieldsProps) {
