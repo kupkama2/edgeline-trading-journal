@@ -5,11 +5,25 @@ import type { Excursion } from "@shared/excursion";
 /**
  * The MAE/MFE excursion chart — one bar per trade.
  *
- * Each trade is a vertical bar spanning from its worst adverse dip (below the
- * zero line, red) to its best favourable reach (above, emerald), with a tick
- * marking where you actually got out. Read top-to-tick as give-back (money the
- * move offered and you didn't keep) and zero-to-bottom as heat (how far a trade
- * dropped before it worked, or before it stopped you).
+ * Each trade is one column, in three bands, all measured from the entry:
+ *
+ *   red, below zero      heat — how far it went against you first
+ *   emerald, above zero  the move you were IN THE TRADE for, up to the
+ *                        in-trade high, with a tick where you got out
+ *   slate, above that    ground the trade made AFTER you were out
+ *
+ * Every pixel belongs to the phase in which it was first reached, so the two
+ * halves of "it went higher" stay visually separate: emerald above the tick is
+ * give-back, money the move offered while you held and you didn't keep, and
+ * that is a management story. Slate is a different event entirely — it ran on
+ * without you — and that is an exit-timing story. Reading them off one colour
+ * is how a trade closed too EARLY gets diagnosed as held too LATE.
+ *
+ * The slate band starts at the in-trade high rather than at the exit, because
+ * the stretch between the exit and that high was already travelled while you
+ * were holding: drawing it twice would show one move as two. So the band is
+ * the NEW ground, and the tooltip carries the full run from the exit — which
+ * is the number the summary totals.
  *
  * Emerald/red is the app's win/loss language, reused so the polarity needs no
  * legend. One value axis (R); the tick is the only per-bar annotation, because
@@ -36,7 +50,15 @@ export function ExcursionChart({
 
   const geom = useMemo(() => {
     if (!rows.length) return null;
-    const hi = Math.max(1, ...rows.map((r) => r.mfeR), ...rows.map((r) => r.actualR));
+    const hi = Math.max(
+      1,
+      ...rows.map((r) => r.mfeR),
+      ...rows.map((r) => r.actualR),
+      // The post-exit run is part of the picture, so the axis has to hold it —
+      // otherwise the band that says "it went far without you" is the one
+      // clipped off the top of the card.
+      ...rows.map((r) => r.postPeakR ?? -Infinity),
+    );
     const lo = Math.min(-1, ...rows.map((r) => r.maeR), ...rows.map((r) => r.actualR));
     const span = hi - lo;
     const barW = Math.max(BAR_MIN, Math.min(28, 720 / rows.length));
@@ -82,6 +104,13 @@ export function ExcursionChart({
             const topY = y(r.mfeR);
             const botY = y(r.maeR);
             const exitY = y(r.actualR);
+            // Where the in-trade story ends: normally the high, but a trade
+            // whose MFE was never recorded stops at the exit itself.
+            const inTradeTopR = Math.max(r.mfeR, r.actualR);
+            // Under a hundredth of an R is a rounding artefact, not a run.
+            const ranOn = r.postPeakR != null && r.postPeakR > inTradeTopR + 0.01;
+            const ghostTopY = ranOn ? y(r.postPeakR!) : 0;
+            const ghostBotY = ranOn ? y(inTradeTopR) : 0;
             return (
               <g
                 key={r.tradeId}
@@ -106,6 +135,31 @@ export function ExcursionChart({
               >
                 {/* invisible full-height hit target so thin bars are hoverable */}
                 <rect x={i * barW} y={0} width={barW} height={H} fill="transparent" />
+                {/* what it made after you were out — behind the in-trade
+                    bands in the stacking order so they always read first */}
+                {ranOn && (
+                  <>
+                    <rect
+                      x={cx - bw / 2}
+                      y={ghostTopY}
+                      width={bw}
+                      height={Math.max(0, ghostBotY - ghostTopY)}
+                      rx={1.5}
+                      className="fill-muted-foreground/25"
+                    />
+                    {/* A thin cap so a shallow run still has a visible top
+                        edge instead of dissolving into the background. */}
+                    <line
+                      x1={cx - bw / 2}
+                      x2={cx + bw / 2}
+                      y1={ghostTopY}
+                      y2={ghostTopY}
+                      className="stroke-muted-foreground/70"
+                      strokeWidth={1.5}
+                      vectorEffect="non-scaling-stroke"
+                    />
+                  </>
+                )}
                 {/* favourable reach, above zero */}
                 <rect
                   x={cx - bw / 2}
@@ -186,6 +240,11 @@ export function ExcursionChart({
             {h.capture != null && ` · kept ${Math.round(h.capture * 100)}%`}
           </p>
           <p className="font-mono text-red-500">dipped {fmtR(h.maeR)}</p>
+          {h.leftBehindR != null && h.leftBehindR > 0.01 && (
+            <p className="font-mono text-muted-foreground">
+              ran {fmtR(h.leftBehindR)} more after you left
+            </p>
+          )}
           {onSelect && <p className="text-muted-foreground">click to open</p>}
         </div>
       )}
@@ -199,6 +258,10 @@ export function ExcursionChart({
         </span>
         <span className="flex items-center gap-1">
           <span className="inline-block h-2 w-2 rounded-sm bg-red-500/60" /> worst dip (MAE)
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="inline-block h-2 w-2 rounded-sm bg-muted-foreground/25" /> ran on
+          without you
         </span>
       </div>
     </div>

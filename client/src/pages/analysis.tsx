@@ -402,8 +402,9 @@ export default function Analysis({ embedded = false }: { embedded?: boolean } = 
         <div className="mb-3">
           <h2 className="text-sm font-semibold tracking-tight">How far each trade travelled</h2>
           <p className="mt-0.5 text-[11px] text-muted-foreground">
-            Best reach and worst dip per trade, with your exit marked. Green above the line you
-            didn't keep is give-back; red below is heat the trade took first.
+            Best reach and worst dip per trade, with your exit marked. Green above your exit
+            is give-back — the move offered it while you held. Grey on top is ground it made
+            after you were out. Red below is heat the trade took first.
           </p>
         </div>
 
@@ -419,7 +420,11 @@ export default function Analysis({ embedded = false }: { embedded?: boolean } = 
               onSelect={(id) => navigate(`/trade/${id}`)}
             />
             {excSummary && (
-              <div className="mt-3 grid grid-cols-2 gap-4 sm:grid-cols-4">
+              <div
+                className={`mt-3 grid grid-cols-2 gap-4 ${
+                  excSummary.avgLeftBehindR != null ? "sm:grid-cols-5" : "sm:grid-cols-4"
+                }`}
+              >
                 <Stat
                   label="Avg best reach"
                   value={`${fmtR(excSummary.avgMfeR)}`}
@@ -444,6 +449,19 @@ export default function Analysis({ embedded = false }: { embedded?: boolean } = 
                   value={`${fmtR(excSummary.deepestWinnerMaeR)}`}
                   hint="how tight is too tight"
                 />
+                {/* Deliberately averaged over the trades that recorded a
+                    post-exit peak only. Counting the unmeasured ones as zero
+                    would read as "it never runs on after I leave" — a claim
+                    the data has not made. */}
+                {excSummary.avgLeftBehindR != null && (
+                  <Stat
+                    label="Avg ran on after"
+                    value={`${fmtR(excSummary.avgLeftBehindR)}`}
+                    hint={`without you, on ${excSummary.leftBehindCount} measured`}
+                    tone={excSummary.avgLeftBehindR >= 0.5 ? "bad" : undefined}
+                    testId="stat-avg-left-behind"
+                  />
+                )}
               </div>
             )}
             {/* The two halves of "it went higher", finally separated: given
