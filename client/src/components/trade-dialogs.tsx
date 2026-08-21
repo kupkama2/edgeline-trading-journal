@@ -31,6 +31,8 @@ import { computeMetrics, fmtFees, fmtMoney, fmtR, EXIT_REASON_LABELS } from "@sh
 import { Dropzone, EXIT_REASONS, RationaleTags, TimeField, localNow, num, parseTags, toIso } from "@/components/trade-shared";
 import { EMPTY_GRADES, GradePicker, type GradeState } from "@/components/grade-picker";
 import { TradeOutcomeFields, statusAfterEdit } from "@/components/trade-outcome";
+import { SymbolPicker } from "@/components/symbol-picker";
+import { typedSymbol } from "@shared/symbols";
 
 /** An ISO instant as the local wall-clock string a datetime-local shows. */
 function toLocalInput(iso: string | null | undefined) {
@@ -156,7 +158,9 @@ export function TradeEditor({
   useEffect(() => {
     if (!trade) return;
     setF({
-      symbol: trade.symbol,
+      // The contract as written when there was one — see typedSymbol. Showing
+      // the rollup here is what made editing an MBTZ6 trade save it as "BTC".
+      symbol: typedSymbol(trade),
       size: String(trade.size),
       entryPrice: String(trade.entryPrice),
       // Pending trades have no stop/target yet — String(null) would put the
@@ -313,13 +317,24 @@ export function TradeEditor({
       <div>
         <div className="flex items-center gap-2 text-base font-semibold">
           <Pencil className="h-4 w-4 text-muted-foreground" />
-          Edit {trade?.symbol}
+          Edit {trade ? typedSymbol(trade) : ""}
         </div>
 
         {trade && (
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-3">
-              {field("symbol", "Symbol", "text")}
+              <div className="min-w-0 space-y-1">
+                <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  Symbol
+                </label>
+                <SymbolPicker
+                  value={f.symbol ?? ""}
+                  onChange={(v) => setF((p) => ({ ...p, symbol: v }))}
+                  trades={allTrades}
+                  testId="input-edit-symbol"
+                  className="h-9 font-mono text-sm"
+                />
+              </div>
               <div className="min-w-0 space-y-1">
                 <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
                   Direction
