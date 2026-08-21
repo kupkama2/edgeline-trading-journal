@@ -152,6 +152,10 @@ ALTER TABLE trades ADD COLUMN IF NOT EXISTS source TEXT;
 -- history, which is honest: old MFE values are ambiguous about which side of
 -- the exit they came from, and nothing can recover that after the fact.
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS post_exit_peak DOUBLE PRECISION;
+-- And its mirror: the ADVERSE extreme after exit. The only field that can say
+-- an exit was right rather than costly, which is what makes "was my stop too
+-- tight" answerable instead of always reading as "widen it".
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS post_exit_adverse DOUBLE PRECISION;
 -- Commission paid on the trade, both sides, in dollars. Deducted in metrics.
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS fees DOUBLE PRECISION;
 -- Green flags: JSON string[] of what went right on the trade.

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { excursions, summariseExcursions } from "../shared/excursion";
+import { excursions, stopQuality, summariseExcursions } from "../shared/excursion";
 import { trade } from "./helpers";
 
 /**
@@ -12,6 +12,8 @@ function t(over: {
   mae?: number;
   mfe?: number;
   postExitPeak?: number;
+  postExitAdverse?: number;
+  reason?: string;
 }) {
   return trade({
     id: over.id ?? 1,
@@ -22,8 +24,9 @@ function t(over: {
     mae: over.mae ?? null,
     mfe: over.mfe ?? null,
     postExitPeak: over.postExitPeak ?? null,
+    postExitAdverse: over.postExitAdverse ?? null,
     status: "closed",
-    exitReason: over.exit >= 100 ? "target" : "stop",
+    exitReason: over.reason ?? (over.exit >= 100 ? "target" : "stop"),
   });
 }
 
@@ -169,5 +172,136 @@ describe("summariseExcursions", () => {
 
   it("is null with nothing to summarise", () => {
     expect(summariseExcursions([])).toBeNull();
+  });
+});
+
+/**
+ * The counterweight: what the exit AVOIDED.
+ *
+ * Every other measurement in this module prices what getting out cost, and a
+ * journal built only from those has exactly one lesson — hold longer, stop
+ * wider. It is right until the day it takes the account, and nothing in the
+ * data ever argues back. These are the tests for the argument back.
+ */
+describe("the adverse continuation", () => {
+  it("measures how much further it fell after taking you out", () => {
+    // Stopped at 91, then it kept going to 71 — the stop saved 2R.
+    const [e] = excursions([t({ exit: 91, mae: 90, mfe: 104, postExitAdverse: 71 })]);
+    expect(e.avoidedR).toBeCloseTo(2);
+    expect(e.postAdverseR).toBeCloseTo(-2.9); // exit's −0.9R minus the 2R avoided
+    expect(e.postAdverseR!).toBeLessThan(e.maeR); // new ground -> the band draws
+  });
+
+  it("is zero, not negative, when it turned the moment you left", () => {
+    // An "adverse" print on the favourable side means nothing was avoided.
+    // Negative here would read as leaving having COST you, which is the
+    // other field's job entirely.
+    const [e] = excursions([t({ exit: 91, mae: 90, mfe: 104, postExitAdverse: 99 })]);
+    expect(e.avoidedR).toBe(0);
+  });
+
+  it("is null when nobody looked", () => {
+    const [e] = excursions([t({ exit: 91, mae: 90, mfe: 104 })]);
+    expect(e.avoidedR).toBeNull();
+    expect(e.postAdverseR).toBeNull();
+  });
+
+  it("charts a trade whose only recorded path is how much worse it got", () => {
+    const rows = excursions([t({ exit: 91, postExitAdverse: 71 })]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].avoidedR).toBeCloseTo(2);
+  });
+
+  it("works for a short, where worse means higher", () => {
+    const short = trade({
+      id: 9,
+      direction: "short",
+      entryPrice: 100,
+      initialStop: 110,
+      exitPrice: 109,
+      mae: 110,
+      mfe: 96,
+      postExitAdverse: 124,
+      status: "closed",
+      exitReason: "stop",
+    });
+    const [e] = excursions([short]);
+    expect(e.avoidedR).toBeCloseTo(1.5); // 109 -> 124 is 15 points, 1R = 10
+  });
+
+  it("carries both aftermath legs on one trade without confusing them", () => {
+    // Stopped out, fell another 1R, then rallied all the way to +2R. Both are
+    // true, they are different numbers, and they point opposite ways.
+    const [e] = excursions([
+      t({ exit: 91, mae: 90, mfe: 104, postExitAdverse: 81, postExitPeak: 111 }),
+    ]);
+    expect(e.avoidedR).toBeCloseTo(1);
+    expect(e.leftBehindR).toBeCloseTo(2);
+  });
+});
+
+/**
+ * "Was my stop too tight" — the question the journal could not answer.
+ *
+ * It needs both aftermath legs. A stop that was the exact low and then
+ * watched the trade work is a stop that was too tight; a stop that took you
+ * out before a much larger loss did its job. Same stop-out, opposite lessons,
+ * and one field can only ever tell one of the two stories.
+ */
+describe("stop quality", () => {
+  const stop = (o: { id: number; adverse?: number; peak?: number; reason?: string }) =>
+    t({ id: o.id, exit: 91, mae: 90, mfe: 104, postExitAdverse: o.adverse, postExitPeak: o.peak, reason: o.reason });
+
+  it("says nothing without stop-outs that recorded an aftermath", () => {
+    expect(stopQuality([t({ exit: 91, mae: 90, mfe: 104 })])).toBeNull();
+    expect(stopQuality([t({ exit: 118, mae: 96, mfe: 124, postExitAdverse: 90 })])).toBeNull();
+  });
+
+  it("credits a stop that took you out of something much worse", () => {
+    const s = stopQuality([stop({ id: 1, adverse: 71 })])!;
+    expect(s.vindicated).toBe(1);
+    expect(s.wickedOut).toBe(0);
+    expect(s.savedTotalR).toBeCloseTo(2);
+    expect(s.verdict).toBe("earning its keep");
+  });
+
+  it("calls out a stop that was the low", () => {
+    // Barely went further, then the trade worked without you.
+    const s = stopQuality([stop({ id: 1, adverse: 90.5, peak: 111 })])!;
+    expect(s.wickedOut).toBe(1);
+    expect(s.wickedTotalR).toBeCloseTo(2);
+    expect(s.verdict).toBe("too tight");
+  });
+
+  it("does not blame a stop for a recovery it never had to sit through", () => {
+    // Fell another 2R first, THEN rallied to +2R. A wider stop would have had
+    // to hold through that 2R; counting this as "too tight" would recommend
+    // exactly the trade that loses more.
+    const s = stopQuality([stop({ id: 1, adverse: 71, peak: 111 })])!;
+    expect(s.vindicated).toBe(1);
+    expect(s.wickedOut).toBe(0);
+  });
+
+  it("ignores movement too small to be a verdict either way", () => {
+    const s = stopQuality([stop({ id: 1, adverse: 89, peak: 93 })])!;
+    expect(s.measured).toBe(1);
+    expect(s.vindicated).toBe(0);
+    expect(s.wickedOut).toBe(0);
+    expect(s.verdict).toBeNull();
+  });
+
+  it("counts only stop-outs, not every losing trade", () => {
+    // A discretionary cut is a decision, not a stop, and grading it as one
+    // would let a habit of bailing early masquerade as a stop problem.
+    const s = stopQuality([
+      stop({ id: 1, adverse: 71 }),
+      stop({ id: 2, adverse: 71, reason: "discretion" }),
+    ])!;
+    expect(s.measured).toBe(1);
+  });
+
+  it("reports mixed when the stops split evenly", () => {
+    const s = stopQuality([stop({ id: 1, adverse: 71 }), stop({ id: 2, adverse: 90.5, peak: 111 })])!;
+    expect(s.verdict).toBe("mixed");
   });
 });

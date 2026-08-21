@@ -181,6 +181,23 @@ export const trades = pgTable("trades", {
    * right: it never came back.
    */
   postExitPeak: doublePrecision("post_exit_peak"),
+  /**
+   * The ADVERSE extreme after the exit — how much further it went against you
+   * once you were out.
+   *
+   * The mirror of postExitPeak, and the only field in the journal that can
+   * say an exit was RIGHT. Everything else here measures what an exit cost:
+   * give-back above the tick, a run left behind above that. A log that only
+   * ever prices the cost of getting out teaches one lesson — hold longer,
+   * stop wider — and that lesson ends an account.
+   *
+   * Both exit kinds again. Stopped out: how far it kept falling after taking
+   * you out, which IS the question "was my stop too tight" — a big number
+   * means the stop saved you real money, ≈0 next to a high postExitPeak means
+   * you were wicked out of a working trade. Closed in profit: how far it
+   * dropped after you left, i.e. give-back you avoided by going when you did.
+   */
+  postExitAdverse: doublePrecision("post_exit_adverse"),
   noManagementOutcome: text("no_management_outcome"), // 'target_first' | 'stop_first' | 'undetermined'
   setupScreenshot: text("setup_screenshot"),
   outcomeScreenshot: text("outcome_screenshot"),
@@ -678,6 +695,7 @@ export interface OutcomeParseResult {
   mae: number | null;
   mfe: number | null;
   postExitPeak?: number | null;
+  postExitAdverse?: number | null;
   noManagementOutcome: "target_first" | "stop_first" | "undetermined" | null;
 }
 

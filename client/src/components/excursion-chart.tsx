@@ -7,10 +7,11 @@ import type { Excursion } from "@shared/excursion";
  *
  * Each trade is one column, in three bands, all measured from the entry:
  *
- *   red, below zero      heat — how far it went against you first
- *   emerald, above zero  the move you were IN THE TRADE for, up to the
- *                        in-trade high, with a tick where you got out
- *   slate, above that    ground the trade made AFTER you were out
+ *   slate, below the red  how much further it fell AFTER you were out
+ *   red, below zero       heat — how far it went against you first
+ *   emerald, above zero   the move you were IN THE TRADE for, up to the
+ *                         in-trade high, with a tick where you got out
+ *   slate, above that     ground the trade made AFTER you were out
  *
  * Every pixel belongs to the phase in which it was first reached, so the two
  * halves of "it went higher" stay visually separate: emerald above the tick is
@@ -18,6 +19,11 @@ import type { Excursion } from "@shared/excursion";
  * that is a management story. Slate is a different event entirely — it ran on
  * without you — and that is an exit-timing story. Reading them off one colour
  * is how a trade closed too EARLY gets diagnosed as held too LATE.
+ *
+ * The bottom band is the same idea mirrored, and it is the only thing here
+ * that can come out in an exit's favour: on a stop-out it is what the stop
+ * saved you. Without it the chart has one lesson to teach — hold longer, stop
+ * wider — which is true right up until it isn't.
  *
  * The slate band starts at the in-trade high rather than at the exit, because
  * the stretch between the exit and that high was already travelled while you
@@ -59,7 +65,12 @@ export function ExcursionChart({
       // clipped off the top of the card.
       ...rows.map((r) => r.postPeakR ?? -Infinity),
     );
-    const lo = Math.min(-1, ...rows.map((r) => r.maeR), ...rows.map((r) => r.actualR));
+    const lo = Math.min(
+      -1,
+      ...rows.map((r) => r.maeR),
+      ...rows.map((r) => r.actualR),
+      ...rows.map((r) => r.postAdverseR ?? Infinity),
+    );
     const span = hi - lo;
     const barW = Math.max(BAR_MIN, Math.min(28, 720 / rows.length));
     const width = Math.max(rows.length * barW, 320);
@@ -111,6 +122,11 @@ export function ExcursionChart({
             const ranOn = r.postPeakR != null && r.postPeakR > inTradeTopR + 0.01;
             const ghostTopY = ranOn ? y(r.postPeakR!) : 0;
             const ghostBotY = ranOn ? y(inTradeTopR) : 0;
+            // Mirror image below: new ground made against you after the exit.
+            const inTradeBotR = Math.min(r.maeR, r.actualR);
+            const fellOn = r.postAdverseR != null && r.postAdverseR < inTradeBotR - 0.01;
+            const underTopY = fellOn ? y(inTradeBotR) : 0;
+            const underBotY = fellOn ? y(r.postAdverseR!) : 0;
             return (
               <g
                 key={r.tradeId}
@@ -154,6 +170,29 @@ export function ExcursionChart({
                       x2={cx + bw / 2}
                       y1={ghostTopY}
                       y2={ghostTopY}
+                      className="stroke-muted-foreground/70"
+                      strokeWidth={1.5}
+                      vectorEffect="non-scaling-stroke"
+                    />
+                  </>
+                )}
+                {/* what it did against you after you were out — on a
+                    stop-out, the part the stop saved you from */}
+                {fellOn && (
+                  <>
+                    <rect
+                      x={cx - bw / 2}
+                      y={underTopY}
+                      width={bw}
+                      height={Math.max(0, underBotY - underTopY)}
+                      rx={1.5}
+                      className="fill-muted-foreground/25"
+                    />
+                    <line
+                      x1={cx - bw / 2}
+                      x2={cx + bw / 2}
+                      y1={underBotY}
+                      y2={underBotY}
                       className="stroke-muted-foreground/70"
                       strokeWidth={1.5}
                       vectorEffect="non-scaling-stroke"
@@ -245,6 +284,11 @@ export function ExcursionChart({
               ran {fmtR(h.leftBehindR)} more after you left
             </p>
           )}
+          {h.avoidedR != null && h.avoidedR > 0.01 && (
+            <p className="font-mono text-muted-foreground">
+              {h.stopped ? "stop saved" : "avoided"} {fmtR(h.avoidedR)} after you left
+            </p>
+          )}
           {onSelect && <p className="text-muted-foreground">click to open</p>}
         </div>
       )}
@@ -260,8 +304,8 @@ export function ExcursionChart({
           <span className="inline-block h-2 w-2 rounded-sm bg-red-500/60" /> worst dip (MAE)
         </span>
         <span className="flex items-center gap-1">
-          <span className="inline-block h-2 w-2 rounded-sm bg-muted-foreground/25" /> ran on
-          without you
+          <span className="inline-block h-2 w-2 rounded-sm bg-muted-foreground/25" /> after you
+          were out (either way)
         </span>
       </div>
     </div>

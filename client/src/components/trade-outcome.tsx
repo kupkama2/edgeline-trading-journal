@@ -24,7 +24,7 @@
  */
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { EXIT_REASON_LABELS, exitTimingVerdict } from "@shared/metrics";
+import { EXIT_REASON_LABELS, EXIT_TIMING_MEANINGFUL_R, exitTimingVerdict } from "@shared/metrics";
 import { gradeLabel } from "@shared/grades";
 import { EXIT_REASONS, TimeField } from "@/components/trade-shared";
 import { GradePicker, type GradeState } from "@/components/grade-picker";
@@ -46,6 +46,8 @@ export interface OutcomeFieldsProps {
   setMfe: (v: string) => void;
   postExitPeak: string;
   setPostExitPeak: (v: string) => void;
+  postExitAdverse: string;
+  setPostExitAdverse: (v: string) => void;
   nmo: string | null;
   setNmo: (v: string | null) => void;
   fees: string;
@@ -146,6 +148,45 @@ export function TradeOutcomeFields(p: OutcomeFieldsProps) {
     return exitTimingVerdict(leg(p.mfe), leg(p.postExitPeak));
   })();
 
+  /**
+   * What the stop did, said at the moment of logging.
+   *
+   * Only for stop-outs, and only once the aftermath is written down — it is
+   * the one read in this form that can come out in the exit's favour, and
+   * offering it on a discretionary close would be flattery rather than
+   * information. Saving R outranks the recovery: money the stop kept is
+   * banked, the comeback is a counterfactual a wider stop would have had to
+   * sit through.
+   */
+  const stopRead = (() => {
+    if (!p.timing || p.exitReason !== "stop") return null;
+    const { direction, entryPrice, initialStop } = p.timing;
+    const exit = Number(p.exitPrice);
+    if (entryPrice == null || initialStop == null || !isFinite(exit)) return null;
+    const risk = Math.abs(entryPrice - initialStop);
+    if (!(risk > 0)) return null;
+    const sign = direction === "short" ? -1 : 1;
+    const num = (raw: string) => {
+      const v = Number(raw);
+      return raw.trim() !== "" && isFinite(v) ? v : null;
+    };
+    const worse = num(p.postExitAdverse);
+    const back = num(p.postExitPeak);
+    const saved = worse != null ? Math.max(0, (sign * (exit - worse)) / risk) : null;
+    const came = back != null ? Math.max(0, (sign * (back - exit)) / risk) : null;
+    if (saved == null && came == null) return null;
+    if (saved != null && saved >= EXIT_TIMING_MEANINGFUL_R) {
+      return { tone: "good" as const, text: `The stop saved ${saved.toFixed(1)}R — it kept going.` };
+    }
+    if (came != null && came >= EXIT_TIMING_MEANINGFUL_R) {
+      return {
+        tone: "bad" as const,
+        text: `Wicked out: barely went further, then came back ${came.toFixed(1)}R without you.`,
+      };
+    }
+    return { tone: "flat" as const, text: "Stop was about right — it went nowhere either way." };
+  })();
+
   const toggleDemon = (id: number) =>
     p.setDemonIds(
       p.demonIds.includes(id) ? p.demonIds.filter((x) => x !== id) : [...p.demonIds, id],
@@ -227,21 +268,60 @@ export function TradeOutcomeFields(p: OutcomeFieldsProps) {
             </div>
           </div>
 
+          {/* After you were out, both ways. The pair is the point: one of
+              them prices what leaving cost, the other what it saved, and a
+              form that only ever asks the first one can only ever conclude
+              "hold longer". */}
           <div className="space-y-1">
-            <label className={LABEL}>After exit, before your stop level broke, it reached…</label>
-            <Input
-              type="number"
-              step="any"
-              inputMode="decimal"
-              value={p.postExitPeak}
-              onChange={(e) => p.setPostExitPeak(e.target.value)}
-              className="h-9 font-mono text-sm"
-              data-testid={`input-${p.testPrefix}-post-exit-peak`}
-            />
-            <p className="text-[10px] leading-snug text-muted-foreground">
-              The half of "it went higher" you were not in for. On a stop-out: where it got
-              to before making a new extreme — ≈ your exit means the stop was right.
-            </p>
+            <p className={LABEL}>Once you were out, it went…</p>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Input
+                  type="number"
+                  step="any"
+                  inputMode="decimal"
+                  placeholder="your way, to…"
+                  value={p.postExitPeak}
+                  onChange={(e) => p.setPostExitPeak(e.target.value)}
+                  className="h-9 font-mono text-sm"
+                  data-testid={`input-${p.testPrefix}-post-exit-peak`}
+                />
+                <p className="text-[10px] leading-snug text-muted-foreground">
+                  The half of "it went higher" you were not in for — up to where your stop
+                  level broke.
+                </p>
+              </div>
+              <div className="space-y-1">
+                <Input
+                  type="number"
+                  step="any"
+                  inputMode="decimal"
+                  placeholder="against you, to…"
+                  value={p.postExitAdverse}
+                  onChange={(e) => p.setPostExitAdverse(e.target.value)}
+                  className="h-9 font-mono text-sm"
+                  data-testid={`input-${p.testPrefix}-post-exit-adverse`}
+                />
+                <p className="text-[10px] leading-snug text-muted-foreground">
+                  How much worse it got without you. On a stop-out this is what the stop
+                  saved you.
+                </p>
+              </div>
+            </div>
+            {stopRead && (
+              <p
+                className={`pt-0.5 text-[11px] leading-snug ${
+                  stopRead.tone === "good"
+                    ? "text-emerald-500"
+                    : stopRead.tone === "bad"
+                      ? "text-amber-500"
+                      : "text-muted-foreground"
+                }`}
+                data-testid={`text-${p.testPrefix}-stop-read`}
+              >
+                {stopRead.text}
+              </p>
+            )}
           </div>
 
           <div className="space-y-1">

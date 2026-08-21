@@ -184,6 +184,7 @@ export function TradeEditor({
       mae: trade.mae != null ? String(trade.mae) : "",
       mfe: trade.mfe != null ? String(trade.mfe) : "",
       postExitPeak: trade.postExitPeak != null ? String(trade.postExitPeak) : "",
+      postExitAdverse: trade.postExitAdverse != null ? String(trade.postExitAdverse) : "",
       rationale: trade.rationale ?? "",
       rationaleTags: parseTags(trade.rationaleTags).join(", "),
       notes: trade.notes ?? "",
@@ -308,6 +309,7 @@ export function TradeEditor({
         mae: numOrNull(f.mae),
         mfe: numOrNull(f.mfe),
         postExitPeak: numOrNull(f.postExitPeak ?? ""),
+        postExitAdverse: numOrNull(f.postExitAdverse ?? ""),
         noManagementOutcome: (nmo as any) ?? null,
         rationale: f.rationale.trim() || null,
         rationaleTags: rTags.length ? JSON.stringify(rTags) : null,
@@ -642,6 +644,8 @@ export function TradeEditor({
               setMfe={(v: string) => setF((p) => ({ ...p, mfe: v }))}
               postExitPeak={f.postExitPeak ?? ""}
               setPostExitPeak={(v: string) => setF((p) => ({ ...p, postExitPeak: v }))}
+              postExitAdverse={f.postExitAdverse ?? ""}
+              setPostExitAdverse={(v: string) => setF((p) => ({ ...p, postExitAdverse: v }))}
               nmo={nmo}
               setNmo={setNmo}
               fees={f.fees ?? ""}
