@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { outcomeStage, statusAfterEdit } from "../client/src/components/trade-outcome";
+import { outcomeStage, resolveLifecycle } from "../client/src/components/trade-outcome";
 
 /**
  * The rule that decides what a trade is asked.
@@ -57,47 +57,61 @@ describe("what an unfinished trade gets asked", () => {
 });
 
 /**
- * Closing is editing now, so the editor has to close.
+ * Waiting to fill -> open -> closed, and back again.
  *
  * This shipped broken for exactly one browser run: the editor saved an exit
  * price, a reason, MFE, fees and an exit grade onto a trade that stayed
  * "open" — every number right, the trade still in the open list, and invisible
  * to every closed-trade statistic. The close dialog used to set the status;
  * deleting it took that with it, and nothing typed complained.
+ *
+ * The fix is not to infer the state from the exit price but to ask for it, and
+ * then refuse to save a picked state and an exit price that contradict each
+ * other. There are exactly two contradictions and both produce a row the app
+ * cannot read, so neither may be reachable by pressing Save.
  */
-describe("the status an edit leaves behind", () => {
-  it("closes an open trade once it has an exit", () => {
-    expect(statusAfterEdit("open", "124")).toBe("closed");
+const ok = (r: ReturnType<typeof resolveLifecycle>) => ("status" in r ? r.status : `ERROR: ${r.error}`);
+
+describe("reconciling the picked state with the exit price", () => {
+  it("closes a trade that has an exit price", () => {
+    expect(ok(resolveLifecycle("closed", "124"))).toBe("closed");
   });
 
-  it("closes a pending order that turns out to have filled and finished", () => {
-    expect(statusAfterEdit("pending", "124")).toBe("closed");
+  it("keeps a live trade open, and a resting order pending", () => {
+    expect(ok(resolveLifecycle("open", ""))).toBe("open");
+    expect(ok(resolveLifecycle("pending", "   "))).toBe("pending");
   });
 
-  it("leaves a pending order pending while it has no exit", () => {
-    expect(statusAfterEdit("pending", "")).toBe("pending");
-    expect(statusAfterEdit("pending", "   ")).toBe("pending");
+  it("refuses closed with nothing to close it at", () => {
+    // "Closed with no exit price" computes nothing: no R, no P&L, no row in
+    // any statistic. It has to be unreachable rather than merely unlikely.
+    const r = resolveLifecycle("closed", "");
+    expect("error" in r).toBe(true);
+    expect(ok(r)).toMatch(/needs an exit price/);
   });
 
-  it("leaves an open trade open while it has no exit", () => {
-    expect(statusAfterEdit("open", "")).toBe("open");
+  it("refuses open with an exit price sitting on it", () => {
+    // The original bug, from the other side: an exit recorded on a trade the
+    // app still calls open. Every number right, counted nowhere.
+    expect("error" in resolveLifecycle("open", "124")).toBe(true);
+    expect(ok(resolveLifecycle("pending", "124"))).toMatch(/Clear the exit price/);
   });
 
-  it("reopens a closed trade whose exit was cleared", () => {
-    // "Closed with no exit price" is not a state the metrics can read, so it
-    // must not be reachable by deleting one field and saving.
-    expect(statusAfterEdit("closed", "")).toBe("open");
+  it("names the state you picked, so the fix is obvious", () => {
+    expect(ok(resolveLifecycle("pending", "124"))).toMatch(/waiting to fill/);
+    expect(ok(resolveLifecycle("open", "124"))).toMatch(/open/);
   });
 
-  it("keeps a closed trade closed when the exit is merely corrected", () => {
-    expect(statusAfterEdit("closed", "131")).toBe("closed");
-  });
-
-  it("never returns closed without an exit price", () => {
-    for (const cur of ["pending", "open", "closed"]) {
-      for (const price of ["", "  ", "abc"]) {
-        expect(statusAfterEdit(cur, price)).not.toBe("closed");
-      }
+  it("never returns closed without a usable exit price", () => {
+    for (const price of ["", "  ", "abc"]) {
+      expect(ok(resolveLifecycle("closed", price))).not.toBe("closed");
     }
+  });
+
+  it("treats an exit of exactly zero as a real exit", () => {
+    // A spread or an option can settle at 0. Falsy-checking the number is how
+    // that trade silently reopens itself.
+    expect(ok(resolveLifecycle("closed", "0"))).toBe("closed");
+    expect("error" in resolveLifecycle("open", "0")).toBe(true);
   });
 });

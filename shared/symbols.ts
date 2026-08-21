@@ -143,6 +143,39 @@ export function contractFor(raw: string | null | undefined): ContractSpec | null
  * Normalize a raw symbol/contract string to its canonical root.
  * "MNQU6" -> "NQ", "MBTZ6" -> "BTC", "MBT" -> "BTC", "AAPL" -> "AAPL".
  */
+/**
+ * The symbol as the trader actually wrote it.
+ *
+ * `symbol` is the rollup ("BTC") and `contract` is what was typed ("MBTZ6");
+ * the rollup is what keeps the stats merged, and the contract is what the
+ * trade actually was. Anywhere a human is shown the symbol for EDITING, this
+ * is the honest answer — showing the rollup and saving it back is how "MBTZ6"
+ * silently becomes "BTC" and a micro becomes a full-size contract.
+ */
+/**
+ * Split what the trader typed into the instrument and the contract.
+ *
+ * "MBTZ6" is a contract whose instrument is BTC; "BTCUSDT" is a spot pair with
+ * no contract to tell apart. Creating and editing must agree on this, or an
+ * edit leaves the old contract attached to a new instrument — so the rule
+ * lives here rather than twice in the routes.
+ */
+export function splitTypedSymbol(raw: string): {
+  symbol: string;
+  contract: string | null;
+} {
+  const typed = raw.trim().toUpperCase();
+  const isContract = Boolean(contractFor(typed)) || looksLikeFuturesContract(typed);
+  return { symbol: normalizeSymbol(typed), contract: isContract ? typed : null };
+}
+
+export function typedSymbol(t: {
+  symbol: string;
+  contract?: string | null;
+}): string {
+  return t.contract?.trim() || t.symbol;
+}
+
 export function normalizeSymbol(raw: string | null | undefined): string {
   if (!raw) return "";
   const s = raw.trim().toUpperCase();

@@ -108,6 +108,7 @@ export function NewTradeCard({
   const [mae, setMae] = useState("");
   const [mfe, setMfe] = useState("");
   const [postExitPeak, setPostExitPeak] = useState("");
+  const [postExitAdverse, setPostExitAdverse] = useState("");
   const [nmo, setNmo] = useState<string | null>(null);
   const [fees, setFees] = useState("");
   const { data: demons = [] } = useMistakeTags();
@@ -564,6 +565,7 @@ export function NewTradeCard({
     setMae("");
     setMfe("");
     setPostExitPeak("");
+    setPostExitAdverse("");
     setNmo(null);
     setFees("");
     setSetupTags([]);
@@ -1285,6 +1287,8 @@ export function NewTradeCard({
                 mfe={mfe}
                 setMfe={setMfe}
                 postExitPeak={postExitPeak}
+                postExitAdverse={postExitAdverse}
+                setPostExitAdverse={setPostExitAdverse}
                 setPostExitPeak={setPostExitPeak}
                 nmo={nmo}
                 setNmo={setNmo}

@@ -38,7 +38,7 @@ const EXPORT_COLUMNS = [
   "entryGrade", "stopGrade", "exitGrade",
   "riskDollars", "actualR", "actualPnL", "fees",
   "potentialR", "managementDeltaR", "captureRatio",
-  "maeR", "mfeR", "postExitPeak", "leftBehindR",
+  "maeR", "mfeR", "postExitPeak", "leftBehindR", "postExitAdverse", "avoidedR",
   "style", "account", "mistakes", "highlights", "setups", "rationale", "notes",
 ] as const;
 
@@ -100,6 +100,8 @@ export function tradesToCsv(
       round(m.mfeR, 4),
       t.postExitPeak,
       round(m.leftBehindR, 4),
+      t.postExitAdverse,
+      round(m.avoidedR, 4),
       t.styleId != null ? (styleNames[t.styleId] ?? "") : "",
       t.account,
       t.mistakeTagIds.map((id) => tagNames[id]).filter(Boolean).join("; "),

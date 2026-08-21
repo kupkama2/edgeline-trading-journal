@@ -29,7 +29,7 @@ import {
 import { drawdown, streaks } from "@shared/streaks";
 import { MIN_SAMPLE, simulate } from "@shared/montecarlo";
 import { missedStats } from "@shared/missed";
-import { excursions, exitTimingSummary, summariseExcursions } from "@shared/excursion";
+import { excursions, exitTimingSummary, stopQuality, summariseExcursions } from "@shared/excursion";
 import { fmtFees, fmtMoney, fmtR } from "@shared/metrics";
 
 /**
@@ -202,6 +202,7 @@ export default function Analysis({ embedded = false }: { embedded?: boolean } = 
   const exc = useMemo(() => excursions(scoped), [scoped]);
   const excSummary = useMemo(() => summariseExcursions(exc), [exc]);
   const timing = useMemo(() => exitTimingSummary(scoped), [scoped]);
+  const stops = useMemo(() => stopQuality(scoped), [scoped]);
 
   const rows = useMemo(() => {
     switch (tab) {
@@ -402,8 +403,11 @@ export default function Analysis({ embedded = false }: { embedded?: boolean } = 
         <div className="mb-3">
           <h2 className="text-sm font-semibold tracking-tight">How far each trade travelled</h2>
           <p className="mt-0.5 text-[11px] text-muted-foreground">
-            Best reach and worst dip per trade, with your exit marked. Green above the line you
-            didn't keep is give-back; red below is heat the trade took first.
+            Best reach and worst dip per trade, with your exit marked. Green above your exit
+            is give-back — the move offered it while you held. Red below is heat the trade
+            took first. Grey is what happened once you were out: on top, ground it made
+            without you; underneath, how much worse it got — on a stop-out, what the stop
+            saved you.
           </p>
         </div>
 
@@ -419,7 +423,18 @@ export default function Analysis({ embedded = false }: { embedded?: boolean } = 
               onSelect={(id) => navigate(`/trade/${id}`)}
             />
             {excSummary && (
-              <div className="mt-3 grid grid-cols-2 gap-4 sm:grid-cols-4">
+              // Four base stats plus up to two aftermath ones. Six goes to two
+              // rows of three rather than one row of six, which at this size
+              // stops being a row of numbers and becomes a wall of them.
+              <div
+                className={`mt-3 grid grid-cols-2 gap-4 ${
+                  excSummary.avgLeftBehindR != null && excSummary.avgAvoidedR != null
+                    ? "sm:grid-cols-3"
+                    : excSummary.avgLeftBehindR != null || excSummary.avgAvoidedR != null
+                      ? "sm:grid-cols-5"
+                      : "sm:grid-cols-4"
+                }`}
+              >
                 <Stat
                   label="Avg best reach"
                   value={`${fmtR(excSummary.avgMfeR)}`}
@@ -444,6 +459,32 @@ export default function Analysis({ embedded = false }: { embedded?: boolean } = 
                   value={`${fmtR(excSummary.deepestWinnerMaeR)}`}
                   hint="how tight is too tight"
                 />
+                {/* Deliberately averaged over the trades that recorded a
+                    post-exit peak only. Counting the unmeasured ones as zero
+                    would read as "it never runs on after I leave" — a claim
+                    the data has not made. */}
+                {excSummary.avgLeftBehindR != null && (
+                  <Stat
+                    label="Avg ran on after"
+                    value={`${fmtR(excSummary.avgLeftBehindR)}`}
+                    hint={`without you, on ${excSummary.leftBehindCount} measured`}
+                    tone={excSummary.avgLeftBehindR >= 0.5 ? "bad" : undefined}
+                    testId="stat-avg-left-behind"
+                  />
+                )}
+                {/* Its counterweight. Shown as GOOD when it is large: this is
+                    the one number here that argues for the exit rather than
+                    against it, and a log where every stat can only ever say
+                    "you got out too soon" teaches one thing, forever. */}
+                {excSummary.avgAvoidedR != null && (
+                  <Stat
+                    label="Avg exit avoided"
+                    value={`${fmtR(excSummary.avgAvoidedR)}`}
+                    hint={`it got worse without you, on ${excSummary.avoidedCount} measured`}
+                    tone={excSummary.avgAvoidedR >= 0.5 ? "good" : undefined}
+                    testId="stat-avg-avoided"
+                  />
+                )}
               </div>
             )}
             {/* The two halves of "it went higher", finally separated: given
@@ -471,6 +512,36 @@ export default function Analysis({ embedded = false }: { embedded?: boolean } = 
                     {" "}— the bigger cost is holding past the move.
                   </span>
                 )}
+              </div>
+            )}
+            {/* The other half of the exit-timing argument, and the only one
+                that can come out in the stop's favour. Give-back and runs
+                left behind both say "stay in longer"; nothing else in this
+                card ever says a stop earned its money. */}
+            {stops && stops.verdict && (
+              <div
+                className="mt-2 rounded-md border border-border/60 px-3 py-2 text-[11px]"
+                data-testid="stop-quality-summary"
+              >
+                <span className="font-semibold">Your stops:</span> saved{" "}
+                {stops.savedTotalR.toFixed(1)}R across {stops.vindicated}{" "}
+                {stops.vindicated === 1 ? "stop-out" : "stop-outs"} that kept going ·{" "}
+                {stops.wickedOut} wicked out and came back {stops.wickedTotalR.toFixed(1)}R
+                {stops.verdict === "too tight" && (
+                  <span className="text-amber-500">
+                    {" "}— more often the low than the escape. Room, or a smaller size, buys
+                    the same risk with fewer of these.
+                  </span>
+                )}
+                {stops.verdict === "earning its keep" && (
+                  <span className="text-emerald-500">
+                    {" "}— the stop is doing its job. Widening it would have cost more than
+                    it saved.
+                  </span>
+                )}
+                <span className="text-muted-foreground">
+                  {" "}({stops.measured} stop-outs with the aftermath recorded)
+                </span>
               </div>
             )}
             <p className="mt-2 text-[10px] leading-snug text-muted-foreground">

@@ -15,7 +15,7 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, Pencil, Trash2 } from "lucide-react";
+import { ArrowUpRight, CheckCircle2, Clock3, Loader2, Pencil, Trash2 } from "lucide-react";
 import { useAccountSettings, useMistakeTags, useUpdateTrade, useAddTradeImage, archiveDataUrl, parseScreenshot, fileToDownscaledDataUrl } from "@/lib/data";
 import { suggestFees } from "@shared/fees";
 import { knownHighlights, parseHighlights, serializeHighlights } from "@shared/highlights";
@@ -30,7 +30,14 @@ import { parseExtraTargets, parsePlaybook, type TradeWithTags } from "@shared/sc
 import { computeMetrics, fmtFees, fmtMoney, fmtR, EXIT_REASON_LABELS } from "@shared/metrics";
 import { Dropzone, EXIT_REASONS, RationaleTags, TimeField, localNow, num, parseTags, toIso } from "@/components/trade-shared";
 import { EMPTY_GRADES, GradePicker, type GradeState } from "@/components/grade-picker";
-import { TradeOutcomeFields, statusAfterEdit } from "@/components/trade-outcome";
+import {
+  TradeOutcomeFields,
+  outcomeStage,
+  resolveLifecycle,
+  type Lifecycle,
+} from "@/components/trade-outcome";
+import { SymbolPicker } from "@/components/symbol-picker";
+import { typedSymbol } from "@shared/symbols";
 
 /** An ISO instant as the local wall-clock string a datetime-local shows. */
 function toLocalInput(iso: string | null | undefined) {
@@ -152,11 +159,19 @@ export function TradeEditor({
     return Array.from(s).sort();
   }, [allTrades]);
   const [source, setSource] = useState("");
+  /**
+   * Where this trade is in its life. Explicit rather than inferred, because
+   * every step is editable: an order that never filled goes back to pending, a
+   * trade closed by mistake goes back to open.
+   */
+  const [lifecycle, setLifecycle] = useState<Lifecycle>("open");
 
   useEffect(() => {
     if (!trade) return;
     setF({
-      symbol: trade.symbol,
+      // The contract as written when there was one — see typedSymbol. Showing
+      // the rollup here is what made editing an MBTZ6 trade save it as "BTC".
+      symbol: typedSymbol(trade),
       size: String(trade.size),
       entryPrice: String(trade.entryPrice),
       // Pending trades have no stop/target yet — String(null) would put the
@@ -169,6 +184,7 @@ export function TradeEditor({
       mae: trade.mae != null ? String(trade.mae) : "",
       mfe: trade.mfe != null ? String(trade.mfe) : "",
       postExitPeak: trade.postExitPeak != null ? String(trade.postExitPeak) : "",
+      postExitAdverse: trade.postExitAdverse != null ? String(trade.postExitAdverse) : "",
       rationale: trade.rationale ?? "",
       rationaleTags: parseTags(trade.rationaleTags).join(", "),
       notes: trade.notes ?? "",
@@ -190,7 +206,22 @@ export function TradeEditor({
     setSource(trade.source ?? "");
     setStyleId(trade.styleId ?? null);
     setSizeUnit(trade.sizeUnit === "quote" ? "quote" : "base");
+    setLifecycle(
+      trade.status === "pending" ? "pending" : trade.status === "closed" ? "closed" : "open",
+    );
   }, [trade]);
+
+  /*
+   * Typing an exit price IS closing the trade, so the picker follows — you
+   * should not have to say it twice. One-way on purpose: it never drags a
+   * trade back OFF closed, so clearing the field to correct a typo does not
+   * reopen a finished trade underneath you.
+   */
+  useEffect(() => {
+    if (outcomeStage(f.exitPrice ?? "", null).priced) {
+      setLifecycle((cur) => (cur === "closed" ? cur : "closed"));
+    }
+  }, [f.exitPrice]);
 
   const set = (k: string) => (e: { target: { value: string } }) =>
     setF((p) => ({ ...p, [k]: e.target.value }));
@@ -238,6 +269,14 @@ export function TradeEditor({
       toast({ title: "A live trade needs a stop and a target", variant: "destructive" });
       return;
     }
+    // The picked lifecycle and the exit price must agree before anything is
+    // written; see resolveLifecycle for why neither contradiction is allowed.
+    const resolution = resolveLifecycle(lifecycle, f.exitPrice ?? "");
+    if ("error" in resolution) {
+      toast({ title: resolution.error, variant: "destructive" });
+      return;
+    }
+    const resolved = resolution;
     // Same promotion as the entry card: a source name typed into the tag
     // field moves to the source column rather than becoming a fake setup.
     const promoted = splitSourceFromTags(
@@ -247,6 +286,7 @@ export function TradeEditor({
     );
     const rTags = promoted.tags;
 
+    try {
     await updateTrade.mutateAsync({
       id: trade.id,
       trade: {
@@ -262,14 +302,14 @@ export function TradeEditor({
           const xs = extraTps.map(Number).filter((x) => isFinite(x) && x > 0);
           return xs.length ? JSON.stringify(xs) : null;
         })(),
-        // Filling in an exit here is what closing a trade now means.
-        status: statusAfterEdit(trade.status, f.exitPrice ?? ""),
+        status: resolved.status,
         exitPrice: numOrNull(f.exitPrice),
         exitTime: f.exitTime ? toIso(f.exitTime) : null,
         exitReason: (exitReason as any) ?? null,
         mae: numOrNull(f.mae),
         mfe: numOrNull(f.mfe),
         postExitPeak: numOrNull(f.postExitPeak ?? ""),
+        postExitAdverse: numOrNull(f.postExitAdverse ?? ""),
         noManagementOutcome: (nmo as any) ?? null,
         rationale: f.rationale.trim() || null,
         rationaleTags: rTags.length ? JSON.stringify(rTags) : null,
@@ -287,6 +327,22 @@ export function TradeEditor({
     });
     toast({ title: "Trade updated", description: `${f.symbol.toUpperCase()} corrected.` });
     onClose();
+    } catch (err: any) {
+      /*
+       * A save that fails must say so, and must NOT close.
+       *
+       * Without this the promise rejected into nothing: no toast, no close,
+       * the editor sitting there looking saved. A cold start, an expired
+       * session or a rejected field all presented as success, and the work
+       * was gone the next time the trade was opened. The panel stays put so
+       * nothing typed is lost — pressing save again is the whole retry.
+       */
+      toast({
+        title: "Not saved — nothing was changed",
+        description: `${String(err?.message ?? err).slice(0, 140)} · your edits are still here, press Save to try again.`,
+        variant: "destructive",
+      });
+    }
   }
 
   const field = (
@@ -313,13 +369,24 @@ export function TradeEditor({
       <div>
         <div className="flex items-center gap-2 text-base font-semibold">
           <Pencil className="h-4 w-4 text-muted-foreground" />
-          Edit {trade?.symbol}
+          Edit {trade ? typedSymbol(trade) : ""}
         </div>
 
         {trade && (
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-3">
-              {field("symbol", "Symbol", "text")}
+              <div className="min-w-0 space-y-1">
+                <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  Symbol
+                </label>
+                <SymbolPicker
+                  value={f.symbol ?? ""}
+                  onChange={(v) => setF((p) => ({ ...p, symbol: v }))}
+                  trades={allTrades}
+                  testId="input-edit-symbol"
+                  className="h-9 font-mono text-sm"
+                />
+              </div>
               <div className="min-w-0 space-y-1">
                 <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
                   Direction
@@ -515,6 +582,52 @@ export function TradeEditor({
               )}
             </div>
 
+            {/* Where the trade is in its life, editable at every step.
+                The entry card asks this when logging; nothing asked it again
+                afterwards, so an order that never filled could not be walked
+                back and a trade closed by mistake could not be reopened. The
+                three states are the whole life of a trade: waiting for a
+                fill, live, done. */}
+            <div data-testid="section-edit-lifecycle">
+              <p className="mb-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
+                State
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {(
+                  [
+                    { id: "pending", label: "Waiting to fill", icon: Clock3 },
+                    { id: "open", label: "Open", icon: ArrowUpRight },
+                    { id: "closed", label: "Closed", icon: CheckCircle2 },
+                  ] as const
+                ).map(({ id, label, icon: Icon }) => (
+                  <Button
+                    key={id}
+                    type="button"
+                    size="sm"
+                    variant={lifecycle === id ? "default" : "outline"}
+                    className="h-7 gap-1.5 px-2 text-[11px]"
+                    onClick={() => setLifecycle(id)}
+                    data-testid={`button-edit-lifecycle-${id}`}
+                    aria-pressed={lifecycle === id}
+                  >
+                    <Icon className="h-3.5 w-3.5" />
+                    {label}
+                  </Button>
+                ))}
+              </div>
+              {lifecycle === "closed" && !outcomeStage(f.exitPrice ?? "", null).priced && (
+                <p className="mt-1.5 text-[11px] text-amber-500" data-testid="text-edit-needs-exit">
+                  Fill in the exit price below to close it.
+                </p>
+              )}
+              {lifecycle !== "closed" && outcomeStage(f.exitPrice ?? "", null).priced && (
+                <p className="mt-1.5 text-[11px] text-amber-500" data-testid="text-edit-has-exit">
+                  There is an exit price below — clear it to put this back to{" "}
+                  {lifecycle === "pending" ? "waiting" : "open"}.
+                </p>
+              )}
+            </div>
+
             {/* The same questions the entry card asks when logging a
                 completed trade — one component, so an open trade is never
                 asked to grade an exit it has not had. */}
@@ -531,6 +644,8 @@ export function TradeEditor({
               setMfe={(v: string) => setF((p) => ({ ...p, mfe: v }))}
               postExitPeak={f.postExitPeak ?? ""}
               setPostExitPeak={(v: string) => setF((p) => ({ ...p, postExitPeak: v }))}
+              postExitAdverse={f.postExitAdverse ?? ""}
+              setPostExitAdverse={(v: string) => setF((p) => ({ ...p, postExitAdverse: v }))}
               nmo={nmo}
               setNmo={setNmo}
               fees={f.fees ?? ""}

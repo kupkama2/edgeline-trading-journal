@@ -6,6 +6,8 @@ import {
   lastPointValueFor,
   normalizeSymbol,
   pointValueFor,
+  splitTypedSymbol,
+  typedSymbol,
 } from "../shared/symbols";
 import { suggestSize } from "../shared/sizing";
 
@@ -218,5 +220,73 @@ describe("remembering a contract the table has never heard of", () => {
     ];
     expect(lastPointValueFor("NANOBIT", history)).toBeNull();
     expect(pointValueFor("NANOBIT", null)).toBe(1);
+  });
+});
+
+/**
+ * What the edit form shows, and what the server does with it.
+ *
+ * The bug: `symbol` stores the rollup ("BTC") and `contract` stores what was
+ * typed ("MBTZ6"). The edit form showed the rollup, so opening an MBTZ6 trade
+ * and saving it wrote "BTC" — the contract silently gone, and with it any
+ * hope of telling a micro from its full-size sibling. The server even had a
+ * guard for the symptom (don't re-derive point value from an unchanged
+ * symbol); this fixes the cause.
+ */
+describe("the symbol a human should be shown", () => {
+  it("is the contract as written when there was one", () => {
+    expect(typedSymbol({ symbol: "BTC", contract: "MBTZ6" })).toBe("MBTZ6");
+  });
+
+  it("is the instrument for spot and equities, which have no contract", () => {
+    expect(typedSymbol({ symbol: "BTCUSDT", contract: null })).toBe("BTCUSDT");
+    expect(typedSymbol({ symbol: "AAPL" })).toBe("AAPL");
+  });
+
+  it("ignores a blank contract rather than showing an empty field", () => {
+    expect(typedSymbol({ symbol: "BTC", contract: "   " })).toBe("BTC");
+  });
+});
+
+describe("splitting what was typed", () => {
+  it("sends a known contract to its instrument and keeps the contract", () => {
+    expect(splitTypedSymbol("MBTZ6")).toEqual({ symbol: "BTC", contract: "MBTZ6" });
+  });
+
+  it("keeps an unknown-but-contract-shaped listing as its own instrument", () => {
+    // The table has never heard of it, but the month code says it expires —
+    // so it is a contract, and the instrument is the text itself.
+    expect(splitTypedSymbol("NANOBITZ6")).toEqual({
+      symbol: "NANOBITZ6",
+      contract: "NANOBITZ6",
+    });
+  });
+
+  it("gives a spot pair no contract at all", () => {
+    expect(splitTypedSymbol("BTCUSDT")).toEqual({ symbol: "BTCUSDT", contract: null });
+    expect(splitTypedSymbol("ZKUSDT")).toEqual({ symbol: "ZKUSDT", contract: null });
+  });
+
+  it("normalises case and spacing the way the form's user does not have to", () => {
+    expect(splitTypedSymbol("  mbtz6 ")).toEqual({ symbol: "BTC", contract: "MBTZ6" });
+  });
+
+  it("round-trips: what typedSymbol shows, splitTypedSymbol puts back", () => {
+    // The whole edit path in one line — show it, save it, and the stored row
+    // must be the row you started with.
+    for (const stored of [
+      { symbol: "BTC", contract: "MBTZ6" },
+      { symbol: "NQ", contract: "MNQU6" },
+      { symbol: "BTCUSDT", contract: null },
+      { symbol: "NANOBITZ6", contract: "NANOBITZ6" },
+    ]) {
+      expect(splitTypedSymbol(typedSymbol(stored))).toEqual(stored);
+    }
+  });
+
+  it("moving a trade off its contract does not leave the old one attached", () => {
+    // MBTZ6 -> BTCUSDT: the contract must clear, or the row claims a spot pair
+    // is a December future.
+    expect(splitTypedSymbol("BTCUSDT").contract).toBeNull();
   });
 });

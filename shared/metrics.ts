@@ -34,6 +34,17 @@ export interface TradeMetrics {
    */
   leftBehindR: number | null;
   dollarsLeftBehind: number | null;
+  /**
+   * R the exit AVOIDED — how much further it went against you once you were
+   * out, measured from the exit. ≥ 0, null when the aftermath wasn't recorded.
+   *
+   * The only figure here that can come out in an exit's favour. On a stop-out
+   * it is what the stop saved you, which is the other half of "was my stop
+   * too tight" — without it every measurement in this file prices the cost of
+   * getting out and none prices the cost of staying in.
+   */
+  avoidedR: number | null;
+  dollarsAvoided: number | null;
 }
 
 /**
@@ -123,6 +134,12 @@ export function computeMetrics(t: Trade & { fills?: TradeFill[] }): TradeMetrics
     safe && t.postExitPeak != null && t.exitPrice != null
       ? Math.max(0, (sign * (t.postExitPeak - t.exitPrice)) / risk)
       : null;
+  // The mirror, clamped the same way: an "adverse" print on the favourable
+  // side of the exit means nothing was avoided, not that leaving cost you.
+  const avoidedR =
+    safe && t.postExitAdverse != null && t.exitPrice != null
+      ? Math.max(0, (sign * (t.exitPrice - t.postExitAdverse)) / risk)
+      : null;
 
   return {
     risk,
@@ -145,6 +162,8 @@ export function computeMetrics(t: Trade & { fills?: TradeFill[] }): TradeMetrics
     dollarsLeftOnTable: rLeftOnTable != null ? rLeftOnTable * riskDollars : null,
     leftBehindR,
     dollarsLeftBehind: leftBehindR != null ? leftBehindR * riskDollars : null,
+    avoidedR,
+    dollarsAvoided: avoidedR != null ? avoidedR * riskDollars : null,
   };
 }
 

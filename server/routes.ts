@@ -42,6 +42,7 @@ import {
   lastPointValueFor,
   looksLikeFuturesContract,
   normalizeSymbol,
+  splitTypedSymbol,
   pointValueFor,
 } from "@shared/symbols";
 import {
@@ -377,31 +378,37 @@ export async function registerRoutes(
     if (!existing) return res.status(404).json({ message: "Trade not found" });
 
     /*
-     * Point value must NOT be re-derived from an unchanged symbol.
+     * An edited symbol is split into instrument and contract exactly the way
+     * creation splits it, because the edit form now sends what the trader
+     * actually typed ("MBTZ6") rather than the rollup it used to show ("BTC").
+     * Without re-splitting here, changing MBTZ6 to BTCUSDT would leave the old
+     * contract attached to the new instrument.
      *
-     * Only the normalized root is stored, so an MNQ trade reads back as "NQ".
-     * The edit form round-trips that stored value, and deriving from it would
-     * silently promote a micro to its full-size sibling — 2 → 20, a tenfold
-     * jump in every dollar figure, from merely opening a trade and saving it.
-     *
-     * Comparing normalized roots distinguishes the two cases exactly: a genuine
-     * instrument change (NQ → ES) differs and re-derives, while the ambiguous
-     * MNQ/NQ round-trip does not and keeps what was stored at creation.
+     * Point value must still NOT be re-derived from an UNCHANGED instrument.
+     * Legacy rows, and any trade whose contract was never recorded, still read
+     * back as the bare root; deriving from that would silently promote a micro
+     * to its full-size sibling — 2 to 20, a tenfold jump in every dollar
+     * figure, from merely opening a trade and saving it. Comparing normalized
+     * roots separates the two cases: a genuine instrument change (NQ to ES)
+     * re-derives, an unchanged one keeps what was stored.
      */
-    const nextSymbol = parsed.data.trade.symbol
-      ? normalizeSymbol(parsed.data.trade.symbol)
-      : undefined;
+    const typedEdit = parsed.data.trade.symbol?.trim().toUpperCase();
+    const nextSymbol = typedEdit ? normalizeSymbol(typedEdit) : undefined;
     const instrumentChanged = nextSymbol != null && nextSymbol !== existing.symbol;
+    const split = typedEdit ? splitTypedSymbol(typedEdit) : null;
 
-    const trade = parsed.data.trade.symbol
+    const trade = typedEdit
       ? {
           ...parsed.data.trade,
           ...(parsed.data.trade.pointValue != null
             ? {}
             : instrumentChanged
-              ? { pointValue: pointValueFor(parsed.data.trade.symbol) }
+              ? { pointValue: pointValueFor(typedEdit) }
               : {}),
-          symbol: nextSymbol!,
+          symbol: split!.symbol,
+          // A spot pair clears it, a contract sets it, and a round-trip of the
+          // same text leaves the stored value exactly as it was.
+          contract: split!.contract,
         }
       : parsed.data.trade;
 

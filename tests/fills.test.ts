@@ -307,3 +307,55 @@ describe("parseExtraTargets", () => {
     expect(parseExtraTargets('[115,"x",-3,null,120]')).toEqual([115, 120]);
   });
 });
+
+/**
+ * Is logging every partial worth the typing?
+ *
+ * For a pure scale-out: no, and this proves it. P&L is linear in the exit
+ * price, so one row carrying the WEIGHTED AVERAGE exit — the number the
+ * exchange already shows as "avg close" — settles to the same R and the same
+ * dollars as the full ledger, to the last bit.
+ *
+ * The moment you ADD to a position that stops being true: an add moves the
+ * average entry, and no single exit price can encode that. So the rule the
+ * journal can honestly give is "average exit is enough unless you scaled IN",
+ * and it needs to stay true as the metrics change — hence a test rather than
+ * a note in the docs.
+ */
+describe("average exit price versus a full fill ledger", () => {
+  const base = {
+    id: 1,
+    entryPrice: 100,
+    initialStop: 90, // 1R = 10 points
+    size: 10,
+    sizeUnit: "base",
+    status: "closed" as const,
+  };
+  const fill = (id: number, kind: "partial" | "add", price: number, size: number, hh: string) =>
+    ({ id, tradeId: 1, kind, price, size, time: `2026-08-01T${hh}:00:00Z`, note: null }) as any;
+
+  it("settles identically for a scale-out", () => {
+    const ledger = computeMetrics(
+      trade({
+        ...base,
+        exitPrice: 160,
+        fills: [fill(1, "partial", 120, 3, "10"), fill(2, "partial", 140, 3, "11")],
+      } as any),
+    );
+    // (3*120 + 3*140 + 4*160) / 10
+    const averaged = computeMetrics(trade({ ...base, exitPrice: 142 } as any));
+    expect(averaged.actualR).toBeCloseTo(ledger.actualR!, 9);
+    expect(averaged.actualPnL).toBeCloseTo(ledger.actualPnL!, 9);
+    expect(ledger.actualR).toBeCloseTo(4.2);
+  });
+
+  it("does NOT once you add to the position", () => {
+    // Doubling up at 130 and closing the lot at 160 makes 9R; no exit price
+    // on a single row reproduces that, because the average entry moved.
+    const added = computeMetrics(
+      trade({ ...base, exitPrice: 160, fills: [fill(1, "add", 130, 10, "10")] } as any),
+    );
+    expect(added.actualR).toBeCloseTo(9);
+    expect(computeMetrics(trade({ ...base, exitPrice: 160 } as any)).actualR).toBeCloseTo(6);
+  });
+});
