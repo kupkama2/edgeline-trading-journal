@@ -11,19 +11,33 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { Loader2, Minus, Plus } from "lucide-react";
 import { parseExtraTargets, type TradeWithTags } from "@shared/schema";
-import { convertFillSize, positionLedger, suggestPartialSize, validateFill } from "@shared/fills";
+import {
+  convertFillSize,
+  fillOutsideTrade,
+  positionLedger,
+  suggestPartialSize,
+  validateFill,
+} from "@shared/fills";
 import { fmtMoney } from "@shared/metrics";
+import { typedSymbol } from "@shared/symbols";
 import { useAddFill } from "@/lib/data";
-import { num } from "@/components/trade-shared";
+import { TimeField, localNow, num, toIso, toLocalInput } from "@/components/trade-shared";
 
 /**
- * Log a scaling event on a running trade: profit off, or size on.
+ * Log a scaling event: profit off, or size on.
  *
  * The dialog leads with the ledger — average entry, what's still on, what's
  * already banked — because a partial only means something against those
  * numbers. Validation is the shared module's, so what this refuses is exactly
- * what the server refuses; the message about "use Close for the last piece"
- * comes from the same sentence in both places.
+ * what the server refuses; the message about the last piece comes from the
+ * same sentence in both places.
+ *
+ * It works on a CLOSED trade too, which is the common case for anyone who
+ * logs trades after the fact rather than managing them here. That is why the
+ * time is a field: on a live trade a fill is happening now, but on a trade
+ * already written up it happened somewhere inside a window that has since
+ * shut, and where it falls relative to the other fills is what decides the
+ * average entry an add moves.
  */
 export function FillDialog({
   trade,
@@ -37,6 +51,7 @@ export function FillDialog({
   const [price, setPrice] = useState("");
   const [size, setSize] = useState("");
   const [note, setNote] = useState("");
+  const [time, setTime] = useState("");
   // The unit the size is TYPED in. Storage stays in the trade's own unit;
   // crossing over just converts at the fill price on the way out.
   const [fillUnit, setFillUnit] = useState<"base" | "quote">("base");
@@ -45,8 +60,13 @@ export function FillDialog({
 
   const tradeUnit: "base" | "quote" = trade?.sizeUnit === "quote" ? "quote" : "base";
   useEffect(() => {
-    if (trade) setFillUnit(trade.sizeUnit === "quote" ? "quote" : "base");
-  }, [trade?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!trade) return;
+    setFillUnit(trade.sizeUnit === "quote" ? "quote" : "base");
+    // On a live trade this is happening now. On a closed one "now" is after
+    // the trade ended, so the entry is the honest starting point — inside the
+    // window, ordered ahead of the exit, and obviously in need of correcting.
+    setTime(trade.status === "closed" ? toLocalInput(trade.entryTime) : localNow());
+  }, [trade?.id, trade?.status]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const led = useMemo(() => (trade ? positionLedger(trade) : null), [trade]);
 
@@ -65,6 +85,9 @@ export function FillDialog({
       ? { kind, price: priceNum, size: effSize }
       : null;
   const problem = trade && parsed ? validateFill(trade, parsed) : null;
+  // A separate, softer channel: nothing downstream breaks on a mistimed fill,
+  // so this points rather than blocks.
+  const timeWarning = trade ? fillOutsideTrade(trade, time ? toIso(time) : null) : null;
 
   // What THIS partial would bank, previewed before commit — the number the
   // decision is actually about.
@@ -90,6 +113,7 @@ export function FillDialog({
         kind,
         price: parsed.price,
         size: parsed.size,
+        time: time ? toIso(time) : undefined,
         note: note.trim() || null,
       });
       toast({
@@ -150,7 +174,14 @@ export function FillDialog({
             ) : (
               <Plus className="h-4 w-4 text-sky-400" />
             )}
-            {kind === "partial" ? "Take partial profit" : "Add to position"} — {trade.symbol}
+            {trade.status === "closed"
+              ? kind === "partial"
+                ? "Log a partial you took"
+                : "Log size you added"
+              : kind === "partial"
+                ? "Take partial profit"
+                : "Add to position"}{" "}
+            — {typedSymbol(trade)}
           </DialogTitle>
         </DialogHeader>
 
@@ -255,6 +286,19 @@ export function FillDialog({
                 {fmtMoney(preview)}
               </span>{" "}
               against avg {num(led.avgEntry)}.
+            </p>
+          )}
+
+          <TimeField
+            label={trade.status === "closed" ? "When did it fill?" : "Fill time"}
+            value={time}
+            onChange={setTime}
+            testId="input-fill-time"
+          />
+          {timeWarning && (
+            <p className="text-[11px] leading-snug text-amber-500" data-testid="fill-time-warning">
+              {timeWarning} Saved anyway if that is right — only the order against the other
+              fills changes the numbers.
             </p>
           )}
 

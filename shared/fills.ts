@@ -224,15 +224,51 @@ export function validateFill(
   t: TradeWithFills,
   fill: { kind: "add" | "partial"; price: number; size: number },
 ): string | null {
-  if (t.status !== "open") return "Fills only apply to open trades.";
+  // Open OR closed. Scaling used to be a live-management feature, so this
+  // refused anything that was not still running — which meant a trade logged
+  // after the fact could never record what actually happened inside it. "I
+  // took two partials and then the rest stopped out" is an ordinary trade and
+  // an important one: it is the difference between a −1R and a small winner,
+  // and the ledger has always computed it correctly. Only the gate was wrong.
+  if (t.status !== "open" && t.status !== "closed") {
+    return "This trade never held a position, so there is nothing to scale.";
+  }
   if (!(fill.price > 0) || !(fill.size > 0)) return "Price and size must be positive.";
 
   if (fill.kind === "partial") {
     const led = positionLedger(t);
     const fq = baseQty(fill.size, t.sizeUnit, fill.price);
     if (fq >= led.openQty - 1e-9) {
-      return "That would close the whole position — use Close instead, so the exit gets recorded properly.";
+      // The last piece is the exit, in both directions. On a running trade it
+      // belongs in the close flow, where the reason and the path get recorded.
+      // On a closed one the remainder is what the recorded exit price settles,
+      // so flattening it here would leave the trade claiming an exit that
+      // priced none of it.
+      return t.status === "closed"
+        ? "That closes the whole position — leave the last piece for the recorded exit, or log this one smaller."
+        : "That would close the whole position — use Close instead, so the exit gets recorded properly.";
     }
+  }
+  return null;
+}
+
+/**
+ * Did this fill happen while the trade was on?
+ *
+ * A warning rather than a refusal, deliberately. Nothing downstream breaks —
+ * the ledger only cares about the order fills fall in relative to each other,
+ * never about the trade's own timestamps — so a fill dated an hour late is a
+ * typo worth pointing at, not a reason to stop someone recording what they
+ * did. Null when there is nothing to check against.
+ */
+export function fillOutsideTrade(
+  t: { entryTime?: string | null; exitTime?: string | null; status?: string },
+  time: string | null | undefined,
+): string | null {
+  if (!time) return null;
+  if (t.entryTime && time < t.entryTime) return "That is before the trade was opened.";
+  if (t.status === "closed" && t.exitTime && time > t.exitTime) {
+    return "That is after the trade was closed.";
   }
   return null;
 }

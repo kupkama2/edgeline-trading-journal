@@ -77,6 +77,15 @@ export function toIso(local: string) {
   return local ? new Date(local).toISOString() : new Date().toISOString();
 }
 
+/** The inverse: an ISO instant as the local wall-clock string a field shows. */
+export function toLocalInput(iso: string | null | undefined) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+  return d.toISOString().slice(0, 16);
+}
+
 /**
  * A datetime field with a one-tap "Now".
  *

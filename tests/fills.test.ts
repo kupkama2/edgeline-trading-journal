@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   collapseFills,
+  fillOutsideTrade,
   positionLedger,
   suggestPartialSize,
   totalPnLWithFills,
@@ -243,8 +244,80 @@ describe("validateFill", () => {
     expect(validateFill(scaled, { kind: "partial", price: 112, size: 2 })).toMatch(/use Close/i);
   });
 
-  it("refuses fills on anything not open", () => {
-    expect(validateFill(trade(), { kind: "add", price: 101, size: 1 })).toMatch(/open/i);
+  /**
+   * Closed trades take fills too, and that is the point of the feature.
+   *
+   * This used to refuse anything not still running, which quietly made the
+   * common case unrecordable: someone who writes trades up after the fact has
+   * no live position to scale, so "it hit my stop, but I had already taken two
+   * partials" could not be logged at all. That trade is the difference between
+   * a −1R and a small winner and the ledger has always computed it — only the
+   * gate was wrong.
+   */
+  const closed = trade({ size: 4, status: "closed", exitPrice: 91 });
+
+  it("accepts a partial on a trade that is already written up", () => {
+    expect(validateFill(closed, { kind: "partial", price: 120, size: 2 })).toBeNull();
+  });
+
+  it("accepts size added on a closed trade", () => {
+    expect(validateFill(closed, { kind: "add", price: 104, size: 2 })).toBeNull();
+  });
+
+  it("still refuses to flatten a closed trade with partials", () => {
+    // The remainder is what the recorded exit price settles. Take it all away
+    // and the trade claims an exit that priced none of it.
+    const problem = validateFill(closed, { kind: "partial", price: 120, size: 4 });
+    expect(problem).toMatch(/recorded exit/i);
+    expect(problem).not.toMatch(/use Close/i); // the live wording would be nonsense here
+  });
+
+  it("refuses fills on a trade that never held a position", () => {
+    for (const status of ["pending", "cancelled"]) {
+      expect(validateFill(trade({ status }), { kind: "add", price: 101, size: 1 })).toMatch(
+        /never held a position/i,
+      );
+    }
+  });
+});
+
+/**
+ * When a back-logged fill lands outside the trade's own window.
+ *
+ * A warning, not a refusal — the ledger orders fills against each other and
+ * never against the trade's timestamps, so nothing downstream breaks. Blocking
+ * the save would cost someone the record of a real trade over a typo in a
+ * field that changes no number.
+ */
+describe("fillOutsideTrade", () => {
+  const t = {
+    entryTime: "2026-08-03T10:00:00Z",
+    exitTime: "2026-08-03T14:00:00Z",
+    status: "closed",
+  };
+
+  it("is quiet for a fill inside the trade", () => {
+    expect(fillOutsideTrade(t, "2026-08-03T12:00:00Z")).toBeNull();
+  });
+
+  it("catches a fill before the trade was even on", () => {
+    expect(fillOutsideTrade(t, "2026-08-03T09:00:00Z")).toMatch(/before/i);
+  });
+
+  it("catches a fill after it was closed", () => {
+    expect(fillOutsideTrade(t, "2026-08-03T15:00:00Z")).toMatch(/after/i);
+  });
+
+  it("lets a running trade take a fill at any time from now on", () => {
+    // An open trade has no closing bound to be past — "now" is always valid,
+    // and a stale exitTime on a reopened trade must not start rejecting fills.
+    const live = { ...t, status: "open" };
+    expect(fillOutsideTrade(live, "2027-01-01T00:00:00Z")).toBeNull();
+  });
+
+  it("says nothing when there is nothing to check", () => {
+    expect(fillOutsideTrade(t, null)).toBeNull();
+    expect(fillOutsideTrade({ status: "closed" }, "2026-08-03T12:00:00Z")).toBeNull();
   });
 });
 
