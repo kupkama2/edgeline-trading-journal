@@ -15,7 +15,7 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowUpRight, CheckCircle2, Clock3, Loader2, Pencil, Trash2 } from "lucide-react";
+import { ArrowUpRight, CheckCircle2, Clock3, Loader2, Minus, Pencil, Plus, Trash2 } from "lucide-react";
 import { useAccountSettings, useMistakeTags, useUpdateTrade, useAddTradeImage, archiveDataUrl, parseScreenshot, fileToDownscaledDataUrl } from "@/lib/data";
 import { suggestFees } from "@shared/fees";
 import { knownHighlights, parseHighlights, serializeHighlights } from "@shared/highlights";
@@ -28,7 +28,7 @@ import { collapseFills, positionLedger } from "@shared/fills";
 import { TradeImageGallery } from "@/components/trade-images";
 import { parseExtraTargets, parsePlaybook, type TradeWithTags } from "@shared/schema";
 import { computeMetrics, fmtFees, fmtMoney, fmtR, EXIT_REASON_LABELS } from "@shared/metrics";
-import { Dropzone, EXIT_REASONS, RationaleTags, TimeField, localNow, num, parseTags, toIso } from "@/components/trade-shared";
+import { Dropzone, EXIT_REASONS, RationaleTags, TimeField, localNow, num, parseTags, toIso, toLocalInput } from "@/components/trade-shared";
 import { EMPTY_GRADES, GradePicker, type GradeState } from "@/components/grade-picker";
 import {
   TradeOutcomeFields,
@@ -37,16 +37,8 @@ import {
   type Lifecycle,
 } from "@/components/trade-outcome";
 import { SymbolPicker } from "@/components/symbol-picker";
+import { FillDialog } from "@/components/fill-dialog";
 import { typedSymbol } from "@shared/symbols";
-
-/** An ISO instant as the local wall-clock string a datetime-local shows. */
-function toLocalInput(iso: string | null | undefined) {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return "";
-  d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
-  return d.toISOString().slice(0, 16);
-}
 
 /**
  * Editing a trade, as a panel rather than a window.
@@ -165,6 +157,8 @@ export function TradeEditor({
    * trade closed by mistake goes back to open.
    */
   const [lifecycle, setLifecycle] = useState<Lifecycle>("open");
+  /** Which scaling dialog is open, if any. */
+  const [fillKind, setFillKind] = useState<"add" | "partial" | null>(null);
 
   useEffect(() => {
     if (!trade) return;
@@ -666,14 +660,57 @@ export function TradeEditor({
               }}
             />
 
-            {/* Scaling belongs in the edit dialog too: the trade view can show
-                and remove fills, but this is where a trade gets corrected, and
-                "I logged partials I would rather not keep" is a correction. */}
-            {trade.fills.length > 0 && (
-              <div data-testid="section-edit-fills">
-                <p className="mb-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
+            {/* Scaling belongs in the edit dialog too, and on a CLOSED trade
+                it is the only place it can happen: the trade view offers
+                these buttons while a position is running, which is no use to
+                anyone who writes trades up afterwards. "It hit my stop, but I
+                had already taken two partials" is an ordinary trade and the
+                difference between a −1R and a small winner; the ledger always
+                did that arithmetic, there was simply nowhere to type it.
+
+                Always rendered, not only when fills exist — a section that
+                appears once you already have what it is for cannot be how you
+                get your first one. */}
+            <div data-testid="section-edit-fills">
+              <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
+                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
                   Partials and adds
                 </p>
+                <div className="flex gap-1.5">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-7 gap-1.5 px-2 text-[11px]"
+                    onClick={() => setFillKind("partial")}
+                    data-testid="button-edit-log-partial"
+                  >
+                    <Minus className="h-3 w-3 text-emerald-500" />
+                    Took profit
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-7 gap-1.5 px-2 text-[11px]"
+                    onClick={() => setFillKind("add")}
+                    data-testid="button-edit-log-add"
+                  >
+                    <Plus className="h-3 w-3 text-sky-400" />
+                    Added size
+                  </Button>
+                </div>
+              </div>
+              {trade.fills.length === 0 ? (
+                <p
+                  className="rounded-md border border-dashed border-border/60 px-2.5 py-2 text-[11px] text-muted-foreground"
+                  data-testid="text-edit-no-fills"
+                >
+                  Nothing scaled — the whole position went on at {num(trade.entryPrice)} and came
+                  off in one piece. Log a partial or an add and the R above follows the blend.
+                </p>
+              ) : (
+                <>
                 <ul className="space-y-1">
                   {[...trade.fills]
                     .sort((a, b) => a.time.localeCompare(b.time))
@@ -753,8 +790,18 @@ export function TradeEditor({
                     </Button>
                   </div>
                 )}
-              </div>
-            )}
+                </>
+              )}
+            </div>
+
+            {/* The same dialog the live trade view uses, so a partial logged
+                afterwards is the same record as one logged in the moment —
+                one validator, one ledger, one shape of row. */}
+            <FillDialog
+              trade={fillKind ? trade : null}
+              kind={fillKind ?? "partial"}
+              onClose={() => setFillKind(null)}
+            />
 
 
             {/* Fees explained where they're typed, since they change the R. */}

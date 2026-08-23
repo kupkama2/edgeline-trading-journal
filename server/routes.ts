@@ -478,10 +478,12 @@ export async function registerRoutes(
 
   /* ------------------------------ trade fills ------------------------------ */
   /*
-   * Scaling events on a running trade. The shared validator enforces the two
-   * rules that keep the model honest: fills only on open trades, and a partial
-   * may never flatten the position — the last piece is the exit, and it
-   * belongs in the close flow where the reason and the path get recorded.
+   * Scaling events on a trade — running or already written up. The shared
+   * validator enforces the two rules that keep the model honest: a trade that
+   * never held a position has nothing to scale, and a partial may never
+   * flatten one. The last piece is the exit: on a live trade it belongs in the
+   * close flow where the reason and the path get recorded, and on a closed one
+   * it is what the recorded exit price settles.
    */
   app.post("/api/trades/:id/fills", async (req, res) => {
     const parsed = addFillSchema.safeParse(req.body);
