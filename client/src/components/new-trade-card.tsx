@@ -703,7 +703,30 @@ export function NewTradeCard({
       />
 
       <Form {...form}>
-        <form onSubmit={onSubmit} className="mt-4 space-y-4">
+        <form
+          onSubmit={onSubmit}
+          /*
+           * Enter does not log the trade.
+           *
+           * A <form> submits implicitly when Enter is pressed in any input,
+           * and typing a number then pressing Enter is what everyone does.
+           * The result was a trade created mid-edit, with whatever was filled
+           * in so far and the state picker still on its default of "open" —
+           * "it just went open without me clicking the button". Logging a
+           * trade is a decision, and it takes pressing the button that says
+           * so. A textarea needs Enter for its own reasons and never submits
+           * implicitly anyway; Enter while the submit button itself has focus
+           * IS pressing it.
+           */
+          onKeyDown={(e) => {
+            if (e.key !== "Enter") return;
+            const el = e.target as HTMLElement | null;
+            const tag = el?.tagName;
+            if (tag === "TEXTAREA" || tag === "BUTTON") return;
+            e.preventDefault();
+          }}
+          className="mt-4 space-y-4"
+        >
           <FormField
             control={form.control}
             name="rationale"
