@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   AFTERMATH_HORIZON_MS,
+  listedAsPerp,
   SEED_CATALOGUE,
   collapseToInstrument,
   scanWindow,
@@ -417,5 +418,24 @@ describe("the fallback catalogue", () => {
     // symbol has always done, and nothing worse.
     expect(collapseToInstrument("NEWCOINUSDT", SEED_CATALOGUE)).toBe("NEWCOINUSDT");
     expect(matchBinanceSymbol("NEWCOIN", SEED_CATALOGUE)).toBeNull();
+  });
+
+  it("knows which coins have a perp at all, without asking the venue", () => {
+    /*
+     * This is what lets the resolver tell two identical-looking situations
+     * apart when only the spot book answered: a coin matched to spot because
+     * spot is where it trades, and a coin matched to spot because the perp
+     * book refused. The second must not be settled from those candles, and
+     * the question has to be answerable while the futures book is exactly the
+     * thing that cannot be reached — so it is answered from the written list.
+     */
+    expect(listedAsPerp("BTC")).toBe(true);
+    expect(listedAsPerp("zro")).toBe(true);
+    expect(listedAsPerp(" LTC ")).toBe(true);
+    // Not a coin anyone has heard of, an index future, and nothing at all.
+    expect(listedAsPerp("NEWCOIN")).toBe(false);
+    expect(listedAsPerp("NQ")).toBe(false);
+    expect(listedAsPerp(null)).toBe(false);
+    expect(listedAsPerp("")).toBe(false);
   });
 });

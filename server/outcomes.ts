@@ -23,6 +23,7 @@
 import {
   binanceSymbolForTrade,
   firstTouch,
+  listedAsPerp,
   pathExtremes,
   scanWindow,
   SEED_CATALOGUE,
@@ -36,6 +37,12 @@ import { catalogue, collapsePairSymbolsOnce, storageFor } from "./storage";
 
 /** How stale the pair list may get. Listings are daily news at most. */
 const CATALOGUE_TTL_MS = 24 * 60 * 60 * 1000;
+/**
+ * Except when a whole book is missing from it, which is not staleness but a
+ * refusal — and one that heals on its own the moment egress changes. Waiting a
+ * full day to notice would mean a region change fixing nothing until tomorrow.
+ */
+const PARTIAL_TTL_MS = 60 * 60 * 1000;
 /** Don't re-read the same unresolved trade more than once an hour. */
 const RECHECK_MS = 60 * 60 * 1000;
 /** Work cap per call, so a first run on a long history stays polite. */
@@ -80,8 +87,9 @@ let backfilled = false;
 /** Refresh the cached pair list when it is missing or a day old. */
 export async function ensureCatalogue(force = false): Promise<BinanceSymbol[]> {
   const last = await catalogue.lastFetchedAt();
-  const stale =
-    force || !last || Date.now() - new Date(last).getTime() > CATALOGUE_TTL_MS;
+  const partial = (await catalogue.list()).every((r) => r.market !== "futures");
+  const ttl = partial ? PARTIAL_TTL_MS : CATALOGUE_TTL_MS;
+  const stale = force || !last || Date.now() - new Date(last).getTime() > ttl;
   if (stale) {
     try {
       const rows = await fetchCatalogue();
@@ -166,6 +174,19 @@ export async function checkOutcomes(userId: number): Promise<CheckSummary> {
   const matched: { trade: TradeWithTags; pair: PairRef }[] = [];
   for (const t of due) {
     const pair = binanceSymbolForTrade(t, cat);
+    /*
+     * A coin with a perp, matched to spot, was matched there because the perp
+     * book refused — and spot is the wrong book to settle it from. Basis moves
+     * the two apart and a liquidation cascade wicks the perp through levels
+     * spot never prints, so the disagreement is worst exactly where it decides
+     * the answer: within a hair of the level. Left unchecked rather than
+     * answered from the wrong market, which is the same rule as everywhere
+     * else here. Charts still draw it, clearly labelled.
+     */
+    if (pair && pair.market === "spot" && listedAsPerp(t.symbol)) {
+      out.unmatched++;
+      continue;
+    }
     if (pair) matched.push({ trade: t, pair });
     else out.unmatched++;
   }

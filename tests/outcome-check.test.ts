@@ -99,6 +99,17 @@ describe.skipIf(!DB)("settling parked trades against the feed", () => {
     userId = acct.id;
     store = storageFor(userId);
     ({ checkOutcomes } = await import("../server/outcomes"));
+    /*
+     * Force a fetch from THIS file's stub before anything reads a price.
+     *
+     * The pair catalogue is one table shared by the whole database, so another
+     * test file that ran first leaves its own symbols in it with a fresh
+     * timestamp — and the TTL would hand those back rather than asking this
+     * stub anything. Every trade below would then go unmatched and the
+     * failures would point at the resolver rather than at the fixture.
+     */
+    const { ensureCatalogue } = await import("../server/outcomes");
+    await ensureCatalogue(true);
   });
 
   afterAll(() => new Promise<void>((r) => feed?.close(() => r())));
