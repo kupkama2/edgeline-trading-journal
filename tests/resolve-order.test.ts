@@ -21,12 +21,22 @@ if (process.env.CI && !DB) {
   throw new Error("DATABASE_URL is required in CI — the route tests must run");
 }
 
-const stamp = `${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
-
 let server: Server;
 let base: string;
 
+/*
+ * A fresh identity per boot, not per module.
+ *
+ * Two describe blocks each call this, and a module-level stamp made the second
+ * one insert a googleSub the first had already taken. The unique index caught
+ * it, beforeAll threw, and vitest reported that block's tests as SKIPPED —
+ * which reads almost exactly like a pass in the summary line. CI, which
+ * counts skips as failures, is what actually said so.
+ */
+let booted = 0;
+
 async function boot() {
+  const stamp = `${Date.now()}-${Math.floor(Math.random() * 1e6)}-${booted++}`;
   const { initSchema, accounts } = await import("../server/storage");
   const { registerRoutes } = await import("../server/routes");
   await initSchema();
