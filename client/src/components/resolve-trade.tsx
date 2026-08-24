@@ -64,25 +64,49 @@ export function ResolveTradeDialog({
 
   async function save() {
     if (!trade || !reason) return;
-    await updateTrade.mutateAsync({
-      id: trade.id,
-      trade: {
-        status: "cancelled",
-        cancelReason: reason as any,
-        // Only meaningful for an order that never filled — a pulled order was
-        // a decision, and "would it have won" is a different question there.
-        wouldHaveHitTarget: reason === "not_filled" ? wouldHaveHit : null,
-      },
-    });
-    toast({ title: `${trade.symbol} logged as ${reason.replace("_", " ")}` });
-    onClose();
+    try {
+      await updateTrade.mutateAsync({
+        id: trade.id,
+        trade: {
+          status: "cancelled",
+          cancelReason: reason as any,
+          // Only meaningful for an order that never filled — a pulled order was
+          // a decision, and "would it have won" is a different question there.
+          wouldHaveHitTarget: reason === "not_filled" ? wouldHaveHit : null,
+        },
+      });
+      toast({ title: `${trade.symbol} logged as ${reason.replace("_", " ")}` });
+      onClose();
+    } catch (err: any) {
+      /*
+       * Say it out loud. Without this the rejected request went nowhere: no
+       * toast, no close, the dialog sitting there with the reason still
+       * highlighted — indistinguishable from a button that does nothing. That
+       * is exactly how a server rule rejecting every cancellation of a
+       * stopless resting order went unnoticed.
+       */
+      toast({
+        title: "Couldn't log that",
+        description: String(err?.message ?? err).slice(0, 180),
+        variant: "destructive",
+      });
+    }
   }
 
   async function hardDelete() {
     if (!trade) return;
-    await deleteTrade.mutateAsync(trade.id);
-    toast({ title: `${trade.symbol} deleted` });
-    onClose();
+    try {
+      await deleteTrade.mutateAsync(trade.id);
+      toast({ title: `${trade.symbol} deleted` });
+      onClose();
+    } catch (err: any) {
+      toast({
+        title: "Couldn't delete it",
+        description: String(err?.message ?? err).slice(0, 180),
+        variant: "destructive",
+      });
+      setConfirmDelete(false);
+    }
   }
 
   const busy = updateTrade.isPending || deleteTrade.isPending;
