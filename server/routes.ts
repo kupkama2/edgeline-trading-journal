@@ -518,7 +518,11 @@ export async function registerRoutes(
    * server/outcomes.ts for why every uncertainty ends as "leave it parked".
    */
   app.post("/api/outcomes/check", async (req, res) => {
-    const userId = (req as any).userId as number;
+    // Same guard store() applies. Passing an absent id into storageFor would
+    // scope the query to nobody, which is one typo away from scoping it to
+    // everybody — and this endpoint WRITES.
+    const userId = (req as any).userId as number | undefined;
+    if (!userId) return res.status(401).json({ message: "No account on request" });
     try {
       res.json(await checkOutcomes(userId));
     } catch (err: any) {

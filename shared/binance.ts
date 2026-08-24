@@ -134,3 +134,77 @@ export function binanceSymbolForTrade(
   if (trade.contract?.trim()) return null;
   return matchBinanceSymbol(trade.symbol, catalogue);
 }
+
+/* ------------------------------ the path ------------------------------ */
+
+export interface PathExtremes {
+  /** Worst price against you WHILE THE TRADE WAS ON. */
+  mae: number | null;
+  /** Best price in your favour while it was on. */
+  mfe: number | null;
+  /** Best price in your favour AFTER the exit, before the thesis died. */
+  postExitPeak: number | null;
+  /** Worst price against you after the exit, over a bounded horizon. */
+  postExitAdverse: number | null;
+}
+
+/** How long after the exit the adverse extreme is still attributed to it. */
+export const AFTERMATH_HORIZON_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * The four path numbers, read off the candles.
+ *
+ * They are four different questions and each has its own window, which is the
+ * whole reason this is one function rather than four one-liners:
+ *
+ *   MAE and MFE cover ENTRY TO EXIT and nothing else. They are what the trade
+ *   did while you were holding it, and letting a single minute of aftermath
+ *   leak in is precisely the bug that made an early exit read as a late one.
+ *
+ *   postExitPeak runs from the exit until price trades beyond the ORIGINAL
+ *   STOP — the thesis dying by the trade's own definition. Without that bound
+ *   "it would have gone higher" is eventually true of everything, and this
+ *   must mean the same thing as the values entered by hand or the exit-timing
+ *   read is comparing two different measurements.
+ *
+ *   postExitAdverse is bounded by TIME instead, because the stop level cannot
+ *   bound it: how far past the stop price went IS the measurement, and
+ *   stopping at the stop would answer "what did the stop save you" with
+ *   "nothing" every time. A month is long enough to cover the move that
+ *   followed and short enough that the next cycle is not attributed to it.
+ *
+ * Every value is null when its window held no bars — an unmeasured leg is not
+ * a zero leg, and the rest of the app depends on being able to tell.
+ */
+export function pathExtremes(
+  candles: Candle[],
+  t: { direction: string; entryMs: number; exitMs: number | null; stop: number | null },
+): PathExtremes {
+  const long = t.direction !== "short";
+  const best = (bars: Candle[]) =>
+    bars.length === 0 ? null : long ? Math.max(...bars.map((c) => c.h)) : Math.min(...bars.map((c) => c.l));
+  const worst = (bars: Candle[]) =>
+    bars.length === 0 ? null : long ? Math.min(...bars.map((c) => c.l)) : Math.max(...bars.map((c) => c.h));
+
+  const exitMs = t.exitMs;
+  const held = candles.filter((c) => c.t >= t.entryMs && (exitMs == null || c.t <= exitMs));
+  const after = exitMs == null ? [] : candles.filter((c) => c.t > exitMs);
+
+  // The favourable aftermath stops at the bar BEFORE the stop level breaks:
+  // once it breaks, a position left alone would not have been there for what
+  // came next.
+  const alive: Candle[] = [];
+  for (const c of after) {
+    if (t.stop != null && (long ? c.l <= t.stop : c.h >= t.stop)) break;
+    alive.push(c);
+  }
+  const withinHorizon =
+    exitMs == null ? [] : after.filter((c) => c.t - exitMs <= AFTERMATH_HORIZON_MS);
+
+  return {
+    mae: worst(held),
+    mfe: best(held),
+    postExitPeak: best(alive),
+    postExitAdverse: worst(withinHorizon),
+  };
+}

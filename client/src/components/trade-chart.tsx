@@ -116,7 +116,32 @@ export function TradeChart({ trade }: { trade: TradeWithTags }) {
         </span>
       </div>
 
-      <div className="overflow-x-auto">
+      {/* The plot stretches horizontally to fill the card (preserveAspectRatio
+          "none"), which is right for price geometry and wrong for letters —
+          SVG text inside it is scaled with the x axis and comes out wider the
+          bigger the screen. So the labels are HTML, positioned in the same
+          pixel space: the height is fixed, so a viewBox y unit IS a pixel and
+          the two agree exactly. */}
+      <div className="relative">
+        {/* Anchored as a PERCENTAGE, not a pixel width: the svg is stretched
+            to the card, so the gutter's real width is PAD.right scaled by the
+            same factor. A fixed 52px gutter would drift away from where the
+            level lines actually stop, by more the wider the screen. */}
+        <div
+          className="pointer-events-none absolute inset-y-0 right-0 z-10"
+          style={{ left: `${(plotW / W) * 100}%` }}
+        >
+          {labelled.map((l) => (
+            <span
+              key={`${l.label}-${l.price}`}
+              className={`absolute left-1 font-mono text-[9px] leading-none ${l.text}`}
+              style={{ top: l.labelY - 4 }}
+              data-testid={`chart-level-${l.label}`}
+            >
+              {l.label}
+            </span>
+          ))}
+        </div>
         <svg
           viewBox={`0 0 ${W} ${H}`}
           width="100%"
@@ -131,26 +156,17 @@ export function TradeChart({ trade }: { trade: TradeWithTags }) {
               breakeven stop routinely do, and two labels drawn on top of one
               another are less use than one. */}
           {labelled.map((l) => (
-            <g key={`${l.label}-${l.price}`}>
-              <line
-                x1={0}
-                x2={plotW}
-                y1={y(l.price)}
-                y2={y(l.price)}
-                className={l.cls}
-                strokeWidth={1}
-                strokeDasharray={l.label === "entry" || l.label === "exit" ? undefined : "3 3"}
-                vectorEffect="non-scaling-stroke"
-              />
-              <text
-                x={plotW + 4}
-                y={l.labelY}
-                className={`${l.text} fill-current font-mono`}
-                style={{ fontSize: 9 }}
-              >
-                {l.label}
-              </text>
-            </g>
+            <line
+              key={`${l.label}-${l.price}`}
+              x1={0}
+              x2={plotW}
+              y1={y(l.price)}
+              y2={y(l.price)}
+              className={l.cls}
+              strokeWidth={1}
+              strokeDasharray={l.label === "entry" || l.label === "exit" ? undefined : "3 3"}
+              vectorEffect="non-scaling-stroke"
+            />
           ))}
 
           {candles.map((c, i) => {

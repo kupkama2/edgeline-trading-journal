@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  AFTERMATH_HORIZON_MS,
   binanceSymbolForTrade,
   firstTouch,
   matchBinanceSymbol,
+  pathExtremes,
   type BinanceSymbol,
   type Candle,
 } from "../shared/binance";
@@ -162,5 +164,119 @@ describe("how finely to scan a window", () => {
     for (const days of [1, 7, 30, 365, 3650]) {
       expect(intervalFor(days * 24 * 3_600_000)).not.toBe("1d");
     }
+  });
+});
+
+/**
+ * The window the untouched-plan question is asked over.
+ *
+ * This shipped wrong for one review cycle: it scanned from the EXIT, and the
+ * bug is invisible on every well-behaved trade. A plan is untouched from the
+ * moment of ENTRY, and the trades where that distinction bites are exactly
+ * the ones worth asking about — hold through your own stop and close later at
+ * a better price, and an exit-onward scan never sees the stop being hit and
+ * can come back "target_first" on a trade the original plan lost.
+ */
+describe("the window a trade is judged over", () => {
+  it("starts at the entry, not the exit", async () => {
+    const { scanWindow } = await import("../server/outcomes");
+    const w = scanWindow({
+      entryTime: "2026-08-01T10:00:00.000Z",
+      exitTime: "2026-08-03T10:00:00.000Z",
+    })!;
+    expect(new Date(w.from).toISOString()).toBe("2026-08-01T10:00:00.000Z");
+    expect(w.to).toBeGreaterThan(new Date("2026-08-03T10:00:00.000Z").getTime());
+  });
+
+  it("covers a trade held through its own stop", async () => {
+    // The concrete case. Entered at 100 with a stop at 90; price wicked to 88
+    // WHILE the trade was on, then recovered and tagged 130 after the exit.
+    // Judged from the entry this is stop_first, which is the truth about the
+    // plan. Judged from the exit it reads target_first — the flattering
+    // answer, and a false one.
+    const held = [bar(1, 100, 101, 88, 95)];
+    const after = [bar(2, 95, 131, 94, 130)];
+    expect(firstTouch([...held, ...after], plan).verdict).toBe("stop_first");
+    expect(firstTouch(after, plan).verdict).toBe("target_first");
+  });
+
+  it("declines a window that has not opened yet", async () => {
+    const { scanWindow } = await import("../server/outcomes");
+    expect(scanWindow({ entryTime: "2099-01-01T00:00:00.000Z" })).toBeNull();
+    expect(scanWindow({ entryTime: "not a date" })).toBeNull();
+  });
+});
+
+/**
+ * Reading the path off the candles.
+ *
+ * Four numbers, four windows, and the windows are the substance. MAE and MFE
+ * that leak one bar of aftermath are the original bug this journal was built
+ * around: an exit that was too EARLY then reads as too LATE, because the run
+ * you were not in gets recorded as a move you gave back.
+ */
+describe("the path, read off the candles", () => {
+  // Long from 100, stop 90. Held over bars 1-3, out after bar 3.
+  const path = { direction: "long", entryMs: 1, exitMs: 3, stop: 90 };
+  const bars = [
+    bar(1, 100, 106, 97, 104), // in trade
+    bar(2, 104, 118, 103, 117), // in trade — the best while held
+    bar(3, 117, 119, 94, 96), // in trade — the worst while held
+    bar(4, 96, 140, 95, 138), // after the exit — ran without you
+    bar(5, 138, 141, 88, 89), // after — breaks the original stop
+    bar(6, 89, 92, 70, 72), // after — well past it
+  ];
+
+  it("keeps MAE and MFE strictly inside the hold", () => {
+    const p = pathExtremes(bars, path);
+    expect(p.mfe).toBe(119); // bar 3's high, NOT bar 4's 140
+    expect(p.mae).toBe(94); // bar 3's low, NOT bar 6's 70
+  });
+
+  it("stops the favourable aftermath where the thesis died", () => {
+    // 140 on bar 4 counts. Bar 5 breaks the original stop, so a position left
+    // alone would not have been there for anything after it — and without
+    // that bound "it would have gone higher" is eventually true of every
+    // trade ever taken.
+    expect(pathExtremes(bars, path).postExitPeak).toBe(140);
+  });
+
+  it("does NOT stop the adverse aftermath at the stop", () => {
+    // How far past the stop it went IS the measurement — it is what the stop
+    // saved you. Bounding this one at the stop would answer that question
+    // with "nothing" every single time.
+    expect(pathExtremes(bars, path).postExitAdverse).toBe(70);
+  });
+
+  it("stops attributing the adverse move after a month", () => {
+    const day = 86_400_000;
+    const late = [bar(1, 100, 100, 100, 100), bar(2, 100, 100, 100, 100),
+      { t: 2 + AFTERMATH_HORIZON_MS + day, o: 50, h: 50, l: 20, c: 25 }];
+    const p = pathExtremes(late, { direction: "long", entryMs: 1, exitMs: 2, stop: 90 });
+    // The crash is a month and a day later — that is the next cycle, not the
+    // aftermath of this trade.
+    expect(p.postExitAdverse).toBeNull();
+  });
+
+  it("flips every direction for a short", () => {
+    const shortBars = [
+      bar(1, 100, 103, 96, 97), // in trade
+      bar(2, 97, 98, 82, 84), // in trade — best (lowest) while held
+      bar(3, 84, 88, 83, 86), // after the exit is bar 2
+    ];
+    const p = pathExtremes(shortBars, { direction: "short", entryMs: 1, exitMs: 2, stop: 110 });
+    expect(p.mfe).toBe(82); // best for a short is the LOW
+    expect(p.mae).toBe(103); // worst is the HIGH
+    expect(p.postExitPeak).toBe(83);
+  });
+
+  it("is null per leg rather than zero when a window is empty", () => {
+    // An unmeasured leg is not a zero leg, and everything downstream depends
+    // on being able to tell the two apart.
+    const open = pathExtremes([bar(1, 100, 106, 97, 104)], { ...path, exitMs: null });
+    expect(open.mfe).toBe(106);
+    expect(open.postExitPeak).toBeNull();
+    expect(open.postExitAdverse).toBeNull();
+    expect(pathExtremes([], path)).toEqual({ mae: null, mfe: null, postExitPeak: null, postExitAdverse: null });
   });
 });
