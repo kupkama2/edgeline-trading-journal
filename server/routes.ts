@@ -25,6 +25,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import {
   insertTradeSchema,
   updateTradeSchema,
+  missingRisk,
   insertMistakeTagSchema,
   insertTradingStyleSchema,
   insertWeeklyReviewSchema,
@@ -412,18 +413,23 @@ export async function registerRoutes(
         }
       : parsed.data.trade;
 
+    /*
+     * The same rule the insert schema applies, from the same function — a
+     * PATCH carries only what changed, so a trade can be walked into a live
+     * state one field at a time and the merged row is the only honest thing
+     * to check. This used to be a second copy of the rule that excluded only
+     * "pending", which made cancelling a resting order with no stop on it
+     * impossible: every reason on the "didn't become a position" dialog came
+     * back 400.
+     */
     const merged = { ...existing, ...trade };
-    if ((merged.status ?? "open") !== "pending") {
-      const missing = (["initialStop", "initialTarget"] as const).filter(
-        (f) => merged[f] == null,
-      );
-      if (missing.length) {
-        return res.status(400).json({
-          message:
-            "A trade needs a stop and a target once it is open — 1R is measured entry-to-stop.",
-          issues: missing.map((f) => ({ path: ["trade", f], message: `${f} is required` })),
-        });
-      }
+    const missing = missingRisk(merged);
+    if (missing.length) {
+      return res.status(400).json({
+        message:
+          "A trade needs a stop and a target once it is open — 1R is measured entry-to-stop.",
+        issues: missing.map((f) => ({ path: ["trade", f], message: `${f} is required` })),
+      });
     }
 
     const updated = await store(req).updateTrade(

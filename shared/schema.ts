@@ -393,20 +393,43 @@ const tradeFields = createInsertSchema(trades)
  * Once it is open or closed both are mandatory: 1R is defined as entry-to-stop,
  * so a live position without a stop would silently poison every R-based metric.
  */
+/**
+ * Which statuses owe a stop and a target.
+ *
+ * Exported because this rule is checked in two places — here on the way in,
+ * and again on the server against the MERGED row, since a PATCH carries only
+ * what changed and a trade can be walked into a live state one field at a
+ * time. Two copies of it drifted apart exactly once and it cost the ability
+ * to cancel a resting order: the copy on the route excluded only "pending",
+ * so cancelling an order that never had a stop — which is what most resting
+ * orders look like — was rejected as a live trade missing its risk.
+ *
+ * A pending order is a plan, and a cancelled one never became a position.
+ * Neither has an R to poison.
+ */
+export const needsRisk = (status: string | null | undefined) =>
+  (status ?? "open") !== "pending" && status !== "cancelled";
+
+/** The fields a live trade cannot go without, and which of them are absent. */
+export const missingRisk = (v: {
+  status?: string | null;
+  initialStop?: number | null;
+  initialTarget?: number | null;
+}) =>
+  needsRisk(v.status)
+    ? (["initialStop", "initialTarget"] as const).filter((f) => v[f] == null)
+    : [];
+
 function requireRiskOnceLive(
   v: { status?: string | null; initialStop?: number | null; initialTarget?: number | null },
   ctx: z.RefinementCtx,
 ) {
-  const st = v.status ?? "open";
-  if (st === "pending" || st === "cancelled") return;
-  for (const field of ["initialStop", "initialTarget"] as const) {
-    if (v[field] == null) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: [field],
-        message: `${field} is required once a trade is open or closed`,
-      });
-    }
+  for (const field of missingRisk(v)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [field],
+      message: `${field} is required once a trade is open or closed`,
+    });
   }
 }
 
