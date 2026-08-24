@@ -24,13 +24,14 @@ import {
   binanceSymbolForTrade,
   firstTouch,
   pathExtremes,
+  scanWindow,
   type BinanceSymbol,
-  type Candle,
+  type PairRef,
 } from "@shared/binance";
 import { outcomeUnknown } from "@shared/aftermath";
 import type { TradeWithTags } from "@shared/schema";
 import { fetchCandles, fetchCatalogue, intervalFor } from "./binance";
-import { catalogue, storageFor } from "./storage";
+import { catalogue, collapsePairSymbolsOnce, storageFor } from "./storage";
 
 /** How stale the pair list may get. Listings are daily news at most. */
 const CATALOGUE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -60,13 +61,20 @@ export interface CheckSummary {
   resolved: Resolved[];
   /** Still waiting: neither level reached yet, or the feed could not say. */
   pending: number;
-  /** Closed trades this cannot speak for at all — futures, unlisted tickers. */
+  /** Closed trades this cannot speak for at all — index futures, unlisted tickers. */
   unmatched: number;
   /** Trades whose MAE/MFE or aftermath prices were filled in from the candles. */
   measured: Measured[];
   /** Set when the price feed itself failed; the caller should say so quietly. */
   error?: string;
 }
+
+/**
+ * Historical pair symbols are folded into their coin the first time a
+ * catalogue exists to fold them with — once per process, and idempotent, so
+ * a restart costs one no-op scan rather than a wrong answer.
+ */
+let backfilled = false;
 
 /** Refresh the cached pair list when it is missing or a day old. */
 export async function ensureCatalogue(force = false): Promise<BinanceSymbol[]> {
@@ -83,12 +91,24 @@ export async function ensureCatalogue(force = false): Promise<BinanceSymbol[]> {
       // which is the same as the honest "don't know" this returns anyway.
     }
   }
-  return (await catalogue.list()).map((r) => ({
+  const cat = (await catalogue.list()).map((r) => ({
     symbol: r.symbol,
     baseAsset: r.baseAsset,
     quoteAsset: r.quoteAsset,
     status: r.status,
+    market: r.market === "futures" ? ("futures" as const) : ("spot" as const),
   }));
+
+  if (!backfilled && cat.length > 0) {
+    backfilled = true;
+    try {
+      await collapsePairSymbolsOnce(cat);
+    } catch {
+      // A failed fold leaves the old split symbols in place, which is where
+      // they already were. It is not worth failing a price lookup over.
+    }
+  }
+  return cat;
 }
 
 /**
@@ -128,7 +148,7 @@ export async function checkOutcomes(userId: number): Promise<CheckSummary> {
    * no crypto trade would ever be read. Nothing would look broken; the feature
    * would just quietly never work.
    */
-  const matched: { trade: TradeWithTags; pair: string }[] = [];
+  const matched: { trade: TradeWithTags; pair: PairRef }[] = [];
   for (const t of due) {
     const pair = binanceSymbolForTrade(t, cat);
     if (pair) matched.push({ trade: t, pair });
@@ -149,7 +169,7 @@ export async function checkOutcomes(userId: number): Promise<CheckSummary> {
         out.resolved.push({
           tradeId: t.id,
           symbol: t.symbol,
-          pair,
+          pair: pair.symbol,
           verdict: read.settled.verdict,
           hitAt: read.settled.hitAt,
         });
@@ -190,30 +210,6 @@ export async function checkOutcomes(userId: number): Promise<CheckSummary> {
 }
 
 /**
- * The window the question is asked over: ENTRY to now.
- *
- * Not exit to now, which is what this did at first and is wrong in a way that
- * writes false answers. The question is what an UNTOUCHED plan would have
- * done, and an untouched plan is live from the moment of entry. Usually the
- * two agree, because a trade whose stop was hit while it was on would have
- * been stopped out rather than closed by hand — but the interesting trades
- * are exactly the ones where that is not true. Hold through your own stop and
- * close later at a better price, or widen the stop and close at breakeven,
- * and scanning only the aftermath skips the stop being hit and can come back
- * "target_first" on a trade the original plan lost. That is a confident wrong
- * answer in the one field this whole module exists to protect.
- */
-export function scanWindow(t: {
-  entryTime: string;
-  exitTime?: string | null;
-}): { from: number; to: number } | null {
-  const from = new Date(t.entryTime).getTime();
-  const to = Date.now();
-  if (!isFinite(from) || to <= from) return null;
-  return { from, to };
-}
-
-/**
  * One trade, one pass over its candles: the verdict AND the path numbers.
  *
  * Both from the same fetch, because they are answers to questions about the
@@ -222,7 +218,7 @@ export function scanWindow(t: {
  */
 async function readTrade(
   t: TradeWithTags,
-  pair: string,
+  pair: PairRef,
 ): Promise<{
   settled: { verdict: "target_first" | "stop_first"; hitAt: string } | null;
   path: ReturnType<typeof pathExtremes>;

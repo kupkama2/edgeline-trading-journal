@@ -40,7 +40,15 @@ export function useCheckOutcomes() {
 
 /** Every spot pair Binance trades, for the symbol picker. */
 export function useBinanceSymbols() {
-  return useQuery<{ symbol: string; baseAsset: string; quoteAsset: string; status: string }[]>({
+  return useQuery<
+    {
+      symbol: string;
+      baseAsset: string;
+      quoteAsset: string;
+      status: string;
+      market: "futures" | "spot";
+    }[]
+  >({
     queryKey: ["/api/binance/symbols"],
     // The pair list changes when a coin lists; once a session is plenty.
     staleTime: Infinity,
@@ -51,6 +59,7 @@ export function useBinanceSymbols() {
 export function useTradeCandles(tradeId: number | null) {
   return useQuery<{
     pair: string | null;
+    market?: "futures" | "spot";
     interval?: string;
     candles: { t: number; o: number; h: number; l: number; c: number }[];
     error?: string;

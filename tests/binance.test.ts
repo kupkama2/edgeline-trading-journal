@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   AFTERMATH_HORIZON_MS,
+  collapseToInstrument,
+  scanWindow,
   binanceSymbolForTrade,
   firstTouch,
   matchBinanceSymbol,
@@ -89,29 +91,47 @@ describe("which level price reached first", () => {
 
 /* --------------------------------------------------------------------- */
 
+const spot = (symbol: string, baseAsset: string, quoteAsset: string, status = "TRADING") =>
+  ({ symbol, baseAsset, quoteAsset, status, market: "spot" as const });
+const perp = (symbol: string, baseAsset: string, quoteAsset: string, status = "TRADING") =>
+  ({ symbol, baseAsset, quoteAsset, status, market: "futures" as const });
+
 const cat: BinanceSymbol[] = [
-  { symbol: "BTCUSDT", baseAsset: "BTC", quoteAsset: "USDT", status: "TRADING" },
-  { symbol: "BTCUSDC", baseAsset: "BTC", quoteAsset: "USDC", status: "TRADING" },
-  { symbol: "ETHBTC", baseAsset: "ETH", quoteAsset: "BTC", status: "TRADING" },
-  { symbol: "ETHUSDC", baseAsset: "ETH", quoteAsset: "USDC", status: "TRADING" },
-  { symbol: "HYPEUSDT", baseAsset: "HYPE", quoteAsset: "USDT", status: "TRADING" },
-  { symbol: "OLDUSDT", baseAsset: "OLD", quoteAsset: "USDT", status: "BREAK" },
-  { symbol: "ONLYBTC", baseAsset: "ONLY", quoteAsset: "BTC", status: "TRADING" },
+  perp("BTCUSDT", "BTC", "USDT"),
+  spot("BTCUSDT", "BTC", "USDT"),
+  spot("BTCUSDC", "BTC", "USDC"),
+  spot("ETHBTC", "ETH", "BTC"),
+  spot("ETHUSDC", "ETH", "USDC"),
+  perp("HYPEUSDT", "HYPE", "USDT"),
+  spot("OLDUSDT", "OLD", "USDT", "BREAK"),
+  spot("ONLYBTC", "ONLY", "BTC"),
+  spot("LTCUSDT", "LTC", "USDT"),
+  perp("LTCUSDT", "LTC", "USDT"),
+  spot("WBTCUSDT", "WBTC", "USDT"),
+  spot("WUSDT", "W", "USDT"),
 ];
 
 describe("matching a journal symbol to a Binance pair", () => {
-  it("takes a pair typed straight in", () => {
-    expect(matchBinanceSymbol("BTCUSDT", cat)).toBe("BTCUSDT");
-    expect(matchBinanceSymbol(" btcusdt ", cat)).toBe("BTCUSDT");
+  it("takes a pair typed straight in, from the futures book", () => {
+    expect(matchBinanceSymbol("BTCUSDT", cat)).toEqual({ symbol: "BTCUSDT", market: "futures" });
+    expect(matchBinanceSymbol(" btcusdt ", cat)).toEqual({ symbol: "BTCUSDT", market: "futures" });
+  });
+
+  it("prefers the PERP over the spot pair of the same name", () => {
+    // They share a name and not a price: basis and funding separate them, and
+    // a liquidation cascade wicks the perp through levels spot never prints.
+    // That wick is what actually takes a stop.
+    expect(matchBinanceSymbol("LTC", cat)!.market).toBe("futures");
+    expect(matchBinanceSymbol("LTCUSDT", cat)!.market).toBe("futures");
   });
 
   it("resolves a bare ticker to its best-quoted pair", () => {
-    expect(matchBinanceSymbol("HYPE", cat)).toBe("HYPEUSDT");
-    expect(matchBinanceSymbol("BTC", cat)).toBe("BTCUSDT"); // USDT over USDC
+    expect(matchBinanceSymbol("HYPE", cat)).toEqual({ symbol: "HYPEUSDT", market: "futures" });
+    expect(matchBinanceSymbol("BTC", cat)!.symbol).toBe("BTCUSDT"); // USDT over USDC
   });
 
-  it("falls back through the stablecoins when there is no USDT pair", () => {
-    expect(matchBinanceSymbol("ETH", cat)).toBe("ETHUSDC");
+  it("falls back to spot when a coin has no perp", () => {
+    expect(matchBinanceSymbol("ETH", cat)).toEqual({ symbol: "ETHUSDC", market: "spot" });
   });
 
   it("refuses a base that only trades against BTC", () => {
@@ -132,17 +152,86 @@ describe("matching a journal symbol to a Binance pair", () => {
   });
 });
 
-describe("matching a whole trade", () => {
-  it("resolves an ordinary spot trade", () => {
-    expect(binanceSymbolForTrade({ symbol: "HYPE", contract: null }, cat)).toBe("HYPEUSDT");
+/**
+ * One coin, however the string was copied.
+ *
+ * "LTC/USDT" off a screenshot, "LTCUSDT.P" off a TradingView title, "LTCUSDT"
+ * off the exchange and "LTC" typed by hand are one instrument. Without this
+ * they are four, each with its own win rate and its own row in every
+ * breakdown, and none of them is the truth.
+ */
+describe("collapsing a pair to the instrument", () => {
+  it("takes the base off every way a pair gets written", () => {
+    for (const written of ["LTC/USDT", "LTCUSDT", "LTCUSDT.P", "LTC/USDT.P", "ltc-usdt", "LTC : USDT"]) {
+      expect(collapseToInstrument(written, cat)).toBe("LTC");
+    }
   });
 
-  it("never touches a futures trade", () => {
+  it("reads a quote Binance does not even list, when the coin is real", () => {
+    // "LTCUSD" is not a pair on Binance — it is how TradingView and half the
+    // industry write it. The journal still has to know it means litecoin.
+    expect(collapseToInstrument("LTCUSD", cat)).toBe("LTC");
+    expect(collapseToInstrument("LTC/USD", cat)).toBe("LTC");
+    expect(collapseToInstrument("BTCUSD", cat)).toBe("BTC");
+  });
+
+  it("peels the longest quote, not the first one that fits", () => {
+    // USD is a suffix of USDT. Try the short one first and LTCUSDT collapses
+    // to "LTCUSD" — a coin that does not exist.
+    expect(collapseToInstrument("LTCUSDT", cat)).toBe("LTC");
+  });
+
+  it("will not peel a suffix off a string that leaves nonsense behind", () => {
+    // The guard on the fallback: the remainder has to be a coin the catalogue
+    // knows. "ZZZUSD" leaves "ZZZ", which is nothing, so the string stands.
+    expect(collapseToInstrument("ZZZUSD", cat)).toBe("ZZZUSD");
+  });
+
+  it("leaves a bare ticker alone", () => {
+    expect(collapseToInstrument("LTC", cat)).toBe("LTC");
+    expect(collapseToInstrument(" hype ", cat)).toBe("HYPE");
+  });
+
+  it("does NOT cut a suffix off a coin whose name ends in one", () => {
+    // The trap a quote-suffix list walks straight into: strip "BTC" from
+    // "WBTC" and Wrapped Bitcoin starts logging as "W" — which is a real and
+    // different coin, sitting right there in the catalogue.
+    expect(collapseToInstrument("WBTC", cat)).toBe("WBTC");
+    expect(collapseToInstrument("WBTCUSDT", cat)).toBe("WBTC");
+  });
+
+  it("trusts an explicit separator even for a coin it has never heard of", () => {
+    // Writing "FOO/USDT" is a human saying which half is the instrument, and
+    // that beats not recognising the ticker.
+    expect(collapseToInstrument("FOO/USDT", cat)).toBe("FOO");
+  });
+
+  it("leaves an unrecognised bare string entirely alone", () => {
+    // Not knowing a symbol is not a licence to start cutting letters off it.
+    expect(collapseToInstrument("NOTACOIN", cat)).toBe("NOTACOIN");
+    expect(collapseToInstrument("MNQU6", cat)).toBe("MNQU6");
+  });
+
+  it("has nothing to say about nothing", () => {
+    expect(collapseToInstrument("", cat)).toBe("");
+    expect(collapseToInstrument(null, cat)).toBe("");
+  });
+});
+
+describe("matching a whole trade", () => {
+  it("resolves an ordinary crypto trade", () => {
+    expect(binanceSymbolForTrade({ symbol: "HYPE", contract: null }, cat)).toEqual({
+      symbol: "HYPEUSDT",
+      market: "futures",
+    });
+  });
+
+  it("never touches an index-futures trade", () => {
     // Nothing stops a token called NQ from listing tomorrow, and resolving a
     // Nasdaq future against a memecoin's candles would be catastrophic and
     // silent. A trade carrying a contract is not matched at all.
     expect(binanceSymbolForTrade({ symbol: "BTC", contract: "MBTZ6" }, cat)).toBeNull();
-    expect(binanceSymbolForTrade({ symbol: "BTC", contract: "   " }, cat)).toBe("BTCUSDT");
+    expect(binanceSymbolForTrade({ symbol: "BTC", contract: "   " }, cat)!.symbol).toBe("BTCUSDT");
   });
 });
 
@@ -178,8 +267,7 @@ describe("how finely to scan a window", () => {
  * can come back "target_first" on a trade the original plan lost.
  */
 describe("the window a trade is judged over", () => {
-  it("starts at the entry, not the exit", async () => {
-    const { scanWindow } = await import("../server/outcomes");
+  it("starts at the entry, not the exit", () => {
     const w = scanWindow({
       entryTime: "2026-08-01T10:00:00.000Z",
       exitTime: "2026-08-03T10:00:00.000Z",
@@ -200,8 +288,7 @@ describe("the window a trade is judged over", () => {
     expect(firstTouch(after, plan).verdict).toBe("target_first");
   });
 
-  it("declines a window that has not opened yet", async () => {
-    const { scanWindow } = await import("../server/outcomes");
+  it("declines a window that has not opened yet", () => {
     expect(scanWindow({ entryTime: "2099-01-01T00:00:00.000Z" })).toBeNull();
     expect(scanWindow({ entryTime: "not a date" })).toBeNull();
   });

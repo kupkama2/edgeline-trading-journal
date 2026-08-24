@@ -19,7 +19,7 @@
  * journal.
  */
 import { ProxyAgent, fetch as undiciFetch } from "undici";
-import type { BinanceSymbol, Candle } from "@shared/binance";
+import type { BinanceSymbol, Candle, Market } from "@shared/binance";
 
 /**
  * Overridable so the whole path can be exercised without the live venue —
@@ -27,6 +27,17 @@ import type { BinanceSymbol, Candle } from "@shared/binance";
  * api.binance.com is ever blocked from the host. Defaults to the real thing.
  */
 const SPOT = (process.env.BINANCE_BASE || "https://api.binance.com").replace(/\/+$/, "");
+/**
+ * USD-M futures — the perpetuals. A different host and a different price for
+ * the same name: basis and funding separate them, and a liquidation cascade
+ * wicks the perp through levels the spot book never prints. Reading a perp
+ * trade off spot candles answers "did my stop get hit" with the price on a
+ * market the order was never resting in.
+ */
+const FUTURES = (process.env.BINANCE_FUTURES_BASE || "https://fapi.binance.com").replace(/\/+$/, "");
+
+const hostFor = (m: Market) => (m === "futures" ? FUTURES : SPOT);
+const klinePath = (m: Market) => (m === "futures" ? "/fapi/v1/klines" : "/api/v3/klines");
 
 /**
  * Egress in the dev sandbox goes through a proxy that Node's built-in fetch
@@ -55,11 +66,11 @@ function egress(): ProxyAgent | undefined {
   return dispatcher;
 }
 
-async function get(path: string, timeoutMs = 12_000): Promise<any> {
+async function get(base: string, path: string, timeoutMs = 12_000): Promise<any> {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), timeoutMs);
   try {
-    const res = await undiciFetch(`${SPOT}${path}`, {
+    const res = await undiciFetch(`${base}${path}`, {
       signal: ctl.signal,
       dispatcher: egress(),
       headers: { accept: "application/json" },
@@ -71,16 +82,52 @@ async function get(path: string, timeoutMs = 12_000): Promise<any> {
   }
 }
 
-/** Every spot pair Binance lists, with the fields the matcher needs. */
+/**
+ * Every pair Binance lists, from BOTH books, tagged with which one.
+ *
+ * Futures first in the returned list and preferred by the matcher. Only
+ * PERPETUAL contracts are taken: the quarterlies (BTCUSDT_240329) are a
+ * different instrument with a different price, and their names would collide
+ * with nothing useful.
+ *
+ * If either book fails the other still counts — half a catalogue matches half
+ * the trades, which beats matching none.
+ */
 export async function fetchCatalogue(): Promise<BinanceSymbol[]> {
-  const json = await get("/api/v3/exchangeInfo?permissions=SPOT");
-  const rows = Array.isArray(json?.symbols) ? json.symbols : [];
-  return rows.map((s: any) => ({
-    symbol: String(s.symbol),
-    baseAsset: String(s.baseAsset),
-    quoteAsset: String(s.quoteAsset),
-    status: String(s.status),
-  }));
+  const [futures, spot] = await Promise.allSettled([
+    get(FUTURES, "/fapi/v1/exchangeInfo"),
+    get(SPOT, "/api/v3/exchangeInfo?permissions=SPOT"),
+  ]);
+
+  const out: BinanceSymbol[] = [];
+  if (futures.status === "fulfilled") {
+    for (const s of futures.value?.symbols ?? []) {
+      // Quarterlies and anything not a straight perp are skipped.
+      if (s?.contractType && s.contractType !== "PERPETUAL") continue;
+      out.push({
+        symbol: String(s.symbol),
+        baseAsset: String(s.baseAsset),
+        quoteAsset: String(s.quoteAsset),
+        status: String(s.status),
+        market: "futures",
+      });
+    }
+  }
+  if (spot.status === "fulfilled") {
+    for (const s of spot.value?.symbols ?? []) {
+      out.push({
+        symbol: String(s.symbol),
+        baseAsset: String(s.baseAsset),
+        quoteAsset: String(s.quoteAsset),
+        status: String(s.status),
+        market: "spot",
+      });
+    }
+  }
+  if (out.length === 0) {
+    throw new Error("Neither Binance book answered");
+  }
+  return out;
 }
 
 export type Interval = "1m" | "5m" | "15m" | "1h" | "4h" | "1d";
@@ -95,7 +142,7 @@ export type Interval = "1m" | "5m" | "15m" | "1h" | "4h" | "1d";
  * which is the kind this module is least allowed to produce.
  */
 export async function fetchCandles(
-  symbol: string,
+  pair: { symbol: string; market: Market },
   interval: Interval,
   startMs: number,
   endMs: number,
@@ -105,7 +152,8 @@ export async function fetchCandles(
   let cursor = startMs;
   while (cursor < endMs && out.length < maxBars) {
     const page: any[] = await get(
-      `/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=${interval}` +
+      hostFor(pair.market),
+      `${klinePath(pair.market)}?symbol=${encodeURIComponent(pair.symbol)}&interval=${interval}` +
         `&startTime=${Math.floor(cursor)}&endTime=${Math.floor(endMs)}&limit=1000`,
     );
     if (!Array.isArray(page) || page.length === 0) break;

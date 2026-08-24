@@ -92,13 +92,23 @@ export function SymbolPicker({
       // it twice would push the useful half of the list off the bottom.
       .filter((c) => !owned.has(c.root))
       .map((c) => ({ value: c.root, detail: contractDetail(c), group: "contracts" as const }));
-    const listed = pairs
-      .filter((p) => !owned.has(p.symbol) && !owned.has(p.baseAsset))
-      .map((p) => ({
-        value: p.symbol,
-        detail: `${p.baseAsset} / ${p.quoteAsset}`,
-        group: "binance" as const,
-      }));
+    /*
+     * The COIN, not the pair. What gets stored on a trade is the instrument —
+     * LTC, never LTCUSDT — so offering the pair would have you pick one string
+     * and watch a different one appear. One row per coin, deduped across the
+     * two books and every quote it trades against, with the pair as the hint.
+     */
+    const seen = new Set<string>();
+    const listed: Option[] = [];
+    for (const p of pairs) {
+      if (owned.has(p.baseAsset) || seen.has(p.baseAsset)) continue;
+      seen.add(p.baseAsset);
+      listed.push({
+        value: p.baseAsset,
+        detail: `${p.symbol}${p.market === "futures" ? " perp" : ""}`,
+        group: "binance",
+      });
+    }
     return [...mine, ...table, ...listed];
   }, [trades, pairs]);
 

@@ -32,6 +32,7 @@ import type {
   BinanceSymbolRow,
 } from "@shared/schema";
 import { DEMON_TAXONOMY, DEMON_LEGACY_ALIASES } from "@shared/demons";
+import { collapseToInstrument } from "@shared/binance";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import { and, eq, desc, inArray, isNull, sql as sqlx } from "drizzle-orm";
@@ -346,12 +347,28 @@ DELETE FROM mistake_tags m
 -- Who may sign in, beyond the owner. Not owner-scoped: it is consulted before
 -- we know who is knocking. Email is the identity, lowercased on the way in so
 -- the UNIQUE index makes "one person, one invite" true regardless of spelling.
+-- The pair list gained a "market" column when futures became the primary book,
+-- and the primary key had to widen with it: BTCUSDT names a perp AND a spot
+-- pair, at different prices. This is a cache with nothing to preserve, so the
+-- old shape is dropped once and refetched rather than migrated in place.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'binance_symbols')
+     AND NOT EXISTS (
+       SELECT 1 FROM information_schema.columns
+       WHERE table_name = 'binance_symbols' AND column_name = 'market'
+     )
+  THEN DROP TABLE binance_symbols;
+  END IF;
+END $$;
 CREATE TABLE IF NOT EXISTS binance_symbols (
-  symbol TEXT PRIMARY KEY,
+  symbol TEXT NOT NULL,
+  market TEXT NOT NULL,
   base_asset TEXT NOT NULL,
   quote_asset TEXT NOT NULL,
   status TEXT NOT NULL,
-  fetched_at TEXT NOT NULL
+  fetched_at TEXT NOT NULL,
+  PRIMARY KEY (symbol, market)
 );
 CREATE TABLE IF NOT EXISTS invites (
   id SERIAL PRIMARY KEY,
@@ -396,6 +413,46 @@ const LEGACY_SOURCE_TAGS = ["Severin", "Daniel", "CBS", "UB"];
  * and a migration must never answer questions. Idempotent — once the tag has
  * moved out, the trade no longer matches.
  */
+/**
+ * Fold historical pair symbols into the coin they name.
+ *
+ * "ZKUSDT" and "ZK" were two instruments before the entry path learned to
+ * collapse them, so a coin logged from a screenshot one week and typed by
+ * hand the next arrived as two rows in every breakdown, each with its own
+ * win rate and neither of them true.
+ *
+ * Not run at boot, unlike the other migrations here, because it needs the
+ * Binance catalogue and a database migration has no business waiting on a
+ * venue to answer. It runs the first time a catalogue is successfully loaded
+ * instead — see ensureCatalogue — and is naturally idempotent: an already
+ * collapsed symbol collapses to itself.
+ *
+ * Rows carrying a contract are never touched. A futures trade has its own
+ * rollup rules and no business near a crypto-pair collapse.
+ */
+export async function collapsePairSymbolsOnce(
+  cat: { symbol: string; baseAsset: string; quoteAsset: string; status: string; market: string }[],
+): Promise<number> {
+  if (cat.length === 0) return 0;
+  const rows = await db
+    .selectDistinct({ symbol: trades.symbol })
+    .from(trades)
+    .where(isNull(trades.contract));
+
+  let changed = 0;
+  for (const { symbol } of rows) {
+    const collapsed = collapseToInstrument(symbol, cat as any);
+    if (!collapsed || collapsed === symbol) continue;
+    const done = await db
+      .update(trades)
+      .set({ symbol: collapsed })
+      .where(and(eq(trades.symbol, symbol), isNull(trades.contract)))
+      .returning({ id: trades.id });
+    changed += done.length;
+  }
+  return changed;
+}
+
 export async function promoteSourceTagsOnce(): Promise<number> {
   const rows = await db
     .select({ id: trades.id, tags: trades.rationaleTags, source: trades.source })
@@ -595,7 +652,13 @@ export const catalogue = {
   },
 
   async replace(
-    rows: { symbol: string; baseAsset: string; quoteAsset: string; status: string }[],
+    rows: {
+      symbol: string;
+      market: string;
+      baseAsset: string;
+      quoteAsset: string;
+      status: string;
+    }[],
   ): Promise<number> {
     if (rows.length === 0) return 0;
     const fetchedAt = new Date().toISOString();
