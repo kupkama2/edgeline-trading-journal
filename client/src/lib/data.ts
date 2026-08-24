@@ -63,6 +63,7 @@ export function useTradeCandles(tradeId: number | null) {
     interval?: string;
     candles: { t: number; o: number; h: number; l: number; c: number }[];
     error?: string;
+    feed?: { lastError: string | null; lastTriedAt: string | null; lastOkAt: string | null } | null;
   }>({
     queryKey: [`/api/trades/${tradeId}/candles`],
     enabled: tradeId != null,

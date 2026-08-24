@@ -81,9 +81,34 @@ export function TradeChart({ trade }: { trade: TradeWithTags }) {
       </Card>
     );
   }
-  // Not a crypto pair, or the feed had nothing. Silent rather than apologetic:
-  // a futures trade is not broken for having no Binance chart.
-  if (!geom || !data?.pair) return null;
+  /*
+   * No chart is two different situations.
+   *
+   * A futures trade or a ticker Binance does not list has nothing to draw and
+   * nothing to apologise for — silence is right, and an error line on every
+   * NQ row would be noise. But a feed that could not be REACHED is a broken
+   * thing pretending to be an empty one, and rendering nothing there is how a
+   * dead price feed stays invisible for a week. So the venue's own words get
+   * printed, including which host said them.
+   */
+  const feedProblem = data?.feed?.lastError ?? data?.error ?? null;
+  if (!geom || !data?.pair) {
+    if (!feedProblem) return null;
+    return (
+      <Card className="border-amber-500/40 bg-card p-4" data-testid="chart-feed-error">
+        <p className="text-[11px] leading-snug text-amber-500">
+          No chart: the price feed did not answer.
+        </p>
+        <p className="mt-1 font-mono text-[10px] leading-snug text-muted-foreground">
+          {feedProblem}
+        </p>
+        <p className="mt-1 text-[10px] leading-snug text-muted-foreground">
+          Everything else on this trade is unaffected — the journal simply cannot read prices
+          until the venue is reachable from the server.
+        </p>
+      </Card>
+    );
+  }
 
   const { candles, W, plotW, y, x, bw } = geom;
   /** Level labels, spread vertically so none is drawn over another. */

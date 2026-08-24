@@ -22,7 +22,7 @@ function store(req: { userId?: number }) {
 }
 import { ProxyAgent, fetch as undiciFetch } from "undici";
 import { checkOutcomes, ensureCatalogue } from "./outcomes";
-import { fetchCandles, intervalFor } from "./binance";
+import { fetchCandles, feedStatus, intervalFor } from "./binance";
 import { binanceSymbolForTrade, collapseToInstrument } from "@shared/binance";
 import Anthropic from "@anthropic-ai/sdk";
 import {
@@ -575,7 +575,20 @@ export async function registerRoutes(
     try {
       const cat = await ensureCatalogue();
       const pair = binanceSymbolForTrade(trade, cat);
-      if (!pair) return res.json({ pair: null, candles: [] });
+      if (!pair) {
+        /*
+         * No pair is two very different situations and the chart has to be
+         * able to tell them apart. A futures trade or an unlisted ticker is
+         * nothing to report. An EMPTY catalogue means the venue never
+         * answered, and rendering nothing there is how a broken price feed
+         * stays invisible for a week.
+         */
+        return res.json({
+          pair: null,
+          candles: [],
+          feed: cat.length === 0 ? feedStatus() : null,
+        });
+      }
 
       const entry = new Date(trade.entryTime).getTime();
       const exit = trade.exitTime ? new Date(trade.exitTime).getTime() : Date.now();
@@ -592,8 +605,19 @@ export async function registerRoutes(
         candles: await fetchCandles(pair, interval, from, to, 1200),
       });
     } catch (err: any) {
-      res.json({ pair: null, candles: [], error: String(err?.message ?? err) });
+      res.json({ pair: null, candles: [], error: String(err?.message ?? err), feed: feedStatus() });
     }
+  });
+
+  /** Why the price feed is or is not working. For diagnosing it from outside. */
+  app.get("/api/binance/status", async (_req, res) => {
+    const cat = await ensureCatalogue().catch(() => []);
+    res.json({
+      pairs: cat.length,
+      futures: cat.filter((s) => s.market === "futures").length,
+      spot: cat.filter((s) => s.market === "spot").length,
+      ...feedStatus(),
+    });
   });
 
   app.delete("/api/fills/:id", async (req, res) => {
