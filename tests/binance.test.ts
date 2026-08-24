@@ -367,3 +367,4 @@ describe("the path, read off the candles", () => {
     expect(pathExtremes([], path)).toEqual({ mae: null, mfe: null, postExitPeak: null, postExitAdverse: null });
   });
 });
+

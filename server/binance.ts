@@ -26,7 +26,20 @@ import type { BinanceSymbol, Candle, Market } from "@shared/binance";
  * against a stub in a sandbox with no egress, or a regional mirror if
  * api.binance.com is ever blocked from the host. Defaults to the real thing.
  */
-const SPOT = (process.env.BINANCE_BASE || "https://api.binance.com").replace(/\/+$/, "");
+/**
+ * Spot hosts, tried in order.
+ *
+ * data-api.binance.vision is Binance's own market-data mirror: same paths, no
+ * account, and — the reason it is here — it is not geo-restricted the way the
+ * main API is. api.binance.com answers 451 to a US IP, which is where a Render
+ * service in Oregon is calling from, and a 451 looks exactly like "no coins
+ * exist" once it has been swallowed.
+ */
+const SPOT_HOSTS = (process.env.BINANCE_BASE
+  ? [process.env.BINANCE_BASE]
+  : ["https://api.binance.com", "https://data-api.binance.vision"]
+).map((h) => h.replace(/\/+$/, ""));
+const SPOT = SPOT_HOSTS[0];
 /**
  * USD-M futures — the perpetuals. A different host and a different price for
  * the same name: basis and funding separate them, and a liquidation cascade
@@ -34,9 +47,46 @@ const SPOT = (process.env.BINANCE_BASE || "https://api.binance.com").replace(/\/
  * trade off spot candles answers "did my stop get hit" with the price on a
  * market the order was never resting in.
  */
-const FUTURES = (process.env.BINANCE_FUTURES_BASE || "https://fapi.binance.com").replace(/\/+$/, "");
+const FUTURES_HOSTS = (process.env.BINANCE_FUTURES_BASE
+  ? [process.env.BINANCE_FUTURES_BASE]
+  : ["https://fapi.binance.com", "https://fapi1.binance.com", "https://fapi2.binance.com"]
+).map((h) => h.replace(/\/+$/, ""));
+const FUTURES = FUTURES_HOSTS[0];
 
-const hostFor = (m: Market) => (m === "futures" ? FUTURES : SPOT);
+const hostsFor = (m: Market) => (m === "futures" ? FUTURES_HOSTS : SPOT_HOSTS);
+const hostFor = (m: Market) => hostsFor(m)[0];
+
+/**
+ * The last thing the feed said when it refused.
+ *
+ * Kept because the alternative is what shipped: every failure swallowed, an
+ * empty pair list, and no way to tell "Binance answered 451" from "nobody has
+ * asked yet". Both look like a journal that has quietly decided none of your
+ * coins exist.
+ */
+export interface FeedStatus {
+  lastError: string | null;
+  lastTriedAt: string | null;
+  lastOkAt: string | null;
+}
+const status: FeedStatus = { lastError: null, lastTriedAt: null, lastOkAt: null };
+export const feedStatus = (): FeedStatus => ({ ...status });
+
+/** Try each host in turn; the last failure is what gets reported. */
+async function getAny(hosts: string[], path: string): Promise<any> {
+  let failure: unknown;
+  for (const host of hosts) {
+    try {
+      const out = await get(host, path);
+      status.lastOkAt = new Date().toISOString();
+      status.lastError = null;
+      return out;
+    } catch (err) {
+      failure = err;
+    }
+  }
+  throw failure ?? new Error("no hosts configured");
+}
 const klinePath = (m: Market) => (m === "futures" ? "/fapi/v1/klines" : "/api/v3/klines");
 
 /**
@@ -54,11 +104,11 @@ const LOCAL_HOST =
   /^(localhost|127\.|\[?::1\]?|0\.0\.0\.0|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/i;
 
 let dispatcher: ProxyAgent | undefined;
-function egress(): ProxyAgent | undefined {
+function egress(base: string): ProxyAgent | undefined {
   const proxy = process.env.HTTPS_PROXY || process.env.https_proxy;
   if (!proxy) return undefined;
   try {
-    if (LOCAL_HOST.test(new URL(SPOT).hostname)) return undefined;
+    if (LOCAL_HOST.test(new URL(base).hostname)) return undefined;
   } catch {
     /* an unparseable base is someone else's error; proxy as normal */
   }
@@ -72,10 +122,15 @@ async function get(base: string, path: string, timeoutMs = 12_000): Promise<any>
   try {
     const res = await undiciFetch(`${base}${path}`, {
       signal: ctl.signal,
-      dispatcher: egress(),
+      dispatcher: egress(base),
       headers: { accept: "application/json" },
     });
-    if (!res.ok) throw new Error(`Binance ${res.status} on ${path.split("?")[0]}`);
+    if (!res.ok) {
+      // The status and the host both matter: 451 from api.binance.com is a
+      // geo-block, and saying which host said it is the difference between a
+      // diagnosis and a shrug.
+      throw new Error(`${new URL(base).hostname} → HTTP ${res.status} on ${path.split("?")[0]}`);
+    }
     return await res.json();
   } finally {
     clearTimeout(timer);
@@ -94,9 +149,10 @@ async function get(base: string, path: string, timeoutMs = 12_000): Promise<any>
  * the trades, which beats matching none.
  */
 export async function fetchCatalogue(): Promise<BinanceSymbol[]> {
+  status.lastTriedAt = new Date().toISOString();
   const [futures, spot] = await Promise.allSettled([
-    get(FUTURES, "/fapi/v1/exchangeInfo"),
-    get(SPOT, "/api/v3/exchangeInfo?permissions=SPOT"),
+    getAny(FUTURES_HOSTS, "/fapi/v1/exchangeInfo"),
+    getAny(SPOT_HOSTS, "/api/v3/exchangeInfo"),
   ]);
 
   const out: BinanceSymbol[] = [];
@@ -125,7 +181,12 @@ export async function fetchCatalogue(): Promise<BinanceSymbol[]> {
     }
   }
   if (out.length === 0) {
-    throw new Error("Neither Binance book answered");
+    const why = [futures, spot]
+      .filter((r): r is PromiseRejectedResult => r.status === "rejected")
+      .map((r) => String(r.reason?.message ?? r.reason))
+      .join(" · ");
+    status.lastError = why || "Neither Binance book returned any symbols";
+    throw new Error(status.lastError);
   }
   return out;
 }
@@ -151,8 +212,8 @@ export async function fetchCandles(
   const out: Candle[] = [];
   let cursor = startMs;
   while (cursor < endMs && out.length < maxBars) {
-    const page: any[] = await get(
-      hostFor(pair.market),
+    const page: any[] = await getAny(
+      hostsFor(pair.market),
       `${klinePath(pair.market)}?symbol=${encodeURIComponent(pair.symbol)}&interval=${interval}` +
         `&startTime=${Math.floor(cursor)}&endTime=${Math.floor(endMs)}&limit=1000`,
     );
