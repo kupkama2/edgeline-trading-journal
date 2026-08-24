@@ -21,6 +21,46 @@ export function useTrades() {
   return useQuery<TradeWithTags[]>({ queryKey: ["/api/trades"] });
 }
 
+/**
+ * Ask the price feed to settle any trades still waiting on a level.
+ *
+ * A mutation rather than a query because it WRITES — it fills in
+ * noManagementOutcome on whatever it can settle — and because it should run
+ * when the journal is opened, not whenever React Query feels like refetching.
+ */
+export function useCheckOutcomes() {
+  return useMutation({
+    mutationFn: async () => (await apiRequest("POST", "/api/outcomes/check", {})).json(),
+    onSuccess: (res: any) => {
+      // Only disturb the cache when something actually changed.
+      if (res?.resolved?.length) invalidateTrades();
+    },
+  });
+}
+
+/** Every spot pair Binance trades, for the symbol picker. */
+export function useBinanceSymbols() {
+  return useQuery<{ symbol: string; baseAsset: string; quoteAsset: string; status: string }[]>({
+    queryKey: ["/api/binance/symbols"],
+    // The pair list changes when a coin lists; once a session is plenty.
+    staleTime: Infinity,
+  });
+}
+
+/** Candles around one trade, or an empty set when it is not a crypto pair. */
+export function useTradeCandles(tradeId: number | null) {
+  return useQuery<{
+    pair: string | null;
+    interval?: string;
+    candles: { t: number; o: number; h: number; l: number; c: number }[];
+    error?: string;
+  }>({
+    queryKey: [`/api/trades/${tradeId}/candles`],
+    enabled: tradeId != null,
+    staleTime: 5 * 60 * 1000,
+  });
+}
+
 export function useStyles() {
   return useQuery<TradingStyle[]>({ queryKey: ["/api/styles"] });
 }

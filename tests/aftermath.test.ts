@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { impliedOutcome, outcomeUnknown, owedOutcome } from "../shared/aftermath";
+import { impliedOutcome, outcomeParked, outcomeUnknown, owedOutcome } from "../shared/aftermath";
 import { trade } from "./helpers";
 
 /** Long from 100, stop 90, target 130 — 1R is 10 points. */
@@ -77,19 +77,34 @@ describe("whether the untouched-plan outcome is still unanswered", () => {
     expect(outcomeUnknown(t({ noManagementOutcome: "stop_first" }))).toBe(false);
   });
 
-  it("treats UNDETERMINED as an answer, not a blank", () => {
-    // You went back, the path wasn't legible, and you said so. A flag that
-    // cannot be cleared by looking teaches you to stop looking — and the
-    // field already distinguishes null (never asked) from undetermined
-    // (asked, and the chart didn't say).
-    expect(outcomeUnknown(t({ noManagementOutcome: "undetermined" }))).toBe(false);
+  it("keeps asking a trade parked at UNDETERMINED", () => {
+    // The moment you close a trade by hand, neither level has been reached —
+    // undetermined is the only truthful thing to write, and it means "not
+    // yet", not "never will". Letting it clear the flag is how a log fills up
+    // with trades that quietly opted out of being comparable against leaving
+    // them alone.
+    expect(outcomeUnknown(t({ noManagementOutcome: "undetermined" }))).toBe(true);
+  });
+
+  it("tells a parked trade apart from one never asked", () => {
+    // Same errand, different reading: one you have looked at and are waiting
+    // on, one you have not touched since closing.
+    expect(outcomeParked(t({ noManagementOutcome: "undetermined" }))).toBe(true);
+    expect(outcomeParked(t())).toBe(false);
+    expect(outcomeParked(t({ noManagementOutcome: "stop_first" }))).toBe(false);
+  });
+
+  it("stops asking once price settles it, however it was labelled", () => {
+    // Parked at undetermined, but the exit is AT the original stop — the row
+    // proves the answer and asking again is busywork.
+    expect(outcomeUnknown(t({ noManagementOutcome: "undetermined", exitPrice: 90 }))).toBe(false);
   });
 
   it("ignores the fields that are no longer worth an alert", () => {
     // Missing post-exit prices and no MAE/MFE at all: still not a question
     // this asks. Recording them is good; nagging about them is noise.
     const bare = t({
-      noManagementOutcome: "undetermined",
+      noManagementOutcome: "stop_first",
       postExitPeak: null,
       postExitAdverse: null,
       mae: null,
@@ -106,14 +121,13 @@ describe("whether the untouched-plan outcome is still unanswered", () => {
 });
 
 describe("the worklist", () => {
-  it("leaves out everything already answered", () => {
-    expect(
-      owedOutcome([
-        t({ id: 1, noManagementOutcome: "stop_first" }),
-        t({ id: 2, noManagementOutcome: "undetermined" }),
-        t({ id: 3, exitPrice: 130 }),
-      ]),
-    ).toHaveLength(0);
+  it("leaves out everything actually settled, and keeps what is only parked", () => {
+    const rows = owedOutcome([
+      t({ id: 1, noManagementOutcome: "stop_first" }), // answered
+      t({ id: 2, noManagementOutcome: "undetermined" }), // parked — still owed
+      t({ id: 3, exitPrice: 130 }), // price settled it
+    ]);
+    expect(rows.map((x) => x.id)).toEqual([2]);
   });
 
   it("puts the trade you can still remember first", () => {

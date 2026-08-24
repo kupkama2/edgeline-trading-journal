@@ -20,6 +20,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Input } from "@/components/ui/input";
 import { CONTRACTS, type ContractSpec } from "@shared/symbols";
+import { useBinanceSymbols } from "@/lib/data";
 import type { TradeWithTags } from "@shared/schema";
 
 interface Option {
@@ -27,7 +28,7 @@ interface Option {
   value: string;
   /** Right-hand detail: the contract's name, or how often you've traded it. */
   detail: string;
-  group: "yours" | "contracts";
+  group: "yours" | "contracts" | "binance";
 }
 
 /** Instruments already in the log, most recently traded first. */
@@ -73,6 +74,16 @@ export function SymbolPicker({
   const [active, setActive] = useState(0);
   const boxRef = useRef<HTMLDivElement>(null);
 
+  /*
+   * Every pair Binance actually trades, cached server-side.
+   *
+   * This is what turns "whatever you type is assumed to be crypto" into
+   * knowing: the journal can now tell a real ticker from a typo, and — the
+   * part that earns its keep — the pair it resolves to is the same one the
+   * outcome checker will read candles from. Picking the symbol from this list
+   * is how a trade becomes one the market can answer for you.
+   */
+  const { data: pairs = [] } = useBinanceSymbols();
   const all = useMemo<Option[]>(() => {
     const mine = fromHistory(trades);
     const owned = new Set(mine.map((m) => m.value));
@@ -81,15 +92,26 @@ export function SymbolPicker({
       // it twice would push the useful half of the list off the bottom.
       .filter((c) => !owned.has(c.root))
       .map((c) => ({ value: c.root, detail: contractDetail(c), group: "contracts" as const }));
-    return [...mine, ...table];
-  }, [trades]);
+    const listed = pairs
+      .filter((p) => !owned.has(p.symbol) && !owned.has(p.baseAsset))
+      .map((p) => ({
+        value: p.symbol,
+        detail: `${p.baseAsset} / ${p.quoteAsset}`,
+        group: "binance" as const,
+      }));
+    return [...mine, ...table, ...listed];
+  }, [trades, pairs]);
 
   const q = value.trim().toUpperCase();
   const matches = useMemo(() => {
     if (!q) return all.slice(0, 8);
     const starts = all.filter((o) => o.value.startsWith(q));
     const contains = all.filter((o) => !o.value.startsWith(q) && o.value.includes(q));
-    return [...starts, ...contains].slice(0, 8);
+    // Thousands of pairs contain a two-letter string, so a plain "contains"
+    // sweep buries your own instruments under alphabetical noise. Prefix
+    // matches, and your history within them, come first.
+    const rank = (o: Option) => (o.group === "yours" ? 0 : o.group === "contracts" ? 1 : 2);
+    return [...starts.sort((a, b) => rank(a) - rank(b)), ...contains.sort((a, b) => rank(a) - rank(b))].slice(0, 8);
   }, [all, q]);
 
   /*
@@ -157,13 +179,17 @@ export function SymbolPicker({
           className="absolute z-50 mt-1 w-full min-w-[16rem] overflow-hidden rounded-md border border-border bg-popover shadow-lg"
           data-testid="symbol-suggestions"
         >
-          {(["yours", "contracts"] as const).map((group) => {
+          {(["yours", "contracts", "binance"] as const).map((group) => {
             const rows = matches.filter((m) => m.group === group);
             if (rows.length === 0) return null;
             return (
               <div key={group}>
                 <p className="px-2.5 pb-0.5 pt-1.5 text-[9px] uppercase tracking-wider text-muted-foreground">
-                  {group === "yours" ? "Your instruments" : "Futures contracts"}
+                  {group === "yours"
+                    ? "Your instruments"
+                    : group === "contracts"
+                      ? "Futures contracts"
+                      : "Listed on Binance"}
                 </p>
                 {rows.map((o) => {
                   const i = matches.indexOf(o);

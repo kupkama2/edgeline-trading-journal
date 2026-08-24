@@ -21,6 +21,9 @@ function store(req: { userId?: number }) {
   return storageFor(req.userId);
 }
 import { ProxyAgent, fetch as undiciFetch } from "undici";
+import { checkOutcomes, ensureCatalogue } from "./outcomes";
+import { fetchCandles, intervalFor } from "./binance";
+import { binanceSymbolForTrade } from "@shared/binance";
 import Anthropic from "@anthropic-ai/sdk";
 import {
   insertTradeSchema,
@@ -506,6 +509,66 @@ export async function registerRoutes(
       time: parsed.data.time ?? new Date().toISOString(),
     });
     res.status(201).json(fill);
+  });
+
+  /* ------------------------- price feed / outcomes ------------------------- */
+  /*
+   * The one question a hand-closed trade cannot answer for itself, answered
+   * by the market. Crypto only, and only where the pair is unambiguous — see
+   * server/outcomes.ts for why every uncertainty ends as "leave it parked".
+   */
+  app.post("/api/outcomes/check", async (req, res) => {
+    // Same guard store() applies. Passing an absent id into storageFor would
+    // scope the query to nobody, which is one typo away from scoping it to
+    // everybody — and this endpoint WRITES.
+    const userId = (req as any).userId as number | undefined;
+    if (!userId) return res.status(401).json({ message: "No account on request" });
+    try {
+      res.json(await checkOutcomes(userId));
+    } catch (err: any) {
+      // A price feed being unreachable is not a broken journal. Report it as
+      // a result, so the client can mention it once and carry on.
+      res.json({ checked: 0, resolved: [], pending: 0, unmatched: 0, error: String(err?.message ?? err) });
+    }
+  });
+
+  /** The pair list, for the symbol picker. Cached in the database. */
+  app.get("/api/binance/symbols", async (_req, res) => {
+    try {
+      const cat = await ensureCatalogue();
+      res.json(cat.filter((s) => s.status === "TRADING"));
+    } catch {
+      res.json([]);
+    }
+  });
+
+  /**
+   * Candles around one trade, for its chart.
+   *
+   * Padded either side of the trade so the levels have context rather than
+   * sitting at the very edge, and extended past the exit because what happened
+   * next is half of what the chart is for.
+   */
+  app.get("/api/trades/:id/candles", async (req, res) => {
+    const trade = await store(req).getTrade(Number(req.params.id));
+    if (!trade) return res.status(404).json({ message: "Trade not found" });
+    try {
+      const cat = await ensureCatalogue();
+      const pair = binanceSymbolForTrade(trade, cat);
+      if (!pair) return res.json({ pair: null, candles: [] });
+
+      const entry = new Date(trade.entryTime).getTime();
+      const exit = trade.exitTime ? new Date(trade.exitTime).getTime() : Date.now();
+      const held = Math.max(exit - entry, 60 * 60 * 1000);
+      // Half the hold before, and the same again after — enough aftermath to
+      // show a level being reached without you.
+      const from = entry - held * 0.5;
+      const to = Math.min(Date.now(), exit + held * 1.5);
+      const interval = intervalFor(to - from);
+      res.json({ pair, interval, candles: await fetchCandles(pair, interval, from, to, 1200) });
+    } catch (err: any) {
+      res.json({ pair: null, candles: [], error: String(err?.message ?? err) });
+    }
   });
 
   app.delete("/api/fills/:id", async (req, res) => {

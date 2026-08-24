@@ -43,6 +43,7 @@ import { exposureOf, fmtExposure } from "@shared/symbols";
 import { GradeBadges } from "@/components/grade-picker";
 import { StyleChip } from "@/components/style-switcher";
 import { TradeImageGallery } from "@/components/trade-images";
+import { TradeChart } from "@/components/trade-chart";
 import { RationaleTags, num, parseTags } from "@/components/trade-shared";
 import { TradeEditor } from "@/components/trade-dialogs";
 import { NewTradeCard } from "@/components/new-trade-card";
@@ -476,6 +477,12 @@ function TradeBody({
             </div>
           )}
       </Card>
+
+      {/* ------------------------------ the path ---------------------------- */}
+      {/* Renders nothing at all for a futures trade or an unmatched ticker —
+          a trade is not broken for having no Binance chart, and an apology
+          in its place would be noise on every NQ row. */}
+      <TradeChart trade={trade} />
 
       {/* ------------------------------ the plan ---------------------------- */}
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">

@@ -198,7 +198,22 @@ export const trades = pgTable("trades", {
    * dropped after you left, i.e. give-back you avoided by going when you did.
    */
   postExitAdverse: doublePrecision("post_exit_adverse"),
-  noManagementOutcome: text("no_management_outcome"), // 'target_first' | 'stop_first' | 'undetermined'
+  noManagementOutcome: text("no_management_outcome"),
+  /**
+   * WHO answered noManagementOutcome — "manual" or "auto".
+   *
+   * Provenance rather than decoration. That field is what potentialR and
+   * managementDeltaR are built from, and once a price feed can write into it,
+   * "the market said so" and "I said so" have to stay distinguishable: a bad
+   * symbol match or a gap in the candles would otherwise be indistinguishable
+   * from your own judgement, forever. A manual answer is never overwritten by
+   * an automatic one.
+   */
+  outcomeSource: text("outcome_source"),
+  /** When the feed last looked, so a re-check knows what to skip. */
+  outcomeCheckedAt: text("outcome_checked_at"),
+  /** When the level was actually reached, for the notification and the chart. */
+  outcomeHitAt: text("outcome_hit_at"), // 'target_first' | 'stop_first' | 'undetermined'
   setupScreenshot: text("setup_screenshot"),
   outcomeScreenshot: text("outcome_screenshot"),
   notes: text("notes"),
@@ -471,6 +486,30 @@ export const invites = pgTable("invites", {
 });
 
 export type Invite = typeof invites.$inferSelect;
+
+/* ========================= the binance catalogue ==================== */
+
+/**
+ * Every spot pair Binance lists, cached.
+ *
+ * Kept as a table rather than fetched per request because it answers two
+ * different questions and both want it instantly: what does "HYPE" mean when
+ * someone types it, and which trades can be resolved against real candles at
+ * all. It changes when a coin lists or delists — daily is far more often than
+ * necessary — and a stale catalogue degrades gracefully, since an unmatched
+ * symbol simply means the journal declines to answer rather than guessing.
+ */
+export const binanceSymbols = pgTable("binance_symbols", {
+  /** The pair as Binance names it: "BTCUSDT". The identity. */
+  symbol: text("symbol").primaryKey(),
+  baseAsset: text("base_asset").notNull(),
+  quoteAsset: text("quote_asset").notNull(),
+  /** "TRADING" or otherwise. Delisted pairs stay, for trades that used them. */
+  status: text("status").notNull(),
+  fetchedAt: text("fetched_at").notNull(),
+});
+
+export type BinanceSymbolRow = typeof binanceSymbols.$inferSelect;
 
 /* ========================== account settings ======================== */
 

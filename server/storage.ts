@@ -10,6 +10,7 @@ import {
   accountSettings,
   users,
   invites,
+  binanceSymbols,
 } from "@shared/schema";
 import type {
   InsertTrade,
@@ -28,6 +29,7 @@ import type {
   UpsertAccountSettings,
   User,
   Invite,
+  BinanceSymbolRow,
 } from "@shared/schema";
 import { DEMON_TAXONOMY, DEMON_LEGACY_ALIASES } from "@shared/demons";
 import { drizzle } from "drizzle-orm/postgres-js";
@@ -156,6 +158,13 @@ ALTER TABLE trades ADD COLUMN IF NOT EXISTS post_exit_peak DOUBLE PRECISION;
 -- an exit was right rather than costly, which is what makes "was my stop too
 -- tight" answerable instead of always reading as "widen it".
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS post_exit_adverse DOUBLE PRECISION;
+-- Who answered noManagementOutcome, and when the feed last looked. Provenance
+-- becomes load-bearing the moment a price feed can write into that field: a
+-- bad symbol match must never be indistinguishable from the trader's own
+-- judgement, and a manual answer is never overwritten by an automatic one.
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS outcome_source TEXT;
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS outcome_checked_at TEXT;
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS outcome_hit_at TEXT;
 -- Commission paid on the trade, both sides, in dollars. Deducted in metrics.
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS fees DOUBLE PRECISION;
 -- Green flags: JSON string[] of what went right on the trade.
@@ -337,6 +346,13 @@ DELETE FROM mistake_tags m
 -- Who may sign in, beyond the owner. Not owner-scoped: it is consulted before
 -- we know who is knocking. Email is the identity, lowercased on the way in so
 -- the UNIQUE index makes "one person, one invite" true regardless of spelling.
+CREATE TABLE IF NOT EXISTS binance_symbols (
+  symbol TEXT PRIMARY KEY,
+  base_asset TEXT NOT NULL,
+  quote_asset TEXT NOT NULL,
+  status TEXT NOT NULL,
+  fetched_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS invites (
   id SERIAL PRIMARY KEY,
   email TEXT NOT NULL UNIQUE,
@@ -554,6 +570,49 @@ export const accounts = {
  * both are consulted before there is an account to scope to. Everything here
  * is owner-gated at the route, not here — this layer only stores rows.
  */
+/**
+ * The cached Binance pair list.
+ *
+ * Account-agnostic on purpose: which coins Binance lists is a fact about the
+ * world, not about a journal, so one copy serves everyone and no owner scoping
+ * applies. Replaced wholesale rather than diffed — a listing that vanished
+ * from the feed should vanish here, and reconciling additions and removals by
+ * hand is a bug surface for no benefit at this size.
+ */
+export const catalogue = {
+  async list(): Promise<BinanceSymbolRow[]> {
+    return db.select().from(binanceSymbols);
+  },
+
+  /** ISO stamp of the last successful refresh, or null when never fetched. */
+  async lastFetchedAt(): Promise<string | null> {
+    const [row] = await db
+      .select({ at: binanceSymbols.fetchedAt })
+      .from(binanceSymbols)
+      .orderBy(desc(binanceSymbols.fetchedAt))
+      .limit(1);
+    return row?.at ?? null;
+  },
+
+  async replace(
+    rows: { symbol: string; baseAsset: string; quoteAsset: string; status: string }[],
+  ): Promise<number> {
+    if (rows.length === 0) return 0;
+    const fetchedAt = new Date().toISOString();
+    await db.transaction(async (tx) => {
+      await tx.delete(binanceSymbols);
+      // Chunked: a few thousand pairs in one statement exceeds the parameter
+      // ceiling postgres-js will build a query for.
+      for (let i = 0; i < rows.length; i += 500) {
+        await tx.insert(binanceSymbols).values(
+          rows.slice(i, i + 500).map((r) => ({ ...r, fetchedAt })),
+        );
+      }
+    });
+    return rows.length;
+  },
+};
+
 export const invitations = {
   async list(): Promise<Invite[]> {
     return db.select().from(invites).orderBy(invites.email);
