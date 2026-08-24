@@ -346,12 +346,28 @@ DELETE FROM mistake_tags m
 -- Who may sign in, beyond the owner. Not owner-scoped: it is consulted before
 -- we know who is knocking. Email is the identity, lowercased on the way in so
 -- the UNIQUE index makes "one person, one invite" true regardless of spelling.
+-- The pair list gained a "market" column when futures became the primary book,
+-- and the primary key had to widen with it: BTCUSDT names a perp AND a spot
+-- pair, at different prices. This is a cache with nothing to preserve, so the
+-- old shape is dropped once and refetched rather than migrated in place.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'binance_symbols')
+     AND NOT EXISTS (
+       SELECT 1 FROM information_schema.columns
+       WHERE table_name = 'binance_symbols' AND column_name = 'market'
+     )
+  THEN DROP TABLE binance_symbols;
+  END IF;
+END $$;
 CREATE TABLE IF NOT EXISTS binance_symbols (
-  symbol TEXT PRIMARY KEY,
+  symbol TEXT NOT NULL,
+  market TEXT NOT NULL,
   base_asset TEXT NOT NULL,
   quote_asset TEXT NOT NULL,
   status TEXT NOT NULL,
-  fetched_at TEXT NOT NULL
+  fetched_at TEXT NOT NULL,
+  PRIMARY KEY (symbol, market)
 );
 CREATE TABLE IF NOT EXISTS invites (
   id SERIAL PRIMARY KEY,
@@ -595,7 +611,13 @@ export const catalogue = {
   },
 
   async replace(
-    rows: { symbol: string; baseAsset: string; quoteAsset: string; status: string }[],
+    rows: {
+      symbol: string;
+      market: string;
+      baseAsset: string;
+      quoteAsset: string;
+      status: string;
+    }[],
   ): Promise<number> {
     if (rows.length === 0) return 0;
     const fetchedAt = new Date().toISOString();

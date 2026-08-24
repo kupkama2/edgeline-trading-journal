@@ -69,6 +69,9 @@ export function firstTouch(
 
 /* ------------------------------ the catalogue ------------------------------ */
 
+/** Which book a pair trades in. They are different prices for the same name. */
+export type Market = "futures" | "spot";
+
 export interface BinanceSymbol {
   /** The pair as Binance names it: "BTCUSDT". */
   symbol: string;
@@ -76,7 +79,30 @@ export interface BinanceSymbol {
   quoteAsset: string;
   /** Only "TRADING" pairs are usable; delisted ones stay for old trades. */
   status: string;
+  market: Market;
 }
+
+/** A pair AND the book to read it from — both are needed to fetch candles. */
+export interface PairRef {
+  symbol: string;
+  market: Market;
+}
+
+/**
+ * Quote currencies a pair might be written against, longest first.
+ *
+ * Longest first matters: try "USD" before "USDT" and LTCUSDT loses only the
+ * "T"'s worth of meaning and comes out as "LTCUSD".
+ *
+ * Wider than QUOTE_RANK because this list is for READING what someone wrote,
+ * not for choosing which market to read prices from. "LTCUSD" is not a Binance
+ * pair at all — it is how TradingView and half the industry write it — and the
+ * journal still has to know it means litecoin.
+ */
+const QUOTE_SUFFIXES = [
+  "USDT", "FDUSD", "BUSD", "TUSD", "USDC", "USD",
+  "BTC", "ETH", "BNB", "EUR", "TRY", "GBP",
+];
 
 /**
  * Which quote currency to prefer when a base trades against several.
@@ -91,29 +117,53 @@ export interface BinanceSymbol {
 const QUOTE_RANK = ["USDT", "USDC", "FDUSD", "BUSD", "TUSD"];
 
 /**
+ * FUTURES BEFORE SPOT, and the reason is correctness rather than preference.
+ *
+ * A perp and its spot pair share a name and do not share a price. Basis and
+ * funding move them apart, and — the part that decides it — a liquidation
+ * cascade wicks the perp through levels the spot book never reaches. That wick
+ * is what actually took someone's stop. Reading a perp trade off spot candles
+ * would answer "did my stop get hit" with the price on a market the order was
+ * never resting in, and it would be wrong exactly at the moment it matters:
+ * within a hair of the level.
+ *
+ * Plenty of tokens also list as a perp long before they list on spot, so
+ * checking futures first is the difference between charting a trade and
+ * declining to.
+ */
+const MARKET_RANK: Market[] = ["futures", "spot"];
+
+/**
  * The Binance pair a journal symbol means, or null when it cannot be sure.
  *
- * Null is a real answer and the common one for anything that is not a spot
- * crypto pair. Nothing downstream may guess past it.
+ * Null is a real answer and the common one for anything that is not a crypto
+ * pair at all. Nothing downstream may guess past it.
  */
 export function matchBinanceSymbol(
   raw: string | null | undefined,
   catalogue: BinanceSymbol[],
-): string | null {
+): PairRef | null {
   const key = (raw ?? "").trim().toUpperCase();
   if (!key) return null;
   const live = catalogue.filter((s) => s.status === "TRADING");
+  const pick = (rows: BinanceSymbol[]) => {
+    for (const m of MARKET_RANK) {
+      const hit = rows.find((s) => s.market === m);
+      if (hit) return { symbol: hit.symbol, market: hit.market };
+    }
+    return null;
+  };
 
-  // Already a pair: "BTCUSDT" typed straight in.
-  const exact = live.find((s) => s.symbol === key);
-  if (exact) return exact.symbol;
+  // Already a pair: "BTCUSDT" typed straight in. It may exist in both books.
+  const exact = pick(live.filter((s) => s.symbol === key));
+  if (exact) return exact;
 
   // A bare asset: "HYPE" -> the best-quoted pair it trades in.
   const asBase = live.filter((s) => s.baseAsset === key);
   if (asBase.length === 0) return null;
   for (const q of QUOTE_RANK) {
-    const hit = asBase.find((s) => s.quoteAsset === q);
-    if (hit) return hit.symbol;
+    const hit = pick(asBase.filter((s) => s.quoteAsset === q));
+    if (hit) return hit;
   }
   return null;
 }
@@ -130,7 +180,7 @@ export function matchBinanceSymbol(
 export function binanceSymbolForTrade(
   trade: { symbol: string; contract?: string | null },
   catalogue: BinanceSymbol[],
-): string | null {
+): PairRef | null {
   if (trade.contract?.trim()) return null;
   return matchBinanceSymbol(trade.symbol, catalogue);
 }
@@ -208,3 +258,88 @@ export function pathExtremes(
     postExitAdverse: worst(withinHorizon),
   };
 }
+
+/* ------------------------- what did you actually type ------------------------- */
+
+/**
+ * The INSTRUMENT behind a pair as it was written.
+ *
+ * "LTC/USDT", "LTCUSDT", "LTCUSDT.P" and "LTC" are one instrument and have to
+ * group as one, or the same coin fragments into four sets of statistics
+ * depending on where the string was copied from — a TradingView title, an
+ * exchange screenshot, or typed by hand.
+ *
+ * Driven by the catalogue rather than by a list of quote suffixes, because the
+ * suffix approach is quietly dangerous. Strip "BTC" off "WBTC" and the journal
+ * starts logging Wrapped Bitcoin as a token called "W", which is itself a real
+ * coin. So the order of questions is:
+ *
+ *   1. Is the whole string a base asset in its own right? Then it IS the
+ *      instrument. WBTC stops here, and so does every other coin whose ticker
+ *      happens to end in one.
+ *   2. Is the whole string a listed pair? Then take that pair's base.
+ *   3. Was there an explicit separator? A human writing "FOO/USDT" has said
+ *      which half is the instrument, and that beats not knowing the ticker.
+ *   4. Otherwise leave it alone. Not recognising a symbol is not a licence to
+ *      start cutting letters off it.
+ */
+export function collapseToInstrument(
+  raw: string | null | undefined,
+  catalogue: BinanceSymbol[],
+): string {
+  const typed = (raw ?? "").trim().toUpperCase();
+  if (!typed) return "";
+
+  // TradingView writes perps as LTCUSDT.P; the suffix is notation, not name.
+  const noPerp = typed.replace(/\.P$/, "");
+  const sep = noPerp.match(/^([A-Z0-9]+)\s*[\/\-:]\s*([A-Z0-9]+)$/);
+  const joined = sep ? `${sep[1]}${sep[2]}` : noPerp.replace(/[\s\/\-:]/g, "");
+  if (!joined) return typed;
+
+  const bases = new Set(catalogue.map((s) => s.baseAsset));
+  if (bases.has(joined)) return joined;
+
+  const pair = catalogue.find((s) => s.symbol === joined);
+  if (pair) return pair.baseAsset;
+
+  if (sep) return sep[1];
+
+  /*
+   * Last resort: peel a quote off the end, but only when what is left is a
+   * coin the catalogue knows. That condition is the whole safety of it —
+   * "LTCUSD" is not a listed pair anywhere, yet LTC plainly is a coin, while
+   * "WBTC" never reaches here because step 1 already recognised it as one in
+   * its own right. Without the condition this would happily turn any string
+   * ending in three familiar letters into a shorter string.
+   */
+  for (const q of QUOTE_SUFFIXES) {
+    if (!joined.endsWith(q) || joined.length <= q.length) continue;
+    const stem = joined.slice(0, -q.length);
+    if (bases.has(stem)) return stem;
+  }
+  return joined;
+}
+
+/**
+ * The window the question is asked over: ENTRY to now.
+ *
+ * Not exit to now, which is what this did at first and is wrong in a way that
+ * writes false answers. The question is what an UNTOUCHED plan would have
+ * done, and an untouched plan is live from the moment of entry. Usually the
+ * two agree, because a trade whose stop was hit while it was on would have
+ * been stopped out rather than closed by hand — but the interesting trades
+ * are exactly the ones where that is not true. Hold through your own stop and
+ * close later at a better price, or widen the stop and close at breakeven,
+ * and scanning only the aftermath skips the stop being hit and can come back
+ * "target_first" on a trade the original plan lost. That is a confident wrong
+ * answer in the one field this whole module exists to protect.
+ */
+export function scanWindow(
+  t: { entryTime: string; exitTime?: string | null },
+  now = Date.now(),
+): { from: number; to: number } | null {
+  const from = new Date(t.entryTime).getTime();
+  if (!isFinite(from) || now <= from) return null;
+  return { from, to: now };
+}
+

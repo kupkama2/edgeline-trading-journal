@@ -500,8 +500,14 @@ export type Invite = typeof invites.$inferSelect;
  * symbol simply means the journal declines to answer rather than guessing.
  */
 export const binanceSymbols = pgTable("binance_symbols", {
-  /** The pair as Binance names it: "BTCUSDT". The identity. */
-  symbol: text("symbol").primaryKey(),
+  /** The pair as Binance names it: "BTCUSDT". Identity with `market`. */
+  symbol: text("symbol").notNull(),
+  /**
+   * Which book: "futures" (USD-M perps) or "spot". Part of the key, because
+   * BTCUSDT names one of each and they are different prices — basis, funding,
+   * and a liquidation wick that only ever prints on the perp.
+   */
+  market: text("market").notNull(),
   baseAsset: text("base_asset").notNull(),
   quoteAsset: text("quote_asset").notNull(),
   /** "TRADING" or otherwise. Delisted pairs stay, for trades that used them. */

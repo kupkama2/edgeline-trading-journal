@@ -23,7 +23,7 @@ function store(req: { userId?: number }) {
 import { ProxyAgent, fetch as undiciFetch } from "undici";
 import { checkOutcomes, ensureCatalogue } from "./outcomes";
 import { fetchCandles, intervalFor } from "./binance";
-import { binanceSymbolForTrade } from "@shared/binance";
+import { binanceSymbolForTrade, collapseToInstrument } from "@shared/binance";
 import Anthropic from "@anthropic-ai/sdk";
 import {
   insertTradeSchema,
@@ -359,10 +359,21 @@ export async function registerRoutes(
     const typed = (body.contract || body.symbol).trim().toUpperCase();
     const isContract = Boolean(contractFor(typed)) || looksLikeFuturesContract(typed);
     const remembered = lastPointValueFor(typed, await store(req).listTrades());
+    /*
+     * A crypto pair collapses to the coin. "LTC/USDT" off a screenshot,
+     * "LTCUSDT.P" off a TradingView title and "LTC" typed by hand are one
+     * instrument, and storing them apart splits one coin into three sets of
+     * statistics. Catalogue-driven, so WBTC is not mistaken for W/BTC — see
+     * collapseToInstrument. A futures contract never reaches this: it has
+     * already been recognised above and keeps its own rollup.
+     */
+    const cat = isContract ? [] : await ensureCatalogue().catch(() => []);
     const trade = {
       ...body,
       pointValue: body.pointValue ?? pointValueFor(typed, remembered),
-      symbol: body.contract ? body.symbol.trim().toUpperCase() : normalizeSymbol(typed),
+      symbol: body.contract
+        ? body.symbol.trim().toUpperCase()
+        : collapseToInstrument(normalizeSymbol(typed), cat),
       // Nothing to record for a stock or a spot pair — there is no contract to
       // tell apart from the instrument.
       contract: isContract ? typed : null,
@@ -398,6 +409,10 @@ export async function registerRoutes(
      */
     const typedEdit = parsed.data.trade.symbol?.trim().toUpperCase();
     const nextSymbol = typedEdit ? normalizeSymbol(typedEdit) : undefined;
+    // Same collapse as creation, so editing a symbol cannot re-split a coin
+    // the entry path had already merged.
+    const editCat =
+      typedEdit && !contractFor(typedEdit) ? await ensureCatalogue().catch(() => []) : [];
     const instrumentChanged = nextSymbol != null && nextSymbol !== existing.symbol;
     const split = typedEdit ? splitTypedSymbol(typedEdit) : null;
 
@@ -409,7 +424,7 @@ export async function registerRoutes(
             : instrumentChanged
               ? { pointValue: pointValueFor(typedEdit) }
               : {}),
-          symbol: split!.symbol,
+          symbol: split!.contract ? split!.symbol : collapseToInstrument(split!.symbol, editCat),
           // A spot pair clears it, a contract sets it, and a round-trip of the
           // same text leaves the stored value exactly as it was.
           contract: split!.contract,
@@ -535,8 +550,13 @@ export async function registerRoutes(
   /** The pair list, for the symbol picker. Cached in the database. */
   app.get("/api/binance/symbols", async (_req, res) => {
     try {
-      const cat = await ensureCatalogue();
-      res.json(cat.filter((s) => s.status === "TRADING"));
+      // Futures first: the picker keeps the first row it sees per coin, and
+      // the perp is the book these trades actually happen in.
+      const cat = (await ensureCatalogue()).filter((s) => s.status === "TRADING");
+      res.json([
+        ...cat.filter((s) => s.market === "futures"),
+        ...cat.filter((s) => s.market !== "futures"),
+      ]);
     } catch {
       res.json([]);
     }
@@ -565,7 +585,12 @@ export async function registerRoutes(
       const from = entry - held * 0.5;
       const to = Math.min(Date.now(), exit + held * 1.5);
       const interval = intervalFor(to - from);
-      res.json({ pair, interval, candles: await fetchCandles(pair, interval, from, to, 1200) });
+      res.json({
+        pair: pair.symbol,
+        market: pair.market,
+        interval,
+        candles: await fetchCandles(pair, interval, from, to, 1200),
+      });
     } catch (err: any) {
       res.json({ pair: null, candles: [], error: String(err?.message ?? err) });
     }

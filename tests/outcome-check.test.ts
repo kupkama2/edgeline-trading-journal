@@ -35,17 +35,17 @@ function startFeed(): Promise<number> {
     feed = createServer((req, res) => {
       const u = new URL(req.url ?? "/", "http://x");
       res.setHeader("content-type", "application/json");
-      if (u.pathname === "/api/v3/exchangeInfo") {
+      if (u.pathname === "/fapi/v1/exchangeInfo" || u.pathname === "/api/v3/exchangeInfo") {
         return res.end(
           JSON.stringify({
             symbols: [
-              { symbol: "AAAUSDT", baseAsset: "AAA", quoteAsset: "USDT", status: "TRADING" },
-              { symbol: "BBBUSDT", baseAsset: "BBB", quoteAsset: "USDT", status: "TRADING" },
+              { symbol: "AAAUSDT", baseAsset: "AAA", quoteAsset: "USDT", status: "TRADING", contractType: "PERPETUAL" },
+              { symbol: "BBBUSDT", baseAsset: "BBB", quoteAsset: "USDT", status: "TRADING", contractType: "PERPETUAL" },
             ],
           }),
         );
       }
-      if (u.pathname === "/api/v3/klines") {
+      if (u.pathname === "/fapi/v1/klines" || u.pathname === "/api/v3/klines") {
         const symbol = u.searchParams.get("symbol");
         const start = Number(u.searchParams.get("startTime"));
         // AAA runs to the target, BBB to the stop. One bar is enough.
@@ -89,6 +89,7 @@ describe.skipIf(!DB)("settling parked trades against the feed", () => {
     const port = await startFeed();
     // Read before the module that captures it is first imported.
     process.env.BINANCE_BASE = `http://127.0.0.1:${port}`;
+    process.env.BINANCE_FUTURES_BASE = `http://127.0.0.1:${port}`;
     const { initSchema, accounts, storageFor } = await import("../server/storage");
     await initSchema();
     const acct = await accounts.create({

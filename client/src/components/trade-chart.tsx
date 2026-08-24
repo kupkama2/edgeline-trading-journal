@@ -110,6 +110,10 @@ export function TradeChart({ trade }: { trade: TradeWithTags }) {
     <Card className="relative border-card-border bg-card p-4" data-testid="trade-chart">
       <div className="mb-1 flex items-center gap-2 text-[10px] text-muted-foreground">
         <span className="font-mono text-foreground/80">{data.pair}</span>
+        {/* Which book, because a perp and its spot pair are different prices
+            and the answer to "did my stop get hit" depends on which one you
+            were actually resting an order in. */}
+        <span>{data.market === "futures" ? "perp" : "spot"}</span>
         <span>{data.interval} candles</span>
         <span className="ml-auto font-mono">
           {h ? `O ${num(h.o)}  H ${num(h.h)}  L ${num(h.l)}  C ${num(h.c)}` : "hover for OHLC"}

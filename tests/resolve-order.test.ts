@@ -81,6 +81,40 @@ async function restingOrder(over: Record<string, unknown> = {}) {
   return res.json();
 }
 
+/**
+ * A pair, written any of the ways it gets written, is one instrument.
+ *
+ * Not a cosmetic point: the symbol is what every breakdown groups by, so
+ * "LTC/USDT" and "LTC" landing as different rows means one coin arrives with
+ * two win rates and neither is true. Through the real route, because the
+ * collapse happens on write and a unit test on the helper would not notice
+ * the route forgetting to call it.
+ */
+describe.skipIf(!DB)("what a pasted pair gets stored as", () => {
+  beforeAll(boot);
+  afterAll(() => new Promise<void>((r) => server?.close(() => r())));
+
+  it("keeps a futures contract exactly as it was", async () => {
+    // The other half of the rule: an index future must not be collapsed by a
+    // crypto-pair rule that has never heard of it.
+    const res = await post("/api/trades", {
+      trade: {
+        symbol: "MNQU6",
+        direction: "long",
+        size: 1,
+        sizeUnit: "base",
+        entryPrice: 100,
+        entryTime: "2026-08-24T08:00:00.000Z",
+        status: "pending",
+      },
+      mistakeTagIds: [],
+    });
+    const t = await res.json();
+    expect(t.symbol).toBe("NQ");
+    expect(t.contract).toBe("MNQU6");
+  });
+});
+
 describe.skipIf(!DB)("resolving an order that never filled", () => {
   beforeAll(boot);
   afterAll(() => new Promise<void>((r) => server?.close(() => r())));
