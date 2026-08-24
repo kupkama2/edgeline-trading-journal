@@ -85,6 +85,48 @@ a quiet period takes ~30s to wake. This is expected, not a fault.
 Sessions are stored in Postgres (`user_sessions`), not in memory, specifically
 so a spin-down does not log you out.
 
+## The region is not a detail: Binance blocks US IPs
+
+`render.yaml` pins `region: frankfurt`. Render's default is Oregon, which is a
+US IP, and both `api.binance.com` and `fapi.binance.com` answer **HTTP 451**
+to one.
+
+Spot survives that — `data-api.binance.vision` is a Binance-run mirror that is
+not geo-restricted, and the app falls back to it — but **the perpetuals have no
+such mirror**. From a US region the result is a journal that looks healthy and
+quietly is not: charts draw off the spot book, labelled "spot · perp book
+unreachable from the server", and no parked trade is ever settled, because the
+price path that would answer "target or stop first?" is the perp's and it
+cannot be read. The app refuses to answer from spot rather than answer wrongly.
+
+**Render cannot move an existing service between regions.** If a service is
+already running in Oregon, the fix is to create a new one:
+
+1. **New → Blueprint** against this repository — the blueprint now says
+   `region: frankfurt`, so the new service lands there.
+2. Re-enter the `sync: false` variables from the table above. The Neon
+   database does not have to move; it is a little further away, nothing more.
+3. Update the Google OAuth **Authorised redirect URI** to the new service's
+   URL (see the OAuth section) or sign-in will fail with `redirect_uri_mismatch`.
+4. Delete the old service once the new one answers.
+
+Singapore (`singapore`) works equally well if it is closer to you.
+
+### Checking which way it went
+
+`GET /api/binance/status?refresh=1` — the `refresh` asks the venue again
+rather than reading the cached answer, which is the point when you have just
+changed something.
+
+```json
+{"pairs": 700, "futures": 450, "spot": 250, "source": "binance",
+ "books": {"futures": 450, "spot": 250}, "catalogueError": null}
+```
+
+`futures: 0` with a 451 in `catalogueError` means the perp book is still being
+refused. `source: "seed"` means neither book answered and the pair list is the
+hardcoded fallback — symbols still resolve, prices will not.
+
 ## Verifying a deploy
 
 - `GET /` returns 200 without a cookie — this is what `healthCheckPath` pings,
