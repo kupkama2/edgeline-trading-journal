@@ -21,6 +21,7 @@ import { NewTradeCard } from "@/components/new-trade-card";
 import { useLocation } from "wouter";
 import { ClosedTradeRow, OpenTradeRow, PendingTradeRow } from "@/components/trade-rows";
 import { OwedCard } from "@/components/owed-card";
+import { useOutcomeWatch } from "@/lib/outcome-watch";
 import { num } from "@/components/trade-shared";
 
 /* ================================ page ================================ */
@@ -132,6 +133,9 @@ export default function Journal() {
     [scoped],
   );
   const cancelled = scoped.filter((t) => t.status === "cancelled");
+
+  // Ask the market to settle anything still parked, once the log has loaded.
+  useOutcomeWatch(closed.length > 0);
 
   return (
     <div className="space-y-6">
