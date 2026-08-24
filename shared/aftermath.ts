@@ -1,63 +1,41 @@
 /**
- * What a closed trade never told you.
+ * One question, asked of the trades that can still answer it.
  *
- * A trade closed by hand is the one the journal knows least about, and it is
- * the one it should know most about. Let a plan run to its stop or its target
- * and the market answers the question for you: the trade IS the experiment,
- * and the result is written on it. Cut it at 1.2R because it felt heavy and
- * the experiment stops there — would it have paid the target? would it have
- * come back and stopped you? — and nothing in the row can say. Those are
- * exactly the trades the edge is decided on, and they are the ones that go
- * into the log with three fields empty.
+ * "If I had left it completely alone — no moving the stop, no taking it off
+ * early — would price have hit my target or my stop first?"
  *
- * The gaps are knowable, just not from inside the app: they are on the chart,
- * later. So the honest thing is not to guess them but to say which trades are
- * still owed, and make walking that list quick. Hence a gap list per trade
- * and a worklist across them.
+ * That is the only thing worth chasing after the fact, because it is the only
+ * one the trade cannot answer for itself. Let a plan run to its own stop or
+ * target and the market writes the answer on the row. Take it off at 1.2R
+ * because it felt heavy and the experiment stops there: nothing in the record
+ * knows whether the plan was right, so noManagementOutcome — and with it
+ * potentialR, managementDeltaR, and any claim that managing the trade helped
+ * or hurt — is simply absent.
  *
- * Nothing here is a judgement about the trade — a hand-close is often the
- * right call. It is a judgement about the RECORD, which is a different thing
- * and the only one a journal is entitled to make.
+ * This used to flag the post-exit prices and the MAE/MFE path too. It no
+ * longer does. Those are worth recording when you have them, but they are not
+ * worth an alert: a flag that fires on four things at once is a flag nobody
+ * reads, and it buried the one question that actually needs walking back to a
+ * chart for.
+ *
+ * Nothing here is a judgement about the trade — taking a trade off by hand is
+ * often the right call. It is a judgement about the RECORD, which is a
+ * different thing and the only one a journal is entitled to make.
  */
 import type { TradeWithTags } from "./schema";
 
-export type Gap = "outcome" | "runOn" | "worse" | "path";
-
-export const GAP_LABELS: Record<Gap, string> = {
-  outcome: "target or stop first?",
-  runOn: "how far it ran after",
-  worse: "how much worse it got",
-  path: "the path while you held",
-};
-
-/** The one sentence explaining why each gap is worth walking back for. */
-export const GAP_WHY: Record<Gap, string> = {
-  outcome: "Without it the trade cannot be compared against leaving it alone.",
-  runOn: "The early-exit half of the exit-timing read.",
-  worse: "What the exit avoided — the only figure that can come out in its favour.",
-  path: "MAE and MFE: how much heat it took, and how far it actually ran.",
-};
-
 /**
- * Exits where the market answered the question, versus where you did.
+ * Did price demonstrably reach one of the trade's ORIGINAL levels?
  *
- * "Hit target" and "stopped out" are resolutions; everything else is a
- * decision taken before the plan resolved, and it is the decision that leaves
- * the record incomplete.
- */
-const RESOLVED_BY_MARKET = new Set(["target", "stop"]);
-
-/**
- * Did the trade demonstrably hit one of its original levels?
+ * When the exit is at the original stop or the original target, the untouched
+ * plan provably got there — there is nothing to look up, and asking would be
+ * busywork. Directional and tolerant, because a stop fills through its level
+ * rather than exactly on it and a target may fill a tick past.
  *
- * When the exit price is AT the original stop or target, the untouched plan
- * provably reached that level first — there is nothing to look up, and asking
- * would be busywork. Directional and tolerant, because a stop fills through
- * the level rather than exactly on it, and a target may fill a tick past.
- *
- * Deliberately not inferred from the exit reason alone: a stop MOVED to
- * breakeven still closes as "stopped out", and calling that "the plan hit its
- * stop" would put a false answer in the field this exists to protect.
+ * Read off the exit PRICE, never the exit reason. A stop moved to breakeven
+ * still closes as "stopped out", and treating that as "the untouched plan hit
+ * its stop" would put a false answer in the one field this exists to protect.
+ * The label is what you called it; the price is what happened.
  */
 export function impliedOutcome(t: TradeWithTags): "target_first" | "stop_first" | null {
   if (t.exitPrice == null || t.initialStop == null) return null;
@@ -72,62 +50,32 @@ export function impliedOutcome(t: TradeWithTags): "target_first" | "stop_first" 
   return null;
 }
 
-export interface AftermathGaps {
-  gaps: Gap[];
-  /**
-   * Closed before the plan resolved — you took it off, the market did not.
-   * The gaps matter more here, and "outcome" is only ever missing here.
-   */
-  cutShort: boolean;
-}
-
 /**
- * What this trade still owes. Null for anything not closed — an open trade is
- * not missing its aftermath, it is still having it.
- */
-export function aftermathGaps(t: TradeWithTags): AftermathGaps | null {
-  if (t.status !== "closed" || t.exitPrice == null) return null;
-  const cutShort = !RESOLVED_BY_MARKET.has(t.exitReason ?? "") && impliedOutcome(t) == null;
-  const gaps: Gap[] = [];
-  // Only ever asked of a hand-close. On a trade that ran to its own stop or
-  // target the answer is on the row already, and a permanent amber flag over
-  // a question with a known answer is how a signal gets ignored.
-  if (cutShort && t.noManagementOutcome == null) gaps.push("outcome");
-  if (t.postExitPeak == null) gaps.push("runOn");
-  if (t.postExitAdverse == null) gaps.push("worse");
-  if (t.mae == null && t.mfe == null) gaps.push("path");
-  return { gaps, cutShort };
-}
-
-export interface Owed {
-  trade: TradeWithTags;
-  gaps: Gap[];
-  cutShort: boolean;
-}
-
-/**
- * The worklist: closed trades still missing something, worst first.
+ * Is the untouched-plan outcome still unanswered on this trade?
  *
- * Ordered by how much is missing rather than by date, because the point is to
- * fix the record and a hand-closed trade with three blanks is worth more than
- * a stop-out missing one. Ties break to the most recent, which is the one
- * still fresh enough to reconstruct from memory and a chart.
+ * "Undetermined" counts as ANSWERED. It is a real answer — you went back, the
+ * path wasn't legible, and you said so — and a flag that cannot be cleared by
+ * looking is a flag that teaches you to stop looking. The distinction the
+ * field carries is between null (never asked) and undetermined (asked, and
+ * the chart didn't say).
  */
-export function owedAftermath(trades: TradeWithTags[]): Owed[] {
-  const out: Owed[] = [];
-  for (const trade of trades) {
-    const g = aftermathGaps(trade);
-    if (!g || g.gaps.length === 0) continue;
-    out.push({ trade, gaps: g.gaps, cutShort: g.cutShort });
-  }
-  return out.sort((a, b) => {
-    // A missing outcome outranks any number of aftermath blanks: it is the
-    // only gap that makes a trade uncomparable against leaving it alone.
-    const weight = (o: Owed) => (o.gaps.includes("outcome") ? 10 : 0) + o.gaps.length;
-    const d = weight(b) - weight(a);
-    if (d !== 0) return d;
-    return (b.trade.exitTime ?? b.trade.entryTime).localeCompare(
-      a.trade.exitTime ?? a.trade.entryTime,
-    );
-  });
+export function outcomeUnknown(t: TradeWithTags): boolean {
+  if (t.status !== "closed" || t.exitPrice == null) return false;
+  if (t.noManagementOutcome != null) return false;
+  return impliedOutcome(t) == null;
+}
+
+/**
+ * The worklist: closed trades that never said whether the plan would have
+ * paid, most recent first.
+ *
+ * Recency rather than any notion of importance, because the errand is going
+ * back to a chart and the trade from yesterday is the one you can still
+ * reconstruct.
+ */
+export function owedOutcome(trades: TradeWithTags[]): TradeWithTags[] {
+  return trades
+    .filter(outcomeUnknown)
+    .slice()
+    .sort((a, b) => (b.exitTime ?? b.entryTime).localeCompare(a.exitTime ?? a.entryTime));
 }

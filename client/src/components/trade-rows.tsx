@@ -11,7 +11,7 @@ import { parseExtraTargets, type TradeWithTags } from "@shared/schema";
 import { parseHighlights } from "@shared/highlights";
 import { computeMetrics, fmtFees, fmtMoney, fmtR, EXIT_REASON_LABELS } from "@shared/metrics";
 import { positionLedger } from "@shared/fills";
-import { aftermathGaps, GAP_LABELS } from "@shared/aftermath";
+import { outcomeUnknown } from "@shared/aftermath";
 import { StyleChip } from "@/components/style-switcher";
 import { num, parseTags, RationaleTags } from "@/components/trade-shared";
 
@@ -340,19 +340,17 @@ export function ClosedTradeRow({
   );
   const rationaleTags = parseTags(t.rationaleTags);
   /*
-   * What this trade never said. Amber rather than red because an incomplete
-   * record is not a bad trade — and only ever shown when there is something
-   * genuinely still knowable, so it never becomes wallpaper. The badge is the
-   * shortcut to filling it in: one click from the row to the fields.
+   * The one question this trade cannot answer for itself: left alone, would
+   * price have hit the target or the stop first? Amber rather than red —
+   * an incomplete record is not a bad trade — and only ever on the trades
+   * where the answer is genuinely still out there, so it never becomes
+   * wallpaper. The badge is the shortcut: one click to the field.
    */
-  const owed = aftermathGaps(t);
-  const missing = owed?.gaps ?? [];
+  const unknown = outcomeUnknown(t);
   return (
     <div
       className={`rounded-lg border bg-card p-3 ${
-        owed?.cutShort && missing.includes("outcome")
-          ? "border-amber-500/40"
-          : "border-card-border"
+        unknown ? "border-amber-500/40" : "border-card-border"
       }`}
       data-testid={`card-closed-trade-${t.id}`}
     >
@@ -376,20 +374,16 @@ export function ClosedTradeRow({
         <Badge variant="outline" className="shrink-0 text-[10px] capitalize">
           {t.exitReason ? EXIT_REASON_LABELS[t.exitReason] : "—"}
         </Badge>
-        {missing.length > 0 && (
+        {unknown && (
           <button
             type="button"
             onClick={onEdit}
-            title={`Still unrecorded: ${missing.map((g) => GAP_LABELS[g]).join(" · ")}`}
-            className={`flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] transition-colors ${
-              missing.includes("outcome")
-                ? "border-amber-500/50 text-amber-500 hover:bg-amber-500/10"
-                : "border-border text-muted-foreground/60 hover:text-foreground"
-            }`}
+            title="Left alone, would price have hit the target or the stop first? Not recorded."
+            className="flex shrink-0 items-center gap-1 rounded-full border border-amber-500/50 px-1.5 py-0.5 text-[10px] text-amber-500 transition-colors hover:bg-amber-500/10"
             data-testid={`badge-owed-${t.id}`}
           >
             <HelpCircle className="h-3 w-3" />
-            {missing.includes("outcome") ? "outcome unknown" : missing.length}
+            target or stop?
           </button>
         )}
         <div className="ml-auto flex shrink-0 items-center gap-2">
