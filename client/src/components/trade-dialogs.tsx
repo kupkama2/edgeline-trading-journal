@@ -37,6 +37,15 @@ import {
   type Lifecycle,
 } from "@/components/trade-outcome";
 import { SymbolPicker } from "@/components/symbol-picker";
+import {
+  agoLabel,
+  clearDraft,
+  draftDiffers,
+  draftFromTrade,
+  readDraft,
+  stashDraft,
+  type TradeDraft,
+} from "@/lib/trade-draft";
 import { FillDialog } from "@/components/fill-dialog";
 import { typedSymbol } from "@shared/symbols";
 
@@ -160,50 +169,78 @@ export function TradeEditor({
   /** Which scaling dialog is open, if any. */
   const [fillKind, setFillKind] = useState<"add" | "partial" | null>(null);
 
+  /** Everything typed, as one value — what gets stashed and compared. */
+  const current: TradeDraft = {
+    f,
+    direction,
+    exitReason,
+    nmo,
+    selectedTags,
+    extraTps,
+    highlights,
+    grades,
+    account,
+    source,
+    styleId,
+    sizeUnit,
+    lifecycle,
+  };
+  /** The same shape, built from the trade as stored. */
+  const saved = useMemo(() => (trade ? draftFromTrade(trade) : null), [trade]);
+
+  /**
+   * Load the trade into the form — once per trade, not once per refetch.
+   *
+   * Keyed on the id rather than the object. `trade` is a fresh object every
+   * time the trades query settles, so with `[trade]` this fired on any
+   * refetch: logging a partial invalidated the list, the list came back, and
+   * this effect overwrote everything typed-but-unsaved with the stored row
+   * mid-sentence. The fills list below reads from `trade` directly, so it
+   * still updates; what must not move is the form.
+   */
+  const [restored, setRestored] = useState<string | null>(null);
   useEffect(() => {
     if (!trade) return;
-    setF({
-      // The contract as written when there was one — see typedSymbol. Showing
-      // the rollup here is what made editing an MBTZ6 trade save it as "BTC".
-      symbol: typedSymbol(trade),
-      size: String(trade.size),
-      entryPrice: String(trade.entryPrice),
-      // Pending trades have no stop/target yet — String(null) would put the
-      // literal text "null" in the field for the user to delete by hand.
-      initialStop: trade.initialStop != null ? String(trade.initialStop) : "",
-      initialTarget: trade.initialTarget != null ? String(trade.initialTarget) : "",
-      entryTime: toLocalInput(trade.entryTime),
-      exitPrice: trade.exitPrice != null ? String(trade.exitPrice) : "",
-      exitTime: toLocalInput(trade.exitTime),
-      mae: trade.mae != null ? String(trade.mae) : "",
-      mfe: trade.mfe != null ? String(trade.mfe) : "",
-      postExitPeak: trade.postExitPeak != null ? String(trade.postExitPeak) : "",
-      postExitAdverse: trade.postExitAdverse != null ? String(trade.postExitAdverse) : "",
-      rationale: trade.rationale ?? "",
-      rationaleTags: parseTags(trade.rationaleTags).join(", "),
-      notes: trade.notes ?? "",
-      account: trade.account ?? "",
-      fees: trade.fees != null ? String(trade.fees) : "",
-    });
-    setDirection(trade.direction === "short" ? "short" : "long");
-    setExitReason(trade.exitReason ?? null);
-    setNmo(trade.noManagementOutcome ?? null);
-    setSelectedTags(trade.mistakeTagIds);
-    setExtraTps(parseExtraTargets(trade.extraTargets).map(String));
-    setHighlights(parseHighlights(trade.highlights));
-    setGrades({
-      entry: trade.entryGrade ?? null,
-      stop: trade.stopGrade ?? null,
-      exit: trade.exitGrade ?? null,
-    });
-    setAccount(trade.account ?? "");
-    setSource(trade.source ?? "");
-    setStyleId(trade.styleId ?? null);
-    setSizeUnit(trade.sizeUnit === "quote" ? "quote" : "base");
-    setLifecycle(
-      trade.status === "pending" ? "pending" : trade.status === "closed" ? "closed" : "open",
-    );
-  }, [trade]);
+    const base = draftFromTrade(trade);
+    // Unsaved edits win over the stored row — that is the whole point of
+    // keeping them — but never silently: the banner says they were restored
+    // and offers to throw them away.
+    const stored = readDraft(trade.id);
+    const use = stored && draftDiffers(stored.draft, base) ? stored.draft : base;
+    setRestored(stored && draftDiffers(stored.draft, base) ? stored.savedAt : null);
+    applyDraft(use);
+  }, [trade?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** Put a draft into the form's state. Used by both load and discard. */
+  function applyDraft(d: TradeDraft) {
+    setF(d.f);
+    setDirection(d.direction);
+    setExitReason(d.exitReason);
+    setNmo(d.nmo);
+    setSelectedTags(d.selectedTags);
+    setExtraTps(d.extraTps);
+    setHighlights(d.highlights);
+    setGrades(d.grades as GradeState);
+    setAccount(d.account);
+    setSource(d.source);
+    setStyleId(d.styleId);
+    setSizeUnit(d.sizeUnit);
+    setLifecycle(d.lifecycle);
+  }
+
+  /*
+   * Keep the draft current as it is typed.
+   *
+   * Every render rather than on unmount: the panel can go away without
+   * unmounting cleanly (a route change, a reload, the tab being closed), and
+   * an unsaved-work guarantee that depends on leaving politely is not one.
+   * stashDraft removes the key when the form matches the stored trade, so
+   * undoing an edit by hand clears the draft as surely as saving does.
+   */
+  useEffect(() => {
+    if (!trade || !saved || !f.symbol) return;
+    stashDraft(trade.id, current, saved);
+  });
 
   /*
    * Typing an exit price IS closing the trade, so the picker follows — you
@@ -319,6 +356,10 @@ export function TradeEditor({
       },
       mistakeTagIds: selectedTags,
     });
+    // Saved: the stored row IS the draft now, and a surviving copy is only a
+    // way for the two to disagree the next time this opens.
+    clearDraft(trade.id);
+    setRestored(null);
     toast({ title: "Trade updated", description: `${f.symbol.toUpperCase()} corrected.` });
     onClose();
     } catch (err: any) {
@@ -365,6 +406,37 @@ export function TradeEditor({
           <Pencil className="h-4 w-4 text-muted-foreground" />
           Edit {trade ? typedSymbol(trade) : ""}
         </div>
+
+        {/* Restoring silently would be its own trap: you would be looking at
+            numbers that are not what the trade says, with nothing to tell you
+            so. The banner says where the fields came from and offers the way
+            back to the stored row. */}
+        {restored && trade && (
+          <div
+            className="mt-2 flex flex-wrap items-center gap-2 rounded-md border border-primary/40 bg-primary/5 px-3 py-2 text-[11px]"
+            data-testid="banner-restored-draft"
+          >
+            <span>
+              Showing edits you never saved, from {agoLabel(restored)}. They stay here until you
+              save or discard them.
+            </span>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="ml-auto h-6 px-2 text-[11px]"
+              onClick={() => {
+                clearDraft(trade.id);
+                applyDraft(draftFromTrade(trade));
+                setRestored(null);
+                toast({ title: "Unsaved edits discarded", description: "Back to the saved trade." });
+              }}
+              data-testid="button-discard-draft"
+            >
+              Discard them
+            </Button>
+          </div>
+        )}
 
         {trade && (
           <div className="space-y-4">
