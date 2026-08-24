@@ -56,7 +56,7 @@ export function useBinanceSymbols() {
 }
 
 /** Candles around one trade, or an empty set when it is not a crypto pair. */
-export function useTradeCandles(tradeId: number | null) {
+export function useTradeCandles(tradeId: number | null, interval?: string) {
   return useQuery<{
     pair: string | null;
     market?: "futures" | "spot";
@@ -65,9 +65,19 @@ export function useTradeCandles(tradeId: number | null) {
     error?: string;
     feed?: { lastError: string | null; lastTriedAt: string | null; lastOkAt: string | null } | null;
   }>({
-    queryKey: [`/api/trades/${tradeId}/candles`],
+    queryKey: [
+      interval ? `/api/trades/${tradeId}/candles?interval=${interval}` : `/api/trades/${tradeId}/candles`,
+    ],
     enabled: tradeId != null,
     staleTime: 5 * 60 * 1000,
+    /*
+     * Switching timeframe changes the key, and without this the hook would
+     * report "no data" for the round trip — the chart would unmount, the
+     * canvas would be thrown away and rebuilt, and the timeframe buttons would
+     * disappear from under the cursor that just clicked one. Holding the
+     * previous answer keeps the old candles on screen until the new ones land.
+     */
+    placeholderData: (prev: unknown) => prev as any,
   });
 }
 

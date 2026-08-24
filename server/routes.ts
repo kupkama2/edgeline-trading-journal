@@ -22,7 +22,8 @@ function store(req: { userId?: number }) {
 }
 import { ProxyAgent, fetch as undiciFetch } from "undici";
 import { checkOutcomes, ensureCatalogue } from "./outcomes";
-import { fetchCandles, feedStatus, intervalFor } from "./binance";
+import { fetchCandles, feedStatus, intervalFor, type Interval } from "./binance";
+
 import { binanceSymbolForTrade, collapseToInstrument } from "@shared/binance";
 import Anthropic from "@anthropic-ai/sdk";
 import {
@@ -64,6 +65,17 @@ import {
   weekStartKey,
 } from "@shared/weekly-insights";
 import { z } from "zod";
+
+/** Timeframes the chart offers, and how wide one bar is in each. */
+const BAR_MS: Record<Interval, number> = {
+  "1m": 60_000,
+  "5m": 300_000,
+  "15m": 900_000,
+  "1h": 3_600_000,
+  "4h": 14_400_000,
+  "1d": 86_400_000,
+};
+const ALLOWED_INTERVALS = ["1m", "15m", "1h", "4h", "1d"] as const;
 
 /**
  * Perplexity Sonar — `sonar-pro` supports vision (image_url content blocks) and
@@ -597,12 +609,39 @@ export async function registerRoutes(
       // show a level being reached without you.
       const from = entry - held * 0.5;
       const to = Math.min(Date.now(), exit + held * 1.5);
-      const interval = intervalFor(to - from);
+      /*
+       * A requested timeframe wins over the automatic one, and the WINDOW
+       * moves to suit it rather than the bar count doing the moving.
+       *
+       * Both ends of that matter. One-minute bars on a three-week swing is a
+       * request for thirty thousand candles when what you wanted was a close
+       * look at the entry — so a fine timeframe zooms in, centred on the
+       * trade. Daily bars on a trade you held for six hours is the opposite
+       * mistake: the window is narrower than a single candle, Binance has
+       * nothing whose open time falls inside it, and the chart comes back
+       * empty. So a coarse timeframe zooms OUT, and you get the daily context
+       * with your entry marked on it, which is the honest reading of what
+       * "show me this on the daily" meant.
+       */
+      const asked = String(req.query.interval ?? "");
+      const interval = (ALLOWED_INTERVALS as readonly string[]).includes(asked)
+        ? (asked as Interval)
+        : intervalFor(to - from);
+      const widest = BAR_MS[interval] * 700;
+      const narrowest = BAR_MS[interval] * 40;
+      const mid = (entry + exit) / 2;
+      let win = { from, to };
+      if (to - from > widest) {
+        win = { from: Math.max(from, mid - widest / 2), to: Math.min(to, mid + widest / 2) };
+      } else if (to - from < narrowest) {
+        const end = Math.min(Date.now(), Math.max(to, mid + narrowest / 2));
+        win = { from: end - narrowest, to: end };
+      }
       res.json({
         pair: pair.symbol,
         market: pair.market,
         interval,
-        candles: await fetchCandles(pair, interval, from, to, 1200),
+        candles: await fetchCandles(pair, interval, win.from, win.to, 1200),
       });
     } catch (err: any) {
       res.json({ pair: null, candles: [], error: String(err?.message ?? err), feed: feedStatus() });

@@ -1,5 +1,23 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  CandlestickSeries,
+  ColorType,
+  CrosshairMode,
+  LineStyle,
+  createChart,
+  createSeriesMarkers,
+  type AutoscaleInfo,
+  type CandlestickData,
+  type IChartApi,
+  type IPriceLine,
+  type ISeriesApi,
+  type ISeriesMarkersPluginApi,
+  type SeriesMarker,
+  type Time,
+  type UTCTimestamp,
+} from "lightweight-charts";
 import { Card } from "@/components/ui/card";
+import { useTheme } from "@/components/shell";
 import { useTradeCandles } from "@/lib/data";
 import { num } from "@/components/trade-shared";
 import type { TradeWithTags } from "@shared/schema";
@@ -14,63 +32,110 @@ import { parseExtraTargets } from "@shared/schema";
  * target was, where you actually got out. Reading "gave back 1.8R" is not the
  * same as seeing the wick that took it.
  *
+ * Drawn with lightweight-charts, which is TradingView's own charting engine
+ * released as a library, rather than with TradingView's embed widget. The
+ * widget was the obvious first choice and is the wrong one for exactly one
+ * reason: it cannot be annotated. A chart of BTCUSDT with none of your levels
+ * on it is a chart of BTCUSDT, and you can already get one of those anywhere.
+ * The levels ARE the feature. The engine gives the same panning, zooming and
+ * crosshair, and lets the entry, stop, target and exit be drawn on it.
+ *
  * The window extends PAST the exit on purpose. Half the questions this journal
  * asks are about what happened once you were out, and a chart that stops at
  * the exit cannot answer any of them — you would be looking at the version of
  * events where leaving was obviously right.
- *
- * Drawn by hand rather than embedded from a charting service, for one reason
- * that decides it: an embed cannot be annotated. A chart of BTCUSDT with none
- * of your levels on it is a chart of BTCUSDT, and you can already get one of
- * those. The levels are the entire point.
  */
-const H = 260;
-const PAD = { top: 12, bottom: 20, right: 52 };
+const HEIGHT = 300;
+
+/** What the timeframe row offers. "auto" lets the server fit the hold. */
+const TIMEFRAMES = [
+  { id: "auto", label: "Auto" },
+  { id: "1m", label: "1m" },
+  { id: "15m", label: "15m" },
+  { id: "1h", label: "1h" },
+  { id: "4h", label: "4h" },
+  { id: "1d", label: "1D" },
+] as const;
+
+type Timeframe = (typeof TIMEFRAMES)[number]["id"];
+
+const pill = (on: boolean) =>
+  `rounded-md border px-1.5 py-0.5 font-mono text-[10px] leading-tight transition-colors ${
+    on
+      ? "border-primary/60 bg-secondary text-foreground"
+      : "border-border text-muted-foreground hover:border-primary/40 hover:text-foreground"
+  }`;
+
+type Candle = { t: number; o: number; h: number; l: number; c: number };
+type Level = { price: number; label: string; color: string; dashed: boolean };
+
+/**
+ * The chart is a canvas, so it cannot inherit a single CSS class the way the
+ * rest of the app does — every colour has to be handed to it as a string. They
+ * are read from the same custom properties the stylesheet uses, so a theme
+ * switch moves the chart with everything else instead of leaving one dark
+ * rectangle in the middle of a light page.
+ */
+function palette(host: HTMLElement) {
+  const cs = getComputedStyle(host);
+  const tok = (name: string, alpha?: number, fallback = "#888888") => {
+    const v = cs.getPropertyValue(name).trim();
+    if (!v) return fallback;
+    return alpha == null ? `hsl(${v})` : `hsl(${v} / ${alpha})`;
+  };
+  return {
+    bg: tok("--card", undefined, "transparent"),
+    text: tok("--muted-foreground"),
+    grid: tok("--border", 0.45),
+    entry: tok("--foreground", 0.65),
+    // Deliberately not --primary: on the default theme that is red, and an
+    // exit line the same colour as the stop line is the one confusion this
+    // chart cannot afford.
+    exit: "#60a5fa",
+    up: "#10b981",
+    down: "#ef4444",
+    stop: "#ef4444",
+    target: "#10b981",
+  };
+}
+
+/**
+ * Ticks small enough for the instrument.
+ *
+ * A price scale pinned at two decimals reads a coin trading at 0.00042 as a
+ * flat line at 0.00, which is worse than no chart: it looks like data.
+ */
+const digitsFor = (p: number) =>
+  p >= 1000 ? 2 : p >= 100 ? 3 : p >= 1 ? 4 : p >= 0.01 ? 6 : 8;
 
 export function TradeChart({ trade }: { trade: TradeWithTags }) {
-  const { data, isLoading } = useTradeCandles(trade.id);
-  const [hover, setHover] = useState<number | null>(null);
+  const [tf, setTf] = useState<Timeframe>("auto");
+  const { data, isLoading, isFetching } = useTradeCandles(
+    trade.id,
+    tf === "auto" ? undefined : tf,
+  );
 
-  const levels = useMemo(() => {
+  const levels = useMemo<Level[]>(() => {
     const tps = parseExtraTargets(trade.extraTargets);
     return [
-      { price: trade.entryPrice, label: "entry", cls: "stroke-foreground/50", text: "text-foreground/70" },
+      { price: trade.entryPrice, label: "entry", color: "entry", dashed: false },
       ...(trade.initialStop != null
-        ? [{ price: trade.initialStop, label: "stop", cls: "stroke-red-500/70", text: "text-red-400" }]
+        ? [{ price: trade.initialStop, label: "stop", color: "stop", dashed: true }]
         : []),
       ...(trade.initialTarget != null
-        ? [{ price: trade.initialTarget, label: "target", cls: "stroke-emerald-500/70", text: "text-emerald-400" }]
+        ? [{ price: trade.initialTarget, label: "target", color: "target", dashed: true }]
         : []),
       ...tps.map((p, i) => ({
         price: p,
         label: `tp${i + 2}`,
-        cls: "stroke-emerald-500/40",
-        text: "text-emerald-400/70",
+        color: "target",
+        dashed: true,
       })),
       ...(trade.exitPrice != null
-        ? [{ price: trade.exitPrice, label: "exit", cls: "stroke-primary", text: "text-primary" }]
+        ? [{ price: trade.exitPrice, label: "exit", color: "exit", dashed: false }]
         : []),
     ];
   }, [trade]);
-
-  const geom = useMemo(() => {
-    const candles = data?.candles ?? [];
-    if (candles.length === 0) return null;
-    // The levels are part of the range, not decoration on top of it: a target
-    // price never reached must still be visible, or the chart quietly answers
-    // "how far away was it" with "off the top".
-    const hi = Math.max(...candles.map((c) => c.h), ...levels.map((l) => l.price));
-    const lo = Math.min(...candles.map((c) => c.l), ...levels.map((l) => l.price));
-    const pad = (hi - lo) * 0.06 || 1;
-    const top = hi + pad;
-    const bot = lo - pad;
-    const W = 760;
-    const plotW = W - PAD.right;
-    const y = (p: number) => PAD.top + ((top - p) / (top - bot)) * (H - PAD.top - PAD.bottom);
-    const bw = Math.max(1, Math.min(9, (plotW / candles.length) * 0.7));
-    const x = (i: number) => (i + 0.5) * (plotW / candles.length);
-    return { candles, top, bot, W, plotW, y, x, bw };
-  }, [data, levels]);
 
   if (isLoading) {
     return (
@@ -81,6 +146,7 @@ export function TradeChart({ trade }: { trade: TradeWithTags }) {
       </Card>
     );
   }
+
   /*
    * No chart is two different situations.
    *
@@ -92,7 +158,7 @@ export function TradeChart({ trade }: { trade: TradeWithTags }) {
    * printed, including which host said them.
    */
   const feedProblem = data?.feed?.lastError ?? data?.error ?? null;
-  if (!geom || !data?.pair) {
+  if (!data?.pair) {
     if (!feedProblem) return null;
     return (
       <Card className="border-amber-500/40 bg-card p-4" data-testid="chart-feed-error">
@@ -110,166 +176,257 @@ export function TradeChart({ trade }: { trade: TradeWithTags }) {
     );
   }
 
-  const { candles, W, plotW, y, x, bw } = geom;
-  /** Level labels, spread vertically so none is drawn over another. */
-  const labelled = levels
-    .map((l) => ({ ...l, labelY: y(l.price) + 3 }))
-    .sort((a, b) => a.labelY - b.labelY)
-    .map((l, i, arr) => {
-      if (i === 0) return l;
-      const gap = l.labelY - arr[i - 1].labelY;
-      if (gap >= 9) return l;
-      arr[i] = { ...l, labelY: arr[i - 1].labelY + 9 };
-      return arr[i];
-    });
-  const h = hover != null ? candles[hover] : null;
-  const entryT = new Date(trade.entryTime).getTime();
-  const exitT = trade.exitTime ? new Date(trade.exitTime).getTime() : null;
-  /** Index of the first candle at or after an instant — where a marker goes. */
-  const idxAt = (ms: number) => {
-    const i = candles.findIndex((c) => c.t >= ms);
-    return i < 0 ? candles.length - 1 : i;
-  };
+  const candles = data.candles ?? [];
 
   return (
-    <Card className="relative border-card-border bg-card p-4" data-testid="trade-chart">
-      <div className="mb-1 flex items-center gap-2 text-[10px] text-muted-foreground">
+    <Card className="border-card-border bg-card p-4" data-testid="trade-chart">
+      <div className="mb-2 flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
         <span className="font-mono text-foreground/80">{data.pair}</span>
         {/* Which book, because a perp and its spot pair are different prices
             and the answer to "did my stop get hit" depends on which one you
             were actually resting an order in. */}
         <span>{data.market === "futures" ? "perp" : "spot"}</span>
-        <span>{data.interval} candles</span>
-        <span className="ml-auto font-mono">
-          {h ? `O ${num(h.o)}  H ${num(h.h)}  L ${num(h.l)}  C ${num(h.c)}` : "hover for OHLC"}
-        </span>
-      </div>
+        {tf === "auto" && data.interval && <span>{data.interval} candles</span>}
+        {isFetching && <span data-testid="chart-refetching">…</span>}
 
-      {/* The plot stretches horizontally to fill the card (preserveAspectRatio
-          "none"), which is right for price geometry and wrong for letters —
-          SVG text inside it is scaled with the x axis and comes out wider the
-          bigger the screen. So the labels are HTML, positioned in the same
-          pixel space: the height is fixed, so a viewBox y unit IS a pixel and
-          the two agree exactly. */}
-      <div className="relative">
-        {/* Anchored as a PERCENTAGE, not a pixel width: the svg is stretched
-            to the card, so the gutter's real width is PAD.right scaled by the
-            same factor. A fixed 52px gutter would drift away from where the
-            level lines actually stop, by more the wider the screen. */}
-        <div
-          className="pointer-events-none absolute inset-y-0 right-0 z-10"
-          style={{ left: `${(plotW / W) * 100}%` }}
-        >
-          {labelled.map((l) => (
-            <span
-              key={`${l.label}-${l.price}`}
-              className={`absolute left-1 font-mono text-[9px] leading-none ${l.text}`}
-              style={{ top: l.labelY - 4 }}
-              data-testid={`chart-level-${l.label}`}
+        <div className="ml-auto flex items-center gap-1" data-testid="chart-timeframes">
+          {TIMEFRAMES.map((f) => (
+            <button
+              key={f.id}
+              type="button"
+              onClick={() => setTf(f.id)}
+              aria-pressed={tf === f.id}
+              className={pill(tf === f.id)}
+              data-testid={`chart-tf-${f.id}`}
             >
-              {l.label}
-            </span>
+              {f.label}
+            </button>
           ))}
         </div>
-        <svg
-          viewBox={`0 0 ${W} ${H}`}
-          width="100%"
-          height={H}
-          preserveAspectRatio="none"
-          style={{ height: H }}
-          onMouseLeave={() => setHover(null)}
-          className="min-w-full"
-        >
-          {/* The levels, behind the price. Labels are nudged apart where two
-              levels sit within a few pixels of each other — an entry and a
-              breakeven stop routinely do, and two labels drawn on top of one
-              another are less use than one. */}
-          {labelled.map((l) => (
-            <line
-              key={`${l.label}-${l.price}`}
-              x1={0}
-              x2={plotW}
-              y1={y(l.price)}
-              y2={y(l.price)}
-              className={l.cls}
-              strokeWidth={1}
-              strokeDasharray={l.label === "entry" || l.label === "exit" ? undefined : "3 3"}
-              vectorEffect="non-scaling-stroke"
-            />
-          ))}
-
-          {candles.map((c, i) => {
-            const up = c.c >= c.o;
-            const cx = x(i);
-            return (
-              <g
-                key={c.t}
-                onMouseEnter={() => setHover(i)}
-                className={up ? "stroke-emerald-500 fill-emerald-500" : "stroke-red-500 fill-red-500"}
-              >
-                <rect x={cx - bw / 2 - 2} y={0} width={bw + 4} height={H} fill="transparent" stroke="none" />
-                <line
-                  x1={cx}
-                  x2={cx}
-                  y1={y(c.h)}
-                  y2={y(c.l)}
-                  strokeWidth={1}
-                  vectorEffect="non-scaling-stroke"
-                />
-                <rect
-                  x={cx - bw / 2}
-                  y={y(Math.max(c.o, c.c))}
-                  width={bw}
-                  height={Math.max(1, Math.abs(y(c.o) - y(c.c)))}
-                  stroke="none"
-                />
-              </g>
-            );
-          })}
-
-          {/* Where you got in and out, on the time axis rather than only the
-              price axis — a level line says at what price, these say when. */}
-          {[
-            { at: entryT, cls: "stroke-foreground/40" },
-            ...(exitT ? [{ at: exitT, cls: "stroke-primary/60" }] : []),
-          ].map((m, i) => (
-            <line
-              key={i}
-              x1={x(idxAt(m.at))}
-              x2={x(idxAt(m.at))}
-              y1={PAD.top}
-              y2={H - PAD.bottom}
-              className={m.cls}
-              strokeWidth={1}
-              strokeDasharray="2 4"
-              vectorEffect="non-scaling-stroke"
-            />
-          ))}
-
-          {hover != null && (
-            <line
-              x1={x(hover)}
-              x2={x(hover)}
-              y1={0}
-              y2={H}
-              className="stroke-foreground/25"
-              strokeWidth={1}
-              vectorEffect="non-scaling-stroke"
-            />
-          )}
-        </svg>
       </div>
 
-      {h && (
-        <p className="mt-0.5 text-center text-[10px] text-muted-foreground" data-testid="chart-hover-time">
-          {new Date(h.t).toLocaleString(undefined, {
-            month: "short",
-            day: "numeric",
-            hour: "2-digit",
-            minute: "2-digit",
-          })}
+      {candles.length === 0 ? (
+        /* A timeframe with nothing in it must not take the buttons down with
+           it — otherwise one wrong click leaves you with no way back. */
+        <p className="py-8 text-center text-[11px] text-muted-foreground" data-testid="chart-empty">
+          No candles at this timeframe.
         </p>
+      ) : (
+        <Candles
+          candles={candles}
+          levels={levels}
+          direction={trade.direction}
+          entryMs={new Date(trade.entryTime).getTime()}
+          exitMs={trade.exitTime ? new Date(trade.exitTime).getTime() : null}
+        />
       )}
     </Card>
+  );
+}
+
+/**
+ * The chart itself, kept in its own component so its lifetime is the canvas's
+ * lifetime: it mounts once there is something to draw and the engine is torn
+ * down when it goes, rather than a chart object outliving the element it was
+ * given.
+ */
+function Candles({
+  candles,
+  levels,
+  direction,
+  entryMs,
+  exitMs,
+}: {
+  candles: Candle[];
+  levels: Level[];
+  direction: string;
+  entryMs: number;
+  exitMs: number | null;
+}) {
+  const { theme } = useTheme();
+  const hostRef = useRef<HTMLDivElement>(null);
+  /* Read by the autoscale provider, which is installed once and must always
+     see the current levels rather than the ones that existed at mount. */
+  const levelsRef = useRef(levels);
+  levelsRef.current = levels;
+  const readoutRef = useRef<HTMLSpanElement>(null);
+  const api = useRef<{
+    chart: IChartApi;
+    series: ISeriesApi<"Candlestick">;
+    markers: ISeriesMarkersPluginApi<Time>;
+    lines: IPriceLine[];
+    colors: ReturnType<typeof palette>;
+    /** Which window is on screen, so a refetch of the same bars doesn't refit. */
+    shape: string;
+  } | null>(null);
+  /* Bumped when the engine is rebuilt, so the drawing pass below knows to run
+     again against the new chart rather than against a removed one. */
+  const [epoch, setEpoch] = useState(0);
+
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+    const colors = palette(host);
+    const chart = createChart(host, {
+      autoSize: true,
+      layout: {
+        background: { type: ColorType.Solid, color: colors.bg },
+        textColor: colors.text,
+        fontSize: 10,
+      },
+      grid: { vertLines: { color: colors.grid }, horzLines: { color: colors.grid } },
+      rightPriceScale: { borderColor: colors.grid, scaleMargins: { top: 0.12, bottom: 0.12 } },
+      timeScale: { borderColor: colors.grid, timeVisible: true, secondsVisible: false },
+      crosshair: { mode: CrosshairMode.Normal },
+    });
+    const series = chart.addSeries(CandlestickSeries, {
+      upColor: colors.up,
+      downColor: colors.down,
+      borderUpColor: colors.up,
+      borderDownColor: colors.down,
+      wickUpColor: colors.up,
+      wickDownColor: colors.down,
+      // The series' own last-price line would land a second unlabelled line
+      // among the four that mean something. The axis value stays.
+      priceLineVisible: false,
+      /*
+       * The levels are part of the vertical range, not decoration on top of
+       * it. A target that was never reached must still be on the chart, or it
+       * quietly answers "how far away was it" with "off the top" — which is
+       * the version of the trade where you left nothing on the table.
+       */
+      autoscaleInfoProvider: (base: () => AutoscaleInfo | null) => {
+        const info = base();
+        const prices = levelsRef.current.map((l) => l.price);
+        if (!info?.priceRange || prices.length === 0) return info;
+        return {
+          ...info,
+          priceRange: {
+            minValue: Math.min(info.priceRange.minValue, ...prices),
+            maxValue: Math.max(info.priceRange.maxValue, ...prices),
+          },
+        };
+      },
+    });
+
+    /* The OHLC readout is written straight into the DOM rather than held in
+       state: it changes on every pixel of mouse movement, and re-rendering the
+       whole card that often to update four numbers is a lot of work to make a
+       chart feel worse. */
+    chart.subscribeCrosshairMove((param) => {
+      const el = readoutRef.current;
+      if (!el) return;
+      const bar = param.seriesData.get(series) as CandlestickData | undefined;
+      el.textContent = bar
+        ? `O ${num(bar.open)}  H ${num(bar.high)}  L ${num(bar.low)}  C ${num(bar.close)}`
+        : "";
+    });
+
+    api.current = {
+      chart,
+      series,
+      markers: createSeriesMarkers(series, []),
+      lines: [],
+      colors,
+      shape: "",
+    };
+    setEpoch((n) => n + 1);
+    return () => {
+      chart.remove();
+      api.current = null;
+    };
+  }, [theme]);
+
+  useEffect(() => {
+    const a = api.current;
+    if (!a || candles.length === 0) return;
+    const { series, colors } = a;
+
+    const digits = digitsFor(candles[candles.length - 1].c);
+    series.applyOptions({
+      priceFormat: { type: "price", precision: digits, minMove: 10 ** -digits },
+    });
+    series.setData(
+      candles.map((k) => ({
+        time: (k.t / 1000) as UTCTimestamp,
+        open: k.o,
+        high: k.h,
+        low: k.l,
+        close: k.c,
+      })),
+    );
+
+    /* Levels as price lines: they get an axis label too, so a target sitting
+       off the top of the visible range still says what it is and how far away
+       it was rather than silently vanishing. */
+    for (const line of a.lines) series.removePriceLine(line);
+    a.lines = levels.map((l) =>
+      series.createPriceLine({
+        price: l.price,
+        color: (colors as any)[l.color] ?? colors.entry,
+        lineWidth: 1,
+        lineStyle: l.dashed ? LineStyle.Dashed : LineStyle.Solid,
+        lineVisible: true,
+        axisLabelVisible: true,
+        title: l.label,
+      }),
+    );
+
+    /* And the two instants, because a level line says at what price and these
+       say when — the difference between "the stop was there" and "the stop was
+       there for two days before it went". */
+    const snap = (ms: number) => {
+      let best = candles[0];
+      for (const k of candles) {
+        if (k.t > ms) break;
+        best = k;
+      }
+      return (best.t / 1000) as UTCTimestamp;
+    };
+    const long = direction === "long";
+    const marks: SeriesMarker<Time>[] = [
+      {
+        time: snap(entryMs),
+        position: long ? "belowBar" : "aboveBar",
+        shape: long ? "arrowUp" : "arrowDown",
+        color: colors.entry,
+        text: "in",
+      },
+      ...(exitMs != null
+        ? [
+            {
+              time: snap(exitMs),
+              position: (long ? "aboveBar" : "belowBar") as "aboveBar" | "belowBar",
+              shape: "circle" as const,
+              color: colors.exit,
+              text: "out",
+            },
+          ]
+        : []),
+    ];
+    a.markers.setMarkers(marks);
+
+    /*
+     * Fit only when the window itself changed — a new trade, a new timeframe.
+     * A background refetch returns the same bars in a new array, and fitting
+     * on that would yank the view back to the default every few minutes,
+     * undoing whatever the trader had just zoomed into.
+     */
+    const shape = `${candles.length}:${candles[0].t}:${candles[candles.length - 1].t}`;
+    if (shape !== a.shape) {
+      a.shape = shape;
+      a.chart.timeScale().fitContent();
+    }
+  }, [candles, levels, direction, entryMs, exitMs, epoch]);
+
+  return (
+    <div className="relative">
+      <div ref={hostRef} style={{ height: HEIGHT }} data-testid="chart-canvas" />
+      <span
+        ref={readoutRef}
+        className="pointer-events-none absolute left-1 top-1 z-10 font-mono text-[10px] text-muted-foreground"
+        data-testid="chart-ohlc"
+      />
+    </div>
   );
 }
