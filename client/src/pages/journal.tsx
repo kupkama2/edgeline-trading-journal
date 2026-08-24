@@ -21,6 +21,8 @@ import { NewTradeCard } from "@/components/new-trade-card";
 import { useLocation } from "wouter";
 import { ClosedTradeRow, OpenTradeRow, PendingTradeRow } from "@/components/trade-rows";
 import { OwedCard } from "@/components/owed-card";
+import { openRisk } from "@shared/exposure";
+import { fmtMoney } from "@shared/metrics";
 import { useOutcomeWatch } from "@/lib/outcome-watch";
 import { num } from "@/components/trade-shared";
 
@@ -133,6 +135,9 @@ export default function Journal() {
     [scoped],
   );
   const cancelled = scoped.filter((t) => t.status === "cancelled");
+  // Worst case on what is still live. Scoped like everything else on the page,
+  // so filtering to one account answers "what is at risk on THAT account".
+  const exposure = useMemo(() => openRisk(scoped), [scoped]);
 
   // Ask the market to settle anything still parked, once the log has loaded.
   useOutcomeWatch(closed.length > 0);
@@ -212,6 +217,38 @@ export default function Journal() {
               </span>
             </div>
           </div>
+
+          {/* What is actually on the table.
+              Every other figure in this journal describes trades that are
+              over; this one is the only thing here you can still act on. It
+              is deliberately the worst case — every stop hit at once — because
+              correlated instruments have a habit of doing exactly that on the
+              day it matters, and three trades that each felt like a normal 1R
+              are a 3R day when the market moves as one thing. */}
+          {exposure.trades > 0 && (
+            <div
+              className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-md border border-border/60 bg-secondary/20 px-3 py-2 text-[11px]"
+              data-testid="open-risk"
+            >
+              <span className="text-muted-foreground">
+                If every stop were hit at once
+              </span>
+              <span className="font-mono font-semibold text-primary" data-testid="open-risk-r">
+                −{exposure.r.toFixed(2)}R
+              </span>
+              <span className="font-mono font-semibold text-primary" data-testid="open-risk-dollars">
+                {fmtMoney(-exposure.dollars)}
+              </span>
+              <span className="text-muted-foreground">
+                across {exposure.trades} {exposure.trades === 1 ? "position" : "positions"}
+              </span>
+              {exposure.unpriced > 0 && (
+                <span className="text-amber-500" data-testid="open-risk-unpriced">
+                  · {exposure.unpriced} with no stop recorded, so not counted
+                </span>
+              )}
+            </div>
+          )}
           {isLoading ? (
             <div className="space-y-2">
               <Skeleton className="h-20 w-full" />
