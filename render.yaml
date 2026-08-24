@@ -3,6 +3,18 @@ services:
     name: edgeline
     runtime: node
     plan: free
+    # NOT the default (Oregon), and the reason is Binance rather than latency.
+    #
+    # api.binance.com and fapi.binance.com both answer HTTP 451 to a US IP.
+    # Spot survives it — data-api.binance.vision is a mirror that is not
+    # geo-restricted — but the perpetuals have no such mirror, so from a US
+    # region the journal can chart your trades off the spot book and can never
+    # settle one: the price path it would have to read is the perp's.
+    #
+    # Render cannot move an EXISTING service between regions, so changing this
+    # line does nothing to a service already running. It decides where a newly
+    # created one lands. See DEPLOY.md.
+    region: frankfurt
     # --include=dev is load-bearing: NODE_ENV=production is set below, and npm
     # omits devDependencies when it sees that. vite/esbuild/tsx all live in
     # devDependencies, so without this the build has no build tools.
