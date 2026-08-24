@@ -20,6 +20,7 @@ import { type ImportCandidate } from "@shared/import-parse";
 import { NewTradeCard } from "@/components/new-trade-card";
 import { useLocation } from "wouter";
 import { ClosedTradeRow, OpenTradeRow, PendingTradeRow } from "@/components/trade-rows";
+import { OwedCard } from "@/components/owed-card";
 import { num } from "@/components/trade-shared";
 
 /* ================================ page ================================ */
@@ -172,6 +173,10 @@ export default function Journal() {
       <DailyGuardCard trades={scoped} tags={tags} styleId={activeStyleId} />
 
       <CoachCard />
+
+      {/* What the log is still missing, above the log itself — an errand
+          nobody can see is an errand nobody runs. */}
+      <OwedCard trades={closed} onOpen={openTrade} />
 
       {/* The entry form gets its own column only while it is open. Closed, it
           is one line, and holding a half-empty column beside it just to keep
