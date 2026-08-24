@@ -26,6 +26,7 @@ import { useDeleteFill, useStyles, useTrades } from "@/lib/data";
 import { styleColor } from "@/lib/style-filter";
 import { collapseFills, positionLedger } from "@shared/fills";
 import { TradeImageGallery } from "@/components/trade-images";
+import { TradeChart } from "@/components/trade-chart";
 import { parseExtraTargets, parsePlaybook, type TradeWithTags } from "@shared/schema";
 import { computeMetrics, fmtFees, fmtMoney, fmtR, EXIT_REASON_LABELS } from "@shared/metrics";
 import { Dropzone, EXIT_REASONS, RationaleTags, TimeField, localNow, num, parseTags, toIso, toLocalInput } from "@/components/trade-shared";
@@ -983,6 +984,15 @@ export function TradeEditor({
                 </div>
               </div>
             )}
+
+            {/* The price path, here as well as on the trade's own page.
+                Editing is where the levels get corrected, and correcting a
+                stop against a chart you cannot see is guesswork. It draws for
+                a RUNNING trade too — the window simply ends at now — which is
+                the case that matters most, because that is the trade you can
+                still do something about. Renders nothing for anything Binance
+                cannot price. */}
+            <TradeChart trade={trade} />
 
             {/* Attach here too, not only from the read-only detail view: Edit
                 is where you reach to change a trade, and a screenshot added to
