@@ -18,7 +18,7 @@ import {
 } from "lightweight-charts";
 import { Card } from "@/components/ui/card";
 import { useTheme } from "@/components/shell";
-import { useTradeCandles } from "@/lib/data";
+import { fetchCandlePage, useTradeCandles } from "@/lib/data";
 import { num } from "@/components/trade-shared";
 import type { TradeWithTags } from "@shared/schema";
 import { parseExtraTargets } from "@shared/schema";
@@ -67,6 +67,15 @@ const pill = (on: boolean) =>
   }`;
 
 type Candle = { t: number; o: number; h: number; l: number; c: number };
+
+/** A journal candle as the chart engine wants it: seconds, named fields. */
+const toBar = (k: Candle) => ({
+  time: (k.t / 1000) as UTCTimestamp,
+  open: k.o,
+  high: k.h,
+  low: k.l,
+  close: k.c,
+});
 type Level = { price: number; label: string; color: string; dashed: boolean };
 
 /**
@@ -186,6 +195,16 @@ export function TradeChart({ trade }: { trade: TradeWithTags }) {
             and the answer to "did my stop get hit" depends on which one you
             were actually resting an order in. */}
         <span>{data.market === "futures" ? "perp" : "spot"}</span>
+        {/* Spot on a coin that HAS a perp is not a preference, it is a
+            refusal — the perp book would not answer the server. Saying so
+            here is the difference between a diagnosis and a mystery, and it
+            matters: basis moves the two apart, so these candles are close to
+            but not the prices your orders were resting among. */}
+        {data.market !== "futures" && data.books?.futures === 0 && (
+          <span className="text-amber-500" data-testid="chart-no-perp">
+            perp book unreachable from the server
+          </span>
+        )}
         {tf === "auto" && data.interval && <span>{data.interval} candles</span>}
         {isFetching && <span data-testid="chart-refetching">…</span>}
 
@@ -213,6 +232,8 @@ export function TradeChart({ trade }: { trade: TradeWithTags }) {
         </p>
       ) : (
         <Candles
+          tradeId={trade.id}
+          interval={data.interval ?? "1h"}
           candles={candles}
           levels={levels}
           direction={trade.direction}
@@ -231,12 +252,16 @@ export function TradeChart({ trade }: { trade: TradeWithTags }) {
  * given.
  */
 function Candles({
+  tradeId,
+  interval,
   candles,
   levels,
   direction,
   entryMs,
   exitMs,
 }: {
+  tradeId: number;
+  interval: string;
   candles: Candle[];
   levels: Level[];
   direction: string;
@@ -250,6 +275,15 @@ function Candles({
   const levelsRef = useRef(levels);
   levelsRef.current = levels;
   const readoutRef = useRef<HTMLSpanElement>(null);
+  /*
+   * History fetched by scrolling, kept out of React state on purpose: it is
+   * appended to a canvas, nothing renders from it, and putting it in state
+   * would re-run every effect in this component on each page.
+   */
+  const olderRef = useRef<Candle[]>([]);
+  const loadingRef = useRef(false);
+  /** Binance had nothing before the earliest bar — stop asking. */
+  const exhaustedRef = useRef(false);
   const api = useRef<{
     chart: IChartApi;
     series: ISeriesApi<"Candlestick">;
@@ -262,6 +296,55 @@ function Candles({
   /* Bumped when the engine is rebuilt, so the drawing pass below knows to run
      again against the new chart rather than against a removed one. */
   const [epoch, setEpoch] = useState(0);
+
+  /*
+   * A new timeframe is a new set of bars, so the pages scrolled into on the
+   * old one are meaningless — and prepending 1m history to 4h candles would
+   * draw a chart that is simply wrong. Declared before the drawing effect so
+   * it runs first on the commit where both change.
+   */
+  useEffect(() => {
+    olderRef.current = [];
+    exhaustedRef.current = false;
+  }, [tradeId, interval]);
+
+  /** Everything drawn: pages scrolled into, then the trade's own window. */
+  const bars = () => (olderRef.current.length ? [...olderRef.current, ...candles] : candles);
+
+  /**
+   * Scrolled off the left edge — go and get the bars that were never asked for.
+   *
+   * The chart opens on the trade, which is right, but a chart that cannot be
+   * scrolled back is a screenshot. Rather than loading every bar Binance holds
+   * up front for a view nobody may look at, history arrives a page at a time,
+   * and the visible range is shifted by exactly the number of bars prepended
+   * so the candles under the cursor stay under the cursor.
+   */
+  async function loadOlder() {
+    const a = api.current;
+    if (!a || loadingRef.current || exhaustedRef.current) return;
+    const drawn = bars();
+    if (drawn.length === 0) return;
+    loadingRef.current = true;
+    try {
+      const page = await fetchCandlePage(tradeId, interval, drawn[0].t - 1);
+      const older = (page.candles ?? []).filter((k) => k.t < drawn[0].t);
+      if (older.length === 0) {
+        exhaustedRef.current = true;
+        return;
+      }
+      olderRef.current = [...older, ...olderRef.current];
+      const ts = a.chart.timeScale();
+      const was = ts.getVisibleLogicalRange();
+      a.series.setData(bars().map(toBar));
+      if (was) ts.setVisibleLogicalRange({ from: was.from + older.length, to: was.to + older.length });
+    } catch {
+      // A failed page is a page you can ask for again by scrolling; there is
+      // nothing to say and nothing to undo.
+    } finally {
+      loadingRef.current = false;
+    }
+  }
 
   useEffect(() => {
     const host = hostRef.current;
@@ -346,15 +429,7 @@ function Candles({
     series.applyOptions({
       priceFormat: { type: "price", precision: digits, minMove: 10 ** -digits },
     });
-    series.setData(
-      candles.map((k) => ({
-        time: (k.t / 1000) as UTCTimestamp,
-        open: k.o,
-        high: k.h,
-        low: k.l,
-        close: k.c,
-      })),
-    );
+    series.setData(bars().map(toBar));
 
     /* Levels as price lines: they get an axis label too, so a target sitting
        off the top of the visible range still says what it is and how far away
@@ -418,6 +493,20 @@ function Candles({
       a.chart.timeScale().fitContent();
     }
   }, [candles, levels, direction, entryMs, exitMs, epoch]);
+
+  useEffect(() => {
+    const a = api.current;
+    if (!a) return;
+    const ts = a.chart.timeScale();
+    /* Twelve bars of runway before the edge: enough that the page lands
+       before you reach the end of the data, not so much that a small nudge
+       fetches history nobody wanted. */
+    const onRange = (range: { from: number; to: number } | null) => {
+      if (range && range.from < 12) void loadOlder();
+    };
+    ts.subscribeVisibleLogicalRangeChange(onRange);
+    return () => ts.unsubscribeVisibleLogicalRangeChange(onRange);
+  }, [epoch, tradeId, interval, candles]);
 
   return (
     <div className="relative">

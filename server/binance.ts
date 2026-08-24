@@ -68,8 +68,34 @@ export interface FeedStatus {
   lastError: string | null;
   lastTriedAt: string | null;
   lastOkAt: string | null;
+  /**
+   * How many pairs each book returned last time it was asked.
+   *
+   * A PARTIAL failure is the one that hides best: the perp book refuses, the
+   * spot mirror answers, and the catalogue comes back full of pairs with
+   * nothing anywhere saying that every perp is missing. Every trade then
+   * resolves to spot, the chart says "spot", and it reads as a preference
+   * rather than a refusal. These counts are what makes it sayable.
+   */
+  books: { futures: number; spot: number };
+  /**
+   * Why a book was missing from the last catalogue fetch.
+   *
+   * Separate from lastError because that one is cleared by the next success,
+   * and successes keep arriving: one spot klines call wipes the record of the
+   * perp book's 451 and the status endpoint goes back to looking healthy while
+   * every perpetual is still gone. This is only ever written by a catalogue
+   * fetch, so it survives until the next one says otherwise.
+   */
+  catalogueError: string | null;
 }
-const status: FeedStatus = { lastError: null, lastTriedAt: null, lastOkAt: null };
+const status: FeedStatus = {
+  lastError: null,
+  lastTriedAt: null,
+  lastOkAt: null,
+  books: { futures: 0, spot: 0 },
+  catalogueError: null,
+};
 export const feedStatus = (): FeedStatus => ({ ...status });
 
 /** Try each host in turn; the last failure is what gets reported. */
@@ -180,11 +206,30 @@ export async function fetchCatalogue(): Promise<BinanceSymbol[]> {
       });
     }
   }
+  status.books = {
+    futures: out.filter((s) => s.market === "futures").length,
+    spot: out.filter((s) => s.market === "spot").length,
+  };
+
+  /*
+   * A book that refused is recorded even when the other one answered.
+   *
+   * getAny clears lastError on any success, so without this a spot fetch that
+   * lands a second after the futures fetch refuses erases the only evidence
+   * that the perps are gone. Written after both have settled, so it is the
+   * whole truth about this attempt rather than whichever finished last.
+   */
+  const why = [
+    ["futures", futures] as const,
+    ["spot", spot] as const,
+  ]
+    .filter(([, r]) => r.status === "rejected")
+    .map(([book, r]) => `${book}: ${String((r as PromiseRejectedResult).reason?.message ?? (r as PromiseRejectedResult).reason)}`)
+    .join(" · ");
+  status.catalogueError = why || null;
+  if (why) status.lastError = why;
+
   if (out.length === 0) {
-    const why = [futures, spot]
-      .filter((r): r is PromiseRejectedResult => r.status === "rejected")
-      .map((r) => String(r.reason?.message ?? r.reason))
-      .join(" · ");
     status.lastError = why || "Neither Binance book returned any symbols";
     throw new Error(status.lastError);
   }

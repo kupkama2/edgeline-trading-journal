@@ -61,6 +61,8 @@ export function useTradeCandles(tradeId: number | null, interval?: string) {
     pair: string | null;
     market?: "futures" | "spot";
     interval?: string;
+    /** How many pairs each Binance book contributed to the catalogue in use. */
+    books?: { futures: number; spot: number };
     candles: { t: number; o: number; h: number; l: number; c: number }[];
     error?: string;
     feed?: { lastError: string | null; lastTriedAt: string | null; lastOkAt: string | null } | null;
@@ -79,6 +81,26 @@ export function useTradeCandles(tradeId: number | null, interval?: string) {
      */
     placeholderData: (prev: unknown) => prev as any,
   });
+}
+
+/**
+ * One page of older candles, fetched imperatively rather than through a query.
+ *
+ * Scrolling left off the edge of a chart is not a piece of view state — it is
+ * an event, and the answer is appended to what is already drawn rather than
+ * replacing it. A query keyed by scroll position would cache a page per
+ * position and re-render the world on each one.
+ */
+export async function fetchCandlePage(
+  tradeId: number,
+  interval: string,
+  before: number,
+): Promise<{ candles: { t: number; o: number; h: number; l: number; c: number }[] }> {
+  const res = await apiRequest(
+    "GET",
+    `/api/trades/${tradeId}/candles?interval=${encodeURIComponent(interval)}&before=${Math.floor(before)}`,
+  );
+  return res.json();
 }
 
 export function useStyles() {

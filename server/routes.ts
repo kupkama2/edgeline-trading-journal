@@ -602,6 +602,17 @@ export async function registerRoutes(
         });
       }
 
+      /*
+       * Which book is in play, from the catalogue actually being used rather
+       * than from the last fetch — a process that started with a warm cache
+       * never fetched at all, and reporting "no perps" there would invent a
+       * refusal that never happened.
+       */
+      const books = {
+        futures: cat.filter((s) => s.market === "futures").length,
+        spot: cat.filter((s) => s.market !== "futures").length,
+      };
+
       const entry = new Date(trade.entryTime).getTime();
       const exit = trade.exitTime ? new Date(trade.exitTime).getTime() : Date.now();
       const held = Math.max(exit - entry, 60 * 60 * 1000);
@@ -637,10 +648,26 @@ export async function registerRoutes(
         const end = Math.min(Date.now(), Math.max(to, mid + narrowest / 2));
         win = { from: end - narrowest, to: end };
       }
+
+      /*
+       * `before` asks for history instead: the page of bars ending at that
+       * instant, which is what scrolling left off the edge of the chart needs.
+       *
+       * A trade journal opens on the trade, and that is right — but a chart you
+       * cannot scroll back on is a screenshot. Loading every bar Binance has up
+       * front to avoid the question would be megabytes for a view nobody may
+       * look at, so history arrives a page at a time as it is asked for.
+       */
+      const before = Number(req.query.before);
+      if (Number.isFinite(before) && before > 0) {
+        win = { from: before - BAR_MS[interval] * 600, to: before };
+      }
+
       res.json({
         pair: pair.symbol,
         market: pair.market,
         interval,
+        books,
         candles: await fetchCandles(pair, interval, win.from, win.to, 1200),
       });
     } catch (err: any) {
@@ -649,8 +676,17 @@ export async function registerRoutes(
   });
 
   /** Why the price feed is or is not working. For diagnosing it from outside. */
-  app.get("/api/binance/status", async (_req, res) => {
-    const cat = await ensureCatalogue().catch(() => []);
+  app.get("/api/binance/status", async (req, res) => {
+    /*
+     * `?refresh=1` asks the venue again rather than reading the cache.
+     *
+     * The whole reason to look at this endpoint is that something changed —
+     * a region moved, a block lifted — and the cached answer is precisely the
+     * thing that cannot tell you. Without a way to force the question you are
+     * waiting on a TTL to find out whether you fixed it.
+     */
+    const force = req.query.refresh === "1" || req.query.refresh === "true";
+    const cat = await ensureCatalogue(force).catch(() => []);
     const status = feedStatus();
     res.json({
       pairs: cat.length,

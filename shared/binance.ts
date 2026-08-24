@@ -139,6 +139,24 @@ export const SEED_CATALOGUE: BinanceSymbol[] = SEED_ASSETS.map((baseAsset) => ({
   market: "futures" as const,
 }));
 
+const SEED_SET = new Set(SEED_ASSETS);
+
+/**
+ * Does this coin have a perp at all?
+ *
+ * Answered from the written-down list rather than the live catalogue, and that
+ * is the entire point: it stays answerable when the futures book is the thing
+ * that cannot be reached. A coin that HAS a perp but was matched to spot was
+ * matched there because the perp book refused, not because spot is where it
+ * trades — and candles from the wrong book must not be allowed to settle a
+ * trade. A coin genuinely listed on spot only is a different case and keeps
+ * working.
+ */
+export function listedAsPerp(raw: string | null | undefined): boolean {
+  const key = (raw ?? "").trim().toUpperCase();
+  return key ? SEED_SET.has(key) : false;
+}
+
 /* ------------------------------ the catalogue ------------------------------ */
 
 /** Which book a pair trades in. They are different prices for the same name. */
