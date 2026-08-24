@@ -31,7 +31,7 @@ import {
 import { outcomeUnknown } from "@shared/aftermath";
 import type { TradeWithTags } from "@shared/schema";
 import { fetchCandles, fetchCatalogue, intervalFor } from "./binance";
-import { catalogue, storageFor } from "./storage";
+import { catalogue, collapsePairSymbolsOnce, storageFor } from "./storage";
 
 /** How stale the pair list may get. Listings are daily news at most. */
 const CATALOGUE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -69,6 +69,13 @@ export interface CheckSummary {
   error?: string;
 }
 
+/**
+ * Historical pair symbols are folded into their coin the first time a
+ * catalogue exists to fold them with — once per process, and idempotent, so
+ * a restart costs one no-op scan rather than a wrong answer.
+ */
+let backfilled = false;
+
 /** Refresh the cached pair list when it is missing or a day old. */
 export async function ensureCatalogue(force = false): Promise<BinanceSymbol[]> {
   const last = await catalogue.lastFetchedAt();
@@ -84,13 +91,24 @@ export async function ensureCatalogue(force = false): Promise<BinanceSymbol[]> {
       // which is the same as the honest "don't know" this returns anyway.
     }
   }
-  return (await catalogue.list()).map((r) => ({
+  const cat = (await catalogue.list()).map((r) => ({
     symbol: r.symbol,
     baseAsset: r.baseAsset,
     quoteAsset: r.quoteAsset,
     status: r.status,
     market: r.market === "futures" ? ("futures" as const) : ("spot" as const),
   }));
+
+  if (!backfilled && cat.length > 0) {
+    backfilled = true;
+    try {
+      await collapsePairSymbolsOnce(cat);
+    } catch {
+      // A failed fold leaves the old split symbols in place, which is where
+      // they already were. It is not worth failing a price lookup over.
+    }
+  }
+  return cat;
 }
 
 /**

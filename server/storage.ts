@@ -32,6 +32,7 @@ import type {
   BinanceSymbolRow,
 } from "@shared/schema";
 import { DEMON_TAXONOMY, DEMON_LEGACY_ALIASES } from "@shared/demons";
+import { collapseToInstrument } from "@shared/binance";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import { and, eq, desc, inArray, isNull, sql as sqlx } from "drizzle-orm";
@@ -412,6 +413,46 @@ const LEGACY_SOURCE_TAGS = ["Severin", "Daniel", "CBS", "UB"];
  * and a migration must never answer questions. Idempotent — once the tag has
  * moved out, the trade no longer matches.
  */
+/**
+ * Fold historical pair symbols into the coin they name.
+ *
+ * "ZKUSDT" and "ZK" were two instruments before the entry path learned to
+ * collapse them, so a coin logged from a screenshot one week and typed by
+ * hand the next arrived as two rows in every breakdown, each with its own
+ * win rate and neither of them true.
+ *
+ * Not run at boot, unlike the other migrations here, because it needs the
+ * Binance catalogue and a database migration has no business waiting on a
+ * venue to answer. It runs the first time a catalogue is successfully loaded
+ * instead — see ensureCatalogue — and is naturally idempotent: an already
+ * collapsed symbol collapses to itself.
+ *
+ * Rows carrying a contract are never touched. A futures trade has its own
+ * rollup rules and no business near a crypto-pair collapse.
+ */
+export async function collapsePairSymbolsOnce(
+  cat: { symbol: string; baseAsset: string; quoteAsset: string; status: string; market: string }[],
+): Promise<number> {
+  if (cat.length === 0) return 0;
+  const rows = await db
+    .selectDistinct({ symbol: trades.symbol })
+    .from(trades)
+    .where(isNull(trades.contract));
+
+  let changed = 0;
+  for (const { symbol } of rows) {
+    const collapsed = collapseToInstrument(symbol, cat as any);
+    if (!collapsed || collapsed === symbol) continue;
+    const done = await db
+      .update(trades)
+      .set({ symbol: collapsed })
+      .where(and(eq(trades.symbol, symbol), isNull(trades.contract)))
+      .returning({ id: trades.id });
+    changed += done.length;
+  }
+  return changed;
+}
+
 export async function promoteSourceTagsOnce(): Promise<number> {
   const rows = await db
     .select({ id: trades.id, tags: trades.rationaleTags, source: trades.source })

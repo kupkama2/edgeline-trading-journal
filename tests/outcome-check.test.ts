@@ -169,6 +169,37 @@ describe.skipIf(!DB)("settling parked trades against the feed", () => {
     expect(after.mfe).toBe(120.25);
   });
 
+  it("folds historical pair symbols into the coin, once a catalogue exists", async () => {
+    // "AAAUSDT" and "AAA" were two instruments before the entry path learned
+    // to collapse them: one coin, two rows in every breakdown, two win rates,
+    // neither true. Written straight to the database so it arrives the way
+    // history did rather than through the route that now prevents it.
+    const legacy = await closedTrade({ symbol: "AAA", exitTime: ago(1.5) });
+    const { db } = await import("../server/storage");
+    const { trades } = await import("../shared/schema");
+    const { eq } = await import("drizzle-orm");
+    await db.update(trades).set({ symbol: "AAAUSDT" }).where(eq(trades.id, legacy.id));
+    expect((await store.getTrade(legacy.id)).symbol).toBe("AAAUSDT");
+
+    const { collapsePairSymbolsOnce } = await import("../server/storage");
+    const { ensureCatalogue } = await import("../server/outcomes");
+    await collapsePairSymbolsOnce(await ensureCatalogue());
+
+    expect((await store.getTrade(legacy.id)).symbol).toBe("AAA");
+  });
+
+  it("leaves a futures row out of the fold entirely", async () => {
+    // A contract has its own rollup rules and no business near a crypto-pair
+    // collapse — "NQ" must not be hunted for in a list of coins.
+    const fut = await closedTrade({ symbol: "NQ", contract: "MNQH7", exitTime: ago(1.4) });
+    const { collapsePairSymbolsOnce } = await import("../server/storage");
+    const { ensureCatalogue } = await import("../server/outcomes");
+    await collapsePairSymbolsOnce(await ensureCatalogue());
+    const after = await store.getTrade(fut.id);
+    expect(after.symbol).toBe("NQ");
+    expect(after.contract).toBe("MNQH7");
+  });
+
   it("leaves futures trades entirely alone", async () => {
     const t = await closedTrade({ symbol: "NQ", contract: "MNQZ6", exitTime: ago(2) });
     await checkOutcomes(userId);
