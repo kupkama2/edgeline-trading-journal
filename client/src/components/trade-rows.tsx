@@ -5,12 +5,13 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowDownRight, ArrowUpRight, Camera, CheckCircle2, Eye, Minus, Pencil, Plus, Trash2, X } from "lucide-react";
+import { ArrowDownRight, ArrowUpRight, Camera, CheckCircle2, Eye, HelpCircle, Minus, Pencil, Plus, Trash2, X } from "lucide-react";
 import { useUpdateTrade, useDeleteTrade } from "@/lib/data";
 import { parseExtraTargets, type TradeWithTags } from "@shared/schema";
 import { parseHighlights } from "@shared/highlights";
 import { computeMetrics, fmtFees, fmtMoney, fmtR, EXIT_REASON_LABELS } from "@shared/metrics";
 import { positionLedger } from "@shared/fills";
+import { aftermathGaps, GAP_LABELS } from "@shared/aftermath";
 import { StyleChip } from "@/components/style-switcher";
 import { num, parseTags, RationaleTags } from "@/components/trade-shared";
 
@@ -338,9 +339,21 @@ export function ClosedTradeRow({
     </button>
   );
   const rationaleTags = parseTags(t.rationaleTags);
+  /*
+   * What this trade never said. Amber rather than red because an incomplete
+   * record is not a bad trade — and only ever shown when there is something
+   * genuinely still knowable, so it never becomes wallpaper. The badge is the
+   * shortcut to filling it in: one click from the row to the fields.
+   */
+  const owed = aftermathGaps(t);
+  const missing = owed?.gaps ?? [];
   return (
     <div
-      className="rounded-lg border border-card-border bg-card p-3"
+      className={`rounded-lg border bg-card p-3 ${
+        owed?.cutShort && missing.includes("outcome")
+          ? "border-amber-500/40"
+          : "border-card-border"
+      }`}
       data-testid={`card-closed-trade-${t.id}`}
     >
       {/* Wraps on narrow screens: symbol, style, account, shots and reason are
@@ -363,6 +376,22 @@ export function ClosedTradeRow({
         <Badge variant="outline" className="shrink-0 text-[10px] capitalize">
           {t.exitReason ? EXIT_REASON_LABELS[t.exitReason] : "—"}
         </Badge>
+        {missing.length > 0 && (
+          <button
+            type="button"
+            onClick={onEdit}
+            title={`Still unrecorded: ${missing.map((g) => GAP_LABELS[g]).join(" · ")}`}
+            className={`flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] transition-colors ${
+              missing.includes("outcome")
+                ? "border-amber-500/50 text-amber-500 hover:bg-amber-500/10"
+                : "border-border text-muted-foreground/60 hover:text-foreground"
+            }`}
+            data-testid={`badge-owed-${t.id}`}
+          >
+            <HelpCircle className="h-3 w-3" />
+            {missing.includes("outcome") ? "outcome unknown" : missing.length}
+          </button>
+        )}
         <div className="ml-auto flex shrink-0 items-center gap-2">
         <span
           className={`shrink-0 font-mono text-sm font-bold ${
