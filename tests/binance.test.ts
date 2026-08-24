@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   AFTERMATH_HORIZON_MS,
+  SEED_CATALOGUE,
   collapseToInstrument,
   scanWindow,
   binanceSymbolForTrade,
@@ -368,3 +369,53 @@ describe("the path, read off the candles", () => {
   });
 });
 
+
+/**
+ * The written-down list, which is what stands in when the venue will not talk.
+ *
+ * It only has to do the two jobs that are not market-data questions: know that
+ * "ZROUSDT" means ZRO, and offer real coins to pick from. Prices genuinely do
+ * need the venue and are allowed to fail loudly.
+ */
+describe("the fallback catalogue", () => {
+  it("is a real catalogue the matcher can use", () => {
+    expect(SEED_CATALOGUE.length).toBeGreaterThan(150);
+    expect(matchBinanceSymbol("ZRO", SEED_CATALOGUE)).toEqual({
+      symbol: "ZROUSDT",
+      market: "futures",
+    });
+  });
+
+  it("collapses the pair spellings without a network", () => {
+    // The reported symptom, offline: a trade filed as ZROUSDT stayed ZROUSDT
+    // because the catalogue was empty, so it sat in the breakdowns as its own
+    // instrument next to ZRO.
+    for (const written of ["ZROUSDT", "ZRO/USDT", "ZROUSDT.P", "ZROUSD"]) {
+      expect(collapseToInstrument(written, SEED_CATALOGUE)).toBe("ZRO");
+    }
+  });
+
+  it("carries the coins actually traded here", () => {
+    for (const coin of ["BTC", "ETH", "SOL", "XRP", "LTC", "ZEC", "ZK", "HYPE", "ZRO"]) {
+      expect(matchBinanceSymbol(coin, SEED_CATALOGUE)?.symbol).toBe(`${coin}USDT`);
+    }
+  });
+
+  it("names every asset once, and every one as a USDT perp", () => {
+    // A duplicate would be harmless but is a sign the list was edited
+    // carelessly, and this list is edited by hand.
+    const names = SEED_CATALOGUE.map((s) => s.baseAsset);
+    expect(new Set(names).size).toBe(names.length);
+    expect(SEED_CATALOGUE.every((s) => s.quoteAsset === "USDT")).toBe(true);
+    expect(SEED_CATALOGUE.every((s) => s.market === "futures")).toBe(true);
+    expect(SEED_CATALOGUE.every((s) => s.symbol === `${s.baseAsset}USDT`)).toBe(true);
+  });
+
+  it("still leaves an unknown ticker alone", () => {
+    // The list is written from knowledge and goes stale. A coin listed after
+    // it was written is simply not folded — which is what an unrecognised
+    // symbol has always done, and nothing worse.
+    expect(collapseToInstrument("NEWCOINUSDT", SEED_CATALOGUE)).toBe("NEWCOINUSDT");
+    expect(matchBinanceSymbol("NEWCOIN", SEED_CATALOGUE)).toBeNull();
+  });
+});
