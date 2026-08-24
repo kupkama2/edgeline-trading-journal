@@ -2,14 +2,14 @@ import { useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ChevronDown, HelpCircle } from "lucide-react";
-import { owedOutcome } from "@shared/aftermath";
+import { outcomeParked, owedOutcome } from "@shared/aftermath";
 import { fmtR, computeMetrics, EXIT_REASON_LABELS } from "@shared/metrics";
 import { typedSymbol } from "@shared/symbols";
 import { num } from "@/components/trade-shared";
 import type { TradeWithTags } from "@shared/schema";
 
 /**
- * Trades that never said whether the plan would have paid.
+ * Trades that have not yet said whether the plan would have paid.
  *
  * One question, not a checklist: left completely alone, would price have hit
  * the target or the stop first? A trade taken off by hand cannot answer it,
@@ -18,8 +18,11 @@ import type { TradeWithTags } from "@shared/schema";
  *
  * Deliberately not a nag. It hides itself entirely when nothing is owed,
  * opens collapsed, and every line is one click into the field that answers
- * it. "Undetermined" clears a trade off this list as surely as an answer
- * does: a flag you cannot clear by looking teaches you to stop looking.
+ * it. "Undetermined" does NOT clear a trade off this list: at the moment you
+ * close a trade by hand neither level has been reached, so undetermined is a
+ * parking space while the market finishes the question, not a verdict that it
+ * never will. Those lines say "waiting" so a trade you have already looked at
+ * reads differently from one you have not touched since closing.
  */
 export function OwedCard({
   trades,
@@ -75,6 +78,15 @@ export function OwedCard({
                 <span className="font-mono text-[11px] text-muted-foreground">
                   {fmtR(computeMetrics(trade).actualR)}
                 </span>
+                {outcomeParked(trade) && (
+                  <span
+                    className="shrink-0 rounded-full border border-amber-500/40 px-1.5 py-0.5 text-[10px] text-amber-500/90"
+                    title="Marked undetermined — neither level had been reached when you closed it"
+                    data-testid={`owed-parked-${trade.id}`}
+                  >
+                    waiting
+                  </span>
+                )}
                 {/* The two levels to set the alerts at — the errand itself,
                     rather than a description of the errand. */}
                 <span className="ml-auto shrink-0 font-mono text-[11px] text-muted-foreground">

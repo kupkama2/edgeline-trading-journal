@@ -18,6 +18,10 @@
  * reads, and it buried the one question that actually needs walking back to a
  * chart for.
  *
+ * "Undetermined" stays on the list rather than clearing it. When you close a
+ * trade by hand, neither level has been reached yet and undetermined is the
+ * only truthful thing to write — it is a parking space, not a verdict.
+ *
  * Nothing here is a judgement about the trade — taking a trade off by hand is
  * often the right call. It is a judgement about the RECORD, which is a
  * different thing and the only one a journal is entitled to make.
@@ -53,21 +57,40 @@ export function impliedOutcome(t: TradeWithTags): "target_first" | "stop_first" 
 /**
  * Is the untouched-plan outcome still unanswered on this trade?
  *
- * "Undetermined" counts as ANSWERED. It is a real answer — you went back, the
- * path wasn't legible, and you said so — and a flag that cannot be cleared by
- * looking is a flag that teaches you to stop looking. The distinction the
- * field carries is between null (never asked) and undetermined (asked, and
- * the chart didn't say).
+ * "Undetermined" counts as UNANSWERED, which is the whole point. At the
+ * moment you close a trade by hand, neither level has been reached yet —
+ * there is nothing else you could truthfully put in the field. So
+ * "undetermined" is where a trade is parked while the market finishes the
+ * question, not a verdict that it never will. Treating it as a verdict is how
+ * a journal fills up with trades that quietly opted out of being comparable
+ * against leaving them alone.
+ *
+ * The field therefore carries two shades of the same state — never asked, and
+ * asked-but-not-yet — and both stay on the list. See `outcomeParked` for
+ * telling them apart in the UI.
+ *
+ * A trade whose price PROVES which level came first is still exempt, however
+ * it was labelled: the row already answers it and asking again is busywork.
  */
 export function outcomeUnknown(t: TradeWithTags): boolean {
   if (t.status !== "closed" || t.exitPrice == null) return false;
-  if (t.noManagementOutcome != null) return false;
+  const said = t.noManagementOutcome;
+  if (said != null && said !== "undetermined") return false;
   return impliedOutcome(t) == null;
 }
 
 /**
- * The worklist: closed trades that never said whether the plan would have
- * paid, most recent first.
+ * Parked deliberately, rather than never asked.
+ *
+ * Same errand either way, but they read differently: one is a trade you have
+ * looked at and are waiting on, the other you have not touched since closing.
+ */
+export const outcomeParked = (t: TradeWithTags) =>
+  t.noManagementOutcome === "undetermined";
+
+/**
+ * The worklist: closed trades that have not yet said whether the plan would
+ * have paid, most recent first.
  *
  * Recency rather than any notion of importance, because the errand is going
  * back to a chart and the trade from yesterday is the one you can still

@@ -11,7 +11,7 @@ import { parseExtraTargets, type TradeWithTags } from "@shared/schema";
 import { parseHighlights } from "@shared/highlights";
 import { computeMetrics, fmtFees, fmtMoney, fmtR, EXIT_REASON_LABELS } from "@shared/metrics";
 import { positionLedger } from "@shared/fills";
-import { outcomeUnknown } from "@shared/aftermath";
+import { outcomeParked, outcomeUnknown } from "@shared/aftermath";
 import { StyleChip } from "@/components/style-switcher";
 import { num, parseTags, RationaleTags } from "@/components/trade-shared";
 
@@ -378,7 +378,11 @@ export function ClosedTradeRow({
           <button
             type="button"
             onClick={onEdit}
-            title="Left alone, would price have hit the target or the stop first? Not recorded."
+            title={
+              outcomeParked(t)
+                ? "Marked undetermined — neither level had been reached yet. Still waiting on one."
+                : "Left alone, would price have hit the target or the stop first? Not recorded."
+            }
             className="flex shrink-0 items-center gap-1 rounded-full border border-amber-500/50 px-1.5 py-0.5 text-[10px] text-amber-500 transition-colors hover:bg-amber-500/10"
             data-testid={`badge-owed-${t.id}`}
           >
