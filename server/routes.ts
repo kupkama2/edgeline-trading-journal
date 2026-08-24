@@ -612,11 +612,16 @@ export async function registerRoutes(
   /** Why the price feed is or is not working. For diagnosing it from outside. */
   app.get("/api/binance/status", async (_req, res) => {
     const cat = await ensureCatalogue().catch(() => []);
+    const status = feedStatus();
     res.json({
       pairs: cat.length,
       futures: cat.filter((s) => s.market === "futures").length,
       spot: cat.filter((s) => s.market === "spot").length,
-      ...feedStatus(),
+      // Which list is actually in play. Without this a healthy-looking count
+      // would hide the fact that every one of them came from a hardcoded
+      // fallback and no price will resolve.
+      source: status.lastOkAt ? "binance" : "seed",
+      ...status,
     });
   });
 

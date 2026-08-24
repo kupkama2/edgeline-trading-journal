@@ -67,6 +67,78 @@ export function firstTouch(
   return { verdict: "pending" };
 }
 
+
+/* ------------------------------ the fallback ------------------------------ */
+
+/**
+ * Binance USDT perpetual base assets, written down.
+ *
+ * A cached list is only as good as the fetch that filled it, and the fetch can
+ * fail for reasons that have nothing to do with this app — Binance answers 451
+ * to US IPs, which is where most cheap hosting calls from. When that happens
+ * the catalogue is empty, and an empty catalogue silently disables the two
+ * things that do not need prices at all: knowing that "ZROUSDT" means ZRO, and
+ * offering real coins in the picker. Neither of those is a market-data
+ * question. Neither should depend on reaching a market.
+ *
+ * So this is the floor. It is used ONLY when the live catalogue is empty, and
+ * a successful fetch always wins — the moment the venue is reachable, the real
+ * list supersedes this one entirely, including for coins listed after this was
+ * written.
+ *
+ * Two honest limitations, both of which the design absorbs rather than hides:
+ *
+ *   It goes stale. A coin listed next month is not here, and until the live
+ *   fetch works that symbol is simply left alone — which is exactly what an
+ *   unrecognised symbol has always done. Nothing breaks; one coin stays
+ *   unfolded.
+ *
+ *   It is written from knowledge rather than read from the venue, so it may
+ *   name something that has since been delisted. That is harmless in the
+ *   direction that matters: the collapse rule checks whether the WHOLE string
+ *   is a known asset before it considers splitting one, so a spurious entry
+ *   cannot mangle a real ticker into a shorter one.
+ *
+ * Quoted in USDT throughout, which is what these actually trade as.
+ */
+const SEED_ASSETS = [
+  "BTC", "ETH", "SOL", "XRP", "BNB", "DOGE", "ADA", "AVAX", "LINK", "DOT",
+  "MATIC", "LTC", "BCH", "TRX", "ATOM", "XLM", "NEAR", "APT", "ARB", "OP",
+  "FIL", "ICP", "HBAR", "VET", "INJ", "SUI", "SEI", "TIA", "IMX", "GRT",
+  "AAVE", "MKR", "LDO", "RUNE", "ALGO", "FTM", "SAND", "MANA", "AXS", "GALA",
+  "CHZ", "ENJ", "APE", "GMT", "CRV", "SNX", "COMP", "UNI", "SUSHI", "YFI",
+  "ZRX", "1INCH", "BAL", "KNC", "OCEAN", "BAND", "STORJ", "ANKR", "CTSI",
+  "SKL", "RSR", "DENT", "HOT", "ZIL", "ONE", "IOTA", "ONT", "QTUM", "ZEC",
+  "DASH", "XMR", "ETC", "EOS", "NEO", "XTZ", "WAVES", "KAVA", "ROSE", "CELO",
+  "FLOW", "EGLD", "THETA", "STX", "ORDI", "WIF", "PEPE", "FLOKI", "BONK",
+  "SHIB", "JUP", "PYTH", "JTO", "WLD", "BLUR", "ENA", "ETHFI", "REZ", "OMNI",
+  "NOT", "ZK", "ZRO", "IO", "LISTA", "BANANA", "RENDER", "TAO", "FET",
+  "AGIX", "ARKM", "PENDLE", "ETHW", "HYPE", "STRK", "MANTA", "ALT", "DYM",
+  "PIXEL", "PORTAL", "AEVO", "BOME", "W", "METIS", "ACE", "NFP", "AI", "XAI",
+  "SAGA", "TAIKO", "ZETA", "MYRO", "TNSR", "SAFE", "BB", "NEIRO", "EIGEN",
+  "DOGS", "CATI", "HMSTR", "POL", "SCR", "MOODENG", "GOAT", "GRASS", "PNUT",
+  "ACT", "ME", "MOVE", "VIRTUAL", "AI16Z", "USUAL", "PENGU", "BIO", "S",
+  "TRUMP", "MELANIA", "ANIME", "BERA", "LAYER", "IP", "KAITO", "SHELL",
+  "PLUME", "NIL", "PARTI", "BABY", "WCT", "ZORA", "HAEDAL", "SXT", "SOPH",
+  "RESOLV", "SPK", "NXPC", "HUMA", "SAHARA", "BOMB", "CAKE", "TWT", "XVS",
+  "ALPACA", "SUN", "CFX", "ASTR", "JASMY", "LPT", "MASK", "API3", "GMX",
+  "DYDX", "MAGIC", "HIGH", "T", "RARE", "POLYX", "ID", "ARK", "EDU", "RDNT",
+  "SUIA", "PEOPLE", "LEVER", "TRB", "IDEX", "HOOK", "STG", "SPELL", "GAL",
+  "AGLD", "LOKA", "BSW", "MDT", "SLP", "HIFI", "RIF", "QUICK", "LQTY", "JOE",
+  "TLM", "ALICE", "DAR", "ATA", "CTK", "BAKE", "BURGER", "XEM", "SFP",
+  "AUDIO", "KDA", "RVN", "ICX", "ZEN", "LRC", "ONG", "NKN", "ARPA", "CHR",
+  "OGN", "CVC", "COTI", "DUSK", "MTL", "PERP", "UNFI", "LINA", "FLM", "XVG",
+];
+
+/** The fallback catalogue: every seeded asset as its USDT perp. */
+export const SEED_CATALOGUE: BinanceSymbol[] = SEED_ASSETS.map((baseAsset) => ({
+  symbol: `${baseAsset}USDT`,
+  baseAsset,
+  quoteAsset: "USDT",
+  status: "TRADING",
+  market: "futures" as const,
+}));
+
 /* ------------------------------ the catalogue ------------------------------ */
 
 /** Which book a pair trades in. They are different prices for the same name. */

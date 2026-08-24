@@ -25,6 +25,7 @@ import {
   firstTouch,
   pathExtremes,
   scanWindow,
+  SEED_CATALOGUE,
   type BinanceSymbol,
   type PairRef,
 } from "@shared/binance";
@@ -91,13 +92,27 @@ export async function ensureCatalogue(force = false): Promise<BinanceSymbol[]> {
       // which is the same as the honest "don't know" this returns anyway.
     }
   }
-  const cat = (await catalogue.list()).map((r) => ({
+  const stored = (await catalogue.list()).map((r) => ({
     symbol: r.symbol,
     baseAsset: r.baseAsset,
     quoteAsset: r.quoteAsset,
     status: r.status,
     market: r.market === "futures" ? ("futures" as const) : ("spot" as const),
   }));
+
+  /*
+   * Fall back to the written-down list when the venue could not be reached.
+   *
+   * Knowing that "ZROUSDT" means ZRO, and offering real coins in the picker,
+   * are not market-data questions and should not fail because a market is
+   * unreachable. Prices still will — that part genuinely needs the venue, and
+   * says so.
+   *
+   * Never written to the database: the cache stays a record of what was
+   * actually fetched, so a successful fetch replaces it cleanly and the seed
+   * disappears the moment it is no longer needed.
+   */
+  const cat = stored.length > 0 ? stored : SEED_CATALOGUE;
 
   if (!backfilled && cat.length > 0) {
     backfilled = true;
