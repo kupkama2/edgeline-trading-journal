@@ -1078,26 +1078,34 @@ export async function registerRoutes(
          * one bad trade, it produces a different set of trades from there on.
          */
         const rows = Array.isArray(json?.fills) ? json.fills : [];
+        const num = (v: any) => (typeof v === "number" && Number.isFinite(v) ? v : null);
         const usable = rows
-          .filter(
-            (f: any) =>
-              f &&
-              (f.side === "buy" || f.side === "sell") &&
-              typeof f.qty === "number" &&
-              f.qty > 0 &&
-              typeof f.price === "number" &&
-              f.price > 0 &&
-              typeof f.time === "string" &&
-              f.symbol,
-          )
+          .filter((f: any) => {
+            if (!f || !f.symbol || typeof f.time !== "string") return false;
+            if (f.side !== "buy" && f.side !== "sell") return false;
+            if (!(num(f.qty) ?? 0)) return false;
+            const filled = f.status !== "cancelled" && f.status !== "working" && f.status !== "other";
+            /*
+             * A filled row is only usable with the price it traded at. A row
+             * that did not fill is usable with a LEVEL instead — that is the
+             * whole point of keeping it, since a cancelled take profit is the
+             * only record of the target the trader set.
+             */
+            return filled ? (num(f.price) ?? 0) > 0 : num(f.limitPrice) != null || num(f.stopPrice) != null;
+          })
           .map((f: any) => ({
             symbol: String(f.symbol).trim().toUpperCase(),
             side: f.side,
             kind: f.kind ? String(f.kind) : null,
             qty: f.qty,
-            price: f.price,
+            price: num(f.price) ?? 0,
             time: String(f.time),
-            stopPrice: typeof f.stopPrice === "number" ? f.stopPrice : null,
+            stopPrice: num(f.stopPrice),
+            limitPrice: num(f.limitPrice),
+            status:
+              f.status === "cancelled" || f.status === "working" || f.status === "other"
+                ? f.status
+                : "filled",
           }));
         return res.json({
           ok: true,

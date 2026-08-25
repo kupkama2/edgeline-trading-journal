@@ -766,6 +766,8 @@ export interface FillRowParseResult {
   price: number | null;
   time: string | null;
   stopPrice: number | null;
+  limitPrice: number | null;
+  status: "filled" | "cancelled" | "working" | "other";
 }
 
 export interface SetupParseResult {
