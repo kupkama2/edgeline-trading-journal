@@ -53,6 +53,7 @@ import {
 import {
   FILL_LOG_PROMPT,
   ORDERS_PROMPT,
+  ordersPrompt,
   RATIONALE_PROMPT,
   SETUP_PROMPT,
   WEEKLY_INSIGHTS_PROMPT,
@@ -1031,7 +1032,7 @@ export async function registerRoutes(
         kind === "setup"
           ? SETUP_PROMPT
           : kind === "orders"
-            ? ORDERS_PROMPT
+            ? ordersPrompt(context ?? {})
             : kind === "close"
               ? closeCardPrompt(context ?? {})
               : kind === "fills"

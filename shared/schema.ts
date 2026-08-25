@@ -718,6 +718,14 @@ export const parseScreenshotSchema = z.object({
       entryPrice: z.number().optional(),
       initialStop: z.number().optional(),
       initialTarget: z.number().optional(),
+      /*
+       * Which screen this came off, where the trader has said. The orders
+       * prompt describes three quite different table shapes and has to work
+       * out which it is looking at; being told removes the guess, and the
+       * guess is where it goes wrong — a Binance row and a broker DOM row
+       * carry the same fields under different names.
+       */
+      venue: z.enum(["binance", "tradingview"]).optional(),
     })
     .optional(),
 });

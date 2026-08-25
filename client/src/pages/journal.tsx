@@ -203,7 +203,7 @@ export default function Journal() {
             data-testid="button-open-import"
           >
             <ClipboardPaste className="mr-1.5 h-3.5 w-3.5" />
-            Import orders
+            Import a batch
           </Button>
         </div>
       </div>
