@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { Suspense, lazy, useRef } from "react";
 import { Switch, Route, Router, useLocation } from "wouter";
 import { useHashLocation } from "wouter/use-hash-location";
 import { queryClient } from "./lib/queryClient";
@@ -11,10 +11,30 @@ import { StyleFilterProvider } from "@/lib/style-filter";
 import { LoginGate } from "@/components/login-gate";
 import NotFound from "@/pages/not-found";
 import Journal from "@/pages/journal";
-import Daily from "@/pages/daily";
-import Settings from "@/pages/settings";
-import Stats from "@/pages/stats";
 import TradeView from "@/pages/trade-view";
+
+/**
+ * The journal and a trade load with the app; everything else arrives when it
+ * is opened.
+ *
+ * Those two ARE the app — you land on the journal and you click into a trade —
+ * while Stats drags in a charting library, Daily a calendar and Settings a
+ * pile of forms, none of which most sessions ever touch. Bundling them into
+ * the first paint costs every visit to pay for the pages that a few of them
+ * visit.
+ */
+const Daily = lazy(() => import("@/pages/daily"));
+const Settings = lazy(() => import("@/pages/settings"));
+const Stats = lazy(() => import("@/pages/stats"));
+
+/** A page arriving over the network is a beat, not a blank screen. */
+function PageFallback() {
+  return (
+    <div className="flex min-h-[40vh] items-center justify-center">
+      <div className="h-5 w-5 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground" />
+    </div>
+  );
+}
 
 /**
  * A trade has its own address but is not its own screen.
@@ -37,6 +57,7 @@ function AppRouter() {
 
   return (
     <>
+      <Suspense fallback={<PageFallback />}>
       <Switch location={onTrade ? lastPage.current : location}>
         <Route path="/" component={Journal} />
         <Route path="/calendar" component={Daily} />
@@ -52,6 +73,7 @@ function AppRouter() {
         <Route path="/settings" component={Settings} />
         <Route component={NotFound} />
       </Switch>
+      </Suspense>
       {onTrade && <TradeView under={lastPage.current} />}
     </>
   );

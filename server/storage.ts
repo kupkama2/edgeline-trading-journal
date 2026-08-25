@@ -384,6 +384,38 @@ CREATE INDEX IF NOT EXISTS mistake_tags_user_id ON mistake_tags (user_id);
 CREATE INDEX IF NOT EXISTS account_settings_user_id ON account_settings (user_id);
 CREATE INDEX IF NOT EXISTS weekly_reviews_user_id ON weekly_reviews (user_id);
 CREATE INDEX IF NOT EXISTS daily_notes_user_id ON daily_notes (user_id);
+
+-- The three tables that hang off a trade get real foreign keys, so a deleted
+-- trade cannot leave them behind.
+--
+-- Application code has always deleted them by hand, and that worked; what it
+-- could not do is make the wrong thing impossible. A row orphaned by a crash
+-- between two statements, or by a future code path that forgets one of them,
+-- is invisible forever — nothing lists it and nothing cleans it up. The
+-- database can simply refuse to have any.
+--
+-- Orphans are cleared first, because an existing one would make the ALTER
+-- fail and take the whole boot with it. Wrapped so that a database which
+-- already has the constraint boots unchanged.
+DELETE FROM trade_images WHERE trade_id NOT IN (SELECT id FROM trades);
+DELETE FROM trade_fills WHERE trade_id NOT IN (SELECT id FROM trades);
+DELETE FROM trade_mistakes WHERE trade_id NOT IN (SELECT id FROM trades);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'trade_images_trade_fk') THEN
+    ALTER TABLE trade_images ADD CONSTRAINT trade_images_trade_fk
+      FOREIGN KEY (trade_id) REFERENCES trades (id) ON DELETE CASCADE;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'trade_fills_trade_fk') THEN
+    ALTER TABLE trade_fills ADD CONSTRAINT trade_fills_trade_fk
+      FOREIGN KEY (trade_id) REFERENCES trades (id) ON DELETE CASCADE;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'trade_mistakes_trade_fk') THEN
+    ALTER TABLE trade_mistakes ADD CONSTRAINT trade_mistakes_trade_fk
+      FOREIGN KEY (trade_id) REFERENCES trades (id) ON DELETE CASCADE;
+  END IF;
+END $$;
 `);
 
   await syncDemonTaxonomy();

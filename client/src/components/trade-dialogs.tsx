@@ -8,7 +8,7 @@
  * are gone: this renders inside the trade's own surface, and "close this
  * trade" means filling in the exit.
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, Suspense, lazy } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -28,7 +28,14 @@ import { useDeleteFill, useStyles, useTrades } from "@/lib/data";
 import { styleColor } from "@/lib/style-filter";
 import { collapseFills, positionLedger } from "@shared/fills";
 import { TradeImageGallery } from "@/components/trade-images";
-import { TradeChart } from "@/components/trade-chart";
+/*
+ * The charting engine is a third of a megabyte and draws for crypto trades
+ * only — a futures trade never shows it at all. Loading it with the app makes
+ * every session pay for a picture some of them never see.
+ */
+const TradeChart = lazy(() =>
+  import("@/components/trade-chart").then((m) => ({ default: m.TradeChart })),
+);
 import { parseExtraTargets, parsePlaybook, type TradeWithTags } from "@shared/schema";
 import { closeFromCard, type CloseCard, type CloseFill } from "@shared/close-card";
 import { LevelLabel, LevelLadder, type LevelKind } from "@/components/levels";
@@ -1216,7 +1223,9 @@ export function TradeEditor({
                 the case that matters most, because that is the trade you can
                 still do something about. Renders nothing for anything Binance
                 cannot price. */}
-            <TradeChart trade={trade} />
+            <Suspense fallback={null}>
+        <TradeChart trade={trade} />
+      </Suspense>
 
             {/* Attach here too, not only from the read-only detail view: Edit
                 is where you reach to change a trade, and a screenshot added to
