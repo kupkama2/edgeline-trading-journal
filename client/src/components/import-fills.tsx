@@ -4,7 +4,9 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { ArrowDownRight, ArrowUpRight, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { useAddFill, useCreateTrade } from "@/lib/data";
+import { useAddFill, useCreateTrade, useStyles, useTrades } from "@/lib/data";
+import { AccountPicker } from "@/components/trade-pickers";
+import { styleColor, useStyleFilter } from "@/lib/style-filter";
 import { num } from "@/components/trade-shared";
 import { computeMetrics, fmtMoney, fmtR } from "@shared/metrics";
 import { pointValueFor } from "@shared/symbols";
@@ -61,9 +63,37 @@ export function FillLogReview({
    * summary at the end, which is the only place anything gets written.
    */
   const [at, setAt] = useState(0);
+  /*
+   * The account, once for the whole batch.
+   *
+   * A batch comes off ONE screen of ONE account — that is what makes it a
+   * batch — so asking per trade would be asking the same question nine times
+   * and inviting one of the nine to be answered differently by accident.
+   */
+  const [account, setAccount] = useState("");
+  /*
+   * The style, per trade, because that is the one thing a batch genuinely
+   * disagrees about: an afternoon's fills can hold a scalp and a swing, and
+   * filing them together would put them in the same book and average two
+   * edges into one.
+   */
+  const [styleOf, setStyleOf] = useState<Record<number, number | null>>({});
   const { toast } = useToast();
   const createTrade = useCreateTrade();
   const addFill = useAddFill();
+  const { data: styles = [] } = useStyles();
+  const { data: allTrades = [] } = useTrades();
+  // The accounts already in use, so a batch joins one of them rather than
+  // quietly inventing a tenth spelling of the same prop firm.
+  const knownAccounts = useMemo(() => {
+    const set = new Set<string>();
+    for (const t of allTrades) if (t.account?.trim()) set.add(t.account.trim());
+    return Array.from(set).sort();
+  }, [allTrades]);
+  // A batch imported while looking at one book belongs to that book unless
+  // said otherwise — the same default the entry card uses.
+  const { activeStyleId } = useStyleFilter();
+  const styleFor = (i: number) => (i in styleOf ? styleOf[i] : activeStyleId);
 
   const levels = (i: number, t: ReconstructedTrade) => ({
     stop: plan[i]?.stop ?? (t.initialStop != null ? String(t.initialStop) : ""),
@@ -142,6 +172,8 @@ export function FillLogReview({
             status: t.stillOpen ? "open" : "closed",
             exitReason: t.stillOpen ? null : t.exitReason,
             source: "broker-log",
+            account: account.trim() || null,
+            styleId: styleFor(i),
           } as any,
           mistakeTagIds: [],
         });
@@ -198,6 +230,21 @@ export function FillLogReview({
         . Which rows belong together is decided by the position, not by the order they are
         printed in — check the legs before logging them.
       </p>
+
+      {/* Asked once and shown throughout, because it governs the whole batch:
+          a batch comes off one screen of one account, and asking per trade
+          would invite one of them to be answered differently by accident. */}
+      <div className="flex flex-wrap items-center gap-2 rounded-md border border-border/60 px-3 py-2 text-[11px]">
+        <span className="text-muted-foreground">Account for all {trades.length}</span>
+        <div className="min-w-[10rem] flex-1">
+          <AccountPicker
+            value={account}
+            onChange={setAccount}
+            known={knownAccounts}
+            testIdPrefix="fill-account"
+          />
+        </div>
+      </div>
 
       {at < trades.length ? (
         (() => {
@@ -338,6 +385,46 @@ export function FillLogReview({
                       ? "the log cannot prove these — type what you actually set"
                       : "the log never has the target"}
                   </span>
+                )}
+              </div>
+            )}
+
+            {/* Per trade, unlike the account: an afternoon's fills can hold a
+                scalp and a swing, and filing them together would put two
+                different edges in one book and average them. */}
+            {styles.length > 0 && (
+              <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px]">
+                <span className="text-muted-foreground">Style</span>
+                {styles.map((st) => {
+                  const on = st.id === styleFor(i);
+                  const c = styleColor(st.color);
+                  return (
+                    <button
+                      key={st.id}
+                      type="button"
+                      onClick={() => setStyleOf((p) => ({ ...p, [i]: on ? null : st.id }))}
+                      aria-pressed={on}
+                      data-testid={`chip-fill-style-${i}-${st.id}`}
+                      className={`flex items-center gap-1.5 rounded-full border px-2 py-0.5 transition-colors ${
+                        on
+                          ? c.chip
+                          : "border-border text-muted-foreground hover:border-primary/40 hover:text-foreground"
+                      }`}
+                    >
+                      <span className={`h-1.5 w-1.5 rounded-full ${c.dot}`} />
+                      {st.name}
+                    </button>
+                  );
+                })}
+                {styleFor(i) != null && (
+                  <button
+                    type="button"
+                    onClick={() => setStyleOf((p) => ({ ...p, [i]: null }))}
+                    className="rounded-full border border-border px-2 py-0.5 text-muted-foreground transition-colors hover:text-foreground"
+                    data-testid={`button-fill-style-clear-${i}`}
+                  >
+                    unassigned
+                  </button>
                 )}
               </div>
             )}
