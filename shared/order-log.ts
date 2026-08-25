@@ -390,16 +390,19 @@ export function attachBrackets(
         : mine;
 
     /*
-     * Stopped out means nothing was moved, so the target still live at the end
-     * is the one that was set at the start. Anywhere else the target is shown
-     * but not claimed — it may be the third one the trader placed.
+     * The target, under the same proof as the stop and one condition more.
+     *
+     * Stopped out says the stop was never moved. It says nothing about the
+     * target — a trader can leave the risk alone and walk the target in all
+     * afternoon — and the log shows that plainly: a moved target leaves TWO
+     * cancelled legs in the window. So one is the plan, and more than one is
+     * a history of what the plan became, which is exactly the thing this
+     * refuses to write into the plan.
      */
     const winning = (level: number) =>
       t.direction === "long" ? level > t.entryPrice : level < t.entryPrice;
-    const planTarget =
-      t.exitReason === "stop"
-        ? (mine.filter((b) => b.kind === "target" && winning(b.level)).pop()?.level ?? null)
-        : null;
+    const targets = mine.filter((b) => b.kind === "target" && winning(b.level));
+    const planTarget = t.exitReason === "stop" && targets.length === 1 ? targets[0].level : null;
 
     return { ...t, brackets, planTarget };
   });

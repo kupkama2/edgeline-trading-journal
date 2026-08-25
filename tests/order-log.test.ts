@@ -294,3 +294,37 @@ describe("a log that shows the cancelled orders too", () => {
     expect(t[0].brackets.some((b) => b.level === 29100)).toBe(false);
   });
 });
+
+describe("a stop that held while the target moved", () => {
+  /*
+   * Being stopped out proves the STOP was never touched. It proves nothing
+   * about the target — a trader can leave the risk alone and walk the target
+   * in all afternoon — and the log says so plainly, because a moved target
+   * leaves two cancelled legs in the window rather than one.
+   */
+  const base: LoggedFill[] = [
+    { symbol: "ES", side: "buy", kind: "Limit", qty: 1, price: 100, time: "2026-08-25 10:00:00", status: "filled" },
+    { symbol: "ES", side: "sell", kind: "Stop Loss", qty: 1, price: 95, stopPrice: 95, time: "2026-08-25 12:00:00", status: "filled" },
+  ];
+
+  it("takes the target when there is only one", () => {
+    const { trades } = tradesFromLog([
+      ...base,
+      { symbol: "ES", side: "sell", kind: "Take Profit", qty: 1, price: 0, limitPrice: 130, time: "2026-08-25 12:00:00", status: "cancelled" },
+    ]);
+    expect(trades[0].initialStop).toBe(95);
+    expect(trades[0].planTarget).toBe(130);
+  });
+
+  it("claims none of them when the target was walked", () => {
+    const { trades } = tradesFromLog([
+      ...base,
+      { symbol: "ES", side: "sell", kind: "Take Profit", qty: 1, price: 0, limitPrice: 130, time: "2026-08-25 11:00:00", status: "cancelled" },
+      { symbol: "ES", side: "sell", kind: "Take Profit", qty: 1, price: 0, limitPrice: 118, time: "2026-08-25 12:00:00", status: "cancelled" },
+    ]);
+    // The stop is still proved; the target is a history, not a plan.
+    expect(trades[0].initialStop).toBe(95);
+    expect(trades[0].planTarget).toBeNull();
+    expect(trades[0].brackets.map((b) => b.level)).toEqual([130, 118, 95]);
+  });
+});
