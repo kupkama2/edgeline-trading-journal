@@ -409,7 +409,7 @@ export async function parseScreenshot(
   image: string,
   kind: "fills",
   context?: Record<string, unknown>,
-): Promise<{ fills: FillRowParseResult[]; skipped: number }>;
+): Promise<{ isExecutionLog: boolean; fills: FillRowParseResult[]; skipped: number }>;
 export async function parseScreenshot(
   image: string,
   kind: "setup" | "outcome" | "orders" | "close" | "fills",

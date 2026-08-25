@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -34,6 +34,21 @@ import { useStyleFilter } from "@/lib/style-filter";
  * see how many positions could open, then add rationale one at a time.
  */
 
+/** The log rows complete enough to place in a position walk. */
+function readableFills(rows: { symbol: string | null; side: string | null; qty: number | null; price: number | null; time: string | null; kind: string | null; stopPrice: number | null }[]): LoggedFill[] {
+  return rows
+    .filter((f) => f.symbol && (f.side === "buy" || f.side === "sell") && f.qty && f.price && f.time)
+    .map((f) => ({
+      symbol: f.symbol!,
+      side: f.side as "buy" | "sell",
+      kind: f.kind,
+      qty: f.qty!,
+      price: f.price!,
+      time: f.time!,
+      stopPrice: f.stopPrice,
+    }));
+}
+
 /** A preview row: the parsed candidate plus any manual corrections. */
 type Row = ImportCandidate & { include: boolean };
 
@@ -64,6 +79,28 @@ export function ImportTradesDialog({
   // A filled-order log, kept separately: it becomes completed trades with legs
   // rather than resting orders, so it has nothing to merge with above.
   const [logRows, setLogRows] = useState<LoggedFill[] | null>(null);
+  // The last image scanned, so either reading can be asked for again without
+  // making the trader find and re-paste the screenshot.
+  const [lastShot, setLastShot] = useState<string | null>(null);
+  /*
+   * What to read the next screenshot as.
+   *
+   * Auto works and is what most pastes should need, but it rests on a
+   * judgement about the picture, and a judgement that goes the wrong way
+   * costs a round trip and a moment of "why is it showing me that". Saying so
+   * up front costs one click and cannot be wrong — so it is offered, and the
+   * automatic reading stays the default rather than the only option.
+   */
+  const [mode, setMode] = useState<"auto" | "log" | "orders">("auto");
+  /*
+   * Read through a ref, because the paste listener is installed once and
+   * captures the scanImage of the render that installed it. Picking a mode
+   * re-renders without re-registering, so a plain read here would have been
+   * the mode as it was when the dialog opened — which is to say "auto", every
+   * time, no matter which chip was lit.
+   */
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
   const [scanning, setScanning] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   // Keyed by the order's identity rather than its row position: pasting a second
@@ -131,6 +168,31 @@ export function ImportTradesDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, scanning]);
 
+  /** Re-read the screenshot already in hand as an execution log. */
+  async function rereadAsLog() {
+    if (!lastShot) return;
+    setScanning(true);
+    try {
+      const log = await parseScreenshot(lastShot, "fills");
+      const rows = readableFills(log.fills ?? []);
+      if (rows.length) setLogRows(rows);
+      else
+        toast({
+          title: "No filled orders in that screenshot",
+          description: "Every row needs a side, a size, a price and a time to be placed in a position.",
+          variant: "destructive",
+        });
+    } catch (err: any) {
+      toast({
+        title: "Couldn't read that screenshot",
+        description: String(err?.message ?? err).slice(0, 160),
+        variant: "destructive",
+      });
+    } finally {
+      setScanning(false);
+    }
+  }
+
   const parsed = useMemo(() => parseImport(text), [text]);
 
   // Several views of one order — the table plus its Take Profit / Stop Loss
@@ -181,38 +243,47 @@ export function ImportTradesDialog({
     setScanning(true);
     try {
       const dataUrl = await fileToDownscaledDataUrl(file);
-      const res = await parseScreenshot(dataUrl, "orders");
+      setLastShot(dataUrl);
 
       /*
-       * Nothing resting in it — so try reading it as an execution log instead.
+       * The execution log is read FIRST, because it is the commoner paste.
        *
-       * The two are asked for separately on purpose: "find the orders that
-       * could still open" and "transcribe every row that filled" pull in
-       * opposite directions, and a prompt told to do both does neither
-       * reliably. Chained rather than chosen, because a trader pasting their
-       * fills should not first have to tell the app which kind of screenshot
-       * it is looking at — it can see that for itself, and the second call
-       * only happens when the first found nothing to import.
+       * It used to be second, reached only when the resting-orders read came
+       * back empty — and it never was. Asked to ignore filled rows, that
+       * prompt read a Tradovate "Filled" tab as nine resting orders anyway:
+       * the rows have a symbol, a side, a quantity and a limit price, and
+       * nothing about them refuses to be an order. So the fallback stayed
+       * dark and a log of finished trades came out as positions about to
+       * open.
+       *
+       * Order alone would only move the failure, so the reader now returns a
+       * verdict on what it is looking at rather than leaving it to be
+       * inferred from whether any rows survived. Emptiness is a poor
+       * discriminator in both directions: a log whose rows were unreadable is
+       * still a log, and reaching for the other reader there answers a
+       * question nobody asked.
        */
-      if (!(res.orders ?? []).length) {
-        const log = await parseScreenshot(dataUrl, "fills");
-        if (log.fills?.length) {
-          setLogRows(
-            log.fills
-              .filter((f) => f.side && f.qty && f.price && f.time && f.symbol)
-              .map((f) => ({
-                symbol: f.symbol!,
-                side: f.side as "buy" | "sell",
-                kind: f.kind,
-                qty: f.qty!,
-                price: f.price!,
-                time: f.time!,
-                stopPrice: f.stopPrice,
-              })),
-          );
-          return;
+      if (modeRef.current !== "orders") {
+      const log = await parseScreenshot(dataUrl, "fills");
+      // Told which it is, the verdict is not consulted: the trader is looking
+      // at the screenshot and this is not.
+      if (log.isExecutionLog || modeRef.current === "log") {
+        const rows = readableFills(log.fills ?? []);
+        if (rows.length) {
+          setLogRows(rows);
+        } else {
+          toast({
+            title: "That looks like a filled-order log, but nothing was readable",
+            description: "Try a wider or sharper screenshot — every row needs its side, size, price and time.",
+            variant: "destructive",
+          });
         }
+        return;
       }
+      }
+
+      const res = await parseScreenshot(dataUrl, "orders");
+
       // A bracketed order comes back as its parent plus two exit legs; listing
       // the legs would offer to import the take profit as a trade of its own.
       const mapped: ImportCandidate[] = dropBracketLegs(
@@ -325,11 +396,38 @@ export function ImportTradesDialog({
               onClick={() => setLogRows(null)}
               data-testid="button-back-to-import"
             >
-              That was not an order log — go back
+              That was not an order log — read it as resting orders
             </Button>
           </div>
         ) : (
         <div className="space-y-4">
+          {/* What the next screenshot is, where the trader would rather say
+              than have it worked out. */}
+          <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+            <span className="text-muted-foreground">Read the screenshot as</span>
+            {(
+              [
+                ["auto", "whatever it is"],
+                ["log", "filled trades"],
+                ["orders", "resting orders"],
+              ] as const
+            ).map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setMode(id)}
+                className={`rounded-full border px-2 py-0.5 transition-colors ${
+                  mode === id
+                    ? "border-primary/60 bg-primary/10 text-foreground"
+                    : "border-border text-muted-foreground hover:border-primary/40"
+                }`}
+                data-testid={`button-import-mode-${id}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
           {/* Three ways in, because a screenshot arrives three ways: dropped,
               pasted with Ctrl+V, or picked through the file dialog. */}
           <label
@@ -553,6 +651,24 @@ export function ImportTradesDialog({
               Import {ready.length || ""} as pending
             </Button>
           </div>
+
+          {/* The escape hatch in the other direction. The verdict on what a
+              screenshot is will sometimes go the wrong way, and when it does
+              the trader can see it instantly — so the fix should be one click
+              and not a re-paste. */}
+          {lastShot && (
+            <Button
+              type="button"
+              variant="ghost"
+              className="w-full text-[11px]"
+              disabled={scanning}
+              onClick={rereadAsLog}
+              data-testid="button-read-as-log"
+            >
+              {scanning && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
+              These already filled — read them as completed trades
+            </Button>
+          )}
         </div>
         )}
       </DialogContent>
