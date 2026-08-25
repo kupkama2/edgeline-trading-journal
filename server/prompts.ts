@@ -263,14 +263,17 @@ For every filled row read:
 1. symbol — the contract as printed, e.g. "MNQU6", "MBTQ6", "ESZ5". Keep the month and year code.
 2. side — "buy" or "sell", from the Side column. Not from the colour.
 3. kind — the Type column verbatim: "Limit", "Stop", "Stop Loss", "Market", "Take Profit", "Trailing Stop".
-4. qty — the FILLED quantity. Use "Filled Qty" where there is one; fall back to "Qty" only when there is not. Never "Remaining Qty".
-5. price — the price it actually filled at: "Avg Fill Price". Only if that column is missing or blank, fall back to Limit Price, then Stop Price.
+4. qty — for a filled row, the FILLED quantity ("Filled Qty"), falling back to "Qty" only where there is no such column; never "Remaining Qty". For a row that did not fill, its "Qty".
+5. price — the price it actually filled at: "Avg Fill Price". null for a row that did not fill; do NOT substitute its limit or stop level here.
 6. time — "Update Time" (or "Fill Time" / "Time"), as "YYYY-MM-DDTHH:mm:ss" exactly as printed, with NO timezone conversion. Keep the seconds.
 7. stopPrice — the Stop Price column where the row has one, else null. This is the trigger level, not the fill.
+8. limitPrice — the Limit Price column where the row has one, else null.
+9. status — "filled", "cancelled", "working" or "other", as above.
 
 Rules:
-- ONLY rows that filled. If the screenshot shows a status column, skip anything reading Cancelled, Rejected, Working, Inactive, Expired or Pending — an order that never filled did not happen, and including it makes the position count wrong for every row after it.
-- A row with Filled Qty 0 did not fill. Skip it.
+- Return EVERY row, filled or not, and say which each one is in status. The cancelled rows matter as much as the filled ones: a "Take Profit" or "Stop Loss" that was placed and then cancelled records the LEVEL the trader set, which nothing else in the log contains. What each row means is worked out afterwards; your job is to transcribe it.
+- status is "filled" only when the row actually traded — a non-zero Filled Qty, or a status column reading Filled/Executed. Use "cancelled" for Cancelled, Rejected or Expired, "working" for Working, Open, Pending or Inactive, "other" if you cannot tell.
+- For a row that did not fill there is no Avg Fill Price. Leave price null and put its resting level in limitPrice (from the Limit Price column) or stopPrice (from the Stop Price column) — a Take Profit keeps its level in Limit Price, a Stop Loss in Stop Price.
 - Row order is whatever the table is sorted by and often is NOT time order. Return the rows as printed; the times decide the sequence later.
 - Do not merge rows. Two fills on the same symbol at the same second are two rows.
 - Numbers must be plain JSON numbers: no thousands separators, no currency symbols.
@@ -287,6 +290,6 @@ FIRST, decide what you are looking at, and say so in isExecutionLog. This is the
   The instrument names are evidence too. Dated futures contracts — two to four letters followed by a month letter and a year digit, such as MNQU6, MBTQ6, ESZ5, NQH6 — come from a futures broker (Tradovate, NinjaTrader, TradingView, Rithmic), never from Binance. A table of those with an Order ID column and filled quantities is an execution log, whatever else you think of it. Binance instruments look like BTCUSDT or ETHUSDC and often carry a "Perp" badge.
 
 Output ONLY this JSON object, no prose and no markdown fences:
-{"isExecutionLog": boolean, "fills": [{"symbol": string|null, "side": "buy"|"sell"|null, "kind": string|null, "qty": number|null, "price": number|null, "time": string|null, "stopPrice": number|null}]}
+{"isExecutionLog": boolean, "fills": [{"symbol": string|null, "side": "buy"|"sell"|null, "kind": string|null, "qty": number|null, "price": number|null, "time": string|null, "stopPrice": number|null, "limitPrice": number|null, "status": "filled"|"cancelled"|"working"|"other"}]}
 
 If the image is not an execution log, return {"isExecutionLog": false, "fills": []}.`;

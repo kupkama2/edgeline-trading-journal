@@ -25,18 +25,39 @@
  *   every R the trade ever contributes — from a number that was never the plan.
  */
 
-/** One filled row, as the log printed it. */
+/** One row of the log, filled or not. */
 export interface LoggedFill {
   symbol: string;
   side: "buy" | "sell";
-  /** The order type as printed: "limit", "stop", "stopLoss", "market", … */
+  /** The order type as printed: "Limit", "Stop", "Stop Loss", "Take Profit", … */
   kind: string | null;
   qty: number;
+  /** The average fill price. Zero or absent on a row that never filled. */
   price: number;
   /** Naive local time — no timezone, the way the log shows it. */
   time: string;
   /** A stop order's trigger level, where the log prints one. */
   stopPrice?: number | null;
+  /** A resting order's limit level — where a take-profit leg keeps its price. */
+  limitPrice?: number | null;
+  /** Absent means filled: the older shape only ever carried fills. */
+  status?: "filled" | "cancelled" | "working" | "other";
+}
+
+/**
+ * A bracket leg the broker had live during a trade.
+ *
+ * These are the rows a position walk must ignore — an order that never traded
+ * moved nothing — and they are the only rows that carry the PLAN. A take
+ * profit that was placed and then cancelled when the position closed is the
+ * target as it stood; no amount of fill data contains it.
+ */
+export interface Bracket {
+  kind: "stop" | "target";
+  level: number;
+  time: string;
+  /** True for the stop that actually fired — the one that is also the exit. */
+  filled: boolean;
 }
 
 /** A leg of a reconstructed trade beyond its first fill. */
@@ -61,10 +82,22 @@ export interface ReconstructedTrade {
   exitPrice: number | null;
   exitTime: string | null;
   /**
-   * The planned stop, but only where a fired stop order proves it. Null is the
-   * common answer and the honest one.
+   * The planned stop, but only where the log PROVES it was the original.
+   *
+   * That proof is narrow on purpose: the trade ended because a stop fired, and
+   * that stop sat on the losing side of the entry. A stop in profit is a trail
+   * — it was moved, so it is evidence of management and not of the plan — and
+   * a stop that was cancelled rather than hit was replaced by something this
+   * screenshot may not even show. Null is the common answer and the honest one.
    */
   initialStop: number | null;
+  /**
+   * The planned target, under the same proof: only where the trade was stopped
+   * out, so the bracket that died with it was still the one first set.
+   */
+  planTarget: number | null;
+  /** Every bracket level seen during the trade, in time order. Shown, never applied. */
+  brackets: Bracket[];
   exitReason: "stop" | null;
   /** Never came back to flat in this log, so it is still running. */
   stillOpen: boolean;
@@ -115,6 +148,10 @@ export function tradesFromFills(fills: LoggedFill[]): Reconstruction {
 
   const bySymbol = new Map<string, LoggedFill[]>();
   for (const f of fills) {
+    // An order that never traded moved nothing. It must stay out of the walk
+    // or every position count after it is wrong — but it is not junk either,
+    // and attachBrackets reads it for the plan.
+    if (f.status && f.status !== "filled") continue;
     if (!f.symbol || !(f.qty > 0) || !(f.price > 0)) {
       problems.push("A row was missing its symbol, size or price and was left out.");
       continue;
@@ -161,12 +198,13 @@ export function tradesFromFills(fills: LoggedFill[]): Reconstruction {
        */
       let initialStop: number | null = null;
       let exitReason: "stop" | null = null;
-      for (const c of closes) {
-        if (!isStop(c.fill.kind)) continue;
-        const level = c.fill.stopPrice ?? c.price;
+      if (last && isStop(last.fill.kind)) {
+        const level = last.fill.stopPrice ?? last.price;
         const losing = open.direction === "long" ? level < entryPrice : level > entryPrice;
-        if (losing) initialStop = level;
-        if (c === last) exitReason = "stop";
+        if (losing) {
+          initialStop = level;
+          exitReason = "stop";
+        }
       }
 
       trades.push({
@@ -180,7 +218,9 @@ export function tradesFromFills(fills: LoggedFill[]): Reconstruction {
         exitPrice: last?.price ?? null,
         exitTime: last?.time ?? null,
         initialStop,
-        exitReason: initialStop != null ? exitReason : null,
+        planTarget: null,
+        brackets: [],
+        exitReason,
         stillOpen: pos !== 0,
       });
       open = null;
@@ -252,4 +292,124 @@ export function avgExit(t: ReconstructedTrade): number | null {
     legs.push({ price: t.exitPrice, size: Math.max(total - closed, 0), time: t.exitTime ?? "" });
   }
   return legs.length ? avg(legs) : null;
+}
+
+/** Which leg of a bracket is this row? */
+function bracketKind(kind: string | null): "stop" | "target" | null {
+  if (!kind) return null;
+  if (/take.?profit|profit.?target/i.test(kind)) return "target";
+  if (/stop/i.test(kind)) return "stop";
+  // A bare "Limit" that never filled could be anything — a resting entry, a
+  // target, an order pulled before it mattered. Guessing would attach a plan
+  // level to a trade off an order that was never part of it.
+  return null;
+}
+
+/** Seconds of slack after the exit, for the broker cancelling its own bracket. */
+const AUTOCANCEL_GRACE = 120;
+
+const asSeconds = (t: string) => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})$/.exec(t);
+  if (!m) return null;
+  const [, y, mo, d, h, mi, se] = m.map(Number) as unknown as number[];
+  return Date.UTC(y, mo - 1, d, h, mi, se) / 1000;
+};
+
+/**
+ * Attach the bracket legs to the trades they were live during.
+ *
+ * This is the half of the log a position walk has to throw away and the only
+ * half that carries the PLAN: a take profit placed and then cancelled when
+ * the position closed is the target as it stood, and no amount of fill data
+ * contains it.
+ *
+ * What it will NOT do is call any of that the original plan. A level found
+ * here is the level as it was at that moment, which is a different claim: a
+ * stop in profit was moved, a target cancelled mid-trade was replaced. Both
+ * are evidence about how the trade was MANAGED, and writing either into the
+ * plan would put a number the trader never agreed to underneath every R the
+ * trade produces.
+ *
+ * The one case where the log does prove the plan is the trade that ran into
+ * its stop: nothing was moved, the bracket died with the position, and what
+ * was live at the end is what was set at the start. Only there are the levels
+ * offered as the plan; everywhere else they are shown and the trader types
+ * what they actually intended.
+ */
+export function attachBrackets(
+  trades: ReconstructedTrade[],
+  rows: LoggedFill[],
+): ReconstructedTrade[] {
+  const legs = rows
+    .filter((r) => r.status && r.status !== "filled")
+    .map((r) => {
+      const kind = bracketKind(r.kind);
+      const level = kind === "stop" ? (r.stopPrice ?? r.limitPrice) : (r.limitPrice ?? r.stopPrice);
+      const at = logTime(r.time);
+      return kind && level && level > 0 && at && r.symbol
+        ? { symbol: r.symbol, side: r.side, kind, level, time: at }
+        : null;
+    })
+    .filter((b): b is NonNullable<typeof b> => b !== null);
+
+  return trades.map((t, i) => {
+    const from = asSeconds(t.entryTime);
+    const exit = t.exitTime ? asSeconds(t.exitTime) : null;
+    /*
+     * The window runs from the entry to a little past the exit, because the
+     * broker cancels its own bracket a moment AFTER the position flattens —
+     * nine seconds, in the log that prompted this. It is clamped to the next
+     * trade on the same symbol so the grace can never reach into one that had
+     * already started.
+     */
+    const nextEntry = trades
+      .slice(i + 1)
+      .filter((o) => o.symbol === t.symbol)
+      .map((o) => asSeconds(o.entryTime))
+      .find((n) => n != null);
+    let until = exit != null ? exit + AUTOCANCEL_GRACE : Infinity;
+    if (nextEntry != null) until = Math.min(until, nextEntry);
+
+    const mine = legs
+      .filter((b) => {
+        if (b.symbol !== t.symbol) return false;
+        // A bracket closes the position, so it sits on the opposite side to it.
+        if ((t.direction === "long") !== (b.side === "sell")) return false;
+        const at = asSeconds(b.time);
+        return at != null && from != null && at >= from && at <= until;
+      })
+      .sort((a, b) => (a.time < b.time ? -1 : 1))
+      .map((b) => ({ kind: b.kind, level: b.level, time: b.time, filled: false }));
+
+    // The stop that fired is a bracket too, and the most informative one.
+    const brackets: Bracket[] =
+      t.initialStop != null && t.exitTime
+        ? [...mine, { kind: "stop" as const, level: t.initialStop, time: t.exitTime, filled: true }].sort(
+            (a, b) => (a.time < b.time ? -1 : 1),
+          )
+        : mine;
+
+    /*
+     * The target, under the same proof as the stop and one condition more.
+     *
+     * Stopped out says the stop was never moved. It says nothing about the
+     * target — a trader can leave the risk alone and walk the target in all
+     * afternoon — and the log shows that plainly: a moved target leaves TWO
+     * cancelled legs in the window. So one is the plan, and more than one is
+     * a history of what the plan became, which is exactly the thing this
+     * refuses to write into the plan.
+     */
+    const winning = (level: number) =>
+      t.direction === "long" ? level > t.entryPrice : level < t.entryPrice;
+    const targets = mine.filter((b) => b.kind === "target" && winning(b.level));
+    const planTarget = t.exitReason === "stop" && targets.length === 1 ? targets[0].level : null;
+
+    return { ...t, brackets, planTarget };
+  });
+}
+
+/** The whole log: the fills walked into trades, the rest read as their plan. */
+export function tradesFromLog(rows: LoggedFill[]): Reconstruction {
+  const walked = tradesFromFills(rows);
+  return { ...walked, trades: attachBrackets(walked.trades, rows) };
 }

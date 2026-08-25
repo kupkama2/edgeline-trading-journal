@@ -9,7 +9,7 @@ import { num } from "@/components/trade-shared";
 import {
   avgEntry,
   avgExit,
-  tradesFromFills,
+  tradesFromLog,
   type LoggedFill,
   type ReconstructedTrade,
 } from "@shared/order-log";
@@ -35,7 +35,7 @@ export function FillLogReview({
   fills: LoggedFill[];
   onDone: () => void;
 }) {
-  const { trades, problems } = useMemo(() => tradesFromFills(fills), [fills]);
+  const { trades, problems } = useMemo(() => tradesFromLog(fills), [fills]);
   const [skip, setSkip] = useState<Record<number, boolean>>({});
   /*
    * The plan, which the log cannot know.
@@ -65,7 +65,7 @@ export function FillLogReview({
 
   const levels = (i: number, t: ReconstructedTrade) => ({
     stop: plan[i]?.stop ?? (t.initialStop != null ? String(t.initialStop) : ""),
-    target: plan[i]?.target ?? "",
+    target: plan[i]?.target ?? (t.planTarget != null ? String(t.planTarget) : ""),
   });
   const numOrNull = (v: string) => (v.trim() === "" || !isFinite(Number(v)) ? null : Number(v));
   const ready = (i: number, t: ReconstructedTrade) => {
@@ -270,11 +270,31 @@ export function FillLogReview({
                 {!ready(i, t) && (
                   <span className="text-amber-500">
                     {t.initialStop == null
-                      ? "the log has neither — without them there is no R"
+                      ? "the log cannot prove these — type what you actually set"
                       : "the log never has the target"}
                   </span>
                 )}
               </div>
+            )}
+
+            {/* What the broker had live, shown but not claimed.
+                A level here is the level as it stood at that moment, which is
+                a different thing from the plan: a stop in profit was moved, a
+                target cancelled mid-trade was replaced by one this screenshot
+                may never show. Both say how the trade was MANAGED. Only the
+                trade that ran into its stop proves what was set at the start,
+                and that one arrives already filled in above. */}
+            {t.brackets.length > 0 && (
+              <p className="mt-1 text-[10px] text-muted-foreground" data-testid={`fill-brackets-${i}`}>
+                {t.exitReason === "stop" ? "Its bracket, still untouched when it stopped out: " : "Orders the broker held during it: "}
+                {t.brackets
+                  .map(
+                    (b) =>
+                      `${b.kind === "stop" ? "stop" : "target"} ${num(b.level)}${b.filled ? " (hit)" : ""}`,
+                  )
+                  .join(" · ")}
+                {t.exitReason !== "stop" && " — moved during the trade, so not the plan."}
+              </p>
             )}
           </div>
 

@@ -23,6 +23,7 @@ import {
 import { fileToDownscaledDataUrl, parseScreenshot, useImportTrades } from "@/lib/data";
 import { FillLogReview } from "@/components/import-fills";
 import type { LoggedFill } from "@shared/order-log";
+import type { FillRowParseResult } from "@shared/schema";
 import { useStyleFilter } from "@/lib/style-filter";
 
 /**
@@ -55,17 +56,27 @@ const SOURCES: { id: Source; title: string; detail: string }[] = [
 ];
 
 /** The log rows complete enough to place in a position walk. */
-function readableFills(rows: { symbol: string | null; side: string | null; qty: number | null; price: number | null; time: string | null; kind: string | null; stopPrice: number | null }[]): LoggedFill[] {
+function readableFills(rows: FillRowParseResult[]): LoggedFill[] {
   return rows
-    .filter((f) => f.symbol && (f.side === "buy" || f.side === "sell") && f.qty && f.price && f.time)
+    .filter((f) => {
+      if (!f.symbol || !f.time || !f.qty) return false;
+      if (f.side !== "buy" && f.side !== "sell") return false;
+      // A filled row needs the price it traded at; an unfilled one is kept for
+      // its LEVEL, which is the only record of the plan the trader set.
+      return f.status === "filled" || !f.status
+        ? !!f.price
+        : f.limitPrice != null || f.stopPrice != null;
+    })
     .map((f) => ({
       symbol: f.symbol!,
       side: f.side as "buy" | "sell",
       kind: f.kind,
       qty: f.qty!,
-      price: f.price!,
+      price: f.price ?? 0,
       time: f.time!,
       stopPrice: f.stopPrice,
+      limitPrice: f.limitPrice,
+      status: f.status ?? "filled",
     }));
 }
 
