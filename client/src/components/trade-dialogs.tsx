@@ -40,6 +40,7 @@ import { parseExtraTargets, parsePlaybook, type TradeWithTags } from "@shared/sc
 import { type CloseCard, type CloseFill, closeFromCard, readHeadline, saysAnythingAboutClose } from "@shared/close-card";
 import { LevelLabel, LevelLadder, type LevelKind } from "@/components/levels";
 import { ClipboardList, Layers, NotebookPen } from "lucide-react";
+import { AverageCloseSolver } from "@/components/average-close";
 import { useCloseCardPaste } from "@/lib/close-paste";
 import { computeMetrics, fmtFees, fmtMoney, fmtR, EXIT_REASON_LABELS } from "@shared/metrics";
 import { Dropzone, EXIT_REASONS, FormSection, RationaleTags, TimeField, localNow, num, parseTags, toIso, toLocalInput } from "@/components/trade-shared";
@@ -317,20 +318,55 @@ export function TradeEditor({
     if (!trade) return;
     setAddingPartials(true);
     try {
-      for (const f of fills.slice(0, -1)) {
-        if (f.price == null || !(f.size ?? 0)) continue;
+      /*
+       * The table's sizes are not always in the trade's unit — Binance prints
+       * fills in USDT against a position that may be kept in coins — and the
+       * check that said so was only ever shown, never applied. Writing the
+       * raw figure logged a position off by a factor of the price, which the
+       * ledger then reported with a straight face.
+       */
+      const note = cardRead?.verdict.sizes?.unitNote ?? null;
+      const inTradeUnit = (f: CloseFill) =>
+        note === "the table is in quote, the trade in units"
+          ? f.size! / f.price!
+          : note === "the table is in units, the trade in quote"
+            ? f.size! * f.price!
+            : f.size!;
+
+      /*
+       * All but the last: the trade's own exit price carries the final slice,
+       * which is the convention the ledger settles on everywhere.
+       */
+      const usable = fills.filter((f) => f.price != null && (f.size ?? 0) > 0);
+      for (const f of usable.slice(0, -1)) {
         await addFill.mutateAsync({
           tradeId: trade.id,
           kind: "partial",
-          price: f.price,
-          size: f.size!,
+          price: f.price!,
+          size: inTradeUnit(f),
           time: f.time ? toIso(f.time) : undefined,
           note: "from a pasted fill table",
         });
       }
+      /*
+       * The trade's own exit becomes the LAST clip, because that is what it
+       * now is: the earlier clips are fills, and whatever size they leave came
+       * off at the final price. Leaving the blended average there instead —
+       * which is what this did, while the message below claimed otherwise —
+       * prices the residual at an average that already includes the clips just
+       * moved out of it, and the trade reports a total it never made.
+       */
+      const last = usable[usable.length - 1];
+      if (last?.price != null) {
+        setF((p) => ({
+          ...p,
+          exitPrice: String(last.price),
+          ...(last.time ? { exitTime: last.time } : {}),
+        }));
+      }
       toast({
         title: "Logged as separate exits",
-        description: `${Math.max(fills.length - 1, 0)} ${fills.length === 2 ? "partial" : "partials"} added. The exit above is the last one, and the R now follows the blend.`,
+        description: `${Math.max(usable.length - 1, 0)} ${usable.length === 2 ? "partial" : "partials"} added. The exit above is the last one, and the R now follows the blend.`,
       });
       setCardRead((r) =>
         r ? { ...r, verdict: { ...r.verdict, fills: [], partials: [] } } : r,
@@ -366,6 +402,20 @@ export function TradeEditor({
    * a chart carries none of a close's fields, so it is attached and nothing is
    * said (see applyCard), while a fills table announces itself.
    */
+  /*
+   * What the offer actually logs.
+   *
+   * Where the table holds several clips, the clips — one exit per decision,
+   * each at the price it got. Offering a row per PRINT there would turn three
+   * partials taken through market orders into fifteen exits and invent a plan
+   * nobody had. Where every print shares one instant there are no clips to
+   * find, so the raw rows are all there is to offer.
+   */
+  const offeredExits =
+    cardRead && cardRead.verdict.partials.length > 1
+      ? cardRead.verdict.partials
+      : (cardRead?.verdict.fills ?? []);
+
   const { busy: readingCard } = useCloseCardPaste({
     trade,
     enabled: !!trade,
@@ -711,7 +761,7 @@ export function TradeEditor({
                     variant="outline"
                     className="h-7 gap-1.5 px-2 text-[11px]"
                     disabled={addingPartials}
-                    onClick={() => logPartials(cardRead.verdict.fills)}
+                    onClick={() => logPartials(offeredExits)}
                     data-testid="button-log-pasted-partials"
                   >
                     {addingPartials ? (
@@ -719,7 +769,7 @@ export function TradeEditor({
                     ) : (
                       <Minus className="h-3 w-3 text-emerald-500" />
                     )}
-                    Keep all {cardRead.verdict.fills.length} as separate exits
+                    Keep all {offeredExits.length} as separate exits
                   </Button>
                 </div>
                 {cardRead.verdict.sizes && (
@@ -1051,6 +1101,10 @@ export function TradeEditor({
                 </p>
               )}
             </div>
+
+            {/* Sits directly above the exit price, because that is the field
+                it writes and the one whose meaning it is disambiguating. */}
+            {trade && <AverageCloseSolver trade={trade} onUse={(v) => setF((p) => ({ ...p, exitPrice: v }))} />}
 
             {/* The same questions the entry card asks when logging a
                 completed trade — one component, so an open trade is never

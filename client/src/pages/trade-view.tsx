@@ -696,6 +696,7 @@ function TradeBody({
                 {trade.status === "open" && ` · ${num(led.openQty)} still on`} ·{" "}
                 {fmtMoney(led.realizedPnL)} banked before the close
               </p>
+
             </>
           )}
 
