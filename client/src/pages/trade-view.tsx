@@ -27,6 +27,7 @@ import {
   ArrowUpRight,
   Ban,
   ClipboardList,
+  Loader2,
   Minus,
   Pencil,
   Plus,
@@ -52,6 +53,8 @@ const TradeChart = lazy(() =>
   import("@/components/trade-chart").then((m) => ({ default: m.TradeChart })),
 );
 import { useCloseCardPaste } from "@/lib/close-paste";
+import { useToast } from "@/hooks/use-toast";
+import { saysAnythingAboutClose } from "@shared/close-card";
 import type { CloseCard } from "@shared/close-card";
 import { RationaleTags, num, parseTags } from "@/components/trade-shared";
 import { TradeEditor } from "@/components/trade-dialogs";
@@ -122,14 +125,37 @@ export default function TradeView({ under = "/" }: { under?: string }) {
    * filled in rather than making you find the button first — whether you
    * clicked View or Edit should not change what a paste does.
    */
+  const { toast } = useToast();
   const [pastedCard, setPastedCard] = useState<CloseCard | null>(null);
-  useCloseCardPaste({
+  const { busy: readingCard } = useCloseCardPaste({
     trade,
-    enabled: !editing && !!trade && (trade.status === "open" || trade.status === "pending"),
+    // Any trade, closed ones included: the exit is most often corrected after
+    // the fact, and a screenshot of the fills is how you find out you logged
+    // one exit for five. What the picture turns out to be decides what
+    // happens next, not the trade's state.
+    enabled: !editing && !!trade,
     onCard: (c) => {
+      // A chart is the other thing Ctrl-V means here, and the gallery's own
+      // listener has already kept it. Dragging the editor open over an
+      // attachment would make the commoner gesture the more annoying one.
+      if (!saysAnythingAboutClose(c)) {
+        if (trade?.status !== "closed") {
+          toast({
+            title: "No exit on that screenshot",
+            description:
+              "It was attached to the trade, but there was nothing in it to close with — a fills table or a position card is what this reads.",
+          });
+        }
+        return;
+      }
       setPastedCard(c);
       setEditing(true);
     },
+    // Without this a failed read was silent, which is indistinguishable from
+    // a paste that was never noticed — and that is exactly what it looked
+    // like from the outside.
+    onError: (message) =>
+      toast({ title: "Couldn't read that screenshot", description: message, variant: "destructive" }),
   });
 
   // Dismissing REPLACES the trade URL with the page underneath, so the back
@@ -192,6 +218,19 @@ export default function TradeView({ under = "/" }: { under?: string }) {
           <DialogTitle className="sr-only">
             {trade ? `${trade.symbol} trade` : "Trade"}
           </DialogTitle>
+
+          {/* A read takes a few seconds against a vision model, and for those
+              seconds an unacknowledged paste is indistinguishable from one
+              that was never noticed. Saying so is most of the fix. */}
+          {readingCard && (
+            <div
+              className="flex items-center gap-2 rounded-md border border-primary/40 bg-primary/5 px-3 py-2 text-[11px]"
+              data-testid="text-reading-card"
+            >
+              <Loader2 className="h-3 w-3 animate-spin text-primary" />
+              Reading your screenshot…
+            </div>
+          )}
 
           {/* Creating has an address too, so "log a trade" is a link rather
               than a state only the journal can reach. Same window as viewing
