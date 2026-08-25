@@ -258,7 +258,16 @@ export async function readCandles(
 ): Promise<CandleRead> {
   try {
     const candles = await liveCandles(pair, interval, startMs, endMs, maxBars);
-    return { candles, coveredTo: endMs, source: "api" };
+    /*
+     * The API answers up to the moment it is asked — unless the bar cap cut
+     * the read short, in which case claiming the whole window would hand a
+     * caller a maximum excursion measured over a stretch it never saw. The
+     * intervals are chosen so this does not happen; saying so honestly costs
+     * one comparison and removes the trap if that ever stops being true.
+     */
+    const truncated = candles.length >= maxBars;
+    const last = candles.length ? candles[candles.length - 1].t : startMs;
+    return { candles, coveredTo: truncated ? last : endMs, source: "api" };
   } catch (err) {
     const read = await archiveCandles(pair, interval, startMs, endMs);
     if (read.candles.length === 0) {

@@ -105,6 +105,23 @@ describe("what may be written onto the trade", () => {
     ).toEqual([]);
   });
 
+  it("does not wave a card through on a shared first letter", () => {
+    /*
+     * W, S and T are all real coins, and a prefix match calls WIFUSDT a W
+     * trade — exactly the tickers where a mix-up is easiest to make and
+     * hardest to spot afterwards. The card's quote is stripped and the bases
+     * are compared whole.
+     */
+    const wTrade = { ...trade, symbol: "W" };
+    expect(
+      closeFromCard(normalizeCloseCard({ ...binance, symbol: "WIFUSDT" }), wTrade).warnings.join(" "),
+    ).toMatch(/WIFUSDT/);
+    // And the same coin, quoted, still passes without a word.
+    expect(
+      closeFromCard(normalizeCloseCard({ ...binance, symbol: "WUSDT" }), wTrade).warnings,
+    ).toEqual([]);
+  });
+
   it("says so when the card is the other side of the market", () => {
     const v = closeFromCard(normalizeCloseCard({ ...binance, direction: "Cross Long" }), {
       ...trade,

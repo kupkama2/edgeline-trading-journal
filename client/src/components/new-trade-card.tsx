@@ -590,6 +590,20 @@ export function NewTradeCard({
     setParsed(false);
   });
 
+  /**
+   * An empty box is not a price of zero.
+   *
+   * Number("") is 0, and a ladder handed a zero entry draws a plan that does
+   * not exist — the whole graphic collapses onto one end of the axis the
+   * moment a field is cleared, which is exactly when it is being edited.
+   */
+  const priceOrNull = (v: unknown) => {
+    const s = String(v ?? "").trim();
+    if (!s) return null;
+    const n = Number(s);
+    return Number.isFinite(n) ? n : null;
+  };
+
   /** A price field that says what KIND of price it is, in colour and mark. */
   const levelField = (name: keyof SetupForm, kind: LevelKind, label?: string) => (
     <FormField
@@ -1176,10 +1190,10 @@ export function NewTradeCard({
                 it rather than in the review afterwards. */}
             <div className="col-span-2">
               <LevelLadder
-                entry={Number(v.entryPrice)}
-                stop={Number(v.initialStop)}
-                target={Number(v.initialTarget)}
-                extraTps={extraTps.map((t) => (t.trim() === "" ? null : Number(t)))}
+                entry={priceOrNull(v.entryPrice)}
+                stop={priceOrNull(v.initialStop)}
+                target={priceOrNull(v.initialTarget)}
+                extraTps={extraTps.map((t) => priceOrNull(t))}
               />
             </div>
 

@@ -15,6 +15,10 @@ import type { TradeWithTags } from "@shared/schema";
  * Only while the trade is live. Pasting on a closed trade is how you attach a
  * chart, and hijacking that to re-close an already-closed trade would take a
  * working gesture away to guess at an intention nobody had.
+ *
+ * The gallery's own paste listener still runs alongside this one, so the card
+ * is ALSO attached to the trade. That is deliberate: the receipt is worth
+ * keeping, and it is the same image either way.
  */
 export function useCloseCardPaste({
   trade,

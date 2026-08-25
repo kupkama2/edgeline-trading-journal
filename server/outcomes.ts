@@ -294,11 +294,24 @@ async function readTrade(
    * the whole window. Withheld means blank, and blank is asked again.
    */
   const grace = barSpanMs(coarse);
-  if (exitMs != null && read.coveredTo < exitMs) {
+  /*
+   * A position that is still running has no excursion to record: whatever the
+   * best price so far is, tomorrow can beat it, and these fields are filled in
+   * only where they are blank — so a provisional number written today would be
+   * frozen as the trade's final answer.
+   *
+   * The list this walks is already filtered to closed trades, so this is the
+   * second lock on the same door. It is worth having: the failure it prevents
+   * is silent and permanent, and the filter that currently prevents it lives
+   * in a different file for a different reason.
+   */
+  const running = t.status !== "closed";
+  const heldTo = exitMs ?? to - grace;
+  if (running || read.coveredTo < heldTo) {
     path.mae = null;
     path.mfe = null;
   }
-  if (read.coveredTo < to - grace) {
+  if (running || read.coveredTo < to - grace) {
     path.postExitPeak = null;
     path.postExitAdverse = null;
   }

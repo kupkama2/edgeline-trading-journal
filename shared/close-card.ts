@@ -111,6 +111,9 @@ export function normalizeCloseCard(raw: any): CloseCard {
   };
 }
 
+/** Longest first, so USDT is peeled before USD. */
+const QUOTES = ["FDUSD", "BUSD", "TUSD", "USDT", "USDC", "USD"];
+
 export interface CardVerdict {
   /** Fields safe to write straight onto the trade. */
   apply: {
@@ -144,13 +147,23 @@ export function closeFromCard(
   const warnings: string[] = [];
   const apply: CardVerdict["apply"] = {};
 
-  // The pair, allowing for the card printing BTCUSDT where the journal keeps
-  // BTC — the same instrument written two ways is not a disagreement.
+  /*
+   * The pair, allowing for the card printing BTCUSDT where the journal keeps
+   * BTC — the same instrument written two ways is not a disagreement.
+   *
+   * Matched by stripping a QUOTE, not by prefix. W, S and T are all real
+   * coins, and "does WIFUSDT start with W" is true — which would have waved
+   * through a card for an entirely different instrument on exactly the
+   * tickers where a mix-up is easiest.
+   */
   if (card.symbol) {
     const onCard = card.symbol.replace(/[^A-Z0-9]/g, "");
-    const mine = trade.symbol.toUpperCase();
-    const same = onCard === mine || onCard.startsWith(mine) || mine.startsWith(onCard);
-    if (!same) warnings.push(`The card is ${card.symbol}, this trade is ${trade.symbol}.`);
+    const mine = trade.symbol.toUpperCase().replace(/[^A-Z0-9]/g, "");
+    const base = QUOTES.reduce(
+      (s, q) => (s.length > q.length && s.endsWith(q) ? s.slice(0, -q.length) : s),
+      onCard,
+    );
+    if (base !== mine) warnings.push(`The card is ${card.symbol}, this trade is ${trade.symbol}.`);
   }
 
   if (card.direction && card.direction !== trade.direction) {

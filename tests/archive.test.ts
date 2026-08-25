@@ -231,6 +231,41 @@ describe.skipIf(!DB)("settling a perp out of the file archive", () => {
     expect(after.mae).toBeNull();
   });
 
+  it("does not touch a position that is still running", async () => {
+    /*
+     * The excursion fields are filled in only where they are BLANK, so a
+     * number written today is the trade's final answer forever — and the best
+     * price of an open position can be beaten tomorrow. The filter upstream
+     * already excludes anything not closed; this pins that it stays that way,
+     * because the failure would be silent and permanent.
+     */
+    const t0 = Math.floor((Date.now() - 3 * DAY) / DAY) * DAY;
+    days = new Map([
+      [ymd(t0), flatDay(t0, 100, { hour: 4, high: 131, low: 95 })],
+      [ymd(t0 + DAY), flatDay(t0 + DAY, 100)],
+      [ymd(t0 + 2 * DAY), flatDay(t0 + 2 * DAY, 100)],
+    ]);
+
+    const t = await store.createTrade({
+      symbol: "LTC",
+      direction: "long",
+      size: 1,
+      sizeUnit: "base",
+      entryPrice: 100,
+      initialStop: 90,
+      initialTarget: 130,
+      entryTime: new Date(t0 + HOUR).toISOString(),
+      status: "open",
+    } as any);
+
+    await checkOutcomes(userId);
+    const after = await store.getTrade(t.id);
+    expect(after.mae).toBeNull();
+    expect(after.mfe).toBeNull();
+    expect(after.noManagementOutcome).toBeNull();
+    expect(after.outcomeCheckedAt).toBeNull();
+  });
+
   it("fills the excursion once the hold is covered", async () => {
     // Same shape, but every day of the hold is published now.
     const t0 = Math.floor((Date.now() - 3 * DAY) / DAY) * DAY;

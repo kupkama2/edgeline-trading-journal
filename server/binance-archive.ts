@@ -39,13 +39,19 @@ const ARCHIVE_BASE = (process.env.BINANCE_ARCHIVE_BASE || "https://data.binance.
 /**
  * How many files one window may cost.
  *
- * Whole months are taken as single files where they are complete, so this is
- * generous in practice: a month-long window is one or two requests, and a
- * fortnight is a fortnight of small ones. The cap exists so a pathological
- * window cannot turn one trade into a hundred requests — and thanks to the
- * prefix rule, stopping early is safe rather than wrong.
+ * Sized to cover the longest window the resolver ever asks for — entry to
+ * thirty days past the exit — because a cap SHORTER than that is not a
+ * safeguard, it is a trade that can never settle: the scan would stop at the
+ * same day on every run, and a level reached after it would stay unread
+ * forever while the trade was re-checked every hour.
+ *
+ * Whole completed months collapse to one file each, so this is only ever
+ * reached by a window ending in the current month, and the files at these
+ * intervals are a few hundred bytes. The cap remains for the pathological
+ * case, and thanks to the prefix rule stopping early is late rather than
+ * wrong.
  */
-const MAX_FILES = 16;
+const MAX_FILES = 35;
 
 /** Parsed files, kept for the run. Overlapping trades share days constantly. */
 const cache = new Map<string, Candle[]>();
