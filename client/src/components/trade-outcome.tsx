@@ -31,6 +31,8 @@ import { GradePicker, type GradeState } from "@/components/grade-picker";
 import { HighlightPicker } from "@/components/trade-pickers";
 import type { MistakeTag } from "@shared/schema";
 
+import { LevelLabel } from "@/components/levels";
+
 const LABEL = "text-[10px] uppercase tracking-wider text-muted-foreground";
 
 export interface OutcomeFieldsProps {
@@ -196,7 +198,8 @@ export function TradeOutcomeFields(p: OutcomeFieldsProps) {
     <div className="space-y-3" data-testid={`section-outcome-${p.testPrefix}`}>
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-1">
-          <label className={LABEL}>Exit price</label>
+          {/* The fourth decision, marked like the other three. */}
+          <LevelLabel kind="exit" text="Exit price" />
           <Input
             type="number"
             step="any"

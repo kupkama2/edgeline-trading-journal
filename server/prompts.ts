@@ -169,3 +169,47 @@ Comment: "{{TEXT}}"
 
 Respond with STRICT JSON only, no prose, no markdown fences:
 {"tags": string[]}`;
+
+
+/**
+ * A broker's closed-position card — the summary strip an exchange shows for a
+ * position that has finished, not a chart.
+ *
+ * Different question from outcomePrompt entirely. That one reads a price path
+ * off a chart and infers what would have happened; this reads printed numbers
+ * off a receipt. The values are stated, so the instruction is to transcribe
+ * rather than estimate, and to return null instead of the nearest plausible
+ * figure when a field is not on the card.
+ */
+export function closeCardPrompt(ctx: {
+  symbol?: string;
+  direction?: string;
+  entryPrice?: number;
+}) {
+  return `You are reading a screenshot of a CLOSED POSITION summary from a crypto exchange (Binance Futures, Bybit, OKX or similar). It is a card or row of printed labels and numbers, not a chart. Transcribe what is printed. Do not estimate, and do not infer anything that is not written on the card.
+
+For context, the trade being closed in the journal is:
+- symbol: ${ctx.symbol ?? "unknown"}
+- direction: ${ctx.direction ?? "unknown"}
+- entry price: ${ctx.entryPrice ?? "unknown"}
+If the card is plainly a different instrument, still report what the card says — the mismatch is handled elsewhere.
+
+Read these fields:
+1. symbol — the contract as printed, e.g. "BTCUSDT".
+2. direction — "long" or "short". Cards print this as "Long"/"Short", sometimes prefixed with the margin mode ("Cross Short", "Isolated Long"). Colour alone is not evidence.
+3. exitPrice — the AVERAGE CLOSE price, labelled "Avg. Close Price", "Close Price", "Avg Exit". This is the number that matters. Do NOT use the entry price here.
+4. entryPrice — labelled "Entry Price" or "Avg. Entry Price".
+5. exitTime — the CLOSED timestamp. Return it as "YYYY-MM-DDTHH:mm:ss" exactly as printed, with NO timezone conversion. Cards print dates as MM/DD/YYYY; a "Lasting 10h 34m" style duration is not a timestamp.
+6. entryTime — the OPENED timestamp, same format.
+7. size — the quantity closed: "Closed Vol", "Closed Amount", "Filled". Give the number only, in the base asset. "Max OI" is NOT this.
+8. realizedPnl — the realised profit or loss, signed. A loss is negative even when the card marks it only with colour or a minus sign.
+9. pnlCurrency — the unit that PnL is printed in: USDT, USDC, BNFCR. Take it from the label, not assumed.
+10. roiPercent — the ROI percentage, signed, as a plain number without the % sign.
+11. leverage — the leverage as a number, so "150x" is 150.
+12. isClosed — true if the card says the position is closed, false if it is still open.
+
+Respond with STRICT JSON only, no prose, no markdown fences:
+{"symbol": string|null, "direction": "long"|"short"|null, "exitPrice": number|null, "entryPrice": number|null, "exitTime": string|null, "entryTime": string|null, "size": number|null, "realizedPnl": number|null, "pnlCurrency": string|null, "roiPercent": number|null, "leverage": number|null, "isClosed": boolean|null}
+
+Every field must be present. Use null for anything not legible or not printed.`;
+}

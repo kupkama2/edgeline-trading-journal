@@ -44,6 +44,8 @@ import { GradeBadges } from "@/components/grade-picker";
 import { StyleChip } from "@/components/style-switcher";
 import { TradeImageGallery } from "@/components/trade-images";
 import { TradeChart } from "@/components/trade-chart";
+import { useCloseCardPaste } from "@/lib/close-paste";
+import type { CloseCard } from "@shared/close-card";
 import { RationaleTags, num, parseTags } from "@/components/trade-shared";
 import { TradeEditor } from "@/components/trade-dialogs";
 import { NewTradeCard } from "@/components/new-trade-card";
@@ -106,6 +108,22 @@ export default function TradeView({ under = "/" }: { under?: string }) {
     () => (trades ?? []).find((t) => t.id === id) ?? null,
     [trades, id],
   );
+
+  /*
+   * Ctrl-V while VIEWING a live trade means the same thing as while editing
+   * it: here is how it ended. It opens the editor with the exit already
+   * filled in rather than making you find the button first — whether you
+   * clicked View or Edit should not change what a paste does.
+   */
+  const [pastedCard, setPastedCard] = useState<CloseCard | null>(null);
+  useCloseCardPaste({
+    trade,
+    enabled: !editing && !!trade && (trade.status === "open" || trade.status === "pending"),
+    onCard: (c) => {
+      setPastedCard(c);
+      setEditing(true);
+    },
+  });
 
   // Dismissing REPLACES the trade URL with the page underneath, so the back
   // button doesn't bounce you straight back into the trade you just closed.
@@ -205,7 +223,14 @@ export default function TradeView({ under = "/" }: { under?: string }) {
                "close this trade" is just editing it and filling in the exit,
                so it lands here too rather than opening a third thing. */
             editing ? (
-              <TradeEditor trade={trade} onClose={() => setEditing(false)} />
+              <TradeEditor
+                trade={trade}
+                card={pastedCard}
+                onClose={() => {
+                  setEditing(false);
+                  setPastedCard(null);
+                }}
+              />
             ) : (
               <TradeBody
                 trade={trade}

@@ -107,6 +107,10 @@ describe.skipIf(!DB)("when only the spot book answers", () => {
     // Read at module load by server/binance.ts, so it must be set first.
     process.env.BINANCE_BASE = `http://127.0.0.1:${port}`;
     process.env.BINANCE_FUTURES_BASE = `http://127.0.0.1:${port}`;
+    // Pinned at the stub, which serves no archive: without this the fallback
+    // would reach for the real data.binance.vision, and a CI runner with
+    // egress would settle these trades from live BTC prices.
+    process.env.BINANCE_ARCHIVE_BASE = `http://127.0.0.1:${port}`;
     const { initSchema, accounts, storageFor } = await import("../server/storage");
     const { registerRoutes } = await import("../server/routes");
     await initSchema();
@@ -142,15 +146,22 @@ describe.skipIf(!DB)("when only the spot book answers", () => {
     await shut(app);
   });
 
-  it("refuses to settle a coin that has a perp from spot candles", async () => {
+  it("never settles a coin that has a perp from spot candles", async () => {
+    /*
+     * The trade IS matched — to the perpetual, not to the spot pair sitting in
+     * the catalogue — and then read from wherever perp bars can be had. Here
+     * that is nowhere: the API refuses and the archive is a stub with no files
+     * in it. So nothing is written, which is the point. The one outcome that
+     * must never happen is the spot candles in this fixture, which run to the
+     * target, settling it as target_first.
+     */
     const t = await closed({ symbol: "BTC", exitTime: ago(5) });
-    const res = await checkOutcomes(userId);
-    expect(res.unmatched).toBeGreaterThanOrEqual(1);
+    await checkOutcomes(userId);
 
     const after = await store.getTrade(t.id);
     // Left exactly as it was — including outcomeCheckedAt, so it is asked
-    // again the moment the perp book is reachable rather than being marked
-    // done on the strength of a market it was never traded in.
+    // again the moment perp bars can be reached rather than being marked done
+    // on the strength of a market it was never traded in.
     expect(after.noManagementOutcome).toBeNull();
     expect(after.outcomeCheckedAt).toBeNull();
   });

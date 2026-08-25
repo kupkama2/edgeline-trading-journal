@@ -401,7 +401,12 @@ export async function parseScreenshot(
 ): Promise<OutcomeParseResult>;
 export async function parseScreenshot(
   image: string,
-  kind: "setup" | "outcome" | "orders",
+  kind: "close",
+  context?: Record<string, unknown>,
+): Promise<unknown>;
+export async function parseScreenshot(
+  image: string,
+  kind: "setup" | "outcome" | "orders" | "close",
   context?: Record<string, unknown>,
 ): Promise<any> {
   const res = await apiRequest("POST", "/api/parse-screenshot", {

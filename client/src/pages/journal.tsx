@@ -21,10 +21,40 @@ import { NewTradeCard } from "@/components/new-trade-card";
 import { useLocation } from "wouter";
 import { ClosedTradeRow, OpenTradeRow, PendingTradeRow } from "@/components/trade-rows";
 import { OwedCard } from "@/components/owed-card";
-import { openRisk } from "@shared/exposure";
+import { openRisk, type SideRisk } from "@shared/exposure";
 import { fmtMoney } from "@shared/metrics";
 import { useOutcomeWatch } from "@/lib/outcome-watch";
 import { num } from "@/components/trade-shared";
+
+/**
+ * One side of the book. Rendered even when empty, because "0 short" is the
+ * fact worth seeing — an absent row reads as a missing feature, while a zero
+ * reads as a one-way book, which is exactly the thing to notice.
+ */
+function SideChip({
+  label,
+  side,
+  tone,
+}: {
+  label: "long" | "short";
+  side: SideRisk;
+  tone: string;
+}) {
+  return (
+    <span className="text-muted-foreground" data-testid={`open-risk-${label}`}>
+      <span className={`font-mono font-semibold ${tone}`}>{side.trades}</span> {label}
+      {side.trades === 1 ? "" : "s"}
+      {side.dollars > 0 && (
+        <>
+          {" "}
+          <span className="font-mono text-foreground/80">−{side.r.toFixed(2)}R</span>{" "}
+          <span className="font-mono text-foreground/80">{fmtMoney(-side.dollars)}</span>
+        </>
+      )}
+      {side.unpriced > 0 && <span className="text-amber-500"> +{side.unpriced} unpriced</span>}
+    </span>
+  );
+}
 
 /* ================================ page ================================ */
 
@@ -247,6 +277,35 @@ export default function Journal() {
                   · {exposure.unpriced} with no stop recorded, so not counted
                 </span>
               )}
+
+              {/* The split, on its own line, because it changes what the number
+                  above MEANS. Five longs is one bet in five pieces: the move
+                  that stops one stops them all, and the worst case is the whole
+                  book. Three and three cannot lose everything to a single move,
+                  since whatever is stopping one side is paying the other. Same
+                  total, different position. */}
+              <div className="flex w-full flex-wrap items-center gap-x-3 gap-y-1">
+                <SideChip label="long" side={exposure.long} tone="text-emerald-400" />
+                <SideChip label="short" side={exposure.short} tone="text-primary" />
+                {exposure.oneWay.side && (
+                  <span className="text-muted-foreground" data-testid="open-risk-one-way">
+                    {exposure.long.trades === 0 || exposure.short.trades === 0 ? (
+                      <>all one way — a single move takes the lot</>
+                    ) : (
+                      <>
+                        one move against you costs{" "}
+                        <span className="font-mono text-foreground">
+                          −{exposure.oneWay.r.toFixed(2)}R
+                        </span>{" "}
+                        <span className="font-mono text-foreground">
+                          {fmtMoney(-exposure.oneWay.dollars)}
+                        </span>{" "}
+                        ({exposure.oneWay.side}s)
+                      </>
+                    )}
+                  </span>
+                )}
+              </div>
             </div>
           )}
           {isLoading ? (

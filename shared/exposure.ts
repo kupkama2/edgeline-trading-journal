@@ -15,11 +15,16 @@
  * you whether you are sized the way you meant to be — a trade half scaled out
  * carries half the risk it opened with, so a book of four untouched trades is
  * 4R and a book of four half-taken ones is 2R, on the same four rows.
+ *
+ * And split by direction, because five longs and no shorts is a different
+ * position from three and three even when the two add to the same number.
+ * The first is one bet in five pieces; the second cannot lose everything to a
+ * single move, since whatever stops one side is paying the other.
  */
 import type { Trade, TradeFill } from "./schema";
 import { positionLedger } from "./fills";
 
-export interface OpenRisk {
+export interface SideRisk {
   /** Live positions. Resting orders are not exposure; nothing is filled yet. */
   trades: number;
   /** Sum of what each open trade would lose at its own stop, in dollars. */
@@ -31,6 +36,33 @@ export interface OpenRisk {
   r: number;
   /** Open trades with no stop recorded — real exposure this cannot price. */
   unpriced: number;
+}
+
+export interface OpenRisk extends SideRisk {
+  /** The book split by direction. */
+  long: SideRisk;
+  short: SideRisk;
+  /**
+   * What ONE move against you costs: the worse side standing alone.
+   *
+   * The headline figure assumes every stop fills, which is the whipsaw — a
+   * day that runs you over in both directions. A trend does something else
+   * entirely, and the difference is the whole reason to look at the split.
+   * Five longs and no shorts go together: one move takes the lot, and the
+   * gross number IS the directional number. Three and three do not: the same
+   * move that stops the longs is paying the shorts, so the realistic damage
+   * is one side, and a book that looked like 6R of exposure is closer to 3R.
+   *
+   * Not a hedge, and not sold as one — different coins have different betas
+   * and both sides can still be stopped by a round trip. It is the honest
+   * lower bound to sit next to the honest upper one.
+   */
+  oneWay: {
+    /** Which side carries it. Null only when nothing is priced at all. */
+    side: "long" | "short" | null;
+    dollars: number;
+    r: number;
+  };
 }
 
 /**
@@ -74,24 +106,48 @@ export function initialRiskOnTrade(t: Trade & { fills?: TradeFill[] }): number |
  * plan and quietly train you to ignore it.
  */
 export function openRisk(trades: (Trade & { fills?: TradeFill[] })[]): OpenRisk {
-  let count = 0;
-  let dollars = 0;
-  let r = 0;
-  let unpriced = 0;
+  const blank = (): SideRisk => ({ trades: 0, dollars: 0, r: 0, unpriced: 0 });
+  const all = blank();
+  const long = blank();
+  const short = blank();
 
   for (const t of trades) {
     if (t.status !== "open") continue;
-    count++;
+    // Anything not explicitly short is counted long, which is how direction is
+    // read everywhere else here. A book must add up: a row that fell out of
+    // both sides would quietly shrink the split below the total it belongs to.
+    const side = t.direction === "short" ? short : long;
+    all.trades++;
+    side.trades++;
+
     const now = riskOnTrade(t);
     const opened = initialRiskOnTrade(t);
     if (now == null || opened == null) {
       // An open position with no stop on it is the most exposed a trade can
       // be, and the one thing this must not do is quietly report it as zero.
-      unpriced++;
+      all.unpriced++;
+      side.unpriced++;
       continue;
     }
-    dollars += now;
-    r += now / opened;
+    all.dollars += now;
+    all.r += now / opened;
+    side.dollars += now;
+    side.r += now / opened;
   }
-  return { trades: count, dollars, r, unpriced };
+
+  /*
+   * Chosen on dollars, because the question this answers is "what leaves the
+   * account", and R is then reported for that same side rather than for
+   * whichever side happens to be larger in R. The two can disagree: a side can
+   * hold fewer, bigger positions.
+   */
+  const worse = short.dollars > long.dollars ? short : long;
+  const side = worse.dollars > 0 ? (worse === short ? "short" : "long") : null;
+
+  return {
+    ...all,
+    long,
+    short,
+    oneWay: { side, dollars: worse.dollars, r: worse.r },
+  };
 }

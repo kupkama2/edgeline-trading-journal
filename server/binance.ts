@@ -18,7 +18,9 @@
  * price feed being down is a reason to leave a trade parked, not to break the
  * journal.
  */
-import { ProxyAgent, fetch as undiciFetch } from "undici";
+import { fetch as undiciFetch } from "undici";
+import { egressFor } from "./egress";
+import { archiveCandles } from "./binance-archive";
 import type { BinanceSymbol, Candle, Market } from "@shared/binance";
 
 /**
@@ -88,6 +90,8 @@ export interface FeedStatus {
    * fetch, so it survives until the next one says otherwise.
    */
   catalogueError: string | null;
+  /** When the historical archive last answered — the perp path from a US host. */
+  archiveOkAt: string | null;
 }
 const status: FeedStatus = {
   lastError: null,
@@ -95,6 +99,7 @@ const status: FeedStatus = {
   lastOkAt: null,
   books: { futures: 0, spot: 0 },
   catalogueError: null,
+  archiveOkAt: null,
 };
 export const feedStatus = (): FeedStatus => ({ ...status });
 
@@ -115,32 +120,6 @@ async function getAny(hosts: string[], path: string): Promise<any> {
 }
 const klinePath = (m: Market) => (m === "futures" ? "/fapi/v1/klines" : "/api/v3/klines");
 
-/**
- * Egress in the dev sandbox goes through a proxy that Node's built-in fetch
- * ignores. Same reason the Perplexity client builds one; different host, so it
- * gets its own, and in production there is no proxy and this is undefined.
- *
- * NO_PROXY is honoured for loopback and private addresses, which is not
- * housekeeping: a request to a host on this machine sent through an external
- * proxy simply fails, and the failure looks exactly like "the venue is down"
- * — an empty catalogue and every trade left unmatched, with nothing saying
- * why. That is the shape of bug this whole module is written to avoid.
- */
-const LOCAL_HOST =
-  /^(localhost|127\.|\[?::1\]?|0\.0\.0\.0|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/i;
-
-let dispatcher: ProxyAgent | undefined;
-function egress(base: string): ProxyAgent | undefined {
-  const proxy = process.env.HTTPS_PROXY || process.env.https_proxy;
-  if (!proxy) return undefined;
-  try {
-    if (LOCAL_HOST.test(new URL(base).hostname)) return undefined;
-  } catch {
-    /* an unparseable base is someone else's error; proxy as normal */
-  }
-  if (!dispatcher) dispatcher = new ProxyAgent(proxy);
-  return dispatcher;
-}
 
 async function get(base: string, path: string, timeoutMs = 12_000): Promise<any> {
   const ctl = new AbortController();
@@ -148,7 +127,7 @@ async function get(base: string, path: string, timeoutMs = 12_000): Promise<any>
   try {
     const res = await undiciFetch(`${base}${path}`, {
       signal: ctl.signal,
-      dispatcher: egress(base),
+      dispatcher: egressFor(base),
       headers: { accept: "application/json" },
     });
     if (!res.ok) {
@@ -247,12 +226,79 @@ export type Interval = "1m" | "5m" | "15m" | "1h" | "4h" | "1d";
  * was hit in week three — a wrong answer produced by an unexamined limit,
  * which is the kind this module is least allowed to produce.
  */
+export interface CandleRead {
+  candles: Candle[];
+  /**
+   * The last instant the data actually reaches.
+   *
+   * The live API answers up to the moment you ask, so this is the end of the
+   * window. The archive answers up to the last file that exists, which is
+   * yesterday at best — and a caller writing down a maximum excursion needs to
+   * know the difference between "price never went further" and "the files
+   * stopped there".
+   */
+  coveredTo: number;
+  source: "api" | "archive";
+}
+
+/**
+ * Candles, from the live API if it will answer and the archive if it will not.
+ *
+ * The fallback is what makes perpetuals readable at all from a US host: the
+ * API refuses with a 451 and has no mirror, while data.binance.vision serves
+ * the same bars as files from an unrestricted domain. It is a day behind, so
+ * this returns what exists and says how far it got rather than pretending.
+ */
+export async function readCandles(
+  pair: { symbol: string; market: Market },
+  interval: Interval,
+  startMs: number,
+  endMs: number,
+  maxBars = 5000,
+): Promise<CandleRead> {
+  try {
+    const candles = await liveCandles(pair, interval, startMs, endMs, maxBars);
+    /*
+     * The API answers up to the moment it is asked — unless the bar cap cut
+     * the read short, in which case claiming the whole window would hand a
+     * caller a maximum excursion measured over a stretch it never saw. The
+     * intervals are chosen so this does not happen; saying so honestly costs
+     * one comparison and removes the trap if that ever stops being true.
+     */
+    const truncated = candles.length >= maxBars;
+    const last = candles.length ? candles[candles.length - 1].t : startMs;
+    return { candles, coveredTo: truncated ? last : endMs, source: "api" };
+  } catch (err) {
+    const read = await archiveCandles(pair, interval, startMs, endMs);
+    if (read.candles.length === 0) {
+      // Nothing from either place. The API's own words are the more useful
+      // ones — "451 from fapi.binance.com" is a diagnosis, "no file for
+      // today" is a consequence.
+      status.lastError = String((err as any)?.message ?? err);
+      throw err;
+    }
+    status.archiveOkAt = new Date().toISOString();
+    return { candles: read.candles, coveredTo: read.coveredTo, source: "archive" };
+  }
+}
+
+/** Just the bars, for callers that do not care where they came from. */
 export async function fetchCandles(
   pair: { symbol: string; market: Market },
   interval: Interval,
   startMs: number,
   endMs: number,
   maxBars = 5000,
+): Promise<Candle[]> {
+  return (await readCandles(pair, interval, startMs, endMs, maxBars)).candles;
+}
+
+async function liveCandles(
+  pair: { symbol: string; market: Market },
+  interval: Interval,
+  startMs: number,
+  endMs: number,
+  maxBars: number,
 ): Promise<Candle[]> {
   const out: Candle[] = [];
   let cursor = startMs;

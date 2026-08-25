@@ -32,7 +32,7 @@ import {
 } from "@shared/binance";
 import { outcomeUnknown } from "@shared/aftermath";
 import type { TradeWithTags } from "@shared/schema";
-import { fetchCandles, fetchCatalogue, intervalFor } from "./binance";
+import { fetchCandles, fetchCatalogue, intervalFor, readCandles } from "./binance";
 import { catalogue, collapsePairSymbolsOnce, storageFor } from "./storage";
 
 /** How stale the pair list may get. Listings are daily news at most. */
@@ -171,21 +171,28 @@ export async function checkOutcomes(userId: number): Promise<CheckSummary> {
    * no crypto trade would ever be read. Nothing would look broken; the feature
    * would just quietly never work.
    */
+  /*
+   * A catalogue with no perpetuals in it means the perp book REFUSED, not that
+   * there are none — and a coin on the written-down list has a perp whether or
+   * not this server is allowed to ask about it. Those trades are pointed back
+   * at the perpetual, and the reader finds the bars where it can: the public
+   * file archive serves them from a host that is not geo-restricted, a day in
+   * arrears.
+   *
+   * Late and right beats prompt and wrong. Settling a perp trade from spot
+   * candles would answer "did my stop get hit" with the price on a market the
+   * order was never resting in — basis moves the two apart and a liquidation
+   * cascade wicks the perp through levels spot never prints, so it would be
+   * wrong exactly at the level that decides the answer. If the archive cannot
+   * be reached either, the read fails and the trade is left where it was.
+   */
+  const perpsMissing = cat.every((s) => s.market !== "futures");
+
   const matched: { trade: TradeWithTags; pair: PairRef }[] = [];
   for (const t of due) {
-    const pair = binanceSymbolForTrade(t, cat);
-    /*
-     * A coin with a perp, matched to spot, was matched there because the perp
-     * book refused — and spot is the wrong book to settle it from. Basis moves
-     * the two apart and a liquidation cascade wicks the perp through levels
-     * spot never prints, so the disagreement is worst exactly where it decides
-     * the answer: within a hair of the level. Left unchecked rather than
-     * answered from the wrong market, which is the same rule as everywhere
-     * else here. Charts still draw it, clearly labelled.
-     */
-    if (pair && pair.market === "spot" && listedAsPerp(t.symbol)) {
-      out.unmatched++;
-      continue;
+    let pair = binanceSymbolForTrade(t, cat);
+    if (perpsMissing && (!pair || pair.market === "spot") && listedAsPerp(t.symbol)) {
+      pair = binanceSymbolForTrade(t, SEED_CATALOGUE) ?? pair;
     }
     if (pair) matched.push({ trade: t, pair });
     else out.unmatched++;
@@ -266,14 +273,48 @@ async function readTrade(
 
   const plan = { direction: t.direction, stop: t.initialStop, target: t.initialTarget };
   const coarse = intervalFor(to - from);
-  const bars = await fetchCandles(pair, coarse, from, to);
+  const read = await readCandles(pair, coarse, from, to);
+  const bars = read.candles;
 
+  const exitMs = t.exitTime ? new Date(t.exitTime).getTime() : null;
   const path = pathExtremes(bars, {
     direction: t.direction,
     entryMs: from,
-    exitMs: t.exitTime ? new Date(t.exitTime).getTime() : null,
+    exitMs,
     stop: t.initialStop,
   });
+
+  /*
+   * An excursion read off a window that stops early is not a small error, it
+   * is the wrong number: the highest price in the first three days of a
+   * five-day hold is not the highest price of the hold, and there is no
+   * provenance column to mark it as provisional once written. So each pair of
+   * fields is withheld until the data actually reaches the instant it is
+   * measured over — MAE and MFE need the position closed, the aftermath needs
+   * the whole window. Withheld means blank, and blank is asked again.
+   */
+  const grace = barSpanMs(coarse);
+  /*
+   * A position that is still running has no excursion to record: whatever the
+   * best price so far is, tomorrow can beat it, and these fields are filled in
+   * only where they are blank — so a provisional number written today would be
+   * frozen as the trade's final answer.
+   *
+   * The list this walks is already filtered to closed trades, so this is the
+   * second lock on the same door. It is worth having: the failure it prevents
+   * is silent and permanent, and the filter that currently prevents it lives
+   * in a different file for a different reason.
+   */
+  const running = t.status !== "closed";
+  const heldTo = exitMs ?? to - grace;
+  if (running || read.coveredTo < heldTo) {
+    path.mae = null;
+    path.mfe = null;
+  }
+  if (running || read.coveredTo < to - grace) {
+    path.postExitPeak = null;
+    path.postExitAdverse = null;
+  }
 
   let touch = firstTouch(bars, plan);
   if (touch.verdict === "ambiguous") {

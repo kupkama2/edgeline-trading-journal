@@ -28,6 +28,9 @@ import { collapseFills, positionLedger } from "@shared/fills";
 import { TradeImageGallery } from "@/components/trade-images";
 import { TradeChart } from "@/components/trade-chart";
 import { parseExtraTargets, parsePlaybook, type TradeWithTags } from "@shared/schema";
+import { closeFromCard, type CloseCard } from "@shared/close-card";
+import { LevelLabel, LevelLadder, type LevelKind } from "@/components/levels";
+import { useCloseCardPaste } from "@/lib/close-paste";
 import { computeMetrics, fmtFees, fmtMoney, fmtR, EXIT_REASON_LABELS } from "@shared/metrics";
 import { Dropzone, EXIT_REASONS, RationaleTags, TimeField, localNow, num, parseTags, toIso, toLocalInput } from "@/components/trade-shared";
 import { EMPTY_GRADES, GradePicker, type GradeState } from "@/components/grade-picker";
@@ -66,9 +69,12 @@ import { typedSymbol } from "@shared/symbols";
 export function TradeEditor({
   trade,
   onClose,
+  card,
 }: {
   trade: TradeWithTags | null;
   onClose: () => void;
+  /** A closed-position card pasted before the editor opened. */
+  card?: CloseCard | null;
 }) {
   const { toast } = useToast();
   const { data: tags = [] } = useMistakeTags();
@@ -255,6 +261,43 @@ export function TradeEditor({
     }
   }, [f.exitPrice]);
 
+  /*
+   * A closed-position card, pasted.
+   *
+   * The exchange knows the average fill and the exact second; typing them back
+   * in by hand is where a journal's numbers drift from what happened. Only the
+   * exit goes on automatically — the card's entry price and its size are
+   * REPORTED rather than applied, because the entry decides 1R and the size
+   * column next to it means something different on a scaled position.
+   */
+  const [cardRead, setCardRead] = useState<{ card: CloseCard; warnings: string[] } | null>(null);
+
+  function applyCard(c: CloseCard) {
+    if (!trade) return;
+    const verdict = closeFromCard(c, trade);
+    setCardRead({ card: c, warnings: verdict.warnings });
+    if (!verdict.usable) return;
+    setF((p) => ({
+      ...p,
+      ...(verdict.apply.exitPrice != null ? { exitPrice: String(verdict.apply.exitPrice) } : {}),
+      ...(verdict.apply.exitTime ? { exitTime: verdict.apply.exitTime } : {}),
+    }));
+  }
+
+  // Handed in by a surface that took the paste before this opened.
+  useEffect(() => {
+    if (card) applyCard(card);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [card]);
+
+  const { busy: readingCard } = useCloseCardPaste({
+    trade,
+    enabled: !!trade && (trade.status === "open" || trade.status === "pending"),
+    onCard: applyCard,
+    onError: (message) =>
+      toast({ title: "Couldn't read that screenshot", description: message, variant: "destructive" }),
+  });
+
   const set = (k: string) => (e: { target: { value: string } }) =>
     setF((p) => ({ ...p, [k]: e.target.value }));
 
@@ -381,6 +424,22 @@ export function TradeEditor({
     }
   }
 
+  /** A price field that says what KIND of price it is, in colour and mark. */
+  const levelField = (key: string, kind: LevelKind, label?: string) => (
+    <div className="space-y-1">
+      <LevelLabel kind={kind} text={label} />
+      <Input
+        type="number"
+        step="any"
+        inputMode="decimal"
+        value={f[key] ?? ""}
+        onChange={set(key)}
+        className="h-9 font-mono text-sm"
+        data-testid={`input-edit-${key}`}
+      />
+    </div>
+  );
+
   const field = (
     key: string,
     label: string,
@@ -406,7 +465,51 @@ export function TradeEditor({
         <div className="flex items-center gap-2 text-base font-semibold">
           <Pencil className="h-4 w-4 text-muted-foreground" />
           Edit {trade ? typedSymbol(trade) : ""}
+          {readingCard && (
+            <span className="text-[11px] font-normal text-muted-foreground" data-testid="text-reading-card">
+              reading your screenshot…
+            </span>
+          )}
         </div>
+
+        {/* What the card said, and what was left alone. Filling the fields
+            silently would be the wrong kind of helpful: these are numbers you
+            are about to sign off on, and the ones this refused to touch are
+            exactly the ones worth a second look. */}
+        {cardRead && (
+          <div
+            className="mt-2 space-y-1 rounded-md border border-primary/40 bg-primary/5 px-3 py-2 text-[11px]"
+            data-testid="banner-close-card"
+          >
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <span className="font-medium">Read from your screenshot</span>
+              {cardRead.card.exitPrice != null && (
+                <span className="font-mono">exit {num(cardRead.card.exitPrice)}</span>
+              )}
+              {cardRead.card.exitTime && <span className="font-mono">{cardRead.card.exitTime.replace("T", " ")}</span>}
+              {cardRead.card.realizedPnl != null && (
+                <span className="font-mono">
+                  {cardRead.card.realizedPnl > 0 ? "+" : ""}
+                  {num(cardRead.card.realizedPnl)} {cardRead.card.pnlCurrency ?? ""}
+                </span>
+              )}
+              <button
+                type="button"
+                className="ml-auto text-muted-foreground underline-offset-2 hover:underline"
+                onClick={() => setCardRead(null)}
+                data-testid="button-dismiss-close-card"
+              >
+                dismiss
+              </button>
+            </div>
+            {cardRead.warnings.map((w) => (
+              <p key={w} className="text-amber-500" data-testid="text-close-card-warning">
+                {w}
+              </p>
+            ))}
+            <p className="text-muted-foreground">Check it, then save.</p>
+          </div>
+        )}
 
         {/* Restoring silently would be its own trap: you would be looking at
             numbers that are not what the trade says, with nothing to tell you
@@ -521,13 +624,10 @@ export function TradeEditor({
                   data-testid="input-edit-size"
                 />
               </div>
-              {field("entryPrice", "Entry")}
-              {field("initialStop", "Stop")}
+              {levelField("entryPrice", "entry")}
+              {levelField("initialStop", "stop")}
               <div className="space-y-1">
-                <div className="flex items-center justify-between">
-                  <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                    {extraTps.length > 0 ? "TP1" : "Target"}
-                  </label>
+                <LevelLabel kind="target" text={extraTps.length > 0 ? "TP1" : "Target"}>
                   {extraTps.length < 3 && (
                     <button
                       type="button"
@@ -539,7 +639,7 @@ export function TradeEditor({
                       +
                     </button>
                   )}
-                </div>
+                </LevelLabel>
                 <Input
                   type="number"
                   step="any"
@@ -552,10 +652,7 @@ export function TradeEditor({
               </div>
               {extraTps.map((tp, i) => (
                 <div key={i} className="space-y-1">
-                  <div className="flex items-center justify-between">
-                    <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                      TP{i + 2}
-                    </label>
+                  <LevelLabel kind="tp" text={`TP${i + 2}`}>
                     <button
                       type="button"
                       onClick={() => setExtraTps((x) => x.filter((_, j) => j !== i))}
@@ -565,7 +662,7 @@ export function TradeEditor({
                     >
                       ×
                     </button>
-                  </div>
+                  </LevelLabel>
                   <Input
                     type="number"
                     step="any"
@@ -579,6 +676,19 @@ export function TradeEditor({
                   />
                 </div>
               ))}
+              {/* The plan, to scale. Two prices are two numbers to subtract; a
+                  reward leg three times the length of the risk leg is a fact
+                  you see before you have finished reading it. Spans the grid
+                  because it is about the fields either side of it. */}
+              <div className="col-span-2">
+                <LevelLadder
+                  entry={numOrNull(f.entryPrice ?? "")}
+                  stop={numOrNull(f.initialStop ?? "")}
+                  target={numOrNull(f.initialTarget ?? "")}
+                  extraTps={extraTps.map((t) => numOrNull(t))}
+                  exit={numOrNull(f.exitPrice ?? "")}
+                />
+              </div>
               {field("entryTime", "Entry time", "datetime-local")}
               <div className="space-y-1">
                 <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
