@@ -166,6 +166,51 @@ describe("the shapes an exchange prints a close in", () => {
     expect(v.apply.exitTime).toBe("2026-08-26T09:00");
   });
 
+  it("checks whether the fills add up to the position", () => {
+    /*
+     * The check is what makes the offer trustworthy. These five sum to 655.5
+     * against a 655-unit position — a complete account of how it came off, so
+     * turning one averaged exit into five loses nothing.
+     */
+    const v = closeFromCard(normalizeCloseCard(slicedOrder), {
+      symbol: "ZRO",
+      direction: "long",
+      entryPrice: 1.0,
+      size: 655,
+    });
+    expect(v.fills).toHaveLength(5);
+    expect(v.sizes?.total).toBeCloseTo(655.5);
+    expect(v.sizes?.matchesTrade).toBe(true);
+  });
+
+  it("says so when the table is only half the story", () => {
+    // Replacing one exit with a table that covers a third of the position
+    // would quietly shrink the trade, so the mismatch is named.
+    const v = closeFromCard(normalizeCloseCard(slicedOrder), {
+      symbol: "ZRO",
+      direction: "long",
+      entryPrice: 1.0,
+      size: 2000,
+    });
+    expect(v.sizes?.matchesTrade).toBe(false);
+  });
+
+  it("does not call a unit difference a discrepancy", () => {
+    /*
+     * Binance prints fill rows in USDT; the same position may be logged in
+     * coins. 655 USDT of a coin at ~1.06 is 617 coins — the same position
+     * twice, and warning about it would be warning about agreement.
+     */
+    const v = closeFromCard(normalizeCloseCard(slicedOrder), {
+      symbol: "ZRO",
+      direction: "long",
+      entryPrice: 1.0,
+      size: 617,
+    });
+    expect(v.sizes?.matchesTrade).toBe(true);
+    expect(v.sizes?.unitNote).toMatch(/quote/);
+  });
+
   it("fills in a fee only where there is none", () => {
     const base = { symbol: "ZRO", direction: "long", entryPrice: 1.0, size: 655 };
     const card = normalizeCloseCard(slicedOrder);

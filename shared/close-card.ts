@@ -196,6 +196,27 @@ export interface CardVerdict {
   partials: CloseFill[];
   /** How many rows the table held, sliced or not — worth saying either way. */
   fillsSeen: number;
+  /**
+   * Every readable fill, and whether they add up to this trade.
+   *
+   * The check is what makes the offer trustworthy. A table whose sizes sum to
+   * the position is a complete account of how it came off, and turning one
+   * averaged exit into that account loses nothing; a table that sums to half
+   * of it is a screenshot of half the story, and replacing the exit with it
+   * would quietly shrink the trade.
+   */
+  fills: CloseFill[];
+  sizes: {
+    /** Sum of the fill sizes, in whatever unit the table printed. */
+    total: number;
+    /** True when that total is this trade's position. */
+    matchesTrade: boolean;
+    /**
+     * Set when the two only differ by the unit — a table in USDT against a
+     * position logged in coins, which is agreement, not a discrepancy.
+     */
+    unitNote: string | null;
+  } | null;
 }
 
 /**
@@ -320,5 +341,39 @@ export function closeFromCard(
     usable: apply.exitPrice != null,
     partials: spreadFills(card.fills),
     fillsSeen: card.fills.length,
+    fills: card.fills.filter((f) => f.price != null && (f.size ?? 0) > 0),
+    sizes: sizeCheck(card, trade, exitPrice),
   };
+}
+
+/**
+ * Do these fills add up to the position?
+ *
+ * Read in the unit the table happens to print, which is not always the unit
+ * the trade was logged in: Binance's fill rows are in USDT while a position
+ * may be recorded in coins. A straight comparison would call that a
+ * discrepancy and warn about a screenshot that is in perfect agreement, so
+ * the conversion is checked too, and named when it is what matched.
+ */
+function sizeCheck(
+  card: CloseCard,
+  trade: { size: number },
+  price: number | null,
+): CardVerdict["sizes"] {
+  const usable = card.fills.filter((f) => (f.size ?? 0) > 0);
+  if (usable.length === 0) return null;
+  const total = usable.reduce((n, f) => n + (f.size ?? 0), 0);
+  const near = (a: number, b: number) => b > 0 && Math.abs(a - b) / b <= 0.01;
+
+  if (near(total, trade.size)) return { total, matchesTrade: true, unitNote: null };
+  if (price && price > 0) {
+    // The table in quote against a position in base, and the reverse.
+    if (near(total, trade.size * price)) {
+      return { total, matchesTrade: true, unitNote: "the table is in quote, the trade in units" };
+    }
+    if (near(total / price, trade.size)) {
+      return { total, matchesTrade: true, unitNote: "the table is in units, the trade in quote" };
+    }
+  }
+  return { total, matchesTrade: false, unitNote: null };
 }

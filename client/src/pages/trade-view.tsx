@@ -14,7 +14,7 @@
  * Everything reads from the live list by id, so an edit made in the dialog
  * above (or a fill removed below) is reflected the moment the mutation lands.
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, Suspense, lazy } from "react";
 import { useLocation, useRoute } from "wouter";
 import { Card } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
@@ -43,7 +43,14 @@ import { exposureOf, fmtExposure } from "@shared/symbols";
 import { GradeBadges } from "@/components/grade-picker";
 import { StyleChip } from "@/components/style-switcher";
 import { TradeImageGallery } from "@/components/trade-images";
-import { TradeChart } from "@/components/trade-chart";
+/*
+ * The charting engine is a third of a megabyte and draws for crypto trades
+ * only — a futures trade never shows it at all. Loading it with the app makes
+ * every session pay for a picture some of them never see.
+ */
+const TradeChart = lazy(() =>
+  import("@/components/trade-chart").then((m) => ({ default: m.TradeChart })),
+);
 import { useCloseCardPaste } from "@/lib/close-paste";
 import type { CloseCard } from "@shared/close-card";
 import { RationaleTags, num, parseTags } from "@/components/trade-shared";
@@ -507,7 +514,9 @@ function TradeBody({
       {/* Renders nothing at all for a futures trade or an unmatched ticker —
           a trade is not broken for having no Binance chart, and an apology
           in its place would be noise on every NQ row. */}
-      <TradeChart trade={trade} />
+      <Suspense fallback={null}>
+        <TradeChart trade={trade} />
+      </Suspense>
 
       {/* ------------------------------ the plan ---------------------------- */}
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">

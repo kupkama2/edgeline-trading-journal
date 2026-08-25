@@ -20,6 +20,7 @@
  */
 
 import type { TradeWithTags } from "@shared/schema";
+import { store } from "@/lib/scoped-storage";
 import { parseExtraTargets } from "@shared/schema";
 import { parseHighlights } from "@shared/highlights";
 import { typedSymbol } from "@shared/symbols";
@@ -49,9 +50,10 @@ export interface StoredDraft {
 }
 
 /*
- * TODO(#23): namespace by account id along with the other per-person keys.
- * Two people on one browser would currently share a draft — the same
- * outstanding issue as the filter and risk-budget keys, fixed in one pass.
+ * Scoped to the signed-in account by lib/scoped-storage, and that is not
+ * housekeeping: trade ids are global, so an unscoped draft key meant opening
+ * YOUR trade 42 could restore somebody else's unsaved edits into the editor
+ * and let you save them onto it.
  */
 const key = (tradeId: number) => `edgeline.draft.trade.${tradeId}`;
 
@@ -102,11 +104,11 @@ const sameList = <T>(a: T[], b: T[]) =>
 export function stashDraft(tradeId: number, draft: TradeDraft, saved: TradeDraft): void {
   try {
     if (!draftDiffers(draft, saved)) {
-      localStorage.removeItem(key(tradeId));
+      store.remove(key(tradeId));
       return;
     }
     const stored: StoredDraft = { draft, savedAt: new Date().toISOString() };
-    localStorage.setItem(key(tradeId), JSON.stringify(stored));
+    store.set(key(tradeId), JSON.stringify(stored));
   } catch {
     // A full or blocked localStorage must never take the editor down with it.
     // Losing the draft is the old behaviour; losing the session is worse.
@@ -115,7 +117,7 @@ export function stashDraft(tradeId: number, draft: TradeDraft, saved: TradeDraft
 
 export function readDraft(tradeId: number): StoredDraft | null {
   try {
-    const raw = localStorage.getItem(key(tradeId));
+    const raw = store.get(key(tradeId));
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     // Anything that isn't the shape we wrote is treated as absent rather than
@@ -129,7 +131,7 @@ export function readDraft(tradeId: number): StoredDraft | null {
 
 export function clearDraft(tradeId: number): void {
   try {
-    localStorage.removeItem(key(tradeId));
+    store.remove(key(tradeId));
   } catch {
     /* nothing to do — the draft is advisory */
   }

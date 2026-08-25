@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowDownRight, ArrowUpRight, Camera, CheckCircle2, Eye, HelpCircle, Minus, Pencil, Plus, Trash2, X } from "lucide-react";
+import { ArrowDownRight, ArrowUpRight, Camera, CheckCircle2,  HelpCircle, Minus, Pencil, Plus, Trash2, X } from "lucide-react";
 import { useUpdateTrade, useDeleteTrade } from "@/lib/data";
 import { parseExtraTargets, type TradeWithTags } from "@shared/schema";
 import { parseHighlights } from "@shared/highlights";
@@ -23,7 +23,6 @@ const STALE_PENDING_DAYS = 3;
 export function OpenTradeRow({
   t,
   onSelect,
-  onView,
   onEdit,
   onResolve,
   onAdd,
@@ -31,7 +30,6 @@ export function OpenTradeRow({
 }: {
   t: TradeWithTags;
   onSelect: () => void;
-  onView: () => void;
   onEdit: () => void;
   onResolve: () => void;
   onAdd: () => void;
@@ -52,17 +50,6 @@ export function OpenTradeRow({
       className="relative w-full rounded-lg border border-card-border bg-card p-3 text-left transition-colors hover:border-primary/50 hover-elevate"
     >
       <div className="absolute right-1.5 top-1.5 flex gap-0.5">
-        <Button
-          type="button"
-          size="icon"
-          variant="ghost"
-          className="h-6 w-6 text-muted-foreground hover:text-foreground"
-          onClick={(e) => { e.stopPropagation(); onView(); }}
-          aria-label="View trade details"
-          data-testid={`button-view-${t.id}`}
-        >
-          <Eye className="h-3.5 w-3.5" />
-        </Button>
         {/* Levels move while a position is live — editing must not require
             closing it first. */}
         <Button
@@ -308,12 +295,12 @@ export function PendingTradeRow({
 export function ClosedTradeRow({
   t,
   tagNames,
-  onView,
+  onSelect,
   onEdit,
 }: {
   t: TradeWithTags;
   tagNames: Record<number, string>;
-  onView: () => void;
+  onSelect: () => void;
   onEdit: () => void;
 }) {
   const m = computeMetrics(t);
@@ -327,7 +314,10 @@ export function ClosedTradeRow({
   const shots = (
     <button
       type="button"
-      onClick={onEdit}
+      onClick={(e) => {
+        e.stopPropagation();
+        onEdit();
+      }}
       className={`flex shrink-0 items-center gap-0.5 rounded px-1 py-0.5 font-mono text-[10px] transition-colors hover:text-foreground ${
         t.imageCount > 0 ? "text-muted-foreground" : "text-muted-foreground/40"
       }`}
@@ -348,8 +338,22 @@ export function ClosedTradeRow({
    */
   const unknown = outcomeUnknown(t);
   return (
+    /* The whole row opens the trade. Clicking a thing that plainly represents
+       a trade should show you the trade — an eye icon in the corner made the
+       obvious gesture do nothing and hid the destination in six pixels. The
+       controls inside stop the click from bubbling so each still means its own
+       thing. */
     <div
-      className={`rounded-lg border bg-card p-3 ${
+      onClick={onSelect}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect();
+        }
+      }}
+      className={`cursor-pointer rounded-lg border bg-card p-3 transition-colors hover:border-primary/40 ${
         unknown ? "border-amber-500/40" : "border-card-border"
       }`}
       data-testid={`card-closed-trade-${t.id}`}
@@ -409,17 +413,10 @@ export function ClosedTradeRow({
           size="icon"
           variant="ghost"
           className="h-6 w-6 shrink-0 text-muted-foreground hover:text-foreground"
-          onClick={onView}
-          aria-label="View trade details"
-          data-testid={`button-view-${t.id}`}
-        >
-          <Eye className="h-3 w-3" />
-        </Button>
-        <Button
-          size="icon"
-          variant="ghost"
-          className="h-6 w-6 shrink-0 text-muted-foreground hover:text-foreground"
-          onClick={onEdit}
+          onClick={(e) => {
+            e.stopPropagation();
+            onEdit();
+          }}
           aria-label="Edit trade"
           data-testid={`button-edit-${t.id}`}
         >
@@ -429,7 +426,10 @@ export function ClosedTradeRow({
           size="icon"
           variant="ghost"
           className="h-6 w-6 shrink-0 text-muted-foreground hover:text-destructive"
-          onClick={() => del.mutate(t.id)}
+          onClick={(e) => {
+            e.stopPropagation();
+            del.mutate(t.id);
+          }}
           aria-label="Delete trade"
           data-testid={`button-delete-${t.id}`}
         >

@@ -53,6 +53,8 @@ function GoogleMark({ className = "" }: { className?: string }) {
  */
 const DENIED = typeof window !== "undefined" && window.location.href.includes("auth=denied");
 
+import { setStorageScope } from "@/lib/scoped-storage";
+
 export function LoginGate({ children }: { children: React.ReactNode }) {
   const session = useQuery<SessionResponse>({ queryKey: ["/api/session"] });
   const denied = DENIED;
@@ -65,7 +67,13 @@ export function LoginGate({ children }: { children: React.ReactNode }) {
     );
   }
 
-  if (session.data?.user) return <>{children}</>;
+  /* Storage is per account, and this is the only place that knows which one
+     before the app renders: nothing below here mounts until the session has
+     resolved, so every key read downstream is already scoped. */
+  if (session.data?.user) {
+    setStorageScope(session.data.user.id);
+    return <>{children}</>;
+  }
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4">
