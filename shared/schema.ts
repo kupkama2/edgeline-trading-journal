@@ -710,7 +710,7 @@ export const parseScreenshotSchema = z.object({
    * far above anything the app produces, far below anything that hurts.
    */
   image: z.string().min(1).max(6_000_000),
-  kind: z.enum(["setup", "outcome", "orders", "close"]),
+  kind: z.enum(["setup", "outcome", "orders", "close", "fills"]),
   context: z
     .object({
       symbol: z.string().optional(),
@@ -747,6 +747,17 @@ export interface OrderRowParseResult {
   initialStop: number | null;
   initialTarget: number | null;
   entryTime: string | null;
+}
+
+/** One row of a broker's filled-order log, as read off the screenshot. */
+export interface FillRowParseResult {
+  symbol: string | null;
+  side: "buy" | "sell" | null;
+  kind: string | null;
+  qty: number | null;
+  price: number | null;
+  time: string | null;
+  stopPrice: number | null;
 }
 
 export interface SetupParseResult {
