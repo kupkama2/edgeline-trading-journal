@@ -1,4 +1,12 @@
-import { Crosshair, Flag, LogOut, ShieldAlert, Target } from "lucide-react";
+import {
+  ArrowDownRight,
+  ArrowUpRight,
+  Crosshair,
+  Flag,
+  LogOut,
+  ShieldAlert,
+  Target,
+} from "lucide-react";
 import { num } from "@/components/trade-shared";
 
 /**
@@ -17,7 +25,17 @@ import { num } from "@/components/trade-shared";
  * the target — and the numbers get a picture underneath them.
  */
 
-export type LevelKind = "entry" | "stop" | "target" | "tp" | "exit";
+export type LevelKind =
+  | "entry"
+  | "stop"
+  | "target"
+  | "tp"
+  | "exit"
+  /* What price DID, as opposed to what you decided. */
+  | "mae"
+  | "mfe"
+  | "ranAfter"
+  | "fellAfter";
 
 /**
  * One vocabulary for the whole app. The chart already draws the stop red and
@@ -33,6 +51,26 @@ export const LEVEL: Record<
   target: { icon: Target, text: "text-emerald-400", dot: "bg-emerald-500", label: "Target" },
   tp: { icon: Flag, text: "text-emerald-400/80", dot: "bg-emerald-500/70", label: "TP" },
   exit: { icon: LogOut, text: "text-sky-400", dot: "bg-sky-400", label: "Exit" },
+  /*
+   * The four facts share the decisions' colours — adverse is red, favourable
+   * is green, wherever it happened — because they are answers to the same
+   * question in the same units. What separates them is the arrow: a decision
+   * is a line you drew, an excursion is a distance price covered.
+   */
+  mae: { icon: ArrowDownRight, text: "text-red-400/90", dot: "bg-red-400/80", label: "Worst held" },
+  mfe: { icon: ArrowUpRight, text: "text-emerald-400/90", dot: "bg-emerald-400/80", label: "Best held" },
+  ranAfter: {
+    icon: ArrowUpRight,
+    text: "text-emerald-400/70",
+    dot: "bg-emerald-400/60",
+    label: "Ran on to",
+  },
+  fellAfter: {
+    icon: ArrowDownRight,
+    text: "text-red-400/70",
+    dot: "bg-red-400/60",
+    label: "Fell to",
+  },
 };
 
 /** The label above a price input: an icon, the word, and room for a control. */
@@ -164,6 +202,135 @@ export function LevelLadder({
           </span>
         )}
       </div>
+    </div>
+  );
+}
+
+
+/**
+ * How far it went WITH you, and how far it went WITHOUT you.
+ *
+ * The four excursion fields are the most valuable numbers in the journal and
+ * the least legible: four prices in four boxes, and the reader has to do the
+ * subtraction, remember which direction is favourable for a short, and hold
+ * two ranges in their head to compare them. The comparison IS the insight —
+ * "it did most of its work after I left" and "I sat through the whole move and
+ * took the middle of it" are different problems with different fixes.
+ *
+ * So both ranges are drawn on one axis, one above the other, with the
+ * favourable end green and the adverse end red on each. Where the stop is
+ * known the ends are also priced in R, because "it ran on another 2.4R without
+ * me" is a sentence about the trade and "it ran on to 79,604" is a sentence
+ * about a number.
+ */
+export function PathBands({
+  direction,
+  entry,
+  stop,
+  exit,
+  mae,
+  mfe,
+  postExitPeak,
+  postExitAdverse,
+  className = "",
+}: {
+  direction: string;
+  entry?: number | null;
+  stop?: number | null;
+  exit?: number | null;
+  mae?: number | null;
+  mfe?: number | null;
+  postExitPeak?: number | null;
+  postExitAdverse?: number | null;
+  className?: string;
+}) {
+  const ok = (v: unknown): v is number => typeof v === "number" && isFinite(v);
+  const held = [mae, mfe].filter(ok);
+  const after = [postExitAdverse, postExitPeak].filter(ok);
+  if (!ok(entry) || (held.length === 0 && after.length === 0)) return null;
+
+  const all = [entry, ...held, ...after, ...(ok(exit) ? [exit] : [])];
+  const lo = Math.min(...all);
+  const hi = Math.max(...all);
+  const span = hi - lo;
+  if (!(span > 0)) return null;
+  const at = (p: number) => ((p - lo) / span) * 100;
+
+  /** Signed R, positive in your favour. Null when there is no 1R to divide by. */
+  const risk = ok(stop) ? Math.abs(entry - stop) : null;
+  const inR = (p: number) => {
+    if (!risk || risk <= 0) return null;
+    const sign = direction === "short" ? -1 : 1;
+    return (sign * (p - entry)) / risk;
+  };
+  const rTag = (p: number) => {
+    const r = inR(p);
+    return r == null ? "" : ` ${r > 0 ? "+" : ""}${r.toFixed(2)}R`;
+  };
+
+  const band = (
+    key: string,
+    label: string,
+    values: number[],
+    kinds: { good: LevelKind; bad: LevelKind },
+  ) => {
+    if (values.length === 0) return null;
+    const good = direction === "short" ? Math.min(...values) : Math.max(...values);
+    const bad = direction === "short" ? Math.max(...values) : Math.min(...values);
+    const a = Math.min(at(good), at(bad));
+    const b = Math.max(at(good), at(bad));
+    return (
+      <div className="space-y-1" data-testid={`path-band-${key}`}>
+        <div className="flex items-center gap-2">
+          <span className="w-24 shrink-0 text-[10px] uppercase leading-tight tracking-wider text-muted-foreground">
+            {label}
+          </span>
+          <div className="relative h-4 flex-1">
+            <div className="absolute inset-x-0 top-1/2 h-px -translate-y-1/2 bg-border" />
+            <div
+              className="absolute top-1/2 h-1 -translate-y-1/2 rounded-full bg-foreground/25"
+              style={{ left: `${a}%`, width: `${Math.max(b - a, 0.5)}%` }}
+            />
+            {values.length > 1 && (
+              <div
+                className={`absolute top-1/2 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full ${LEVEL[kinds.bad].dot}`}
+                style={{ left: `${at(bad)}%` }}
+              />
+            )}
+            <div
+              className={`absolute top-1/2 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full ${LEVEL[kinds.good].dot}`}
+              style={{ left: `${at(good)}%` }}
+            />
+            {/* Where you got in, for scale: every distance here is measured
+                from it, and a band floating on an unmarked axis says nothing
+                about which way the trade was going. */}
+            <div
+              className="absolute top-1/2 h-3 w-px -translate-x-1/2 -translate-y-1/2 bg-foreground/50"
+              style={{ left: `${at(entry)}%` }}
+              title={`Entry ${num(entry)}`}
+            />
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-x-3 pl-[6.5rem] text-[10px]">
+          {values.length > 1 && (
+            <span className={LEVEL[kinds.bad].text}>
+              {LEVEL[kinds.bad].label} <span className="font-mono">{num(bad)}</span>
+              <span className="font-mono">{rTag(bad)}</span>
+            </span>
+          )}
+          <span className={LEVEL[kinds.good].text}>
+            {LEVEL[kinds.good].label} <span className="font-mono">{num(good)}</span>
+            <span className="font-mono">{rTag(good)}</span>
+          </span>
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div className={`space-y-2 ${className}`} data-testid="path-bands">
+      {band("held", "With you", held, { good: "mfe", bad: "mae" })}
+      {band("after", "Without you", after, { good: "ranAfter", bad: "fellAfter" })}
     </div>
   );
 }

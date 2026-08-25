@@ -30,9 +30,10 @@ import { TradeChart } from "@/components/trade-chart";
 import { parseExtraTargets, parsePlaybook, type TradeWithTags } from "@shared/schema";
 import { closeFromCard, type CloseCard } from "@shared/close-card";
 import { LevelLabel, LevelLadder, type LevelKind } from "@/components/levels";
+import { ClipboardList, Layers, NotebookPen } from "lucide-react";
 import { useCloseCardPaste } from "@/lib/close-paste";
 import { computeMetrics, fmtFees, fmtMoney, fmtR, EXIT_REASON_LABELS } from "@shared/metrics";
-import { Dropzone, EXIT_REASONS, RationaleTags, TimeField, localNow, num, parseTags, toIso, toLocalInput } from "@/components/trade-shared";
+import { Dropzone, EXIT_REASONS, FormSection, RationaleTags, TimeField, localNow, num, parseTags, toIso, toLocalInput } from "@/components/trade-shared";
 import { EMPTY_GRADES, GradePicker, type GradeState } from "@/components/grade-picker";
 import {
   TradeOutcomeFields,
@@ -543,7 +544,13 @@ export function TradeEditor({
         )}
 
         {trade && (
-          <div className="space-y-4">
+          <div className="space-y-5">
+            <FormSection
+              icon={ClipboardList}
+              title="The setup"
+              hint="what you planned, and what you put on"
+              testId="section-edit-setup"
+            >
             <div className="grid grid-cols-2 gap-3">
               <div className="min-w-0 space-y-1">
                 <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
@@ -758,6 +765,7 @@ export function TradeEditor({
                 </div>
               )}
             </div>
+            </FormSection>
 
             {/* Where the trade is in its life, editable at every step.
                 The entry card asks this when logging; nothing asked it again
@@ -856,9 +864,10 @@ export function TradeEditor({
                 get your first one. */}
             <div data-testid="section-edit-fills">
               <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
-                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-foreground/80">
+                  <Layers className="h-3.5 w-3.5 text-muted-foreground" />
                   Partials and adds
-                </p>
+                </span>
                 <div className="flex gap-1.5">
                   <Button
                     type="button"
@@ -989,6 +998,12 @@ export function TradeEditor({
 
             {/* Fees explained where they're typed, since they change the R. */}
 
+            <FormSection
+              icon={NotebookPen}
+              title="Why you took it"
+              hint="the part only you can fill in"
+              testId="section-edit-why"
+            />
             <div className="space-y-1">
               <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
                 Rationale

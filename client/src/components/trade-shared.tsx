@@ -7,7 +7,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Camera, Clock, Loader2, X } from "lucide-react";
+import { Camera, Clock, Loader2, X, type LucideIcon } from "lucide-react";
 
 /* ============================== helpers ============================== */
 
@@ -295,3 +295,39 @@ export function Dropzone({
   );
 }
 
+/**
+ * A titled band across a form.
+ *
+ * A trade write-up is four different questions wearing the same clothes — what
+ * you planned, how it ended, what price actually did, and what you make of it
+ * — and a single unbroken column of inputs makes them all look like one long
+ * chore. The headings are there so you know which question you are answering
+ * and can stop when that question is done.
+ */
+export function FormSection({
+  icon: Icon,
+  title,
+  hint,
+  children,
+  testId,
+}: {
+  icon: LucideIcon;
+  title: string;
+  hint?: string;
+  /** Optional: a heading can also just introduce the run of fields below it. */
+  children?: React.ReactNode;
+  testId?: string;
+}) {
+  return (
+    <section className="space-y-3" data-testid={testId}>
+      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 border-b border-border/60 pb-1.5">
+        <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-foreground/80">
+          <Icon className="h-3.5 w-3.5 text-muted-foreground" />
+          {title}
+        </span>
+        {hint && <span className="text-[10px] text-muted-foreground">{hint}</span>}
+      </div>
+      {children}
+    </section>
+  );
+}

@@ -26,14 +26,23 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { EXIT_REASON_LABELS, EXIT_TIMING_MEANINGFUL_R, exitTimingVerdict } from "@shared/metrics";
 import { gradeLabel } from "@shared/grades";
-import { EXIT_REASONS, TimeField } from "@/components/trade-shared";
+import { EXIT_REASONS, FormSection, TimeField } from "@/components/trade-shared";
 import { GradePicker, type GradeState } from "@/components/grade-picker";
 import { HighlightPicker } from "@/components/trade-pickers";
 import type { MistakeTag } from "@shared/schema";
 
-import { LevelLabel } from "@/components/levels";
+import { LevelLabel, PathBands } from "@/components/levels";
+import { Activity, Gavel, LogOut } from "lucide-react";
 
 const LABEL = "text-[10px] uppercase tracking-wider text-muted-foreground";
+
+/** An empty box is not a price of zero. */
+const numOrNull = (v: string) => {
+  const t = (v ?? "").trim();
+  if (!t) return null;
+  const n = Number(t);
+  return Number.isFinite(n) ? n : null;
+};
 
 export interface OutcomeFieldsProps {
   exitPrice: string;
@@ -195,7 +204,13 @@ export function TradeOutcomeFields(p: OutcomeFieldsProps) {
     );
 
   return (
-    <div className="space-y-3" data-testid={`section-outcome-${p.testPrefix}`}>
+    <div className="space-y-5" data-testid={`section-outcome-${p.testPrefix}`}>
+      <FormSection
+        icon={LogOut}
+        title="The exit"
+        hint="where and when you actually got out"
+        testId={`section-${p.testPrefix}-exit`}
+      >
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-1">
           {/* The fourth decision, marked like the other three. */}
@@ -244,89 +259,6 @@ export function TradeOutcomeFields(p: OutcomeFieldsProps) {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <label className={LABEL}>MAE — worst while in the trade</label>
-              <Input
-                type="number"
-                step="any"
-                inputMode="decimal"
-                value={p.mae}
-                onChange={(e) => p.setMae(e.target.value)}
-                className="h-9 font-mono text-sm"
-                data-testid={`input-${p.testPrefix}-mae`}
-              />
-            </div>
-            <div className="space-y-1">
-              <label className={LABEL}>MFE — best while in the trade</label>
-              <Input
-                type="number"
-                step="any"
-                inputMode="decimal"
-                value={p.mfe}
-                onChange={(e) => p.setMfe(e.target.value)}
-                className="h-9 font-mono text-sm"
-                data-testid={`input-${p.testPrefix}-mfe`}
-              />
-            </div>
-          </div>
-
-          {/* After you were out, both ways. The pair is the point: one of
-              them prices what leaving cost, the other what it saved, and a
-              form that only ever asks the first one can only ever conclude
-              "hold longer". */}
-          <div className="space-y-1">
-            <p className={LABEL}>Once you were out, it went…</p>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1">
-                <Input
-                  type="number"
-                  step="any"
-                  inputMode="decimal"
-                  placeholder="your way, to…"
-                  value={p.postExitPeak}
-                  onChange={(e) => p.setPostExitPeak(e.target.value)}
-                  className="h-9 font-mono text-sm"
-                  data-testid={`input-${p.testPrefix}-post-exit-peak`}
-                />
-                <p className="text-[10px] leading-snug text-muted-foreground">
-                  The half of "it went higher" you were not in for — up to where your stop
-                  level broke.
-                </p>
-              </div>
-              <div className="space-y-1">
-                <Input
-                  type="number"
-                  step="any"
-                  inputMode="decimal"
-                  placeholder="against you, to…"
-                  value={p.postExitAdverse}
-                  onChange={(e) => p.setPostExitAdverse(e.target.value)}
-                  className="h-9 font-mono text-sm"
-                  data-testid={`input-${p.testPrefix}-post-exit-adverse`}
-                />
-                <p className="text-[10px] leading-snug text-muted-foreground">
-                  How much worse it got without you. On a stop-out this is what the stop
-                  saved you.
-                </p>
-              </div>
-            </div>
-            {stopRead && (
-              <p
-                className={`pt-0.5 text-[11px] leading-snug ${
-                  stopRead.tone === "good"
-                    ? "text-emerald-500"
-                    : stopRead.tone === "bad"
-                      ? "text-amber-500"
-                      : "text-muted-foreground"
-                }`}
-                data-testid={`text-${p.testPrefix}-stop-read`}
-              >
-                {stopRead.text}
-              </p>
-            )}
-          </div>
-
           <div className="space-y-1">
             <label className={LABEL}>Fees $ (both sides · optional — R and P&L go net)</label>
             <Input
@@ -352,6 +284,119 @@ export function TradeOutcomeFields(p: OutcomeFieldsProps) {
                   </button>
                 ))}
               </div>
+            )}
+          </div>
+        </>
+      )}
+      </FormSection>
+
+      {priced && (
+        <FormSection
+          icon={Activity}
+          title="What price did"
+          hint="how far it went with you, and how far without you"
+          testId={`section-${p.testPrefix}-path`}
+        >
+        <>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <LevelLabel kind="mae" text="Worst while in" />
+              <Input
+                type="number"
+                step="any"
+                inputMode="decimal"
+                value={p.mae}
+                onChange={(e) => p.setMae(e.target.value)}
+                className="h-9 font-mono text-sm"
+                data-testid={`input-${p.testPrefix}-mae`}
+              />
+            </div>
+            <div className="space-y-1">
+              <LevelLabel kind="mfe" text="Best while in" />
+              <Input
+                type="number"
+                step="any"
+                inputMode="decimal"
+                value={p.mfe}
+                onChange={(e) => p.setMfe(e.target.value)}
+                className="h-9 font-mono text-sm"
+                data-testid={`input-${p.testPrefix}-mfe`}
+              />
+            </div>
+          </div>
+
+          {/* After you were out, both ways. The pair is the point: one of
+              them prices what leaving cost, the other what it saved, and a
+              form that only ever asks the first one can only ever conclude
+              "hold longer". */}
+          <div className="space-y-1">
+            <p className={LABEL}>Once you were out, it went…</p>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <LevelLabel kind="ranAfter" text="Your way, to" />
+                <Input
+                  type="number"
+                  step="any"
+                  inputMode="decimal"
+                  placeholder="your way, to…"
+                  value={p.postExitPeak}
+                  onChange={(e) => p.setPostExitPeak(e.target.value)}
+                  className="h-9 font-mono text-sm"
+                  data-testid={`input-${p.testPrefix}-post-exit-peak`}
+                />
+                <p className="text-[10px] leading-snug text-muted-foreground">
+                  The half of "it went higher" you were not in for — up to where your stop
+                  level broke.
+                </p>
+              </div>
+              <div className="space-y-1">
+                <LevelLabel kind="fellAfter" text="Against you, to" />
+                <Input
+                  type="number"
+                  step="any"
+                  inputMode="decimal"
+                  placeholder="against you, to…"
+                  value={p.postExitAdverse}
+                  onChange={(e) => p.setPostExitAdverse(e.target.value)}
+                  className="h-9 font-mono text-sm"
+                  data-testid={`input-${p.testPrefix}-post-exit-adverse`}
+                />
+                <p className="text-[10px] leading-snug text-muted-foreground">
+                  How much worse it got without you. On a stop-out this is what the stop
+                  saved you.
+                </p>
+              </div>
+            </div>
+            {/* The two ranges on one axis, which is where the comparison
+                lives: "it did most of its work after I left" and "I sat
+                through the whole move and took the middle" are different
+                problems with different fixes, and four numbers in four boxes
+                say neither out loud. */}
+            <PathBands
+              className="pt-1"
+              direction={p.timing?.direction ?? "long"}
+              entry={p.timing?.entryPrice ?? null}
+              stop={p.timing?.initialStop ?? null}
+              exit={numOrNull(p.exitPrice)}
+              mae={numOrNull(p.mae)}
+              mfe={numOrNull(p.mfe)}
+              postExitPeak={numOrNull(p.postExitPeak)}
+              postExitAdverse={numOrNull(p.postExitAdverse)}
+            />
+
+            {stopRead && (
+              <p
+                className={`pt-0.5 text-[11px] leading-snug ${
+                  stopRead.tone === "good"
+                    ? "text-emerald-500"
+                    : stopRead.tone === "bad"
+                      ? "text-amber-500"
+                      : "text-muted-foreground"
+                }`}
+                data-testid={`text-${p.testPrefix}-stop-read`}
+              >
+                {stopRead.text}
+              </p>
             )}
           </div>
 
@@ -380,10 +425,17 @@ export function TradeOutcomeFields(p: OutcomeFieldsProps) {
             </div>
           </div>
         </>
+        </FormSection>
       )}
 
       {/* ---- stage 3: judgements about those facts ---- */}
       {explained && (
+        <FormSection
+          icon={Gavel}
+          title="Your read"
+          hint="what you make of all that"
+          testId={`section-${p.testPrefix}-read`}
+        >
         <>
           {/* What the numbers say, right where the grade is picked. The grade
               stays yours — but a post-exit run typed into MFE flips "early"
@@ -463,6 +515,7 @@ export function TradeOutcomeFields(p: OutcomeFieldsProps) {
             testIdPrefix={`highlight-${p.testPrefix}`}
           />
         </>
+        </FormSection>
       )}
 
       {!priced && (

@@ -56,30 +56,76 @@ export function ExcursionChart({
 
   const geom = useMemo(() => {
     if (!rows.length) return null;
-    const hi = Math.max(
-      1,
-      ...rows.map((r) => r.mfeR),
-      ...rows.map((r) => r.actualR),
-      // The post-exit run is part of the picture, so the axis has to hold it —
-      // otherwise the band that says "it went far without you" is the one
-      // clipped off the top of the card.
-      ...rows.map((r) => r.postPeakR ?? -Infinity),
+    const ups = rows.flatMap((r) =>
+      [r.mfeR, r.actualR, r.postPeakR].filter((v): v is number => v != null && isFinite(v) && v > 0),
     );
-    const lo = Math.min(
-      -1,
-      ...rows.map((r) => r.maeR),
-      ...rows.map((r) => r.actualR),
-      ...rows.map((r) => r.postAdverseR ?? Infinity),
+    const downs = rows.flatMap((r) =>
+      [r.maeR, r.actualR, r.postAdverseR].filter(
+        (v): v is number => v != null && isFinite(v) && v < 0,
+      ),
     );
+    const rawHi = Math.max(1, ...ups);
+    const rawLo = Math.min(-1, ...downs);
+
+    /*
+     * One monster flattens the rest.
+     *
+     * A single trade that ran on 15R without you sets the axis for everyone
+     * and turns thirty ordinary trades into a grey smear at the bottom of the
+     * card — the chart still contains the information and stops carrying any.
+     * So the axis is set by the BODY of the distribution and the few beyond it
+     * are drawn clipped, with a torn top edge and their real number still in
+     * the tooltip. Nothing is hidden; what is off the scale says so.
+     *
+     * Only when it would actually help: an axis within a quarter of the cap is
+     * already readable, and clipping it would add a warning about nothing.
+     */
+    const ceiling = (vals: number[], floor: number) => {
+      if (vals.length === 0) return floor;
+      const sorted = [...vals].map(Math.abs).sort((a, b) => a - b);
+      const p90 = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.9))];
+      return Math.max(floor, p90 * 1.35);
+    };
+    const capHi = ceiling(ups, 1);
+    const capLo = -ceiling(downs, 1);
+    const clipHi = rawHi > capHi * 1.25;
+    const clipLo = rawLo < capLo * 1.25;
+    const hi = clipHi ? capHi : rawHi;
+    const lo = clipLo ? capLo : rawLo;
+
     const span = hi - lo;
     const barW = Math.max(BAR_MIN, Math.min(28, 720 / rows.length));
     const width = Math.max(rows.length * barW, 320);
-    const y = (r: number) => PAD.top + ((hi - r) / span) * (H - PAD.top - PAD.bottom);
-    return { hi, lo, barW, width, y, zero: PAD.top + (hi / span) * (H - PAD.top - PAD.bottom) };
+    const clamp = (r: number) => Math.min(hi, Math.max(lo, r));
+    const y = (r: number) => PAD.top + ((hi - clamp(r)) / span) * (H - PAD.top - PAD.bottom);
+    /*
+     * Counted the same way the torn edges are drawn — on EITHER value per
+     * side, not the post-exit one where it exists. A trade whose in-trade dip
+     * ran past the axis while its aftermath did not is still a clipped bar,
+     * and a footnote that disagrees with the picture is worse than no
+     * footnote.
+     */
+    const past = (vals: (number | null | undefined)[], edge: number, below: boolean) =>
+      vals.some((v) => v != null && isFinite(v) && (below ? v < edge : v > edge));
+    const over = rows.filter(
+      (r) => past([r.mfeR, r.postPeakR], hi, false) || past([r.maeR, r.postAdverseR], lo, true),
+    );
+    return {
+      hi,
+      lo,
+      rawHi,
+      rawLo,
+      barW,
+      width,
+      y,
+      clipped: (r: number) => r > hi + 1e-9 || r < lo - 1e-9,
+      over: over.length,
+      zero: PAD.top + (hi / span) * (H - PAD.top - PAD.bottom),
+    };
   }, [rows]);
 
   if (!geom) return null;
-  const { barW, width, y, zero } = geom;
+  const { barW, width, y, zero, clipped, over, hi, lo, rawHi, rawLo } = geom;
   const h = hover != null ? rows[hover] : null;
 
   return (
@@ -217,6 +263,30 @@ export function ExcursionChart({
                   rx={1.5}
                   className="fill-red-500/60"
                 />
+                {/* A torn edge where a bar runs past the axis. The number is
+                    still in the tooltip; what this says is "there is more of
+                    this bar than the card can show", which is the one thing a
+                    silently clipped bar cannot. */}
+                {clipped(r.postPeakR ?? r.mfeR) && (
+                  <polyline
+                    points={`${cx - bw / 2},${PAD.top + 3} ${cx - bw / 6},${PAD.top} ${cx + bw / 6},${PAD.top + 3} ${cx + bw / 2},${PAD.top}`}
+                    fill="none"
+                    className="stroke-foreground/60"
+                    strokeWidth={1.5}
+                    vectorEffect="non-scaling-stroke"
+                    data-testid={`excursion-clipped-top-${r.tradeId}`}
+                  />
+                )}
+                {clipped(r.postAdverseR ?? r.maeR) && (
+                  <polyline
+                    points={`${cx - bw / 2},${H - PAD.bottom - 3} ${cx - bw / 6},${H - PAD.bottom} ${cx + bw / 6},${H - PAD.bottom - 3} ${cx + bw / 2},${H - PAD.bottom}`}
+                    fill="none"
+                    className="stroke-foreground/60"
+                    strokeWidth={1.5}
+                    vectorEffect="non-scaling-stroke"
+                    data-testid={`excursion-clipped-bottom-${r.tradeId}`}
+                  />
+                )}
                 {/* the exit tick — where you actually got out inside that range */}
                 <line
                   x1={cx - bw / 2 - 1.5}
@@ -256,6 +326,20 @@ export function ExcursionChart({
           })}
         </svg>
       </div>
+
+      {over > 0 && (
+        <p
+          className="mt-1 text-center text-[10px] text-muted-foreground"
+          data-testid="excursion-clip-note"
+        >
+          Axis held to {hi.toFixed(1)}R / {lo.toFixed(1)}R so the rest stays readable —{" "}
+          {over} {over === 1 ? "trade runs" : "trades run"} past it, out to{" "}
+          {[rawHi > hi ? `+${rawHi.toFixed(1)}R` : null, rawLo < lo ? `${rawLo.toFixed(1)}R` : null]
+            .filter(Boolean)
+            .join(" and ")}
+          . Hover a torn bar for its real number.
+        </p>
+      )}
 
       {h && hover != null && (
         <div
