@@ -6,6 +6,8 @@ import { ArrowDownRight, ArrowUpRight, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useAddFill, useCreateTrade } from "@/lib/data";
 import { num } from "@/components/trade-shared";
+import { computeMetrics, fmtMoney, fmtR } from "@shared/metrics";
+import { pointValueFor } from "@shared/symbols";
 import {
   avgEntry,
   avgExit,
@@ -68,6 +70,44 @@ export function FillLogReview({
     target: plan[i]?.target ?? (t.planTarget != null ? String(t.planTarget) : ""),
   });
   const numOrNull = (v: string) => (v.trim() === "" || !isFinite(Number(v)) ? null : Number(v));
+
+  /*
+   * What this trade actually made, worked out on the spot.
+   *
+   * The point of showing it here is not decoration: it is the one figure the
+   * trader can check against their broker without leaving the screen, and a
+   * reconstruction that agrees with the statement to the dollar is a
+   * reconstruction whose trade boundaries are right. A wrong boundary shows up
+   * as a P&L that does not match anything.
+   *
+   * R follows the stop, so it appears as the stop is typed rather than sitting
+   * there as a dash — which is also the fastest way to notice a stop entered
+   * on the wrong side.
+   */
+  const previewOf = (i: number, t: ReconstructedTrade) => {
+    const l = levels(i, t);
+    if (t.stillOpen || t.exitPrice == null) return null;
+    return computeMetrics({
+      symbol: t.symbol,
+      direction: t.direction,
+      size: t.size,
+      sizeUnit: "base",
+      entryPrice: t.entryPrice,
+      initialStop: numOrNull(l.stop),
+      initialTarget: numOrNull(l.target),
+      exitPrice: t.exitPrice,
+      status: "closed",
+      pointValue: pointValueFor(t.symbol),
+      fees: 0,
+      // The legs matter to the total: a trade scaled out of made its money at
+      // several prices, and pricing all of it at the last one would be wrong
+      // by exactly the amount the scaling was worth.
+      fills: [
+        ...t.adds.map((a, k) => ({ id: k, kind: "add", price: a.price, size: a.size, time: a.time })),
+        ...t.partials.map((pt, k) => ({ id: 1000 + k, kind: "partial", price: pt.price, size: pt.size, time: pt.time })),
+      ],
+    } as any);
+  };
   const ready = (i: number, t: ReconstructedTrade) => {
     const l = levels(i, t);
     return numOrNull(l.stop) != null && numOrNull(l.target) != null;
@@ -210,6 +250,28 @@ export function FillLogReview({
                   stopped at {num(t.initialStop)}
                 </Badge>
               )}
+              {/* The figure to check against the broker. A reconstruction that
+                  agrees with the statement to the dollar has its boundaries
+                  right; a wrong one shows up here as a total matching nothing. */}
+              {(() => {
+                const m = previewOf(i, t);
+                if (!m || m.actualPnL == null) return null;
+                return (
+                  <span
+                    className={`ml-auto font-mono text-xs font-semibold ${
+                      m.actualPnL >= 0 ? "text-emerald-400" : "text-primary"
+                    }`}
+                    data-testid={`fill-pnl-${i}`}
+                  >
+                    {fmtMoney(m.actualPnL)}
+                    {m.actualR != null && (
+                      <span className="ml-2 font-normal text-muted-foreground">
+                        {fmtR(m.actualR)}
+                      </span>
+                    )}
+                  </span>
+                );
+              })()}
             </div>
 
             {/* The legs, spelled out. This is the inference made checkable:
@@ -267,6 +329,9 @@ export function FillLogReview({
                   className="h-7 w-28 font-mono text-xs"
                   data-testid={`input-fill-target-${i}`}
                 />
+                {previewOf(i, t)?.actualR == null && numOrNull(levels(i, t).stop) == null && (
+                  <span className="text-muted-foreground">R needs the stop</span>
+                )}
                 {!ready(i, t) && (
                   <span className="text-amber-500">
                     {t.initialStop == null
@@ -354,12 +419,47 @@ export function FillLogReview({
           </p>
           <ul className="space-y-1 font-mono text-[10px] text-muted-foreground">
             {trades.map((t, k) => (
-              <li key={k} className={skip[k] ? "opacity-40 line-through" : ""} data-testid={`fill-summary-${k}`}>
-                {t.symbol} {t.direction} {t.size} @ {num(t.entryPrice)}
-                {t.exitPrice != null && ` → ${num(t.exitPrice)}`}
+              <li
+                key={k}
+                className={`flex justify-between gap-3 ${skip[k] ? "opacity-40 line-through" : ""}`}
+                data-testid={`fill-summary-${k}`}
+              >
+                <span>
+                  {t.symbol} {t.direction} {t.size} @ {num(t.entryPrice)}
+                  {t.exitPrice != null && ` → ${num(t.exitPrice)}`}
+                </span>
+                {(() => {
+                  const m = previewOf(k, t);
+                  if (!m || m.actualPnL == null) return null;
+                  return (
+                    <span className={m.actualPnL >= 0 ? "text-emerald-400" : "text-primary"}>
+                      {fmtMoney(m.actualPnL)}
+                      {m.actualR != null && ` · ${fmtR(m.actualR)}`}
+                    </span>
+                  );
+                })()}
               </li>
             ))}
           </ul>
+          {(() => {
+            // What the whole batch comes to. One number to check against the
+            // day's P&L on the broker, which is the cheapest possible proof
+            // that none of the trade boundaries came out wrong.
+            const total = chosen.reduce(
+              (n, { t, i }) => n + (previewOf(i, t)?.actualPnL ?? 0),
+              0,
+            );
+            return chosen.length > 1 ? (
+              <p className="border-t border-border/60 pt-1.5 text-[11px]" data-testid="text-fill-total">
+                Together they come to{" "}
+                <span className={`font-mono ${total >= 0 ? "text-emerald-400" : "text-primary"}`}>
+                  {fmtMoney(total)}
+                </span>{" "}
+                — check it against the day on your broker.
+              </p>
+            ) : null;
+          })()}
+
           <Button
             type="button"
             variant="ghost"
