@@ -34,6 +34,26 @@ import { useStyleFilter } from "@/lib/style-filter";
  * see how many positions could open, then add rationale one at a time.
  */
 
+type Source = "trades" | "tradingview" | "binance";
+
+const SOURCES: { id: Source; title: string; detail: string }[] = [
+  {
+    id: "trades",
+    title: "Trades I've taken",
+    detail: "A filled-order log — Tradovate, TradingView, NinjaTrader. Becomes completed trades.",
+  },
+  {
+    id: "tradingview",
+    title: "TradingView orders",
+    detail: "Working orders on a futures broker or DOM. Becomes positions that could still open.",
+  },
+  {
+    id: "binance",
+    title: "Binance orders",
+    detail: "Open orders or a TP/SL dialog. Becomes positions that could still open.",
+  },
+];
+
 /** The log rows complete enough to place in a position walk. */
 function readableFills(rows: { symbol: string | null; side: string | null; qty: number | null; price: number | null; time: string | null; kind: string | null; stopPrice: number | null }[]): LoggedFill[] {
   return rows
@@ -93,6 +113,17 @@ export function ImportTradesDialog({
    */
   const [mode, setMode] = useState<"auto" | "log" | "orders">("auto");
   /*
+   * Which screen this batch came off, chosen before anything is read.
+   *
+   * Working it out from the picture is possible and mostly right, but "mostly"
+   * is the problem: when it lands on the wrong one the trader is looking at a
+   * screen about the wrong thing, and the evidence they used to know that
+   * instantly — the contract codes, the layout — is evidence they could simply
+   * have stated. So they state it, and the reader is told rather than asked to
+   * guess. `null` means the choice has not been made yet.
+   */
+  const [source, setSource] = useState<Source | null>(null);
+  /*
    * Read through a ref, because the paste listener is installed once and
    * captures the scanImage of the render that installed it. Picking a mode
    * re-renders without re-registering, so a plain read here would have been
@@ -101,6 +132,8 @@ export function ImportTradesDialog({
    */
   const modeRef = useRef(mode);
   modeRef.current = mode;
+  const sourceRef = useRef(source);
+  sourceRef.current = source;
   const [scanning, setScanning] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   // Keyed by the order's identity rather than its row position: pasting a second
@@ -124,6 +157,9 @@ export function ImportTradesDialog({
   // Adopt rows handed in from a paste, replacing anything from a previous open.
   useEffect(() => {
     if (open && seedRows?.length) {
+      // Handed in by a paste that already turned out to be a table — the
+      // choice has effectively been made, so asking again would be theatre.
+      setSource("tradingview");
       setShotRows(seedRows);
       setEdits({});
       setExcluded({});
@@ -263,11 +299,12 @@ export function ImportTradesDialog({
        * still a log, and reaching for the other reader there answers a
        * question nobody asked.
        */
-      if (modeRef.current !== "orders") {
+      const picked = sourceRef.current;
+      if (picked !== "tradingview" && picked !== "binance" && modeRef.current !== "orders") {
       const log = await parseScreenshot(dataUrl, "fills");
       // Told which it is, the verdict is not consulted: the trader is looking
       // at the screenshot and this is not.
-      if (log.isExecutionLog || modeRef.current === "log") {
+      if (log.isExecutionLog || modeRef.current === "log" || picked === "trades") {
         const rows = readableFills(log.fills ?? []);
         if (rows.length) {
           setLogRows(rows);
@@ -282,7 +319,11 @@ export function ImportTradesDialog({
       }
       }
 
-      const res = await parseScreenshot(dataUrl, "orders");
+      const res = await parseScreenshot(
+        dataUrl,
+        "orders",
+        picked === "binance" || picked === "tradingview" ? { venue: picked } : undefined,
+      );
 
       // A bracketed order comes back as its parent plus two exit legs; listing
       // the legs would offer to import the take profit as a trade of its own.
@@ -401,31 +442,33 @@ export function ImportTradesDialog({
           </div>
         ) : (
         <div className="space-y-4">
-          {/* What the next screenshot is, where the trader would rather say
-              than have it worked out. */}
-          <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
-            <span className="text-muted-foreground">Read the screenshot as</span>
-            {(
-              [
-                ["auto", "whatever it is"],
-                ["log", "filled trades"],
-                ["orders", "resting orders"],
-              ] as const
-            ).map(([id, label]) => (
-              <button
-                key={id}
-                type="button"
-                onClick={() => setMode(id)}
-                className={`rounded-full border px-2 py-0.5 transition-colors ${
-                  mode === id
-                    ? "border-primary/60 bg-primary/10 text-foreground"
-                    : "border-border text-muted-foreground hover:border-primary/40"
-                }`}
-                data-testid={`button-import-mode-${id}`}
-              >
-                {label}
-              </button>
-            ))}
+          {/* What this batch is, asked before anything is read. Working it out
+              from the picture is possible and mostly right, and "mostly" is
+              the problem: when it lands wrong the trader is looking at a
+              screen about the wrong thing, and the evidence they used to know
+              that instantly is evidence they could simply have stated. */}
+          <div className="space-y-1.5">
+            <p className="text-[11px] text-muted-foreground">What are you importing?</p>
+            <div className="grid gap-1.5 sm:grid-cols-3">
+              {SOURCES.map((sc) => (
+                <button
+                  key={sc.id}
+                  type="button"
+                  onClick={() => setSource(sc.id)}
+                  className={`rounded-md border p-2 text-left transition-colors ${
+                    source === sc.id
+                      ? "border-primary/60 bg-primary/10"
+                      : "border-border hover:border-primary/40"
+                  }`}
+                  data-testid={`button-import-source-${sc.id}`}
+                >
+                  <span className="block text-[11px] font-medium">{sc.title}</span>
+                  <span className="mt-0.5 block text-[10px] leading-snug text-muted-foreground">
+                    {sc.detail}
+                  </span>
+                </button>
+              ))}
+            </div>
           </div>
 
           {/* Three ways in, because a screenshot arrives three ways: dropped,

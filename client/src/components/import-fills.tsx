@@ -52,6 +52,13 @@ export function FillLogReview({
    */
   const [plan, setPlan] = useState<Record<number, { stop: string; target: string }>>({});
   const [saving, setSaving] = useState(false);
+  /*
+   * Which trade is being looked at. The reconstruction is an inference, and
+   * a list of three invites the eye to scan and accept; one at a time is the
+   * same information with the reading forced. `at === trades.length` is the
+   * summary at the end, which is the only place anything gets written.
+   */
+  const [at, setAt] = useState(0);
   const { toast } = useToast();
   const createTrade = useCreateTrade();
   const addFill = useAddFill();
@@ -152,13 +159,32 @@ export function FillLogReview({
         printed in — check the legs before logging them.
       </p>
 
-      <ul className="space-y-2">
-        {trades.map((t, i) => (
-          <li
-            key={i}
-            className={`rounded-md border px-3 py-2 ${
-              skip[i] ? "border-border/40 opacity-45" : "border-card-border bg-secondary/20"
-            }`}
+      {at < trades.length ? (
+        (() => {
+          const t = trades[at];
+          const i = at;
+          return (
+            <div className="space-y-3" data-testid={`fill-step-${at}`}>
+              <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+                <span>
+                  Trade <span className="text-foreground">{at + 1}</span> of {trades.length}
+                </span>
+                <span className="flex gap-1">
+                  {/* A dot per trade: how far through, and how far left, without
+                      a sentence saying it. */}
+                  {trades.map((_, k) => (
+                    <span
+                      key={k}
+                      className={`h-1.5 w-1.5 rounded-full ${
+                        k === at ? "bg-primary" : skip[k] ? "bg-border" : k < at ? "bg-emerald-500/60" : "bg-border"
+                      }`}
+                    />
+                  ))}
+                </span>
+              </div>
+
+          <div
+            className="rounded-md border border-card-border bg-secondary/20 px-3 py-2"
             data-testid={`fill-trade-${i}`}
           >
             <div className="flex flex-wrap items-center gap-2 text-xs">
@@ -184,14 +210,6 @@ export function FillLogReview({
                   stopped at {num(t.initialStop)}
                 </Badge>
               )}
-              <button
-                type="button"
-                className="ml-auto text-[10px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-                onClick={() => setSkip((p) => ({ ...p, [i]: !p[i] }))}
-                data-testid={`button-skip-fill-trade-${i}`}
-              >
-                {skip[i] ? "include" : "skip"}
-              </button>
             </div>
 
             {/* The legs, spelled out. This is the inference made checkable:
@@ -223,7 +241,7 @@ export function FillLogReview({
                 because a defaulted stop is a made-up number sitting under
                 every R this trade will ever contribute — and unlike a blank
                 one, it would never look wrong. */}
-            {!skip[i] && (
+            {(
               <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[10px]">
                 <span className="text-muted-foreground">Stop</span>
                 <Input
@@ -258,9 +276,82 @@ export function FillLogReview({
                 )}
               </div>
             )}
-          </li>
-        ))}
-      </ul>
+          </div>
+
+              <div className="flex gap-2">
+                {at > 0 && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="text-[11px]"
+                    onClick={() => setAt(at - 1)}
+                    data-testid="button-fill-back"
+                  >
+                    Back
+                  </Button>
+                )}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="text-[11px]"
+                  onClick={() => {
+                    setSkip((p) => ({ ...p, [i]: true }));
+                    setAt(at + 1);
+                  }}
+                  data-testid="button-fill-skip"
+                >
+                  Skip this one
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  className="flex-1 text-[11px]"
+                  disabled={!ready(i, t)}
+                  onClick={() => {
+                    setSkip((p) => ({ ...p, [i]: false }));
+                    setAt(at + 1);
+                  }}
+                  data-testid="button-fill-next"
+                >
+                  {ready(i, t)
+                    ? at + 1 === trades.length
+                      ? "Looks right — review them all"
+                      : "Looks right — next"
+                    : "Needs a stop and a target"}
+                </Button>
+              </div>
+            </div>
+          );
+        })()
+      ) : (
+        <div className="space-y-2" data-testid="panel-fill-summary">
+          <p className="text-[11px] text-muted-foreground">
+            {chosen.length === 0
+              ? "Nothing left to log — every trade was skipped."
+              : `Ready to log ${chosen.length} of ${trades.length}.`}
+          </p>
+          <ul className="space-y-1 font-mono text-[10px] text-muted-foreground">
+            {trades.map((t, k) => (
+              <li key={k} className={skip[k] ? "opacity-40 line-through" : ""} data-testid={`fill-summary-${k}`}>
+                {t.symbol} {t.direction} {t.size} @ {num(t.entryPrice)}
+                {t.exitPrice != null && ` → ${num(t.exitPrice)}`}
+              </li>
+            ))}
+          </ul>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="text-[11px]"
+            onClick={() => setAt(0)}
+            data-testid="button-fill-restart"
+          >
+            Go back through them
+          </Button>
+        </div>
+      )}
 
       {problems.map((p) => (
         <p key={p} className="text-[10px] text-amber-500" data-testid="text-fill-log-problem">
@@ -268,17 +359,27 @@ export function FillLogReview({
         </p>
       ))}
 
-      <Button
-        type="button"
-        className="w-full"
-        disabled={saving || chosen.length === 0}
-        onClick={save}
-        data-testid="button-log-fill-trades"
-      >
-        {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-        Log {chosen.length} {chosen.length === 1 ? "trade" : "trades"}
-      </Button>
-      {waiting > 0 && (
+      {/* Hidden rather than disabled while stepping. A greyed-out button the
+          size of the primary one still reads as the thing to press, and the
+          thing to press here is "next". */}
+      {at >= trades.length && (
+        <Button
+          type="button"
+          className="w-full"
+          disabled={saving || chosen.length === 0}
+          onClick={save}
+          data-testid="button-log-fill-trades"
+        >
+          {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+          Log {chosen.length} {chosen.length === 1 ? "trade" : "trades"}
+        </Button>
+      )}
+      {at < trades.length && (
+        <p className="text-center text-[10px] text-muted-foreground" data-testid="text-fills-progress">
+          Nothing is written until you have been through them all.
+        </p>
+      )}
+      {at >= trades.length && waiting > 0 && (
         <p className="text-center text-[10px] text-muted-foreground" data-testid="text-fills-waiting">
           {waiting} more {waiting === 1 ? "trade is" : "trades are"} waiting on a stop and a
           target. Skip any you would rather not fill in.

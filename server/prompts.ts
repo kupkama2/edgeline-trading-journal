@@ -61,6 +61,24 @@ Rules:
  * two would make both worse: "find the one that matters" and "return all of
  * them" pull in opposite directions.
  */
+/**
+ * The venue, where the trader has said which one.
+ *
+ * The prompt below describes three quite different table shapes and has to
+ * work out which it is looking at. Being told removes that guess — and the
+ * guess is where it goes wrong, because a Binance row and a broker DOM row
+ * carry the same fields under different names.
+ */
+export function ordersPrompt(ctx: { venue?: string } = {}) {
+  const hint =
+    ctx.venue === "binance"
+      ? "\n\nThe trader has said this is a BINANCE screen, so expect shape (A) or (C) and read sizes as quote notional unless the column plainly says otherwise."
+      : ctx.venue === "tradingview"
+        ? "\n\nThe trader has said this is a TRADINGVIEW or futures-broker screen, so expect shape (B): contracts rather than notional, and bracket children beneath their parent."
+        : "";
+  return ORDERS_PROMPT + hint;
+}
+
 export const ORDERS_PROMPT = `You are reading a screenshot from a trading venue showing resting/open orders that have not been filled yet. Extract EVERY order you can read.
 
 Common shapes:
@@ -82,6 +100,7 @@ For every order:
 Rules:
 - Return every DISTINCT order. Two rows on the same symbol at different entry prices are two separate orders and both must be returned. But a parent and its own Take Profit / Stop Loss children are one order — count orders, not rows.
 - Ignore header rows, totals, and any row that is clearly a filled/closed position rather than a resting order.
+- STOP if the instruments are dated futures contracts (MNQU6, MBTQ6, ESZ5 — letters, a month letter, a year digit) AND the rows show filled quantities. That is a futures broker's execution log, not resting orders. Return {"orders": []}.
 - STOP if the table is an EXECUTION LOG rather than a list of resting orders — a "Filled Qty" column with non-zero values, "Remaining Qty" reading 0, an "Avg Fill Price" column with prices in it, or a tab reading "Filled". Those rows are history: they cannot open anything, and returning them as orders invents positions the trader already closed. Return {"orders": []} and nothing else.
 - entryPrice is the identity of an order: it is what lets a shape (C) dialog be matched to the row it brackets, so read it exactly, to every decimal shown.
 - Output ONLY this JSON object, no prose and no markdown fences:
@@ -259,11 +278,13 @@ Rules:
 
 FIRST, decide what you are looking at, and say so in isExecutionLog. This is the only judgement asked of you and it decides which screen the trader gets, so make it on evidence rather than impression:
 
-  isExecutionLog is TRUE when the rows record orders that ALREADY FILLED. The tells, any one of which settles it: a "Filled Qty" column with non-zero values; a "Remaining Qty" column reading 0; an "Avg Fill Price" column with prices in it; a selected tab or status reading "Filled", "Executed" or "Completed"; an Order ID column beside a fill time.
+  isExecutionLog is TRUE when the rows record orders that ALREADY FILLED. The tells, any one of which settles it: a "Filled Qty" column with non-zero values; a "Remaining Qty" column reading 0; an "Avg Fill Price" column with prices in it; a selected tab or status reading "Filled", "Executed" or "Completed"; an Order ID column beside a fill time; an "Expiry" column reading "Day".
 
   isExecutionLog is FALSE for RESTING orders — ones that have not filled and could still open a position. The tells: Filled Qty 0, Remaining Qty equal to Qty, a status of "Working", "Open", "Pending" or "Inactive", a Binance "Open Orders" tab, or a Take Profit / Stop Loss confirmation dialog for an order not yet placed.
 
   A table showing BOTH is an execution log: report true, and return only the rows that filled.
+
+  The instrument names are evidence too. Dated futures contracts — two to four letters followed by a month letter and a year digit, such as MNQU6, MBTQ6, ESZ5, NQH6 — come from a futures broker (Tradovate, NinjaTrader, TradingView, Rithmic), never from Binance. A table of those with an Order ID column and filled quantities is an execution log, whatever else you think of it. Binance instruments look like BTCUSDT or ETHUSDC and often carry a "Perp" badge.
 
 Output ONLY this JSON object, no prose and no markdown fences:
 {"isExecutionLog": boolean, "fills": [{"symbol": string|null, "side": "buy"|"sell"|null, "kind": string|null, "qty": number|null, "price": number|null, "time": string|null, "stopPrice": number|null}]}
