@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { store } from "@/lib/scoped-storage";
+import { useAccountSettings } from "@/lib/data";
 import type { TradeWithTags, TradingStyle } from "@shared/schema";
 
 /**
@@ -31,6 +32,14 @@ export interface Scope {
   accounts: string[];
   /** Whose idea it was. Same free-text matching rules as accounts. */
   sources: string[];
+  /**
+   * Accounts marked as evaluations, held out of the default view.
+   *
+   * Not a filter the trader set — a property of the accounts themselves — so
+   * it does not count towards `scopeActive`: a page showing everything except
+   * a prop eval is still showing the log, not a subset of it.
+   */
+  evaluationAccounts?: string[];
 }
 
 export const EMPTY_SCOPE: Scope = { styleIds: [], accounts: [], sources: [] };
@@ -70,6 +79,8 @@ const StyleCtx = createContext<{
   toggleSource: (s: string) => void;
   clearSources: () => void;
   activeSource: string | null;
+  /** Accounts held out of the default view, for surfaces that want to say so. */
+  evaluationAccounts: string[];
 }>({
   scope: EMPTY_SCOPE,
   toggleStyle: () => {},
@@ -81,6 +92,7 @@ const StyleCtx = createContext<{
   toggleSource: () => {},
   clearSources: () => {},
   activeSource: null,
+  evaluationAccounts: [],
 });
 
 function readList<T>(key: string, parse: (raw: string) => T | null): T[] {
@@ -163,8 +175,20 @@ export function StyleFilterProvider({ children }: { children: React.ReactNode })
     );
   }, [styleIds, accounts, sources]);
 
+  /*
+   * Which accounts are evaluations, read from their settings rather than
+   * guessed from the name. "Apex eval" is a naming convention, not a fact, and
+   * a rule that hid every account with "eval" in it would hide the wrong ones
+   * and miss the right ones.
+   */
+  const { data: accountSettings = [] } = useAccountSettings();
+  const evaluationAccounts = useMemo(
+    () => accountSettings.filter((a) => a.kind === "evaluation").map((a) => a.name),
+    [accountSettings],
+  );
+
   const value = useMemo(() => {
-    const scope: Scope = { styleIds, accounts, sources };
+    const scope: Scope = { styleIds, accounts, sources, evaluationAccounts };
     return {
       scope,
       toggleStyle: (id: number) => setStyleIds((cur) => toggleStyleIn(cur, id)),
@@ -176,8 +200,9 @@ export function StyleFilterProvider({ children }: { children: React.ReactNode })
       activeStyleId: styleIds.length === 1 ? styleIds[0] : null,
       activeAccount: accounts.length === 1 ? accounts[0] : null,
       activeSource: sources.length === 1 ? sources[0] : null,
+      evaluationAccounts,
     };
-  }, [styleIds, accounts, sources]);
+  }, [styleIds, accounts, sources, evaluationAccounts]);
 
   return <StyleCtx.Provider value={value}>{children}</StyleCtx.Provider>;
 }
@@ -211,6 +236,23 @@ export function filterByScope<
   }
   if (scope.accounts.length) {
     out = out.filter((t) => scope.accounts.some((a) => sameAccount(a, t.account)));
+  } else if (scope.evaluationAccounts?.length) {
+    /*
+     * Evaluations stay out of the default view.
+     *
+     * A prop evaluation is somebody else's money under somebody else's rules
+     * — a drawdown limit and a profit target that change how a trade gets
+     * managed. Averaged into the live record it is not a bigger sample, it is
+     * a different game contaminating the one being measured, and the damage is
+     * invisible: the numbers still look like numbers.
+     *
+     * Only when NO account is chosen. Picking the evaluation explicitly is
+     * asking to see it, and a filter that refused to show what it was pointed
+     * at would be broken rather than careful.
+     */
+    out = out.filter(
+      (t) => !scope.evaluationAccounts!.some((a) => sameAccount(a, t.account)),
+    );
   }
   if (scope.sources?.length) {
     out = out.filter((t) =>

@@ -19,6 +19,7 @@ import {
   useStorageUsage,
   useDeleteStyle,
   useAccountSettings,
+  useMergeAccounts,
   useSaveAccountSettings,
 } from "@/lib/data";
 import { STYLE_COLOR_NAMES, styleColor } from "@/lib/style-filter";
@@ -43,12 +44,18 @@ import {
 function AccountFeesRow({
   name,
   existing,
+  others,
 }: {
   name: string;
-  existing: { feeMode: string; makerFee: number; takerFee: number } | undefined;
+  existing: { feeMode: string; makerFee: number; takerFee: number; kind?: string } | undefined;
+  /** The other accounts, for folding a passed evaluation into one of them. */
+  others: string[];
 }) {
   const save = useSaveAccountSettings();
+  const merge = useMergeAccounts();
   const { toast } = useToast();
+  const isEval = existing?.kind === "evaluation";
+  const [mergeInto, setMergeInto] = useState("");
   const [mode, setMode] = useState<"percent" | "perContract">(
     existing?.feeMode === "perContract" ? "perContract" : "percent",
   );
@@ -64,6 +71,32 @@ function AccountFeesRow({
     const t = Number(taker) || 0;
     await save.mutateAsync({ name, feeMode: mode, makerFee: m, takerFee: t });
     toast({ title: "Fees saved", description: `${name} — schedule updated.` });
+  }
+
+  async function setKind(kind: "live" | "evaluation") {
+    await save.mutateAsync({
+      name,
+      feeMode: mode,
+      makerFee: Number(maker) || 0,
+      takerFee: Number(taker) || 0,
+      kind,
+    });
+    toast({
+      title: kind === "evaluation" ? "Held out of the record" : "Counting again",
+      description:
+        kind === "evaluation"
+          ? `${name} no longer counts towards your stats unless you open it.`
+          : `${name} is funded — its trades join the book.`,
+    });
+  }
+
+  async function foldInto(into: string) {
+    const { moved } = await merge.mutateAsync({ from: name, into });
+    setMergeInto("");
+    toast({
+      title: `Merged into ${into}`,
+      description: `${moved} ${moved === 1 ? "trade" : "trades"} moved. ${name} is gone.`,
+    });
   }
 
   return (
@@ -130,6 +163,64 @@ function AccountFeesRow({
           Save
         </Button>
       )}
+
+      {/*
+        What the account IS, which decides whether it counts.
+
+        An evaluation is somebody else's money under somebody else's rules —
+        a drawdown limit and a profit target that change how a trade gets
+        managed. Averaged into the live record it is not a bigger sample, it
+        is a different game contaminating the one being measured, and the
+        damage is invisible because the numbers still look like numbers.
+      */}
+      <div className="flex w-full flex-wrap items-center gap-2 border-t border-border/40 pt-1.5 text-[10px]">
+        <button
+          type="button"
+          onClick={() => setKind(isEval ? "live" : "evaluation")}
+          className={`rounded-full border px-2 py-0.5 transition-colors ${
+            isEval
+              ? "border-amber-500/50 bg-amber-500/10 text-amber-500"
+              : "border-border text-muted-foreground hover:border-primary/40 hover:text-foreground"
+          }`}
+          data-testid={`button-account-kind-${name}`}
+        >
+          {isEval ? "evaluation — held out of your stats" : "mark as an evaluation"}
+        </button>
+
+        {isEval && (
+          <>
+            <span className="text-muted-foreground">
+              Opening it in the account filter still shows it.
+            </span>
+            {/* Passing an eval usually means a NEW funded account with a new
+                name. The trades that got you there are real and belong in the
+                record — they were only ever logged under the name the account
+                had at the time. */}
+            {others.length > 0 && (
+              <span className="ml-auto flex items-center gap-1.5">
+                <span className="text-muted-foreground">Passed it? Fold into</span>
+                <select
+                  value={mergeInto}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setMergeInto(v);
+                    if (v) void foldInto(v);
+                  }}
+                  className="rounded border border-border bg-transparent px-1.5 py-0.5 text-[10px]"
+                  data-testid={`select-merge-${name}`}
+                >
+                  <option value="">choose…</option>
+                  {others.map((o) => (
+                    <option key={o} value={o}>
+                      {o}
+                    </option>
+                  ))}
+                </select>
+              </span>
+            )}
+          </>
+        )}
+      </div>
     </div>
   );
 }
@@ -150,11 +241,13 @@ function AccountFeesCard() {
 
   return (
     <Card className="border-card-border bg-card p-4 sm:p-5" data-testid="card-account-fees">
-      <h2 className="text-sm font-semibold tracking-tight">Account fees</h2>
+      <h2 className="text-sm font-semibold tracking-tight">Accounts</h2>
       <p className="mt-0.5 text-xs text-muted-foreground">
-        Commission per side for each account — limit (maker) and market (taker) orders
-        separately. The Close dialog uses these to suggest the fee; you can always
-        overtype it per trade.
+        Commission per side — limit (maker) and market (taker) separately; the Close
+        dialog uses these to suggest a fee and you can always overtype it. And what
+        each account IS: an evaluation is held out of your stats until you open it,
+        because somebody else's drawdown limit is a different game and averaging the
+        two measures neither.
       </p>
       <div className="mt-3 space-y-2">
         {names.length === 0 && (
@@ -167,6 +260,7 @@ function AccountFeesCard() {
             key={`${n}:${settings.find((s) => s.name === n)?.id ?? "new"}`}
             name={n}
             existing={settings.find((s) => s.name === n)}
+            others={names.filter((o) => o !== n)}
           />
         ))}
         <div className="flex items-center gap-2">

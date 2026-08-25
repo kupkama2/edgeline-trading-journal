@@ -116,6 +116,26 @@ export function useAccountSettings() {
   return useQuery<AccountSettings[]>({ queryKey: ["/api/account-settings"] });
 }
 
+/**
+ * Fold one account's trades into another — an evaluation that got funded.
+ *
+ * Invalidates trades as well as the settings: every page's numbers change the
+ * moment a book's worth of trades changes account.
+ */
+export function useMergeAccounts() {
+  return useMutation({
+    mutationFn: async (v: { from: string; into: string }) =>
+      (await apiRequest("POST", "/api/account-settings/merge", v)).json() as Promise<{
+        ok: boolean;
+        moved: number;
+      }>,
+    onSuccess: () => {
+      invalidateTrades();
+      queryClient.invalidateQueries({ queryKey: ["/api/account-settings"] });
+    },
+  });
+}
+
 export function useSaveAccountSettings() {
   return useMutation({
     mutationFn: async (v: UpsertAccountSettings) =>

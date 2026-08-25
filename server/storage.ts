@@ -300,6 +300,9 @@ ALTER TABLE trades ADD COLUMN IF NOT EXISTS user_id INTEGER;
 ALTER TABLE trading_styles ADD COLUMN IF NOT EXISTS user_id INTEGER;
 ALTER TABLE mistake_tags ADD COLUMN IF NOT EXISTS user_id INTEGER;
 ALTER TABLE account_settings ADD COLUMN IF NOT EXISTS user_id INTEGER;
+-- What the account IS. 'live' for everything that already exists, so adding
+-- the distinction cannot retroactively hide anybody's record.
+ALTER TABLE account_settings ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'live';
 ALTER TABLE weekly_reviews ADD COLUMN IF NOT EXISTS user_id INTEGER;
 ALTER TABLE daily_notes ADD COLUMN IF NOT EXISTS user_id INTEGER;
 
@@ -1127,6 +1130,35 @@ export class DatabaseStorage implements IStorage {
       .orderBy(accountSettings.name);
   }
 
+  /**
+   * Move every trade from one account onto another.
+   *
+   * The case this exists for: an evaluation is passed and becomes a funded
+   * account with a different name. The trades that got you there are real
+   * trades and belong in the record — they were simply logged under the name
+   * the account had at the time.
+   *
+   * One statement, so a half-moved account cannot exist. The source's
+   * settings row goes with it: leaving it behind would keep a dead account in
+   * every picker forever.
+   */
+  async mergeAccounts(from: string, into: string): Promise<number> {
+    const a = from.trim();
+    const b = into.trim();
+    if (!a || !b || a.toLowerCase() === b.toLowerCase()) return 0;
+    return db.transaction(async (tx) => {
+      const moved = await tx
+        .update(trades)
+        .set({ account: b })
+        .where(and(eq(trades.account, a), this.owns(trades)))
+        .returning({ id: trades.id });
+      await tx
+        .delete(accountSettings)
+        .where(and(eq(accountSettings.name, a), this.owns(accountSettings)));
+      return moved.length;
+    });
+  }
+
   async upsertAccountSettings(s: UpsertAccountSettings): Promise<AccountSettings> {
     const name = s.name.trim();
     const [existing] = await db
@@ -1136,7 +1168,14 @@ export class DatabaseStorage implements IStorage {
     if (existing) {
       const [row] = await db
         .update(accountSettings)
-        .set({ feeMode: s.feeMode, makerFee: s.makerFee, takerFee: s.takerFee })
+        .set({
+          feeMode: s.feeMode,
+          makerFee: s.makerFee,
+          takerFee: s.takerFee,
+          // Omitted means "leave it as it is": the fee editor saves without
+          // knowing about kinds, and it must not quietly relive an account.
+          ...(s.kind ? { kind: s.kind } : {}),
+        })
         .where(eq(accountSettings.id, existing.id))
         .returning();
       return row;
@@ -1148,6 +1187,7 @@ export class DatabaseStorage implements IStorage {
         feeMode: s.feeMode,
         makerFee: s.makerFee,
         takerFee: s.takerFee,
+        kind: s.kind ?? "live",
         userId: this.userId,
       })
       .returning();

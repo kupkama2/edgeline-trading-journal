@@ -534,14 +534,35 @@ export const accountSettings = pgTable("account_settings", {
   feeMode: text("fee_mode").notNull().default("percent"), // 'percent' | 'perContract'
   makerFee: doublePrecision("maker_fee").notNull().default(0), // limit orders, per side
   takerFee: doublePrecision("taker_fee").notNull().default(0), // market orders, per side
+  /**
+   * What this account IS, which decides whether its trades count by default.
+   *
+   * An evaluation is somebody else's money under somebody else's rules, with
+   * a drawdown limit and a profit target that change how a trade gets managed.
+   * Averaged into the live record it is not a bigger sample, it is a different
+   * game contaminating the one you are trying to measure — so its trades stay
+   * out of every default view until the account is opened on purpose, or
+   * passes and is marked funded.
+   *
+   * "live" by default, so every account that already exists is unaffected.
+   */
+  kind: text("kind").notNull().default("live"), // 'live' | 'evaluation'
 });
 
 export const feeModeEnum = z.enum(["percent", "perContract"]);
+export const accountKindEnum = z.enum(["live", "evaluation"]);
 export const upsertAccountSettingsSchema = z.object({
   name: z.string().min(1).max(80),
   feeMode: feeModeEnum,
   makerFee: z.number().min(0),
   takerFee: z.number().min(0),
+  kind: accountKindEnum.optional(),
+});
+
+/** Move every trade from one account onto another — an eval that got funded. */
+export const mergeAccountsSchema = z.object({
+  from: z.string().min(1).max(80),
+  into: z.string().min(1).max(80),
 });
 
 export type AccountSettings = typeof accountSettings.$inferSelect;
