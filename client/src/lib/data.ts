@@ -13,6 +13,7 @@ import type {
   WeeklyReview,
   SetupParseResult,
   OutcomeParseResult,
+  FillRowParseResult,
   OrderRowParseResult,
 } from "@shared/schema";
 import type { InsightsBundle, WeeklyInsights } from "@shared/weekly-insights";
@@ -406,7 +407,12 @@ export async function parseScreenshot(
 ): Promise<unknown>;
 export async function parseScreenshot(
   image: string,
-  kind: "setup" | "outcome" | "orders" | "close",
+  kind: "fills",
+  context?: Record<string, unknown>,
+): Promise<{ fills: FillRowParseResult[]; skipped: number }>;
+export async function parseScreenshot(
+  image: string,
+  kind: "setup" | "outcome" | "orders" | "close" | "fills",
   context?: Record<string, unknown>,
 ): Promise<any> {
   const res = await apiRequest("POST", "/api/parse-screenshot", {

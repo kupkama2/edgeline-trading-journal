@@ -51,6 +51,7 @@ import {
   pointValueFor,
 } from "@shared/symbols";
 import {
+  FILL_LOG_PROMPT,
   ORDERS_PROMPT,
   RATIONALE_PROMPT,
   SETUP_PROMPT,
@@ -1033,7 +1034,9 @@ export async function registerRoutes(
             ? ORDERS_PROMPT
             : kind === "close"
               ? closeCardPrompt(context ?? {})
-              : outcomePrompt(context ?? {});
+              : kind === "fills"
+                ? FILL_LOG_PROMPT
+                : outcomePrompt(context ?? {});
       const text = await callLLM(prompt, { mediaType, data });
       const json = extractJson(text);
 
@@ -1061,6 +1064,44 @@ export async function registerRoutes(
           ok: true,
           kind,
           result: { orders: usable, skipped: rows.length - usable.length },
+        });
+      }
+
+      if (kind === "fills") {
+        /*
+         * Rows only — which trades they add up to is a question about the
+         * running position, not about any row, and it is answered in shared
+         * code where it can be tested. A row missing any of side, quantity,
+         * price or time is dropped rather than passed on: the walk counts a
+         * position through every row in turn, so one bad row does not produce
+         * one bad trade, it produces a different set of trades from there on.
+         */
+        const rows = Array.isArray(json?.fills) ? json.fills : [];
+        const usable = rows
+          .filter(
+            (f: any) =>
+              f &&
+              (f.side === "buy" || f.side === "sell") &&
+              typeof f.qty === "number" &&
+              f.qty > 0 &&
+              typeof f.price === "number" &&
+              f.price > 0 &&
+              typeof f.time === "string" &&
+              f.symbol,
+          )
+          .map((f: any) => ({
+            symbol: String(f.symbol).trim().toUpperCase(),
+            side: f.side,
+            kind: f.kind ? String(f.kind) : null,
+            qty: f.qty,
+            price: f.price,
+            time: String(f.time),
+            stopPrice: typeof f.stopPrice === "number" ? f.stopPrice : null,
+          }));
+        return res.json({
+          ok: true,
+          kind,
+          result: { fills: usable, skipped: rows.length - usable.length },
         });
       }
 

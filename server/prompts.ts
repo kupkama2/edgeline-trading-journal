@@ -224,3 +224,39 @@ Respond with STRICT JSON only, no prose, no markdown fences:
 
 Every field must be present. Use null for anything not legible or not printed, and [] for fills where there is no fill table.`;
 }
+
+/**
+ * A filled-order log — the "Filled" tab of a futures broker's order window.
+ *
+ * Deliberately dumb: it transcribes rows and does not try to work out which
+ * rows belong to which trade. That is a question about the running position
+ * rather than about any row, it is arithmetic, and `tradesFromFills` does it
+ * where it can be tested. A model asked to do both tends to answer the second
+ * question by guessing, and a guessed trade boundary is invisible afterwards.
+ */
+export const FILL_LOG_PROMPT = `You are reading a screenshot of a trading account's FILLED ORDERS — an execution log. Every row is one order that actually filled. Transcribe every row you can read. Do not work out which rows belong to which trade, do not pair entries with exits, and do not skip a row because you think it is an exit: return them all, in the order they appear, and the pairing is done elsewhere.
+
+Typical columns (Tradovate, NinjaTrader, TradingView, Rithmic and similar):
+Symbol | Side | Type | Qty | Remaining Qty | Filled Qty | Limit Price | Stop Price | Take Profit | Stop Loss | Avg Fill Price | Update Time | Order ID | Expiry
+
+For every filled row read:
+1. symbol — the contract as printed, e.g. "MNQU6", "MBTQ6", "ESZ5". Keep the month and year code.
+2. side — "buy" or "sell", from the Side column. Not from the colour.
+3. kind — the Type column verbatim: "Limit", "Stop", "Stop Loss", "Market", "Take Profit", "Trailing Stop".
+4. qty — the FILLED quantity. Use "Filled Qty" where there is one; fall back to "Qty" only when there is not. Never "Remaining Qty".
+5. price — the price it actually filled at: "Avg Fill Price". Only if that column is missing or blank, fall back to Limit Price, then Stop Price.
+6. time — "Update Time" (or "Fill Time" / "Time"), as "YYYY-MM-DDTHH:mm:ss" exactly as printed, with NO timezone conversion. Keep the seconds.
+7. stopPrice — the Stop Price column where the row has one, else null. This is the trigger level, not the fill.
+
+Rules:
+- ONLY rows that filled. If the screenshot shows a status column, skip anything reading Cancelled, Rejected, Working, Inactive, Expired or Pending — an order that never filled did not happen, and including it makes the position count wrong for every row after it.
+- A row with Filled Qty 0 did not fill. Skip it.
+- Row order is whatever the table is sorted by and often is NOT time order. Return the rows as printed; the times decide the sequence later.
+- Do not merge rows. Two fills on the same symbol at the same second are two rows.
+- Numbers must be plain JSON numbers: no thousands separators, no currency symbols.
+- If a field is not legible, use null rather than guessing. A guessed quantity turns every later row into a different trade.
+
+Output ONLY this JSON object, no prose and no markdown fences:
+{"fills": [{"symbol": string|null, "side": "buy"|"sell"|null, "kind": string|null, "qty": number|null, "price": number|null, "time": string|null, "stopPrice": number|null}]}
+
+If the image is not an execution log at all, return {"fills": []}.`;

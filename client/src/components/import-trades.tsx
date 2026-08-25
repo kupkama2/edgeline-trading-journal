@@ -21,6 +21,8 @@ import {
   type ImportCandidate,
 } from "@shared/import-parse";
 import { fileToDownscaledDataUrl, parseScreenshot, useImportTrades } from "@/lib/data";
+import { FillLogReview } from "@/components/import-fills";
+import type { LoggedFill } from "@shared/order-log";
 import { useStyleFilter } from "@/lib/style-filter";
 
 /**
@@ -59,6 +61,9 @@ export function ImportTradesDialog({
   // merged into it, because the paste is re-parsed on every keystroke and would
   // wipe them.
   const [shotRows, setShotRows] = useState<ImportCandidate[]>([]);
+  // A filled-order log, kept separately: it becomes completed trades with legs
+  // rather than resting orders, so it has nothing to merge with above.
+  const [logRows, setLogRows] = useState<LoggedFill[] | null>(null);
   const [scanning, setScanning] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   // Keyed by the order's identity rather than its row position: pasting a second
@@ -175,7 +180,39 @@ export function ImportTradesDialog({
   async function scanImage(file: File) {
     setScanning(true);
     try {
-      const res = await parseScreenshot(await fileToDownscaledDataUrl(file), "orders");
+      const dataUrl = await fileToDownscaledDataUrl(file);
+      const res = await parseScreenshot(dataUrl, "orders");
+
+      /*
+       * Nothing resting in it — so try reading it as an execution log instead.
+       *
+       * The two are asked for separately on purpose: "find the orders that
+       * could still open" and "transcribe every row that filled" pull in
+       * opposite directions, and a prompt told to do both does neither
+       * reliably. Chained rather than chosen, because a trader pasting their
+       * fills should not first have to tell the app which kind of screenshot
+       * it is looking at — it can see that for itself, and the second call
+       * only happens when the first found nothing to import.
+       */
+      if (!(res.orders ?? []).length) {
+        const log = await parseScreenshot(dataUrl, "fills");
+        if (log.fills?.length) {
+          setLogRows(
+            log.fills
+              .filter((f) => f.side && f.qty && f.price && f.time && f.symbol)
+              .map((f) => ({
+                symbol: f.symbol!,
+                side: f.side as "buy" | "sell",
+                kind: f.kind,
+                qty: f.qty!,
+                price: f.price!,
+                time: f.time!,
+                stopPrice: f.stopPrice,
+              })),
+          );
+          return;
+        }
+      }
       // A bracketed order comes back as its parent plus two exit legs; listing
       // the legs would offer to import the take profit as a trade of its own.
       const mapped: ImportCandidate[] = dropBracketLegs(
@@ -264,10 +301,34 @@ export function ImportTradesDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-sm">
             <ClipboardPaste className="h-4 w-4" />
-            Import resting orders
+            {logRows ? "Trades from your order log" : "Import resting orders"}
           </DialogTitle>
         </DialogHeader>
 
+        {/* An execution log is a different thing from a list of resting orders
+            — completed trades with legs, not positions that might open — so it
+            takes over the window rather than sharing it. The dropzone's other
+            controls would all be about the wrong thing. */}
+        {logRows ? (
+          <div className="space-y-3">
+            <FillLogReview
+              fills={logRows}
+              onDone={() => {
+                setLogRows(null);
+                onClose();
+              }}
+            />
+            <Button
+              type="button"
+              variant="ghost"
+              className="w-full text-[11px]"
+              onClick={() => setLogRows(null)}
+              data-testid="button-back-to-import"
+            >
+              That was not an order log — go back
+            </Button>
+          </div>
+        ) : (
         <div className="space-y-4">
           {/* Three ways in, because a screenshot arrives three ways: dropped,
               pasted with Ctrl+V, or picked through the file dialog. */}
@@ -493,6 +554,7 @@ export function ImportTradesDialog({
             </Button>
           </div>
         </div>
+        )}
       </DialogContent>
     </Dialog>
   );
