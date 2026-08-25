@@ -37,7 +37,7 @@ const TradeChart = lazy(() =>
   import("@/components/trade-chart").then((m) => ({ default: m.TradeChart })),
 );
 import { parseExtraTargets, parsePlaybook, type TradeWithTags } from "@shared/schema";
-import { closeFromCard, type CloseCard, type CloseFill } from "@shared/close-card";
+import { type CloseCard, type CloseFill, closeFromCard, readHeadline, saysAnythingAboutClose } from "@shared/close-card";
 import { LevelLabel, LevelLadder, type LevelKind } from "@/components/levels";
 import { ClipboardList, Layers, NotebookPen } from "lucide-react";
 import { useCloseCardPaste } from "@/lib/close-paste";
@@ -289,6 +289,10 @@ export function TradeEditor({
 
   function applyCard(c: CloseCard) {
     if (!trade) return;
+    // A chart pasted onto a closed trade is an attachment, not an argument.
+    // It has none of a close's fields, so there is nothing to report and the
+    // gallery's own listener has already kept the image.
+    if (trade.status === "closed" && !saysAnythingAboutClose(c)) return;
     const verdict = closeFromCard(c, { ...trade, fees: trade.fees });
     setCardRead({ card: c, verdict });
     if (!verdict.usable) return;
@@ -348,9 +352,23 @@ export function TradeEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [card]);
 
+  /*
+   * Read on ANY trade, not just a live one.
+   *
+   * This used to be live-only, on the reasoning that Ctrl-V on a closed trade
+   * is how you attach the outcome chart and hijacking it would take a working
+   * gesture away. That was right about the gesture and wrong about the trader:
+   * the exit is most often corrected AFTER the trade is closed — a screenshot
+   * of the fills is exactly how you find out you logged one exit for five —
+   * and a paste that silently did nothing was the worse of the two failures.
+   *
+   * Both readings coexist because the picture decides, not the trade's state:
+   * a chart carries none of a close's fields, so it is attached and nothing is
+   * said (see applyCard), while a fills table announces itself.
+   */
   const { busy: readingCard } = useCloseCardPaste({
     trade,
-    enabled: !!trade && (trade.status === "open" || trade.status === "pending"),
+    enabled: !!trade,
     onCard: applyCard,
     onError: (message) =>
       toast({ title: "Couldn't read that screenshot", description: message, variant: "destructive" }),
@@ -530,6 +548,80 @@ export function TradeEditor({
           )}
         </div>
 
+        {/*
+          Pinned, because the editor grew long enough that the numbers you are
+          editing FOR sat below everything you were editing. Typing an exit
+          price and scrolling back down to see what it did to R is not
+          checking your work, it is remembering it — and a live preview you
+          cannot see while you type is not a live preview.
+
+          Top rather than bottom: sticky never lifts an element above where it
+          falls in flow, so a bottom bar would stay invisible until you had
+          already scrolled to it. Opaque, because form fields sliding under a
+          translucent strip is how a wrong number gets read as a right one.
+        */}
+        {previewMetrics && (
+          /* An opaque shell does the pinning so the strip itself can keep
+             its tint. The offset is negative on purpose: the dialog scrolls
+             inside 24px of padding, so a plain top-0 would pin the bar 24px
+             down and leave a band above it where form rows slide past in
+             full view. -top-6 pins it 24px higher — flush with the visible
+             edge — and the shell's matching pt-6 fills that band, which the
+             scroll container clips away rather than painting over the
+             heading. */
+          <div className="sticky -top-6 z-20 bg-background pb-1 pt-6">
+          <div
+            className="grid grid-cols-2 gap-2 rounded-md border border-border/60 bg-secondary/30 p-2.5 text-center font-mono text-xs shadow-sm sm:grid-cols-4"
+            data-testid="edit-preview-metrics"
+          >
+            {/* P&L leads. R is this journal's unit, but the broker's
+                statement is in dollars, and the fastest way to know a
+                trade was logged correctly is that this figure matches the
+                one on the exchange. */}
+            <div>
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                {previewMetrics.fees > 0 ? "Net P&L" : "P&L"}
+              </p>
+              <p
+                className={`text-sm font-semibold ${
+                  (previewMetrics.actualPnL ?? 0) >= 0 ? "text-emerald-400" : "text-primary"
+                }`}
+                data-testid="edit-preview-pnl"
+              >
+                {previewMetrics.actualPnL != null ? fmtMoney(previewMetrics.actualPnL) : "—"}
+              </p>
+              {previewMetrics.fees > 0 && (
+                <p className="text-[10px] text-muted-foreground">
+                  {fmtMoney(previewMetrics.grossPnL)} gross
+                </p>
+              )}
+            </div>
+            <div>
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Actual</p>
+              <p
+                className={
+                  (previewMetrics.actualR ?? 0) >= 0 ? "text-emerald-400" : "text-primary"
+                }
+              >
+                {fmtR(previewMetrics.actualR)}
+              </p>
+            </div>
+            <div>
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">No-mgmt</p>
+              <p>{fmtR(previewMetrics.potentialR)}</p>
+            </div>
+            <div>
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Capture</p>
+              <p>
+                {previewMetrics.captureRatioClipped != null
+                  ? `${Math.round(previewMetrics.captureRatioClipped * 100)}%`
+                  : "—"}
+              </p>
+            </div>
+          </div>
+          </div>
+        )}
+
         {/* What the card said, and what was left alone. Filling the fields
             silently would be the wrong kind of helpful: these are numbers you
             are about to sign off on, and the ones this refused to touch are
@@ -540,11 +632,32 @@ export function TradeEditor({
             data-testid="banner-close-card"
           >
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-              <span className="font-medium">Read from your screenshot</span>
-              {cardRead.card.exitPrice != null && (
-                <span className="font-mono">exit {num(cardRead.card.exitPrice)}</span>
+              {/* What KIND of screenshot that was, before any of the numbers.
+                  "I pasted it and nothing happened" was literally true, but a
+                  paste that quietly fills three fields looks the same — so the
+                  read says what it saw, in the terms the position came off in
+                  rather than the fields it wrote. */}
+              <span className="font-medium" data-testid="text-close-card-headline">
+                {readHeadline(cardRead.card, cardRead.verdict)}
+              </span>
+              {(cardRead.verdict.apply.exitPrice ?? cardRead.card.exitPrice) != null && (
+                <span className="font-mono">
+                  exit {num((cardRead.verdict.apply.exitPrice ?? cardRead.card.exitPrice)!)}
+                </span>
               )}
-              {cardRead.card.exitTime && <span className="font-mono">{cardRead.card.exitTime.replace("T", " ")}</span>}
+              {/* The size is the field most worth showing and the one most
+                  likely to be off: it is what says whether the screenshot is
+                  the whole position or a slice of it. */}
+              {(cardRead.card.size ?? cardRead.verdict.sizes?.total) != null && (
+                <span className="font-mono" data-testid="text-close-card-size">
+                  {num((cardRead.card.size ?? cardRead.verdict.sizes!.total)!)} closed
+                </span>
+              )}
+              {(cardRead.verdict.apply.exitTime ?? cardRead.card.exitTime) && (
+                <span className="font-mono">
+                  {(cardRead.verdict.apply.exitTime ?? cardRead.card.exitTime)!.replace("T", " ")}
+                </span>
+              )}
               {cardRead.card.realizedPnl != null && (
                 <span className="font-mono">
                   {cardRead.card.realizedPnl > 0 ? "+" : ""}
@@ -585,12 +698,12 @@ export function TradeEditor({
             {cardRead.verdict.fills.length > 1 && (
               <div className="space-y-1" data-testid="close-card-partials">
                 <div className="flex flex-wrap items-center gap-2">
+                  {/* The headline above already said what these rows are; this
+                      is only the offer to keep them. */}
                   <span>
-                    {cardRead.verdict.fills.length} fills
                     {cardRead.verdict.partials.length > 1
-                      ? ` across ${new Set(cardRead.verdict.partials.map((f) => f.time)).size} times — scaling, not one order`
-                      : " at one instant — one order the venue sliced up"}
-                    .
+                      ? "Logged as one exit, but it was not one."
+                      : "Kept as a single exit at the average."}
                   </span>
                   <Button
                     type="button"
@@ -1190,57 +1303,6 @@ export function TradeEditor({
               data-testid="input-edit-notes"
             />
 
-            {previewMetrics && (
-              <div
-                className="grid grid-cols-2 gap-2 rounded-md border border-border/60 bg-secondary/30 p-2.5 text-center font-mono text-xs sm:grid-cols-4"
-                data-testid="edit-preview-metrics"
-              >
-                {/* P&L leads. R is this journal's unit, but the broker's
-                    statement is in dollars, and the fastest way to know a
-                    trade was logged correctly is that this figure matches the
-                    one on the exchange. */}
-                <div>
-                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                    {previewMetrics.fees > 0 ? "Net P&L" : "P&L"}
-                  </p>
-                  <p
-                    className={`text-sm font-semibold ${
-                      (previewMetrics.actualPnL ?? 0) >= 0 ? "text-emerald-400" : "text-primary"
-                    }`}
-                    data-testid="edit-preview-pnl"
-                  >
-                    {previewMetrics.actualPnL != null ? fmtMoney(previewMetrics.actualPnL) : "—"}
-                  </p>
-                  {previewMetrics.fees > 0 && (
-                    <p className="text-[10px] text-muted-foreground">
-                      {fmtMoney(previewMetrics.grossPnL)} gross
-                    </p>
-                  )}
-                </div>
-                <div>
-                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Actual</p>
-                  <p
-                    className={
-                      (previewMetrics.actualR ?? 0) >= 0 ? "text-emerald-400" : "text-primary"
-                    }
-                  >
-                    {fmtR(previewMetrics.actualR)}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">No-mgmt</p>
-                  <p>{fmtR(previewMetrics.potentialR)}</p>
-                </div>
-                <div>
-                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Capture</p>
-                  <p>
-                    {previewMetrics.captureRatioClipped != null
-                      ? `${Math.round(previewMetrics.captureRatioClipped * 100)}%`
-                      : "—"}
-                  </p>
-                </div>
-              </div>
-            )}
 
             {/* The price path, here as well as on the trade's own page.
                 Editing is where the levels get corrected, and correcting a

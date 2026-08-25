@@ -194,7 +194,7 @@ A. A CLOSED POSITION CARD. Big labels: "Realized PNL", "ROI", "Entry Price", "Av
 
 B. A TRADE HISTORY ROW. A single line under column headers such as: Time | Market | Direction | Price | Size | Trade Value | Fee | Closed PNL. The headers may be in a SECOND image, or missing entirely — in that case infer the columns from their shape: a timestamp, a ticker, a direction, then numbers, with currency suffixes on the money columns. "Close Long" means the POSITION was long; "Close Short" means it was short.
 
-C. AN ORDER WITH ITS FILLS. A summary line (symbol, type, direction, "Average", "Executed", "Amount", "Status: Filled"), often with "Total PNL" and "Total Fee" beneath it, and then a table of individual fills: Time | Trading Price | Executed | Fee | Role | PNL | Total. Read the summary AND every fill row you can see.
+C. AN ORDER WITH ITS FILLS. A summary line (symbol, type, direction, "Average", "Executed", "Amount", "Status: Filled"), often with "Total PNL" and "Total Fee" beneath it, and then a table of individual fills: Time | Trading Price | Executed | Fee | Role | PNL | Total. Read the summary AND every fill row you can see. The summary is OFTEN CROPPED OUT, leaving only the fill table under its headers: SEVERAL rows sharing one timestamp, or a Role column reading "Taker"/"Maker", is layout C with no summary — never layout B. B is ONE row. When the summary is missing, leave exitPrice, size and realizedPnl null unless you can add them up from the rows themselves, and fill in every fill row.
 
 For context, the trade being closed in the journal is:
 - symbol: ${ctx.symbol ?? "unknown"}
@@ -210,14 +210,14 @@ Read these fields:
 5. exitTime — when it closed, as "YYYY-MM-DDTHH:mm:ss" exactly as printed, with NO timezone conversion. Dates are usually MM/DD/YYYY. A duration like "Lasting 10h 34m" is not a timestamp.
 6. entryTime — the opened timestamp where there is one, same format, else null.
 7. size — the quantity closed: "Closed Vol" (A), "Size" (B), "Executed"/"Amount" (C). The number only. "Max OI" is NOT this.
-8. realizedPnl — the realised profit or loss for the close, signed: "Realized PNL", "Closed PNL", "Total PNL".
+8. realizedPnl — the realised profit or loss for the close, signed: "Realized PNL", "Closed PNL", "Total PNL". If no total is printed but every fill row has a PNL, add those up.
 9. pnlCurrency — the unit PnL is printed in: USDT, USDC, BNFCR. From the label, not assumed.
 10. roiPercent — signed, plain number, where printed; else null.
 11. leverage — a number, so "150x" is 150; else null.
 12. fee — the TOTAL fee for this close, positive: "Fee" (B) or "Total Fee" (C). If only per-fill fees are shown, add them up.
 13. feeCurrency — the unit the fee is printed in.
 14. isClosed — true if it shows the position or order as closed/filled, false if still open.
-15. fills — layout C only, and only for rows you can actually read. One object per fill row: {"time": "YYYY-MM-DDTHH:mm:ss", "price": number, "size": number, "fee": number|null, "pnl": number|null}. Use the row's own time even when every row shares it. Empty array for layouts A and B.
+15. fills — layout C only (summary or not), and only for rows you can actually read. One object per fill row: {"time": "YYYY-MM-DDTHH:mm:ss", "price": number, "size": number, "fee": number|null, "pnl": number|null}. Use the row's own time even when every row shares it. Empty array for layouts A and B.
 
 Respond with STRICT JSON only, no prose, no markdown fences:
 {"symbol": string|null, "direction": "long"|"short"|null, "exitPrice": number|null, "entryPrice": number|null, "exitTime": string|null, "entryTime": string|null, "size": number|null, "realizedPnl": number|null, "pnlCurrency": string|null, "roiPercent": number|null, "leverage": number|null, "fee": number|null, "feeCurrency": string|null, "isClosed": boolean|null, "fills": [{"time": string|null, "price": number|null, "size": number|null, "fee": number|null, "pnl": number|null}]}

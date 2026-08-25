@@ -68,6 +68,15 @@ export interface CloseCard {
   fills: CloseFill[];
 }
 
+/** How many decimals a number carries, as printed. */
+function decimalsOf(n: number): number {
+  const s = String(n);
+  // Tiny prices go exponential ("1e-7"), where counting characters says 0.
+  if (s.includes("e") || s.includes("E")) return 8;
+  const dot = s.indexOf(".");
+  return dot < 0 ? 0 : s.length - dot - 1;
+}
+
 const nOrNull = (v: unknown): number | null => {
   if (typeof v === "number") return Number.isFinite(v) ? v : null;
   if (typeof v !== "string") return null;
@@ -278,7 +287,19 @@ export function closeFromCard(
     const usable = card.fills.filter((f) => f.price != null && (f.size ?? 0) > 0);
     if (usable.length === 0) return null;
     const size = usable.reduce((n, f) => n + (f.size ?? 0), 0);
-    return size > 0 ? usable.reduce((n, f) => n + f.price! * (f.size ?? 0), 0) / size : null;
+    if (size <= 0) return null;
+    const avg = usable.reduce((n, f) => n + f.price! * (f.size ?? 0), 0) / size;
+    /*
+     * Rounded, because a size-weighted mean of five prices lands on all
+     * seventeen digits a float can hold and "1.0625305110602594" in the exit
+     * box is not a price anyone recognises — it reads as the app having
+     * invented precision the exchange never printed. Four decimals past the
+     * finest fill is past anything a venue quotes and still far short of
+     * where the noise starts, so it removes the artefact without rounding
+     * away anything real.
+     */
+    const dp = Math.min(8, Math.max(...usable.map((f) => decimalsOf(f.price!))) + 4);
+    return Number(avg.toFixed(dp));
   })();
   const exitPrice = card.exitPrice ?? avgOfFills;
   if (exitPrice != null) apply.exitPrice = exitPrice;
@@ -296,12 +317,23 @@ export function closeFromCard(
    * typed it is left alone and the difference reported — the trader may have
    * counted both sides where the card shows one.
    */
-  if (card.fee != null && card.fee > 0) {
+  /*
+   * A cropped fill table prints a fee per row and no total. Adding them up is
+   * arithmetic, so it is done here rather than asked of the model — a column
+   * of numbers is exactly the thing a vision model will get subtly wrong and
+   * exactly the thing code gets right every time.
+   */
+  const feeOnCard =
+    card.fee ??
+    (card.fills.some((f) => f.fee != null)
+      ? card.fills.reduce((n, f) => n + Math.abs(f.fee ?? 0), 0)
+      : null);
+  if (feeOnCard != null && feeOnCard > 0) {
     const already = trade.fees ?? null;
-    if (already == null || already === 0) apply.fees = Math.abs(card.fee);
-    else if (Math.abs(Math.abs(card.fee) - already) / Math.max(already, 1e-9) > 0.05) {
+    if (already == null || already === 0) apply.fees = Math.abs(feeOnCard);
+    else if (Math.abs(Math.abs(feeOnCard) - already) / Math.max(already, 1e-9) > 0.05) {
       warnings.push(
-        `The card's fee is ${Math.abs(card.fee)}${card.feeCurrency ? ` ${card.feeCurrency}` : ""}, this trade says ${already}. Left as it was.`,
+        `The card's fee is ${Math.abs(feeOnCard)}${card.feeCurrency ? ` ${card.feeCurrency}` : ""}, this trade says ${already}. Left as it was.`,
       );
     }
   }
@@ -376,4 +408,56 @@ function sizeCheck(
     }
   }
   return { total, matchesTrade: false, unitNote: null };
+}
+
+/**
+ * Did the screenshot say anything at all about how the trade ended?
+ *
+ * On a live trade a paste can only mean one thing, so a blank read is worth
+ * saying out loud. On a CLOSED trade the same gesture is also how you attach
+ * the outcome chart, and a chart has none of these fields — so this is what
+ * separates "you pasted the exit" from "you pasted a picture", and it is the
+ * difference between a helpful panel and one that argues with every chart you
+ * ever attach.
+ */
+export function saysAnythingAboutClose(card: CloseCard): boolean {
+  return (
+    card.exitPrice != null ||
+    card.exitTime != null ||
+    card.realizedPnl != null ||
+    card.size != null ||
+    card.fee != null ||
+    card.fills.some((f) => f.price != null || f.size != null)
+  );
+}
+
+/**
+ * One line saying what kind of screenshot that was.
+ *
+ * The complaint this answers is "I pasted it and nothing happened" — which was
+ * literally true, but the fix is not only to make it happen. A paste that
+ * quietly fills three fields still looks like nothing happened, so the read
+ * announces itself first and in the trader's terms: how the position came off,
+ * not which fields were written.
+ *
+ * The distinction it exists to make is between five prints at the same instant
+ * and five taken over an afternoon. Both arrive as five rows in the same table
+ * and they are not the same event — one is a market order the venue sliced up,
+ * the other is you scaling out, and only the second is a set of decisions
+ * worth keeping separately.
+ */
+export function readHeadline(card: CloseCard, v: CardVerdict): string {
+  if (!saysAnythingAboutClose(card)) return "Nothing about an exit on that screenshot.";
+
+  const times = new Set(v.partials.map((f) => f.time)).size;
+  if (v.partials.length > 1) {
+    return `${v.partials.length} exits across ${times} different times — you scaled out of this one.`;
+  }
+  if (v.fills.length > 1) {
+    return `${v.fills.length} fills, all at the same instant — one order the venue sliced up, so it is a single exit.`;
+  }
+  if (v.usable) return "One exit.";
+  // Something was legible, but not the price — so nothing can be written from
+  // it, and saying which part is missing beats a bare refusal.
+  return "Read the screenshot, but not an exit price — nothing to fill in from it.";
 }

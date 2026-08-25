@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { closeFromCard, normalizeCloseCard, toNaiveLocal } from "../shared/close-card";
+import {
+  closeFromCard,
+  normalizeCloseCard,
+  readHeadline,
+  saysAnythingAboutClose,
+  toNaiveLocal,
+} from "../shared/close-card";
 
 /**
  * Reading a broker's closed-position card onto a trade.
@@ -313,5 +319,106 @@ describe("what may be written onto the trade", () => {
     // onto a trade with no exit and leave it looking half-finished.
     const v = closeFromCard(normalizeCloseCard({ ...binance, exitPrice: null }), trade);
     expect(v.usable).toBe(false);
+  });
+});
+
+/**
+ * The same order, screenshotted without its summary line — just the fill
+ * table under its headers. This is what actually gets pasted: the summary sits
+ * above the fold, or the trader crops to the rows because the rows are the
+ * interesting part. Everything the card would have stated has to come from the
+ * table itself.
+ */
+const bareFillTable = {
+  symbol: null,
+  direction: null,
+  exitPrice: null,
+  exitTime: null,
+  size: null,
+  realizedPnl: null,
+  fee: null,
+  isClosed: true,
+  fills: slicedOrder.fills,
+};
+
+describe("a fill table with no summary above it", () => {
+  const read = () =>
+    closeFromCard(normalizeCloseCard(bareFillTable), {
+      symbol: "ZRO",
+      direction: "long",
+      entryPrice: 1.0,
+      size: 655.5,
+    });
+
+  it("still closes the trade, at the size-weighted average", () => {
+    const v = read();
+    expect(v.usable).toBe(true);
+    // 655.50 quote across five prints between 1.0625 and 1.0626.
+    expect(v.apply.exitPrice).toBeCloseTo(1.0625305, 6);
+    expect(v.apply.exitTime).toBe("2026-08-25T10:56");
+  });
+
+  it("recognises the rows as one sliced order rather than five decisions", () => {
+    const v = read();
+    expect(v.fillsSeen).toBe(5);
+    expect(v.partials).toEqual([]);
+    expect(readHeadline(normalizeCloseCard(bareFillTable), v)).toMatch(
+      /5 fills, all at the same instant.*single exit/i,
+    );
+  });
+
+  it("matches the table's quote total against a position kept in quote", () => {
+    expect(read().sizes).toMatchObject({ matchesTrade: true });
+  });
+
+  it("adds the per-fill fees up itself", () => {
+    // The total is only printed on the summary line that got cropped off, and
+    // adding a column of numbers is the last thing to delegate to a model.
+    expect(read().apply.fees).toBeCloseTo(0.32773753, 8);
+  });
+
+  it("does not invent precision the exchange never printed", () => {
+    /*
+     * A size-weighted mean of five prices lands on all seventeen digits a
+     * float can hold. "1.0625305110602594" in the exit box is not a price
+     * anyone recognises — it reads as the app having made the number up.
+     */
+    expect(String(read().apply.exitPrice)).toBe("1.06253051");
+  });
+});
+
+describe("saying what the screenshot was", () => {
+  it("calls scaling out what it is", () => {
+    // The same five prints, spread over an afternoon. Five decisions, not one
+    // order — and the only thing separating the two is the clock.
+    const scaled = {
+      ...bareFillTable,
+      fills: slicedOrder.fills.map((f, i) => ({ ...f, time: `2026-08-25T1${i}:00:00` })),
+    };
+    const card = normalizeCloseCard(scaled);
+    expect(readHeadline(card, closeFromCard(card, { symbol: "ZRO", direction: "long", entryPrice: 1, size: 655.5 })))
+      .toMatch(/5 exits across 5 different times.*scaled out/i);
+  });
+
+  it("names a plain single close", () => {
+    const card = normalizeCloseCard(binance);
+    expect(readHeadline(card, closeFromCard(card, trade))).toBe("One exit.");
+  });
+
+  it("stays quiet about a screenshot that is not a close at all", () => {
+    /*
+     * The reason this matters: on a CLOSED trade, Ctrl-V is also how you
+     * attach the outcome chart. A chart has none of these fields, and a panel
+     * that argued with every chart you ever attached would make the gesture
+     * worse than useless.
+     */
+    const chart = normalizeCloseCard({ symbol: "ZROUSDT", direction: "long", fills: [] });
+    expect(saysAnythingAboutClose(chart)).toBe(false);
+    expect(readHeadline(chart, closeFromCard(chart, { symbol: "ZRO", direction: "long", entryPrice: 1, size: 1 })))
+      .toMatch(/nothing about an exit/i);
+  });
+
+  it("counts a fill table on its own as something to say", () => {
+    expect(saysAnythingAboutClose(normalizeCloseCard(bareFillTable))).toBe(true);
   });
 });
