@@ -90,6 +90,10 @@ describe.skipIf(!DB)("settling parked trades against the feed", () => {
     // Read before the module that captures it is first imported.
     process.env.BINANCE_BASE = `http://127.0.0.1:${port}`;
     process.env.BINANCE_FUTURES_BASE = `http://127.0.0.1:${port}`;
+    // Nothing here should ever reach the archive — the stub answers every
+    // kline request — but pinning it means a CI runner with egress cannot
+    // quietly start reading real prices if that ever stops being true.
+    process.env.BINANCE_ARCHIVE_BASE = `http://127.0.0.1:${port}`;
     const { initSchema, accounts, storageFor } = await import("../server/storage");
     await initSchema();
     const acct = await accounts.create({
