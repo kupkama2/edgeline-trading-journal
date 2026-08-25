@@ -82,6 +82,7 @@ For every order:
 Rules:
 - Return every DISTINCT order. Two rows on the same symbol at different entry prices are two separate orders and both must be returned. But a parent and its own Take Profit / Stop Loss children are one order — count orders, not rows.
 - Ignore header rows, totals, and any row that is clearly a filled/closed position rather than a resting order.
+- STOP if the table is an EXECUTION LOG rather than a list of resting orders — a "Filled Qty" column with non-zero values, "Remaining Qty" reading 0, an "Avg Fill Price" column with prices in it, or a tab reading "Filled". Those rows are history: they cannot open anything, and returning them as orders invents positions the trader already closed. Return {"orders": []} and nothing else.
 - entryPrice is the identity of an order: it is what lets a shape (C) dialog be matched to the row it brackets, so read it exactly, to every decimal shown.
 - Output ONLY this JSON object, no prose and no markdown fences:
 {"orders": [{"symbol": string|null, "direction": "long"|"short"|null, "size": number|null, "sizeUnit": "base"|"quote"|null, "entryPrice": number|null, "initialStop": number|null, "initialTarget": number|null, "entryTime": string|null}]}
@@ -256,7 +257,15 @@ Rules:
 - Numbers must be plain JSON numbers: no thousands separators, no currency symbols.
 - If a field is not legible, use null rather than guessing. A guessed quantity turns every later row into a different trade.
 
-Output ONLY this JSON object, no prose and no markdown fences:
-{"fills": [{"symbol": string|null, "side": "buy"|"sell"|null, "kind": string|null, "qty": number|null, "price": number|null, "time": string|null, "stopPrice": number|null}]}
+FIRST, decide what you are looking at, and say so in isExecutionLog. This is the only judgement asked of you and it decides which screen the trader gets, so make it on evidence rather than impression:
 
-If the image is not an execution log at all, return {"fills": []}.`;
+  isExecutionLog is TRUE when the rows record orders that ALREADY FILLED. The tells, any one of which settles it: a "Filled Qty" column with non-zero values; a "Remaining Qty" column reading 0; an "Avg Fill Price" column with prices in it; a selected tab or status reading "Filled", "Executed" or "Completed"; an Order ID column beside a fill time.
+
+  isExecutionLog is FALSE for RESTING orders — ones that have not filled and could still open a position. The tells: Filled Qty 0, Remaining Qty equal to Qty, a status of "Working", "Open", "Pending" or "Inactive", a Binance "Open Orders" tab, or a Take Profit / Stop Loss confirmation dialog for an order not yet placed.
+
+  A table showing BOTH is an execution log: report true, and return only the rows that filled.
+
+Output ONLY this JSON object, no prose and no markdown fences:
+{"isExecutionLog": boolean, "fills": [{"symbol": string|null, "side": "buy"|"sell"|null, "kind": string|null, "qty": number|null, "price": number|null, "time": string|null, "stopPrice": number|null}]}
+
+If the image is not an execution log, return {"isExecutionLog": false, "fills": []}.`;

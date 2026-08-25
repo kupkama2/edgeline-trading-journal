@@ -1101,7 +1101,16 @@ export async function registerRoutes(
         return res.json({
           ok: true,
           kind,
-          result: { fills: usable, skipped: rows.length - usable.length },
+          result: {
+            // The model's own verdict on what the screenshot is, carried
+            // through rather than re-derived from whether any rows survived.
+            // An execution log where every row was unreadable is still an
+            // execution log, and falling back to the resting-orders reader
+            // there would answer a question nobody asked.
+            isExecutionLog: json?.isExecutionLog === true,
+            fills: usable,
+            skipped: rows.length - usable.length,
+          },
         });
       }
 
