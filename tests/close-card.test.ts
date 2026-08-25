@@ -74,6 +74,110 @@ describe("reading the card", () => {
   });
 });
 
+/** Layout B: one line of trade history, columns in a separate screenshot. */
+const historyRow = {
+  symbol: "CASHCAT",
+  direction: "Close Long",
+  exitTime: "8/25/2026 - 10:05:44",
+  exitPrice: "0.21051",
+  size: "4,041 CASHCAT",
+  fee: "0.37 USDC",
+  feeCurrency: "USDC",
+  realizedPnl: "352.58 USDC",
+  pnlCurrency: "USDC",
+  isClosed: true,
+  fills: [],
+};
+
+/** Layout C: one order, sliced by the venue into prints at the same instant. */
+const slicedOrder = {
+  symbol: "ZROUSDT",
+  direction: "Close Long",
+  exitPrice: "1.0625305",
+  exitTime: "2026-08-25T10:56:58",
+  size: "655.48",
+  realizedPnl: "115.37912",
+  pnlCurrency: "BNFCR",
+  fee: "0.32773753",
+  feeCurrency: "BNFCR",
+  isClosed: true,
+  fills: [
+    { time: "2026-08-25T10:56:58", price: "1.0626000", size: "100.00", fee: "0.04999533", pnl: "17.60611" },
+    { time: "2026-08-25T10:56:58", price: "1.0626000", size: "100.00", fee: "0.04999533", pnl: "17.60611" },
+    { time: "2026-08-25T10:56:58", price: "1.0625000", size: "8.50", fee: "0.00425", pnl: "1.496" },
+    { time: "2026-08-25T10:56:58", price: "1.0625000", size: "108.91", fee: "0.05445312", pnl: "19.1675" },
+    { time: "2026-08-25T10:56:58", price: "1.0625000", size: "338.09", fee: "0.16904375", pnl: "59.5034" },
+  ],
+};
+
+describe("the shapes an exchange prints a close in", () => {
+  it("reads a history row, columns and all", () => {
+    const c = normalizeCloseCard(historyRow);
+    expect(c.symbol).toBe("CASHCAT");
+    // "Close Long" is the side of the POSITION, not of the order.
+    expect(c.direction).toBe("long");
+    expect(c.exitPrice).toBe(0.21051);
+    expect(c.size).toBe(4041);
+    expect(c.fee).toBe(0.37);
+    expect(c.realizedPnl).toBe(352.58);
+    // "8/25/2026 - 10:05:44" — a dash between the date and the time, single
+    // digit month, and no timezone to shift it by.
+    expect(c.exitTime).toBe("2026-08-25T10:05");
+  });
+
+  it("treats one sliced order as one exit, not five partials", () => {
+    /*
+     * Five prints at the same second are the venue filling a market order,
+     * and logging them as scaling would invent a plan the trader never had.
+     * The exchange's own average is what goes on the trade.
+     */
+    const v = closeFromCard(normalizeCloseCard(slicedOrder), {
+      symbol: "ZRO",
+      direction: "long",
+      entryPrice: 1.0,
+      size: 655,
+    });
+    expect(v.fillsSeen).toBe(5);
+    expect(v.partials).toEqual([]);
+    expect(v.apply.exitPrice).toBe(1.0625305);
+    expect(v.apply.fees).toBeCloseTo(0.32773753);
+  });
+
+  it("treats fills spread over time as the scaling they are", () => {
+    // The trader's own words for why this matters: taking partials far too
+    // early is a different mistake from one badly-timed exit, and a single
+    // averaged price hides which one happened.
+    const card = normalizeCloseCard({
+      ...slicedOrder,
+      // No summary line in this shot — just the fill table.
+      exitPrice: null,
+      exitTime: null,
+      fills: [
+        { time: "2026-08-25T10:05:00", price: "1.10", size: "200" },
+        { time: "2026-08-25T12:30:00", price: "1.20", size: "200" },
+        { time: "2026-08-26T09:00:00", price: "1.40", size: "200" },
+      ],
+    });
+    const v = closeFromCard(card, { symbol: "ZRO", direction: "long", entryPrice: 1, size: 600 });
+    expect(v.partials).toHaveLength(3);
+    // No stated average, so one is computed — and the exit time is the last
+    // print, which is when the position actually finished.
+    expect(v.apply.exitPrice).toBeCloseTo((1.1 + 1.2 + 1.4) / 3);
+    expect(v.apply.exitTime).toBe("2026-08-26T09:00");
+  });
+
+  it("fills in a fee only where there is none", () => {
+    const base = { symbol: "ZRO", direction: "long", entryPrice: 1.0, size: 655 };
+    const card = normalizeCloseCard(slicedOrder);
+    expect(closeFromCard(card, { ...base, fees: null }).apply.fees).toBeCloseTo(0.32773753);
+    // Already typed, and materially different: reported, never overwritten.
+    // The trader may have counted both sides where the card shows one.
+    const typed = closeFromCard(card, { ...base, fees: 0.9 });
+    expect(typed.apply.fees).toBeUndefined();
+    expect(typed.warnings.join(" ")).toMatch(/fee/i);
+  });
+});
+
 describe("what may be written onto the trade", () => {
   it("applies the exit, which is the point of the exercise", () => {
     const v = closeFromCard(normalizeCloseCard(binance), trade);

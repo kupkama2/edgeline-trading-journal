@@ -1190,6 +1190,7 @@ export function NewTradeCard({
                 it rather than in the review afterwards. */}
             <div className="col-span-2">
               <LevelLadder
+                direction={v.direction}
                 entry={priceOrNull(v.entryPrice)}
                 stop={priceOrNull(v.initialStop)}
                 target={priceOrNull(v.initialTarget)}
