@@ -39,14 +39,17 @@ import { TimeField, localNow, num, toIso, toLocalInput } from "@/components/trad
  * shut, and where it falls relative to the other fills is what decides the
  * average entry an add moves.
  */
-export function FillDialog({
+export function FillForm({
   trade,
   kind,
   onClose,
+  inline = false,
 }: {
   trade: TradeWithTags | null;
   kind: "add" | "partial";
   onClose: () => void;
+  /** Rendered inside the editor rather than in a window of its own. */
+  inline?: boolean;
 }) {
   const [price, setPrice] = useState("");
   const [size, setSize] = useState("");
@@ -164,27 +167,25 @@ export function FillDialog({
             ? Math.round((sizeHint / hintPx) * 1e4) / 1e4
             : null;
 
-  return (
-    <Dialog open={trade != null} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-sm">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2 text-sm">
-            {kind === "partial" ? (
-              <Minus className="h-4 w-4 text-emerald-500" />
-            ) : (
-              <Plus className="h-4 w-4 text-sky-400" />
-            )}
-            {trade.status === "closed"
-              ? kind === "partial"
-                ? "Log a partial you took"
-                : "Log size you added"
-              : kind === "partial"
-                ? "Take partial profit"
-                : "Add to position"}{" "}
-            — {typedSymbol(trade)}
-          </DialogTitle>
-        </DialogHeader>
+  const heading = (
+    <span className="flex items-center gap-2 text-sm font-semibold">
+      {kind === "partial" ? (
+        <Minus className="h-4 w-4 text-emerald-500" />
+      ) : (
+        <Plus className="h-4 w-4 text-sky-400" />
+      )}
+      {trade.status === "closed"
+        ? kind === "partial"
+          ? "Log a partial you took"
+          : "Log size you added"
+        : kind === "partial"
+          ? "Take partial profit"
+          : "Add to position"}{" "}
+      — {typedSymbol(trade)}
+    </span>
+  );
 
+  const body = (
         <div className="space-y-3">
           {/* The ledger this fill plays against. */}
           <div className="grid grid-cols-3 gap-2 rounded-md border border-border/60 bg-secondary/30 p-2.5 text-center font-mono text-xs">
@@ -325,7 +326,43 @@ export function FillDialog({
             </Button>
           </div>
         </div>
+  );
+
+  /*
+   * Inline, this is a panel that opens where the button is — a partial is part
+   * of writing the trade up, and sending it to a window stacked over the
+   * editor made a small correction feel like a separate errand and buried the
+   * numbers it should be read against.
+   */
+  if (inline) {
+    return (
+      <div
+        className="space-y-3 rounded-md border border-border bg-secondary/20 p-3"
+        data-testid="panel-fill-inline"
+      >
+        {heading}
+        {body}
+      </div>
+    );
+  }
+
+  return (
+    <Dialog open={trade != null} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle>{heading}</DialogTitle>
+        </DialogHeader>
+        {body}
       </DialogContent>
     </Dialog>
   );
+}
+
+/** The same form in a window, for the surfaces that are not the editor. */
+export function FillDialog(props: {
+  trade: TradeWithTags | null;
+  kind: "add" | "partial";
+  onClose: () => void;
+}) {
+  return <FillForm {...props} />;
 }

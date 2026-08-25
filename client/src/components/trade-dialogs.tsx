@@ -60,7 +60,7 @@ import {
   stashDraft,
   type TradeDraft,
 } from "@/lib/trade-draft";
-import { FillDialog } from "@/components/fill-dialog";
+import { FillForm } from "@/components/fill-dialog";
 import { typedSymbol } from "@shared/symbols";
 
 /**
@@ -283,21 +283,14 @@ export function TradeEditor({
    */
   const [cardRead, setCardRead] = useState<{
     card: CloseCard;
-    warnings: string[];
-    partials: CloseFill[];
-    fillsSeen: number;
+    verdict: ReturnType<typeof closeFromCard>;
   } | null>(null);
   const [addingPartials, setAddingPartials] = useState(false);
 
   function applyCard(c: CloseCard) {
     if (!trade) return;
     const verdict = closeFromCard(c, { ...trade, fees: trade.fees });
-    setCardRead({
-      card: c,
-      warnings: verdict.warnings,
-      partials: verdict.partials,
-      fillsSeen: verdict.fillsSeen,
-    });
+    setCardRead({ card: c, verdict });
     if (!verdict.usable) return;
     setF((p) => ({
       ...p,
@@ -332,10 +325,12 @@ export function TradeEditor({
         });
       }
       toast({
-        title: "Partials logged",
-        description: `${Math.max(fills.length - 1, 0)} scaling ${fills.length === 2 ? "event" : "events"} added. The exit above is the last one.`,
+        title: "Logged as separate exits",
+        description: `${Math.max(fills.length - 1, 0)} ${fills.length === 2 ? "partial" : "partials"} added. The exit above is the last one, and the R now follows the blend.`,
       });
-      setCardRead((r) => (r ? { ...r, partials: [] } : r));
+      setCardRead((r) =>
+        r ? { ...r, verdict: { ...r.verdict, fills: [], partials: [] } } : r,
+      );
     } catch (err: any) {
       toast({
         title: "Couldn't log those partials",
@@ -574,43 +569,68 @@ export function TradeEditor({
                 — R and P&amp;L go net of it.
               </p>
             )}
-            {cardRead.warnings.map((w) => (
+            {cardRead.verdict.warnings.map((w) => (
               <p key={w} className="text-amber-500" data-testid="text-close-card-warning">
                 {w}
               </p>
             ))}
-            {/* Fills at one instant are the venue slicing an order, not a
-                plan; those are averaged into the exit and simply reported.
-                Fills spread across minutes are decisions, and those are
-                offered rather than written — they change what the trade is. */}
-            {cardRead.fillsSeen > 0 && cardRead.partials.length === 0 && (
-              <p className="text-muted-foreground" data-testid="text-close-card-slices">
-                {cardRead.fillsSeen} fills at one instant — one order, averaged into the exit.
-              </p>
-            )}
-            {cardRead.partials.length > 1 && (
-              <div className="flex flex-wrap items-center gap-2" data-testid="close-card-partials">
-                <span>
-                  {cardRead.partials.length} fills across{" "}
-                  {new Set(cardRead.partials.map((f) => f.time)).size} times — scaling, not one
-                  order.
-                </span>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  className="h-7 gap-1.5 px-2 text-[11px]"
-                  disabled={addingPartials}
-                  onClick={() => logPartials(cardRead.partials)}
-                  data-testid="button-log-pasted-partials"
-                >
-                  {addingPartials ? (
-                    <Loader2 className="h-3 w-3 animate-spin" />
-                  ) : (
-                    <Minus className="h-3 w-3 text-emerald-500" />
-                  )}
-                  Log {cardRead.partials.length - 1} as partials
-                </Button>
+            {/* A fills table is an account of how the position came off, and
+                the offer to keep it is only trustworthy if it ADDS UP: a table
+                summing to the position loses nothing when it replaces one
+                averaged exit, while a table summing to half of it would
+                quietly shrink the trade. So the totals are checked, said out
+                loud, and the conversion is offered either way — with the
+                mismatch named, because a screenshot of half the exits is
+                still worth keeping if you know that is what it is. */}
+            {cardRead.verdict.fills.length > 1 && (
+              <div className="space-y-1" data-testid="close-card-partials">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span>
+                    {cardRead.verdict.fills.length} fills
+                    {cardRead.verdict.partials.length > 1
+                      ? ` across ${new Set(cardRead.verdict.partials.map((f) => f.time)).size} times — scaling, not one order`
+                      : " at one instant — one order the venue sliced up"}
+                    .
+                  </span>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-7 gap-1.5 px-2 text-[11px]"
+                    disabled={addingPartials}
+                    onClick={() => logPartials(cardRead.verdict.fills)}
+                    data-testid="button-log-pasted-partials"
+                  >
+                    {addingPartials ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <Minus className="h-3 w-3 text-emerald-500" />
+                    )}
+                    Keep all {cardRead.verdict.fills.length} as separate exits
+                  </Button>
+                </div>
+                {cardRead.verdict.sizes && (
+                  <p
+                    className={
+                      cardRead.verdict.sizes.matchesTrade ? "text-muted-foreground" : "text-amber-500"
+                    }
+                    data-testid="text-close-card-sizes"
+                  >
+                    {cardRead.verdict.sizes.matchesTrade ? (
+                      <>
+                        They add up to this position ({num(cardRead.verdict.sizes.total)})
+                        {cardRead.verdict.sizes.unitNote ? ` — ${cardRead.verdict.sizes.unitNote}` : ""}
+                        , so nothing is lost by keeping them all.
+                      </>
+                    ) : (
+                      <>
+                        They add up to {num(cardRead.verdict.sizes.total)}, and this trade is{" "}
+                        {num(trade?.size)} — a partial view of how it came off. Keeping them would
+                        replace the exit with less than the whole position.
+                      </>
+                    )}
+                  </p>
+                )}
               </div>
             )}
             <p className="text-muted-foreground">Check it, then save.</p>
@@ -1092,14 +1112,20 @@ export function TradeEditor({
               )}
             </div>
 
-            {/* The same dialog the live trade view uses, so a partial logged
-                afterwards is the same record as one logged in the moment —
-                one validator, one ledger, one shape of row. */}
-            <FillDialog
-              trade={fillKind ? trade : null}
-              kind={fillKind ?? "partial"}
-              onClose={() => setFillKind(null)}
-            />
+            {/* Inside the editor, not over it. The same form the live trade
+                view uses — one validator, one ledger, one shape of row — but a
+                partial logged while writing a trade up is part of writing it
+                up, and a window stacked on top made a small correction feel
+                like a separate errand while hiding the numbers it should be
+                read against. */}
+            {fillKind && (
+              <FillForm
+                inline
+                trade={trade}
+                kind={fillKind}
+                onClose={() => setFillKind(null)}
+              />
+            )}
 
 
             {/* Fees explained where they're typed, since they change the R. */}
