@@ -703,7 +703,7 @@ export type TradeFill = typeof tradeFills.$inferSelect;
 
 export const parseScreenshotSchema = z.object({
   image: z.string().min(1), // data URL or raw base64
-  kind: z.enum(["setup", "outcome", "orders"]),
+  kind: z.enum(["setup", "outcome", "orders", "close"]),
   context: z
     .object({
       symbol: z.string().optional(),

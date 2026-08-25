@@ -56,6 +56,7 @@ import {
   SETUP_PROMPT,
   WEEKLY_INSIGHTS_PROMPT,
   outcomePrompt,
+  closeCardPrompt,
 } from "./prompts";
 import { tradesToCsv } from "@shared/csv";
 import { validateFill } from "@shared/fills";
@@ -985,7 +986,9 @@ export async function registerRoutes(
           ? SETUP_PROMPT
           : kind === "orders"
             ? ORDERS_PROMPT
-            : outcomePrompt(context ?? {});
+            : kind === "close"
+              ? closeCardPrompt(context ?? {})
+              : outcomePrompt(context ?? {});
       const text = await callLLM(prompt, { mediaType, data });
       const json = extractJson(text);
 
