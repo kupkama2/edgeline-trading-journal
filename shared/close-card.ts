@@ -174,8 +174,34 @@ export function normalizeCloseCard(raw: any): CloseCard {
  */
 export function spreadFills(fills: CloseFill[]): CloseFill[] {
   const timed = fills.filter((f) => f.time && f.price != null);
-  const minutes = new Set(timed.map((f) => f.time));
-  return minutes.size > 1 ? timed : [];
+  const byTime = new Map<string, CloseFill[]>();
+  for (const f of timed) {
+    const at = f.time!;
+    const group = byTime.get(at);
+    if (group) group.push(f);
+    else byTime.set(at, [f]);
+  }
+  // One instant, however many prints, is one order and one exit.
+  if (byTime.size < 2) return [];
+  return Array.from(byTime.entries())
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([time, group]) => mergeAt(time, group));
+}
+
+/** The prints of one clip, as the single exit they were. */
+function mergeAt(time: string, group: CloseFill[]): CloseFill {
+  const sized = group.filter((f) => (f.size ?? 0) > 0);
+  const size = sized.reduce((n, f) => n + (f.size ?? 0), 0);
+  const dp = Math.min(8, Math.max(...group.map((f) => decimalsOf(f.price!))) + 4);
+  const price =
+    size > 0
+      ? Number((sized.reduce((n, f) => n + f.price! * (f.size ?? 0), 0) / size).toFixed(dp))
+      : // No sizes to weight by. An unweighted mean is the only average
+        // available, and it is still better than picking a row at random.
+        Number((group.reduce((n, f) => n + f.price!, 0) / group.length).toFixed(dp));
+  const sum = (k: "fee" | "pnl") =>
+    group.some((f) => f[k] != null) ? group.reduce((n, f) => n + (f[k] ?? 0), 0) : null;
+  return { time, price, size: size > 0 ? size : null, fee: sum("fee"), pnl: sum("pnl") };
 }
 
 /** Longest first, so USDT is peeled before USD. */
@@ -198,9 +224,16 @@ export interface CardVerdict {
   /** True when there is enough to close the trade with. */
   usable: boolean;
   /**
-   * Fills that are separate decisions rather than one sliced order. Offered
-   * as partials to log; never written without being asked for, because they
-   * change the trade's whole shape.
+   * The separate decisions, one entry per clip rather than per print.
+   *
+   * A trader who scales out three times through market orders produces
+   * fifteen rows in the same table as a trader who scaled out fifteen times,
+   * and offering fifteen exits for three decisions invents a plan nobody had.
+   * The prints of each clip are merged back to the size-weighted price they
+   * actually got, so what comes out is what was decided.
+   *
+   * Offered as partials to log; never written without being asked for,
+   * because they change the trade's whole shape.
    */
   partials: CloseFill[];
   /** How many rows the table held, sliced or not — worth saying either way. */
@@ -449,9 +482,14 @@ export function saysAnythingAboutClose(card: CloseCard): boolean {
 export function readHeadline(card: CloseCard, v: CardVerdict): string {
   if (!saysAnythingAboutClose(card)) return "Nothing about an exit on that screenshot.";
 
-  const times = new Set(v.partials.map((f) => f.time)).size;
   if (v.partials.length > 1) {
-    return `${v.partials.length} exits across ${times} different times — you scaled out of this one.`;
+    const lead = `${v.partials.length} exits across ${v.partials.length} different times — you scaled out of this one.`;
+    // The mixed case, and the one worth spelling out: several clips, each of
+    // which the venue filled in pieces. Left ungrouped it reads as fifteen
+    // decisions instead of three.
+    return v.fills.length > v.partials.length
+      ? `${lead} The venue filled them in ${v.fills.length} prints, grouped back into the ${v.partials.length} you took.`
+      : lead;
   }
   if (v.fills.length > 1) {
     return `${v.fills.length} fills, all at the same instant — one order the venue sliced up, so it is a single exit.`;

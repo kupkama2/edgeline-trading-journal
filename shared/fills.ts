@@ -81,6 +81,10 @@ export function positionLedger(t: TradeWithFills): PositionLedger {
 /**
  * Total P&L for a closed trade with fills: everything the partials banked,
  * plus the remainder settled at the exit price.
+ *
+ * The exit price here is the price the LAST slice came off at, not the
+ * average across the whole position — see `residualFromAverage` for the
+ * conversion, and for why the difference is worth being strict about.
  */
 export function totalPnLWithFills(t: TradeWithFills): number | null {
   if (t.exitPrice == null) return null;
@@ -271,4 +275,119 @@ export function fillOutsideTrade(
     return "That is after the trade was closed.";
   }
   return null;
+}
+
+/**
+ * How much of the position the logged exits account for, and what the rest
+ * must have come off at.
+ *
+ * The flow this exists for: the exchange's average close is the one number
+ * that is always easy to copy and always right, so it is the one worth
+ * trusting. The individual exits are not equally easy — a limit clip is one
+ * tidy row, a market close is a dozen prints — so a trader reasonably logs
+ * the tidy ones and stops.
+ *
+ * That leaves a gap, and the trade's exit price is not the answer to it. Here
+ * the exit price means the price the LAST slice came off at, which is what
+ * the ledger settles the remainder at; the exchange's figure is the average
+ * across the whole position. The two are different numbers and nothing in the
+ * data says which one got typed in — so rather than guess, the average is
+ * asked for and the remainder solved from it.
+ *
+ * Given an average that is known to be right there is exactly one price the
+ * rest can have come off at, and once it is in the exit field the total is
+ * the one the exchange printed.
+ */
+export interface ExitCoverage {
+  /** Base-unit quantity the partials account for. */
+  coveredQty: number;
+  /** Everything that had to come off: the entry plus any adds. */
+  totalQty: number;
+  /** Still carried by the trade's own exit price. */
+  residualQty: number;
+  /** 0..1, how much of the position the partials cover. */
+  covered: number;
+}
+
+export function exitCoverage(t: TradeWithFills): ExitCoverage | null {
+  const fills = t.fills ?? [];
+  const partials = fills.filter((f) => f.kind !== "add");
+  if (partials.length === 0) return null;
+
+  const totalQty =
+    baseQty(t.size, t.sizeUnit, t.entryPrice) +
+    fills
+      .filter((f) => f.kind === "add")
+      .reduce((n, f) => n + baseQty(f.size, t.sizeUnit, f.price), 0);
+  const coveredQty = partials.reduce((n, f) => n + baseQty(f.size, t.sizeUnit, f.price), 0);
+
+  return {
+    coveredQty,
+    totalQty,
+    residualQty: totalQty - coveredQty,
+    covered: totalQty > 0 ? coveredQty / totalQty : 0,
+  };
+}
+
+export interface ResidualSolve {
+  /** The price the unlogged remainder must have come off at. */
+  price: number | null;
+  /** Why there is no price, in words worth showing. */
+  problem: string | null;
+}
+
+/**
+ * Solve the remainder from an average that is known to be right.
+ *
+ * It refuses rather than guesses when the arithmetic comes out absurd. A
+ * mistyped partial size produces a perfectly computable price that is nowhere
+ * near the trade, and a number like that written into the exit field as fact
+ * is worse than the gap it filled.
+ */
+export function residualFromAverage(t: TradeWithFills, average: number): ResidualSolve {
+  const cov = exitCoverage(t);
+  if (!cov || !(average > 0)) return { price: null, problem: null };
+
+  if (cov.coveredQty > cov.totalQty * 1.005) {
+    return { price: null, problem: "These exits already come to more than the position." };
+  }
+  if (cov.residualQty <= cov.totalQty * 0.005) {
+    return {
+      price: null,
+      problem: "These exits already cover the position — there is no remainder to price.",
+    };
+  }
+
+  const partials = (t.fills ?? []).filter((f) => f.kind !== "add");
+  const proceeds = partials.reduce(
+    (n, f) => n + f.price * baseQty(f.size, t.sizeUnit, f.price),
+    0,
+  );
+  const price = (average * cov.totalQty - proceeds) / cov.residualQty;
+
+  if (!Number.isFinite(price) || price <= 0) {
+    return { price: null, problem: "No positive price for the rest would give that average." };
+  }
+  /*
+   * Believable is measured against THIS TRADE, not against the average that
+   * was typed. Anchoring on the average lets a wrong average vouch for the
+   * price it produces — type 400 into a trade that ran from 100 to 110 and
+   * the solved 841 sits comfortably inside a band drawn around 400, while
+   * being nowhere near anything that happened.
+   */
+  const seen = [t.entryPrice, ...partials.map((f) => f.price)].filter((n) => n > 0);
+  const ceiling = Math.max(...seen) * 5;
+  const floor = Math.min(...seen) * 0.2;
+  if (price > ceiling || price < floor) {
+    return {
+      price: null,
+      problem: `That average puts the rest at ${price.toFixed(4)}, nowhere near this trade — check the average and the sizes.`,
+    };
+  }
+
+  const dp = Math.min(
+    8,
+    Math.max(...partials.map((f) => String(f.price).split(".")[1]?.length ?? 0), 2),
+  );
+  return { price: Number(price.toFixed(dp)), problem: null };
 }

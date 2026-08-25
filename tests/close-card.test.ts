@@ -422,3 +422,93 @@ describe("saying what the screenshot was", () => {
     expect(saysAnythingAboutClose(normalizeCloseCard(bareFillTable))).toBe(true);
   });
 });
+
+describe("several clips, each filled in pieces", () => {
+  /*
+   * The case both pure ones miss, and the one that actually happens: you
+   * scale out three times, and the venue fills each clip as a handful of
+   * prints. Fifteen rows in the same table a trader who scaled out fifteen
+   * times would produce — and offering fifteen exits for three decisions
+   * invents a plan nobody had.
+   */
+  const clip = (time: string, prints: [number, number][]) =>
+    prints.map(([price, size]) => ({ time, price, size, fee: 0.01, pnl: 1 }));
+
+  const mixed = {
+    ...bareFillTable,
+    fills: [
+      ...clip("2026-08-25T10:00:00", [[1.10, 100], [1.10, 100], [1.12, 100]]),
+      ...clip("2026-08-25T12:30:00", [[1.20, 50], [1.24, 50]]),
+      ...clip("2026-08-25T14:15:00", [[1.30, 200], [1.30, 55.5]]),
+    ],
+  };
+  const read = () =>
+    closeFromCard(normalizeCloseCard(mixed), {
+      symbol: "ZRO",
+      direction: "long",
+      entryPrice: 1.0,
+      size: 655.5,
+    });
+
+  it("offers one exit per clip, not one per print", () => {
+    const v = read();
+    expect(v.fillsSeen).toBe(7);
+    expect(v.partials).toHaveLength(3);
+    expect(v.partials.map((f) => f.time)).toEqual([
+      "2026-08-25T10:00",
+      "2026-08-25T12:30",
+      "2026-08-25T14:15",
+    ]);
+  });
+
+  it("prices each clip at what it actually got", () => {
+    const [first, second, third] = read().partials;
+    // (1.10·100 + 1.10·100 + 1.12·100) / 300
+    expect(first.price).toBeCloseTo(1.106667, 5);
+    expect(first.size).toBeCloseTo(300);
+    expect(second.price).toBeCloseTo(1.22);
+    expect(third.price).toBeCloseTo(1.3);
+    // Nothing is lost in the merge: the clips still add up to the position.
+    expect(read().partials.reduce((n, f) => n + (f.size ?? 0), 0)).toBeCloseTo(655.5);
+  });
+
+  it("carries the fees and PnL of the prints it merged", () => {
+    const [first] = read().partials;
+    expect(first.fee).toBeCloseTo(0.03);
+    expect(first.pnl).toBeCloseTo(3);
+  });
+
+  it("leaves a set of exits that adds back up to what the prints made", () => {
+    /*
+     * The invariant the conversion has to preserve. Every clip but the last
+     * becomes a partial; whatever size they leave comes off at the LAST
+     * clip's price — not at the blended average, which already contains the
+     * clips being moved out of it. Get that wrong and the trade reports a
+     * total it never made, which is the one failure a journal cannot have.
+     */
+    const clips = read().partials;
+    const position = 655.5;
+    const last = clips[clips.length - 1];
+    const asLogged =
+      clips.slice(0, -1).reduce((n, f) => n + f.size! * f.price!, 0) +
+      (position - clips.slice(0, -1).reduce((n, f) => n + f.size!, 0)) * last.price!;
+    const fromThePrints = mixed.fills.reduce((n, f) => n + f.price * f.size, 0);
+    // Two decimals: the clip prices are rounded to what the venue printed, so
+    // a hundredth of a cent of drift on an eight-hundred-dollar total is the
+    // rounding doing its job, not the arithmetic failing.
+    expect(asLogged).toBeCloseTo(fromThePrints, 2);
+  });
+
+  it("says how many prints became how many exits", () => {
+    expect(readHeadline(normalizeCloseCard(mixed), read())).toMatch(
+      /3 exits across 3 different times.*7 prints, grouped back into the 3 you took/i,
+    );
+  });
+
+  it("still treats one clip as one exit however many prints it took", () => {
+    const one = { ...bareFillTable, fills: clip("2026-08-25T10:00:00", [[1.1, 100], [1.12, 100]]) };
+    const card = normalizeCloseCard(one);
+    expect(closeFromCard(card, { symbol: "ZRO", direction: "long", entryPrice: 1, size: 200 }).partials)
+      .toEqual([]);
+  });
+});
