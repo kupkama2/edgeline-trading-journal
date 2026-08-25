@@ -129,6 +129,11 @@ export default function Journal() {
   /* Editing a trade from a row opens the trade, not a window over the row.
      One address, one editor: the journal is a list of links into it. */
   const openTrade = (t: TradeWithTags) => navigate(`/trade/${t.id}/edit`);
+  /* Clicking the row itself opens the trade to READ. Landing straight in the
+     editor made the common gesture the destructive one — you clicked to look
+     at a trade and were handed a form with a save button. The pencil still
+     goes directly to editing for when that is what you meant. */
+  const viewTrade = (t: TradeWithTags) => navigate(`/trade/${t.id}`);
   const [importing, setImporting] = useState(false);
   const [loggingMissed, setLoggingMissed] = useState(false);
   const [resolving, setResolving] = useState<TradeWithTags | null>(null);
@@ -325,8 +330,7 @@ export default function Journal() {
                 <OpenTradeRow
                   key={t.id}
                   t={t}
-                  onSelect={() => openTrade(t)}
-                  onView={() => navigate(`/trade/${t.id}`)}
+                  onSelect={() => viewTrade(t)}
                   onEdit={() => openTrade(t)}
                   onResolve={() => setResolving(t)}
                   onAdd={() => setFilling({ trade: t, kind: "add" })}
@@ -399,7 +403,7 @@ export default function Journal() {
                     key={t.id}
                     t={t}
                     tagNames={tagNames}
-                    onView={() => navigate(`/trade/${t.id}`)}
+                    onSelect={() => viewTrade(t)}
                     onEdit={() => openTrade(t)}
                   />
                 ))}
