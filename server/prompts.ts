@@ -186,30 +186,41 @@ export function closeCardPrompt(ctx: {
   direction?: string;
   entryPrice?: number;
 }) {
-  return `You are reading a screenshot of a CLOSED POSITION summary from a crypto exchange (Binance Futures, Bybit, OKX or similar). It is a card or row of printed labels and numbers, not a chart. Transcribe what is printed. Do not estimate, and do not infer anything that is not written on the card.
+  return `You are reading a screenshot from a crypto exchange (Binance Futures, Bybit, OKX or similar) that records HOW A TRADE ENDED. It is printed labels and numbers — a card, a table row, or an order with its fills — not a chart. Transcribe what is printed. Do not estimate, and do not infer anything that is not written.
+
+It will be ONE of these three layouts. Work out which, then read it.
+
+A. A CLOSED POSITION CARD. Big labels: "Realized PNL", "ROI", "Entry Price", "Avg. Close Price", "Closed Vol", with the direction as "Cross Short" or "Isolated Long" and opened/closed timestamps side by side.
+
+B. A TRADE HISTORY ROW. A single line under column headers such as: Time | Market | Direction | Price | Size | Trade Value | Fee | Closed PNL. The headers may be in a SECOND image, or missing entirely — in that case infer the columns from their shape: a timestamp, a ticker, a direction, then numbers, with currency suffixes on the money columns. "Close Long" means the POSITION was long; "Close Short" means it was short.
+
+C. AN ORDER WITH ITS FILLS. A summary line (symbol, type, direction, "Average", "Executed", "Amount", "Status: Filled"), often with "Total PNL" and "Total Fee" beneath it, and then a table of individual fills: Time | Trading Price | Executed | Fee | Role | PNL | Total. Read the summary AND every fill row you can see.
 
 For context, the trade being closed in the journal is:
 - symbol: ${ctx.symbol ?? "unknown"}
 - direction: ${ctx.direction ?? "unknown"}
 - entry price: ${ctx.entryPrice ?? "unknown"}
-If the card is plainly a different instrument, still report what the card says — the mismatch is handled elsewhere.
+If the screenshot is plainly a different instrument, still report what it says — the mismatch is handled elsewhere.
 
 Read these fields:
-1. symbol — the contract as printed, e.g. "BTCUSDT".
-2. direction — "long" or "short". Cards print this as "Long"/"Short", sometimes prefixed with the margin mode ("Cross Short", "Isolated Long"). Colour alone is not evidence.
-3. exitPrice — the AVERAGE CLOSE price, labelled "Avg. Close Price", "Close Price", "Avg Exit". This is the number that matters. Do NOT use the entry price here.
-4. entryPrice — labelled "Entry Price" or "Avg. Entry Price".
-5. exitTime — the CLOSED timestamp. Return it as "YYYY-MM-DDTHH:mm:ss" exactly as printed, with NO timezone conversion. Cards print dates as MM/DD/YYYY; a "Lasting 10h 34m" style duration is not a timestamp.
-6. entryTime — the OPENED timestamp, same format.
-7. size — the quantity closed: "Closed Vol", "Closed Amount", "Filled". Give the number only, in the base asset. "Max OI" is NOT this.
-8. realizedPnl — the realised profit or loss, signed. A loss is negative even when the card marks it only with colour or a minus sign.
-9. pnlCurrency — the unit that PnL is printed in: USDT, USDC, BNFCR. Take it from the label, not assumed.
-10. roiPercent — the ROI percentage, signed, as a plain number without the % sign.
-11. leverage — the leverage as a number, so "150x" is 150.
-12. isClosed — true if the card says the position is closed, false if it is still open.
+1. symbol — the contract as printed, e.g. "BTCUSDT" or "ZROUSDT".
+2. direction — the side of the POSITION, "long" or "short". "Close Long" and "Sell" both close a long; "Close Short" and "Buy" close a short. Colour alone is not evidence.
+3. exitPrice — the average price the position came OFF at: "Avg. Close Price" (A), "Price" (B), "Average" (C). Never the entry price.
+4. entryPrice — only where the screenshot prints one. Layouts B and C usually do not; use null.
+5. exitTime — when it closed, as "YYYY-MM-DDTHH:mm:ss" exactly as printed, with NO timezone conversion. Dates are usually MM/DD/YYYY. A duration like "Lasting 10h 34m" is not a timestamp.
+6. entryTime — the opened timestamp where there is one, same format, else null.
+7. size — the quantity closed: "Closed Vol" (A), "Size" (B), "Executed"/"Amount" (C). The number only. "Max OI" is NOT this.
+8. realizedPnl — the realised profit or loss for the close, signed: "Realized PNL", "Closed PNL", "Total PNL".
+9. pnlCurrency — the unit PnL is printed in: USDT, USDC, BNFCR. From the label, not assumed.
+10. roiPercent — signed, plain number, where printed; else null.
+11. leverage — a number, so "150x" is 150; else null.
+12. fee — the TOTAL fee for this close, positive: "Fee" (B) or "Total Fee" (C). If only per-fill fees are shown, add them up.
+13. feeCurrency — the unit the fee is printed in.
+14. isClosed — true if it shows the position or order as closed/filled, false if still open.
+15. fills — layout C only, and only for rows you can actually read. One object per fill row: {"time": "YYYY-MM-DDTHH:mm:ss", "price": number, "size": number, "fee": number|null, "pnl": number|null}. Use the row's own time even when every row shares it. Empty array for layouts A and B.
 
 Respond with STRICT JSON only, no prose, no markdown fences:
-{"symbol": string|null, "direction": "long"|"short"|null, "exitPrice": number|null, "entryPrice": number|null, "exitTime": string|null, "entryTime": string|null, "size": number|null, "realizedPnl": number|null, "pnlCurrency": string|null, "roiPercent": number|null, "leverage": number|null, "isClosed": boolean|null}
+{"symbol": string|null, "direction": "long"|"short"|null, "exitPrice": number|null, "entryPrice": number|null, "exitTime": string|null, "entryTime": string|null, "size": number|null, "realizedPnl": number|null, "pnlCurrency": string|null, "roiPercent": number|null, "leverage": number|null, "fee": number|null, "feeCurrency": string|null, "isClosed": boolean|null, "fills": [{"time": string|null, "price": number|null, "size": number|null, "fee": number|null, "pnl": number|null}]}
 
-Every field must be present. Use null for anything not legible or not printed.`;
+Every field must be present. Use null for anything not legible or not printed, and [] for fills where there is no fill table.`;
 }

@@ -16,7 +16,9 @@ import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { ArrowUpRight, CheckCircle2, Clock3, Loader2, Minus, Pencil, Plus, Trash2 } from "lucide-react";
-import { useAccountSettings, useMistakeTags, useUpdateTrade, useAddTradeImage, archiveDataUrl, parseScreenshot, fileToDownscaledDataUrl } from "@/lib/data";
+import { useAccountSettings, useMistakeTags, useUpdateTrade, useAddTradeImage, archiveDataUrl, parseScreenshot, fileToDownscaledDataUrl,
+  useAddFill,
+} from "@/lib/data";
 import { suggestFees } from "@shared/fees";
 import { knownHighlights, parseHighlights, serializeHighlights } from "@shared/highlights";
 import { AccountPicker, HighlightPicker, SetupTagPicker } from "@/components/trade-pickers";
@@ -28,7 +30,7 @@ import { collapseFills, positionLedger } from "@shared/fills";
 import { TradeImageGallery } from "@/components/trade-images";
 import { TradeChart } from "@/components/trade-chart";
 import { parseExtraTargets, parsePlaybook, type TradeWithTags } from "@shared/schema";
-import { closeFromCard, type CloseCard } from "@shared/close-card";
+import { closeFromCard, type CloseCard, type CloseFill } from "@shared/close-card";
 import { LevelLabel, LevelLadder, type LevelKind } from "@/components/levels";
 import { ClipboardList, Layers, NotebookPen } from "lucide-react";
 import { useCloseCardPaste } from "@/lib/close-paste";
@@ -104,6 +106,7 @@ export function TradeEditor({
   const { data: styles = [] } = useStyles();
   const { data: allTrades = [] } = useTrades();
   const deleteFill = useDeleteFill();
+  const addFill = useAddFill();
   const [merging, setMerging] = useState(false);
   const [confirmMerge, setConfirmMerge] = useState(false);
 
@@ -271,18 +274,70 @@ export function TradeEditor({
    * REPORTED rather than applied, because the entry decides 1R and the size
    * column next to it means something different on a scaled position.
    */
-  const [cardRead, setCardRead] = useState<{ card: CloseCard; warnings: string[] } | null>(null);
+  const [cardRead, setCardRead] = useState<{
+    card: CloseCard;
+    warnings: string[];
+    partials: CloseFill[];
+    fillsSeen: number;
+  } | null>(null);
+  const [addingPartials, setAddingPartials] = useState(false);
 
   function applyCard(c: CloseCard) {
     if (!trade) return;
-    const verdict = closeFromCard(c, trade);
-    setCardRead({ card: c, warnings: verdict.warnings });
+    const verdict = closeFromCard(c, { ...trade, fees: trade.fees });
+    setCardRead({
+      card: c,
+      warnings: verdict.warnings,
+      partials: verdict.partials,
+      fillsSeen: verdict.fillsSeen,
+    });
     if (!verdict.usable) return;
     setF((p) => ({
       ...p,
       ...(verdict.apply.exitPrice != null ? { exitPrice: String(verdict.apply.exitPrice) } : {}),
       ...(verdict.apply.exitTime ? { exitTime: verdict.apply.exitTime } : {}),
+      ...(verdict.apply.fees != null ? { fees: String(verdict.apply.fees) } : {}),
     }));
+  }
+
+  /**
+   * Log the fills that were separate decisions.
+   *
+   * Never automatic. Partials change what the trade IS — its average exit, its
+   * R, whether it reads as one clean exit or three nervous ones — and a set of
+   * rows that arrived through a screenshot should be looked at before it
+   * rewrites that. The last fill is left off: it is the close itself, already
+   * going in as the exit above.
+   */
+  async function logPartials(fills: CloseFill[]) {
+    if (!trade) return;
+    setAddingPartials(true);
+    try {
+      for (const f of fills.slice(0, -1)) {
+        if (f.price == null || !(f.size ?? 0)) continue;
+        await addFill.mutateAsync({
+          tradeId: trade.id,
+          kind: "partial",
+          price: f.price,
+          size: f.size!,
+          time: f.time ? toIso(f.time) : undefined,
+          note: "from a pasted fill table",
+        });
+      }
+      toast({
+        title: "Partials logged",
+        description: `${Math.max(fills.length - 1, 0)} scaling ${fills.length === 2 ? "event" : "events"} added. The exit above is the last one.`,
+      });
+      setCardRead((r) => (r ? { ...r, partials: [] } : r));
+    } catch (err: any) {
+      toast({
+        title: "Couldn't log those partials",
+        description: String(err?.message ?? err).slice(0, 160),
+        variant: "destructive",
+      });
+    } finally {
+      setAddingPartials(false);
+    }
   }
 
   // Handed in by a surface that took the paste before this opened.
@@ -503,11 +558,54 @@ export function TradeEditor({
                 dismiss
               </button>
             </div>
+            {cardRead.card.fee != null && cardRead.card.fee > 0 && (
+              <p className="text-muted-foreground">
+                Fee{" "}
+                <span className="font-mono text-foreground/80">
+                  {num(Math.abs(cardRead.card.fee))} {cardRead.card.feeCurrency ?? ""}
+                </span>{" "}
+                — R and P&amp;L go net of it.
+              </p>
+            )}
             {cardRead.warnings.map((w) => (
               <p key={w} className="text-amber-500" data-testid="text-close-card-warning">
                 {w}
               </p>
             ))}
+            {/* Fills at one instant are the venue slicing an order, not a
+                plan; those are averaged into the exit and simply reported.
+                Fills spread across minutes are decisions, and those are
+                offered rather than written — they change what the trade is. */}
+            {cardRead.fillsSeen > 0 && cardRead.partials.length === 0 && (
+              <p className="text-muted-foreground" data-testid="text-close-card-slices">
+                {cardRead.fillsSeen} fills at one instant — one order, averaged into the exit.
+              </p>
+            )}
+            {cardRead.partials.length > 1 && (
+              <div className="flex flex-wrap items-center gap-2" data-testid="close-card-partials">
+                <span>
+                  {cardRead.partials.length} fills across{" "}
+                  {new Set(cardRead.partials.map((f) => f.time)).size} times — scaling, not one
+                  order.
+                </span>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="h-7 gap-1.5 px-2 text-[11px]"
+                  disabled={addingPartials}
+                  onClick={() => logPartials(cardRead.partials)}
+                  data-testid="button-log-pasted-partials"
+                >
+                  {addingPartials ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <Minus className="h-3 w-3 text-emerald-500" />
+                  )}
+                  Log {cardRead.partials.length - 1} as partials
+                </Button>
+              </div>
+            )}
             <p className="text-muted-foreground">Check it, then save.</p>
           </div>
         )}

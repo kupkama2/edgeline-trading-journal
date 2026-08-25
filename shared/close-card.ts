@@ -24,6 +24,17 @@
  *   typo you would spot later.
  */
 
+/** One line of an exchange's fill table. */
+export interface CloseFill {
+  /** Naive local time, "YYYY-MM-DDTHH:mm". */
+  time: string | null;
+  price: number | null;
+  /** As printed, in whatever unit the column is in. */
+  size: number | null;
+  fee: number | null;
+  pnl: number | null;
+}
+
 /** What the model is asked to read off the card. */
 export interface CloseCard {
   symbol: string | null;
@@ -41,8 +52,20 @@ export interface CloseCard {
   pnlCurrency: string | null;
   roiPercent: number | null;
   leverage: number | null;
+  /** Total fee for the close, as printed. */
+  fee: number | null;
+  feeCurrency: string | null;
   /** False when the card shows a position that is still running. */
   isClosed: boolean | null;
+  /**
+   * The individual fills, where the screenshot shows them.
+   *
+   * An exchange slices one market order into a dozen prints at the same
+   * instant; a trader takes three partials over two days. Both arrive as rows
+   * in the same table and they mean completely different things — see
+   * `spreadFills`.
+   */
+  fills: CloseFill[];
 }
 
 const nOrNull = (v: unknown): number | null => {
@@ -81,7 +104,9 @@ export function toNaiveLocal(raw: unknown): string | null {
   const iso = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?/.exec(s);
   if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}T${iso[4]}:${iso[5]}`;
 
-  const slashed = /^(\d{1,2})\/(\d{1,2})\/(\d{4})[T ]+(\d{1,2}):(\d{2})(?::(\d{2}))?/.exec(s);
+  // The separator between the date and the time is whatever the venue felt
+  // like: a space, a "T", a comma, or " - ". None of it is information.
+  const slashed = /^(\d{1,2})\/(\d{1,2})\/(\d{4})[T\s,\u2013\u2014-]+(\d{1,2}):(\d{2})(?::(\d{2}))?/.exec(s);
   if (slashed) {
     let [, a, b, y, hh, mm] = slashed;
     // A first component above twelve can only be a day.
@@ -107,8 +132,41 @@ export function normalizeCloseCard(raw: any): CloseCard {
     pnlCurrency: sOrNull(raw?.pnlCurrency)?.toUpperCase() ?? null,
     roiPercent: nOrNull(raw?.roiPercent),
     leverage: nOrNull(raw?.leverage),
+    fee: nOrNull(raw?.fee),
+    feeCurrency: sOrNull(raw?.feeCurrency)?.toUpperCase() ?? null,
     isClosed: typeof raw?.isClosed === "boolean" ? raw.isClosed : null,
+    fills: Array.isArray(raw?.fills)
+      ? raw.fills
+          .map((f: any) => ({
+            time: toNaiveLocal(f?.time),
+            price: nOrNull(f?.price),
+            size: nOrNull(f?.size),
+            fee: nOrNull(f?.fee),
+            pnl: nOrNull(f?.pnl),
+          }))
+          .filter((f: CloseFill) => f.price != null)
+      : [],
   };
+}
+
+/**
+ * Are these separate decisions, or one order the exchange chopped up?
+ *
+ * A market order for 655 USDT comes back as five prints at the same second and
+ * the same price — that is the venue's plumbing, and logging it as five
+ * partials would invent a scaling plan the trader never had and put five
+ * meaningless rows in the ledger. Three partials taken over two days at
+ * different prices is the opposite: it is the whole story of the trade, and
+ * collapsing it into one average exit throws away the fact that the first
+ * third came off far too early.
+ *
+ * The line between them is time. Fills sharing a minute are one order however
+ * many rows the table shows; fills in different minutes are decisions.
+ */
+export function spreadFills(fills: CloseFill[]): CloseFill[] {
+  const timed = fills.filter((f) => f.time && f.price != null);
+  const minutes = new Set(timed.map((f) => f.time));
+  return minutes.size > 1 ? timed : [];
 }
 
 /** Longest first, so USDT is peeled before USD. */
@@ -120,6 +178,7 @@ export interface CardVerdict {
     exitPrice?: number;
     exitTime?: string;
     size?: number;
+    fees?: number;
     direction?: "long" | "short";
   };
   /**
@@ -129,6 +188,14 @@ export interface CardVerdict {
   warnings: string[];
   /** True when there is enough to close the trade with. */
   usable: boolean;
+  /**
+   * Fills that are separate decisions rather than one sliced order. Offered
+   * as partials to log; never written without being asked for, because they
+   * change the trade's whole shape.
+   */
+  partials: CloseFill[];
+  /** How many rows the table held, sliced or not — worth saying either way. */
+  fillsSeen: number;
 }
 
 /**
@@ -142,7 +209,13 @@ export interface CardVerdict {
  */
 export function closeFromCard(
   card: CloseCard,
-  trade: { symbol: string; direction: string; entryPrice: number; size: number },
+  trade: {
+    symbol: string;
+    direction: string;
+    entryPrice: number;
+    size: number;
+    fees?: number | null;
+  },
 ): CardVerdict {
   const warnings: string[] = [];
   const apply: CardVerdict["apply"] = {};
@@ -174,8 +247,43 @@ export function closeFromCard(
     warnings.push("The card shows a position that is still open.");
   }
 
-  if (card.exitPrice != null) apply.exitPrice = card.exitPrice;
+  /*
+   * The exchange's own average is preferred over anything computed here. It
+   * is the number the venue settled on, it accounts for fills this screenshot
+   * may not even show, and a re-derived average that disagrees with the one
+   * printed on the card is a number nobody can check.
+   */
+  const avgOfFills = (() => {
+    const usable = card.fills.filter((f) => f.price != null && (f.size ?? 0) > 0);
+    if (usable.length === 0) return null;
+    const size = usable.reduce((n, f) => n + (f.size ?? 0), 0);
+    return size > 0 ? usable.reduce((n, f) => n + f.price! * (f.size ?? 0), 0) / size : null;
+  })();
+  const exitPrice = card.exitPrice ?? avgOfFills;
+  if (exitPrice != null) apply.exitPrice = exitPrice;
   if (card.exitTime) apply.exitTime = card.exitTime;
+  else {
+    // A fills table with no header still carries the time: the last print is
+    // when the position actually finished.
+    const last = card.fills.map((f) => f.time).filter(Boolean).sort().pop();
+    if (last) apply.exitTime = last;
+  }
+
+  /*
+   * Fees are applied where there are none, because R and P&L go net and an
+   * unrecorded fee overstates every one of them. Where a figure is already
+   * typed it is left alone and the difference reported — the trader may have
+   * counted both sides where the card shows one.
+   */
+  if (card.fee != null && card.fee > 0) {
+    const already = trade.fees ?? null;
+    if (already == null || already === 0) apply.fees = Math.abs(card.fee);
+    else if (Math.abs(Math.abs(card.fee) - already) / Math.max(already, 1e-9) > 0.05) {
+      warnings.push(
+        `The card's fee is ${Math.abs(card.fee)}${card.feeCurrency ? ` ${card.feeCurrency}` : ""}, this trade says ${already}. Left as it was.`,
+      );
+    }
+  }
 
   /*
    * Size only when it disagrees by enough to matter, because it is the field
@@ -206,5 +314,11 @@ export function closeFromCard(
     }
   }
 
-  return { apply, warnings, usable: apply.exitPrice != null };
+  return {
+    apply,
+    warnings,
+    usable: apply.exitPrice != null,
+    partials: spreadFills(card.fills),
+    fillsSeen: card.fills.length,
+  };
 }
