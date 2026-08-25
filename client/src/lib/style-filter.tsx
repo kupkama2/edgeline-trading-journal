@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { store } from "@/lib/scoped-storage";
 import type { TradeWithTags, TradingStyle } from "@shared/schema";
 
 /**
@@ -84,7 +85,7 @@ const StyleCtx = createContext<{
 
 function readList<T>(key: string, parse: (raw: string) => T | null): T[] {
   try {
-    const raw = localStorage.getItem(key);
+    const raw = store.get(key);
     if (!raw) return [];
     const arr = JSON.parse(raw);
     if (!Array.isArray(arr)) return [];
@@ -101,16 +102,16 @@ function readStyles(): number[] {
   });
   if (stored.length) return stored;
   // One-time carry-over from the single-select era.
-  const legacy = Number(localStorage.getItem(LEGACY_STYLE_KEY));
-  localStorage.removeItem(LEGACY_STYLE_KEY);
+  const legacy = Number(store.get(LEGACY_STYLE_KEY));
+  store.remove(LEGACY_STYLE_KEY);
   return Number.isInteger(legacy) && legacy ? [legacy] : [];
 }
 
 function readAccounts(): string[] {
   const stored = readList(ACCOUNT_KEY, (r) => r.trim() || null);
   if (stored.length) return stored;
-  const legacy = localStorage.getItem(LEGACY_ACCOUNT_KEY);
-  localStorage.removeItem(LEGACY_ACCOUNT_KEY);
+  const legacy = store.get(LEGACY_ACCOUNT_KEY);
+  store.remove(LEGACY_ACCOUNT_KEY);
   return legacy ? [legacy] : [];
 }
 
@@ -138,18 +139,18 @@ export function StyleFilterProvider({ children }: { children: React.ReactNode })
   );
 
   useEffect(() => {
-    if (styleIds.length === 0) localStorage.removeItem(STYLE_KEY);
-    else localStorage.setItem(STYLE_KEY, JSON.stringify(styleIds));
+    if (styleIds.length === 0) store.remove(STYLE_KEY);
+    else store.set(STYLE_KEY, JSON.stringify(styleIds));
   }, [styleIds]);
 
   useEffect(() => {
-    if (accounts.length === 0) localStorage.removeItem(ACCOUNT_KEY);
-    else localStorage.setItem(ACCOUNT_KEY, JSON.stringify(accounts));
+    if (accounts.length === 0) store.remove(ACCOUNT_KEY);
+    else store.set(ACCOUNT_KEY, JSON.stringify(accounts));
   }, [accounts]);
 
   useEffect(() => {
-    if (sources.length === 0) localStorage.removeItem(SOURCE_KEY);
-    else localStorage.setItem(SOURCE_KEY, JSON.stringify(sources));
+    if (sources.length === 0) store.remove(SOURCE_KEY);
+    else store.set(SOURCE_KEY, JSON.stringify(sources));
   }, [sources]);
 
   // The whole-viewport "you are filtered" glow (see index.css). On the root

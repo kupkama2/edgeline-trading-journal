@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { store } from "@/lib/scoped-storage";
 import { Card } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import { Award, Flame, Sparkles } from "lucide-react";
@@ -47,7 +48,7 @@ export function XpToaster() {
       // First render absorbs the backlog silently — opening the app after a
       // week of entries must not detonate a pile of toasts.
       prev.current = { ids, level: p.level.level };
-      localStorage.setItem(SEEN_KEY, String(p.level.totalXp));
+      store.set(SEEN_KEY, String(p.level.totalXp));
       return;
     }
 
@@ -87,7 +88,7 @@ export function XpToaster() {
     } else {
       toast({ title: `+${gained} XP`, description: itemised });
     }
-    localStorage.setItem(SEEN_KEY, String(p.level.totalXp));
+    store.set(SEEN_KEY, String(p.level.totalXp));
   }, [p.events, p.level.totalXp, p.level.level, p.level.title, toast]);
 
   if (!burst) return null;

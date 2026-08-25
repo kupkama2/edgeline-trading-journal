@@ -1039,12 +1039,22 @@ export class DatabaseStorage implements IStorage {
     };
   }
 
+  /**
+   * Delete a trade and everything hanging off it.
+   *
+   * In one transaction, because there are no foreign keys to cascade for us:
+   * four separate statements mean a crash between them leaves images and
+   * fills pointing at a trade that no longer exists, which nothing will ever
+   * surface again and nothing will ever clean up.
+   */
   async deleteTrade(id: number): Promise<void> {
     if (!(await this.ownsTrade(id))) return;
-    await db.delete(tradeMistakes).where(eq(tradeMistakes.tradeId, id));
-    await db.delete(tradeImages).where(eq(tradeImages.tradeId, id));
-    await db.delete(tradeFills).where(eq(tradeFills.tradeId, id));
-    await db.delete(trades).where(and(eq(trades.id, id), this.owns(trades)));
+    await db.transaction(async (tx) => {
+      await tx.delete(tradeMistakes).where(eq(tradeMistakes.tradeId, id));
+      await tx.delete(tradeImages).where(eq(tradeImages.tradeId, id));
+      await tx.delete(tradeFills).where(eq(tradeFills.tradeId, id));
+      await tx.delete(trades).where(and(eq(trades.id, id), this.owns(trades)));
+    });
   }
 
   /* -------------------------------- fills ------------------------------- */

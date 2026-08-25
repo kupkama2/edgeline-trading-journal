@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { store } from "@/lib/scoped-storage";
 import { useCheckOutcomes } from "@/lib/data";
 import { useToast } from "@/hooks/use-toast";
 
@@ -33,14 +34,14 @@ export function useOutcomeWatch(enabled: boolean) {
     if (!enabled || firedThisMount.current) return;
     let last = 0;
     try {
-      last = Number(localStorage.getItem(LAST_KEY) ?? 0);
+      last = Number(store.get(LAST_KEY) ?? 0);
     } catch {
       /* private mode: check anyway, the server throttle still holds */
     }
     if (Date.now() - last < MIN_GAP_MS) return;
     firedThisMount.current = true;
     try {
-      localStorage.setItem(LAST_KEY, String(Date.now()));
+      store.set(LAST_KEY, String(Date.now()));
     } catch {
       /* nothing to do */
     }

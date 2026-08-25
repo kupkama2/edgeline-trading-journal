@@ -702,7 +702,14 @@ export type TradeFill = typeof tradeFills.$inferSelect;
 /* ===================== API payloads (screenshots) =================== */
 
 export const parseScreenshotSchema = z.object({
-  image: z.string().min(1), // data URL or raw base64
+  /*
+   * Capped like every other blob here. The body limit is 25 MB and this goes
+   * straight to a vision model: an image that size is a slow, expensive
+   * failure rather than a parse, and the client downscales to a fraction of
+   * this before it ever gets here. 6 MB of base64 is roughly a 4.5 MB image —
+   * far above anything the app produces, far below anything that hurts.
+   */
+  image: z.string().min(1).max(6_000_000),
   kind: z.enum(["setup", "outcome", "orders", "close"]),
   context: z
     .object({

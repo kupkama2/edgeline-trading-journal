@@ -2,6 +2,7 @@
  * The entry card: log a setup by hand or drop a chart and confirm the numbers.
  */
 import { useEffect, useMemo, useState } from "react";
+import { store } from "@/lib/scoped-storage";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -154,7 +155,7 @@ export function NewTradeCard({
   // The risk budget is a account-level habit, not a per-trade fact — it
   // survives reloads so it is typed once, not every morning.
   const [riskBudget, setRiskBudget] = useState<string>(
-    () => localStorage.getItem(RISK_BUDGET_KEY) ?? "",
+    () => store.get(RISK_BUDGET_KEY) ?? "",
   );
   // Planned scale-out levels beyond the first target. Most trades have one
   // TP, so this starts empty and only the "+" reveals more rows.
@@ -162,7 +163,7 @@ export function NewTradeCard({
   // Which account the trade runs in. Sticky like the risk budget — you trade
   // the same account all session, so it should not need re-picking per trade.
   const [account, setAccount] = useState<string>(
-    () => localStorage.getItem(ACCOUNT_KEY) ?? "",
+    () => store.get(ACCOUNT_KEY) ?? "",
   );
   // Scoping the page to an account is a statement about what you are doing
   // now, so a trade logged from that page belongs to it. Without this you can
@@ -573,7 +574,7 @@ export function NewTradeCard({
     setPickedStyleId(null);
     setExtraTps([]);
     // The account survives the reset on purpose — next trade, same account.
-    localStorage.setItem(ACCOUNT_KEY, account.trim());
+    store.set(ACCOUNT_KEY, account.trim());
     setPb({ setupName: "", stopLogic: "", targetLogic: "", confidence: null, standAside: "" });
     form.reset({
       symbol: "",
@@ -1219,10 +1220,10 @@ export function NewTradeCard({
                     setRiskOverride(e.target.value);
                     setSizeMode(e.target.value.trim() === "" ? "manual" : "auto");
                     if (e.target.value.trim() !== "") {
-                      localStorage.setItem(RISK_BUDGET_KEY, e.target.value);
+                      store.set(RISK_BUDGET_KEY, e.target.value);
                     }
                   }}
-                  placeholder={localStorage.getItem(RISK_BUDGET_KEY) ?? "300"}
+                  placeholder={store.get(RISK_BUDGET_KEY) ?? "300"}
                   inputMode="decimal"
                   className={`h-7 w-24 font-mono text-[11px] ${
                     riskOverride !== "" ? "border-primary/50 text-primary" : ""

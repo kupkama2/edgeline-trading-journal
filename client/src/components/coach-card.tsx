@@ -11,6 +11,7 @@
  * away on Tuesday does not silence next Monday.
  */
 import { useMemo, useState } from "react";
+import { store } from "@/lib/scoped-storage";
 import { useLocation } from "wouter";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -36,7 +37,7 @@ export function CoachCard() {
   const { data: styles = [] } = useStyles();
   const week = weekKey();
   const [dismissed, setDismissed] = useState(
-    () => localStorage.getItem(DISMISS_KEY) === week,
+    () => store.get(DISMISS_KEY) === week,
   );
   const [open, setOpen] = useState(true);
   /* Which finding is showing its trades. One at a time: the card is a read,
@@ -84,7 +85,7 @@ export function CoachCard() {
           size="icon"
           className="ml-auto h-6 w-6 text-muted-foreground"
           onClick={() => {
-            localStorage.setItem(DISMISS_KEY, week);
+            store.set(DISMISS_KEY, week);
             setDismissed(true);
           }}
           aria-label="Put this away until next week"

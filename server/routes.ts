@@ -67,6 +67,49 @@ import {
 } from "@shared/weekly-insights";
 import { z } from "zod";
 
+
+/**
+ * A ceiling on the routes that cost money.
+ *
+ * Every model call is billed, and the only thing between one and a bill is a
+ * signed-in session — which is fine against strangers and useless against a
+ * retry loop in a browser tab, a double-click on a slow parse, or a script
+ * somebody writes against their own journal. Per account rather than per IP,
+ * because the account is what the spending attaches to.
+ *
+ * Generous enough that no human hits it: a screenshot parse takes seconds, so
+ * thirty a minute is far past what anyone can look at. In memory on purpose —
+ * this is a spend guard, not a security control, and a restart resetting it is
+ * not worth a table.
+ */
+const SPEND_WINDOW_MS = 60_000;
+const SPEND_MAX = 30;
+const spend = new Map<number, number[]>();
+
+function overSpendLimit(userId: number): boolean {
+  const now = Date.now();
+  const hits = (spend.get(userId) ?? []).filter((t: number) => now - t < SPEND_WINDOW_MS);
+  hits.push(now);
+  spend.set(userId, hits);
+  // Whoever is idle is not holding memory: the map is swept as it is read.
+  if (spend.size > 500) {
+    for (const id of Array.from(spend.keys())) {
+      const ts = spend.get(id) ?? [];
+      if (ts.every((t: number) => now - t >= SPEND_WINDOW_MS)) spend.delete(id);
+    }
+  }
+  return hits.length > SPEND_MAX;
+}
+
+/** Refuse politely, and say when to come back. */
+function costly(req: { userId?: number }, res: any): boolean {
+  if (!req.userId || !overSpendLimit(req.userId)) return false;
+  res.status(429).json({
+    message: "That is a lot of model calls in a minute. Give it a moment and try again.",
+  });
+  return true;
+}
+
 /** Timeframes the chart offers, and how wide one bar is in each. */
 const BAR_MS: Record<Interval, number> = {
   "1m": 60_000,
@@ -889,6 +932,7 @@ export async function registerRoutes(
    * this costs one model call a week rather than one per page load.
    */
   app.post("/api/weekly-insights", async (req, res) => {
+    if (costly(req, res)) return;
     const weekStartInput =
       typeof req.body?.weekStart === "string" ? req.body.weekStart : undefined;
     const force = req.body?.force === true;
@@ -973,6 +1017,7 @@ export async function registerRoutes(
 
   /* ------------------------ AI screenshot parsing ----------------------- */
   app.post("/api/parse-screenshot", async (req, res) => {
+    if (costly(req, res)) return;
     const parsed = parseScreenshotSchema.safeParse(req.body);
     if (!parsed.success)
       return res.status(400).json({ message: "Invalid request", issues: parsed.error.issues });
@@ -1051,6 +1096,7 @@ export async function registerRoutes(
 
   /* ------------------------ AI rationale tagging ------------------------ */
   app.post("/api/analyze-rationale", async (req, res) => {
+    if (costly(req, res)) return;
     const parsed = analyzeRationaleSchema.safeParse(req.body);
     if (!parsed.success)
       return res.status(400).json({ message: "Invalid request", issues: parsed.error.issues });
