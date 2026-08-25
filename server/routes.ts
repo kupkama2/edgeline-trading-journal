@@ -36,6 +36,7 @@ import {
   upsertDailyNoteSchema,
   addTradeImageSchema,
   addFillSchema,
+  mergeAccountsSchema,
   upsertAccountSettingsSchema,
   parseScreenshotSchema,
   analyzeRationaleSchema,
@@ -893,6 +894,22 @@ export async function registerRoutes(
     if (!parsed.success)
       return res.status(400).json({ message: "Invalid account settings", issues: parsed.error.issues });
     res.json(await store(req).upsertAccountSettings(parsed.data));
+  });
+
+  /*
+   * An evaluation that passed, folded into the funded account it became.
+   * The trades that got you there are real and belong in the record; they
+   * were only ever logged under the name the account had at the time.
+   */
+  app.post("/api/account-settings/merge", async (req, res) => {
+    const parsed = mergeAccountsSchema.safeParse(req.body);
+    if (!parsed.success)
+      return res.status(400).json({ message: "Invalid merge", issues: parsed.error.issues });
+    const { from, into } = parsed.data;
+    if (from.trim().toLowerCase() === into.trim().toLowerCase())
+      return res.status(400).json({ message: "That is the same account." });
+    const moved = await store(req).mergeAccounts(from, into);
+    res.json({ ok: true, moved });
   });
 
   app.get("/api/mistake-tags", async (req, res) => {
