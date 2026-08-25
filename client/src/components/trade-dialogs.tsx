@@ -29,6 +29,7 @@ import { TradeImageGallery } from "@/components/trade-images";
 import { TradeChart } from "@/components/trade-chart";
 import { parseExtraTargets, parsePlaybook, type TradeWithTags } from "@shared/schema";
 import { closeFromCard, type CloseCard } from "@shared/close-card";
+import { LevelLabel, LevelLadder, type LevelKind } from "@/components/levels";
 import { useCloseCardPaste } from "@/lib/close-paste";
 import { computeMetrics, fmtFees, fmtMoney, fmtR, EXIT_REASON_LABELS } from "@shared/metrics";
 import { Dropzone, EXIT_REASONS, RationaleTags, TimeField, localNow, num, parseTags, toIso, toLocalInput } from "@/components/trade-shared";
@@ -423,6 +424,22 @@ export function TradeEditor({
     }
   }
 
+  /** A price field that says what KIND of price it is, in colour and mark. */
+  const levelField = (key: string, kind: LevelKind, label?: string) => (
+    <div className="space-y-1">
+      <LevelLabel kind={kind} text={label} />
+      <Input
+        type="number"
+        step="any"
+        inputMode="decimal"
+        value={f[key] ?? ""}
+        onChange={set(key)}
+        className="h-9 font-mono text-sm"
+        data-testid={`input-edit-${key}`}
+      />
+    </div>
+  );
+
   const field = (
     key: string,
     label: string,
@@ -607,13 +624,10 @@ export function TradeEditor({
                   data-testid="input-edit-size"
                 />
               </div>
-              {field("entryPrice", "Entry")}
-              {field("initialStop", "Stop")}
+              {levelField("entryPrice", "entry")}
+              {levelField("initialStop", "stop")}
               <div className="space-y-1">
-                <div className="flex items-center justify-between">
-                  <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                    {extraTps.length > 0 ? "TP1" : "Target"}
-                  </label>
+                <LevelLabel kind="target" text={extraTps.length > 0 ? "TP1" : "Target"}>
                   {extraTps.length < 3 && (
                     <button
                       type="button"
@@ -625,7 +639,7 @@ export function TradeEditor({
                       +
                     </button>
                   )}
-                </div>
+                </LevelLabel>
                 <Input
                   type="number"
                   step="any"
@@ -638,10 +652,7 @@ export function TradeEditor({
               </div>
               {extraTps.map((tp, i) => (
                 <div key={i} className="space-y-1">
-                  <div className="flex items-center justify-between">
-                    <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                      TP{i + 2}
-                    </label>
+                  <LevelLabel kind="tp" text={`TP${i + 2}`}>
                     <button
                       type="button"
                       onClick={() => setExtraTps((x) => x.filter((_, j) => j !== i))}
@@ -651,7 +662,7 @@ export function TradeEditor({
                     >
                       ×
                     </button>
-                  </div>
+                  </LevelLabel>
                   <Input
                     type="number"
                     step="any"
@@ -665,6 +676,19 @@ export function TradeEditor({
                   />
                 </div>
               ))}
+              {/* The plan, to scale. Two prices are two numbers to subtract; a
+                  reward leg three times the length of the risk leg is a fact
+                  you see before you have finished reading it. Spans the grid
+                  because it is about the fields either side of it. */}
+              <div className="col-span-2">
+                <LevelLadder
+                  entry={numOrNull(f.entryPrice ?? "")}
+                  stop={numOrNull(f.initialStop ?? "")}
+                  target={numOrNull(f.initialTarget ?? "")}
+                  extraTps={extraTps.map((t) => numOrNull(t))}
+                  exit={numOrNull(f.exitPrice ?? "")}
+                />
+              </div>
               {field("entryTime", "Entry time", "datetime-local")}
               <div className="space-y-1">
                 <label className="text-[10px] uppercase tracking-wider text-muted-foreground">

@@ -36,6 +36,7 @@ import { SymbolPicker } from "@/components/symbol-picker";
 import { knownHighlights, serializeHighlights } from "@shared/highlights";
 import { suggestSize } from "@shared/sizing";
 import { inSessionWindow, windowLabel } from "@shared/session";
+import { LevelLabel, LevelLadder, type LevelKind } from "@/components/levels";
 
 /* ============================ new trade card ========================== */
 
@@ -589,6 +590,31 @@ export function NewTradeCard({
     setParsed(false);
   });
 
+  /** A price field that says what KIND of price it is, in colour and mark. */
+  const levelField = (name: keyof SetupForm, kind: LevelKind, label?: string) => (
+    <FormField
+      control={form.control}
+      name={name as any}
+      render={({ field }) => (
+        <FormItem className="space-y-1">
+          <LevelLabel kind={kind} text={label} />
+          <FormControl>
+            <Input
+              {...field}
+              type="number"
+              step="any"
+              inputMode="decimal"
+              className="h-9 font-mono text-sm"
+              data-testid={`input-${String(name)}`}
+              value={(field.value as any) ?? ""}
+            />
+          </FormControl>
+          <FormMessage className="text-[10px]" />
+        </FormItem>
+      )}
+    />
+  );
+
   const numField = (
     name: keyof SetupForm,
     label: string,
@@ -1078,8 +1104,8 @@ export function NewTradeCard({
                 </p>
               </div>
             )}
-            {numField("entryPrice", "Entry")}
-            {numField("initialStop", "Stop")}
+            {levelField("entryPrice", "entry")}
+            {levelField("initialStop", "stop")}
 
             {/* First target plus optional extra TPs. TP1 stays the target the
                 R:R math runs on; the extras are the levels the partials are
@@ -1089,10 +1115,7 @@ export function NewTradeCard({
               name="initialTarget"
               render={({ field }) => (
                 <FormItem className="space-y-1">
-                  <div className="flex items-center justify-between">
-                    <FormLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                      {extraTps.length > 0 ? "TP1" : "Target"}
-                    </FormLabel>
+                  <LevelLabel kind="target" text={extraTps.length > 0 ? "TP1" : "Target"}>
                     {extraTps.length < 3 && (
                       <button
                         type="button"
@@ -1104,7 +1127,7 @@ export function NewTradeCard({
                         +
                       </button>
                     )}
-                  </div>
+                  </LevelLabel>
                   <FormControl>
                     <Input
                       {...field}
@@ -1122,10 +1145,7 @@ export function NewTradeCard({
             />
             {extraTps.map((tp, i) => (
               <div key={i} className="space-y-1">
-                <div className="flex items-center justify-between">
-                  <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                    TP{i + 2}
-                  </label>
+                <LevelLabel kind="tp" text={`TP${i + 2}`}>
                   <button
                     type="button"
                     onClick={() => setExtraTps((x) => x.filter((_, j) => j !== i))}
@@ -1135,7 +1155,7 @@ export function NewTradeCard({
                   >
                     ×
                   </button>
-                </div>
+                </LevelLabel>
                 <Input
                   type="number"
                   step="any"
@@ -1149,6 +1169,19 @@ export function NewTradeCard({
                 />
               </div>
             ))}
+
+            {/* The plan, to scale, the moment there is a plan to draw. Two
+                prices are two numbers to subtract; a risk leg nearly as long
+                as the reward leg is a trade you want to notice BEFORE you take
+                it rather than in the review afterwards. */}
+            <div className="col-span-2">
+              <LevelLadder
+                entry={Number(v.entryPrice)}
+                stop={Number(v.initialStop)}
+                target={Number(v.initialTarget)}
+                extraTps={extraTps.map((t) => (t.trim() === "" ? null : Number(t)))}
+              />
+            </div>
 
             {/* What this position costs, filled in from what you typed. The
                 box is editable, and typing in it flips the arithmetic round to
