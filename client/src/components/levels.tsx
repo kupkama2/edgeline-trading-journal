@@ -99,6 +99,34 @@ export function LevelLabel({
   );
 }
 
+
+/**
+ * The axis every graphic here shares: distance from the entry, in your favour.
+ *
+ * NOT the price. A price axis puts the low number on the left, which for a
+ * long happens to mean "the bad end" — and for a short means the opposite, so
+ * the same red mark jumps sides depending on which way you were facing. Worse,
+ * two stacked bands stop lining up by MEANING: "it fell to 205 after I left"
+ * sits to the right of "it dipped to 194 while I held" because 205 is the
+ * bigger number, even though one is a smaller loss than the other.
+ *
+ * Measured from the entry outward, all of that goes away. Zero is where you
+ * got in, everything against you is left, everything in your favour is right,
+ * and a short reads exactly like a long. Where a stop is known the unit is R,
+ * which is what the rest of the journal counts in; without one it is plain
+ * distance, which still puts every mark on the correct side.
+ */
+function favouredAxis(direction: string, entry: number, stop?: number | null) {
+  const risk = stop != null && isFinite(stop) ? Math.abs(entry - stop) : null;
+  const sign = direction === "short" ? -1 : 1;
+  const unit = risk && risk > 0 ? risk : 1;
+  return {
+    /** Signed: negative against you, positive in your favour. */
+    of: (p: number) => (sign * (p - entry)) / unit,
+    inR: !!(risk && risk > 0),
+  };
+}
+
 interface Mark {
   kind: LevelKind;
   price: number;
@@ -121,6 +149,7 @@ interface Mark {
  * it rather than after.
  */
 export function LevelLadder({
+  direction,
   entry,
   stop,
   target,
@@ -128,6 +157,7 @@ export function LevelLadder({
   exit,
   className = "",
 }: {
+  direction: string;
   entry?: number | null;
   stop?: number | null;
   target?: number | null;
@@ -144,13 +174,14 @@ export function LevelLadder({
   extraTps.forEach((p, i) => ok(p) && marks.push({ kind: "tp", price: p, label: `TP${i + 2}` }));
   if (ok(exit)) marks.push({ kind: "exit", price: exit, label: "Exit" });
 
-  const prices = marks.map((m) => m.price);
-  const lo = Math.min(...prices);
-  const hi = Math.max(...prices);
+  const axis = favouredAxis(direction, entry, stop);
+  const ds = marks.map((m) => axis.of(m.price));
+  const lo = Math.min(...ds);
+  const hi = Math.max(...ds);
   const span = hi - lo;
   // Every level on one price: nothing to draw and nothing to say.
   if (!(span > 0)) return null;
-  const at = (p: number) => ((p - lo) / span) * 100;
+  const at = (p: number) => ((axis.of(p) - lo) / span) * 100;
 
   const risk = ok(stop) ? Math.abs(entry - stop) : null;
   const reward = ok(target) ? Math.abs(target - entry) : null;
@@ -249,23 +280,24 @@ export function PathBands({
   const after = [postExitAdverse, postExitPeak].filter(ok);
   if (!ok(entry) || (held.length === 0 && after.length === 0)) return null;
 
-  const all = [entry, ...held, ...after, ...(ok(exit) ? [exit] : [])];
+  /*
+   * Both bands on ONE axis measured from the entry, which is what makes them
+   * comparable at a glance: the adverse ends share a column, the favourable
+   * ends share a column, and "further left" means "worse" in both rows rather
+   * than "cheaper".
+   */
+  const axis = favouredAxis(direction, entry, stop);
+  const all = [entry, ...held, ...after, ...(ok(exit) ? [exit] : [])].map(axis.of);
   const lo = Math.min(...all);
   const hi = Math.max(...all);
   const span = hi - lo;
   if (!(span > 0)) return null;
-  const at = (p: number) => ((p - lo) / span) * 100;
+  const at = (p: number) => ((axis.of(p) - lo) / span) * 100;
 
-  /** Signed R, positive in your favour. Null when there is no 1R to divide by. */
-  const risk = ok(stop) ? Math.abs(entry - stop) : null;
-  const inR = (p: number) => {
-    if (!risk || risk <= 0) return null;
-    const sign = direction === "short" ? -1 : 1;
-    return (sign * (p - entry)) / risk;
-  };
   const rTag = (p: number) => {
-    const r = inR(p);
-    return r == null ? "" : ` ${r > 0 ? "+" : ""}${r.toFixed(2)}R`;
+    if (!axis.inR) return "";
+    const r = axis.of(p);
+    return ` ${r > 0 ? "+" : ""}${r.toFixed(2)}R`;
   };
 
   const band = (
@@ -275,8 +307,9 @@ export function PathBands({
     kinds: { good: LevelKind; bad: LevelKind },
   ) => {
     if (values.length === 0) return null;
-    const good = direction === "short" ? Math.min(...values) : Math.max(...values);
-    const bad = direction === "short" ? Math.max(...values) : Math.min(...values);
+    // Best and worst in the trade's own terms, which the axis already knows.
+    const good = values.reduce((a, b) => (axis.of(b) > axis.of(a) ? b : a));
+    const bad = values.reduce((a, b) => (axis.of(b) < axis.of(a) ? b : a));
     const a = Math.min(at(good), at(bad));
     const b = Math.max(at(good), at(bad));
     return (

@@ -328,27 +328,17 @@ export function TradeOutcomeFields(p: OutcomeFieldsProps) {
           {/* After you were out, both ways. The pair is the point: one of
               them prices what leaving cost, the other what it saved, and a
               form that only ever asks the first one can only ever conclude
-              "hold longer". */}
+              "hold longer".
+
+              Adverse on the LEFT in both rows, favourable on the right, the
+              same way round as the bands below and as every R in the app.
+              Left column reads worst-held over got-worse-without-you; right
+              column reads best-held over ran-on-without-you. Alternating them
+              put a red label under a green one and made two rows that measure
+              the same thing look like they measured different ones. */}
           <div className="space-y-1">
             <p className={LABEL}>Once you were out, it went…</p>
             <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1">
-                <LevelLabel kind="ranAfter" text="Your way, to" />
-                <Input
-                  type="number"
-                  step="any"
-                  inputMode="decimal"
-                  placeholder="your way, to…"
-                  value={p.postExitPeak}
-                  onChange={(e) => p.setPostExitPeak(e.target.value)}
-                  className="h-9 font-mono text-sm"
-                  data-testid={`input-${p.testPrefix}-post-exit-peak`}
-                />
-                <p className="text-[10px] leading-snug text-muted-foreground">
-                  The half of "it went higher" you were not in for — up to where your stop
-                  level broke.
-                </p>
-              </div>
               <div className="space-y-1">
                 <LevelLabel kind="fellAfter" text="Against you, to" />
                 <Input
@@ -364,6 +354,23 @@ export function TradeOutcomeFields(p: OutcomeFieldsProps) {
                 <p className="text-[10px] leading-snug text-muted-foreground">
                   How much worse it got without you. On a stop-out this is what the stop
                   saved you.
+                </p>
+              </div>
+              <div className="space-y-1">
+                <LevelLabel kind="ranAfter" text="Your way, to" />
+                <Input
+                  type="number"
+                  step="any"
+                  inputMode="decimal"
+                  placeholder="your way, to…"
+                  value={p.postExitPeak}
+                  onChange={(e) => p.setPostExitPeak(e.target.value)}
+                  className="h-9 font-mono text-sm"
+                  data-testid={`input-${p.testPrefix}-post-exit-peak`}
+                />
+                <p className="text-[10px] leading-snug text-muted-foreground">
+                  The half of "it went higher" you were not in for — up to where your stop
+                  level broke.
                 </p>
               </div>
             </div>

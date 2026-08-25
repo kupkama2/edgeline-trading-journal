@@ -787,6 +787,7 @@ export function TradeEditor({
                   because it is about the fields either side of it. */}
               <div className="col-span-2">
                 <LevelLadder
+                  direction={direction}
                   entry={numOrNull(f.entryPrice ?? "")}
                   stop={numOrNull(f.initialStop ?? "")}
                   target={numOrNull(f.initialTarget ?? "")}
