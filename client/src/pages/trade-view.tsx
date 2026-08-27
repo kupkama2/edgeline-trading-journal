@@ -34,11 +34,12 @@ import {
   Sparkles,
   Trash2,
 } from "lucide-react";
-import { useDeleteFill, useDeleteTrade, useMistakeTags, useTrades } from "@/lib/data";
+import { useCheckTrade, useDeleteFill, useDeleteTrade, useMistakeTags, useTrades } from "@/lib/data";
 import { parseExtraTargets, parsePlaybook, type TradeWithTags } from "@shared/schema";
 import { computeMetrics, fmtFees, fmtMoney, fmtR, EXIT_REASON_LABELS } from "@shared/metrics";
 import { positionLedger } from "@shared/fills";
 import { parseHighlights } from "@shared/highlights";
+import { pathIncomplete } from "@shared/aftermath";
 import { overrodeThePlan } from "@shared/grades";
 import { exposureOf, fmtExposure } from "@shared/symbols";
 import { GradeBadges } from "@/components/grade-picker";
@@ -320,6 +321,7 @@ function TradeBody({
   onDeleted: () => void;
 }) {
   const { data: tags = [] } = useMistakeTags();
+  const { toast } = useToast();
   const deleteFill = useDeleteFill();
   const deleteTrade = useDeleteTrade();
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -330,6 +332,45 @@ function TradeBody({
 
   const m = computeMetrics(trade);
   const led = positionLedger(trade);
+
+  /*
+   * Reported either way. "Nothing came back" is a real answer here — the
+   * archive may still not have the day — and a button that silently did
+   * nothing would be indistinguishable from one that was broken.
+   */
+  const [rechecking, setRechecking] = useState(false);
+  const checkTrade = useCheckTrade();
+  async function recheck() {
+    setRechecking(true);
+    try {
+      const res: any = await checkTrade.mutateAsync(trade.id);
+      const settled = (res?.resolved ?? []).length > 0;
+      const measured = (res?.measured ?? []).length > 0;
+      toast(
+        settled || measured
+          ? {
+              title: settled ? "Settled from the market" : "Price path filled in",
+              description: settled
+                ? "The plan's outcome is in, and the R beside it now means something."
+                : "MAE, MFE and what happened after your exit are on the trade now.",
+            }
+          : {
+              title: "Nothing new yet",
+              description:
+                res?.error ??
+                "The archive has not published far enough past this trade. It is worth asking again tomorrow.",
+            },
+      );
+    } catch (err: any) {
+      toast({
+        title: "Couldn't reach the market",
+        description: String(err?.message ?? err).slice(0, 160),
+        variant: "destructive",
+      });
+    } finally {
+      setRechecking(false);
+    }
+  }
   const tps = [trade.initialTarget, ...parseExtraTargets(trade.extraTargets)].filter(
     (x): x is number => x != null,
   );
@@ -553,6 +594,49 @@ function TradeBody({
       {/* Renders nothing at all for a futures trade or an unmatched ticker —
           a trade is not broken for having no Binance chart, and an apology
           in its place would be noise on every NQ row. */}
+      {/*
+        The errand the trader can see but the schedule cannot.
+
+        The archive publishes a day at a time, so a trade closed yesterday has
+        no file covering its own exit and its MAE and MFE are withheld rather
+        than measured over half a window. Today the file is there — and nothing
+        on screen changes to say so. The sweep would get to it eventually, on
+        its own hourly throttle and per-run cap, which is fine for a background
+        errand and no use at all to somebody looking straight at the gap.
+
+        Offered only when there is something to gain: a closed trade, missing
+        numbers, and recent enough that the archive could still be publishing
+        data about it.
+      */}
+      {trade.status === "closed" && pathIncomplete(trade) && (
+        <div
+          className="flex flex-wrap items-center gap-2 rounded-md border border-border/60 px-3 py-2 text-[11px]"
+          data-testid="panel-recheck"
+        >
+          <span className="text-muted-foreground">
+            {trade.mae == null && trade.mfe == null
+              ? "No price path on this one yet — the archive publishes a day at a time."
+              : "The price path is only half filled in."}
+          </span>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="ml-auto h-7 gap-1.5 px-2 text-[11px]"
+            disabled={rechecking}
+            onClick={recheck}
+            data-testid="button-recheck-trade"
+          >
+            {rechecking ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <Sparkles className="h-3 w-3 text-emerald-400" />
+            )}
+            Ask the market again
+          </Button>
+        </div>
+      )}
+
       <Suspense fallback={null}>
         <TradeChart trade={trade} />
       </Suspense>

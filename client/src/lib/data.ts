@@ -29,6 +29,22 @@ export function useTrades() {
  * noManagementOutcome on whatever it can settle — and because it should run
  * when the journal is opened, not whenever React Query feels like refetching.
  */
+/**
+ * Re-read ONE trade from the market, now.
+ *
+ * The sweep is throttled and capped, which is right for a background errand
+ * and wrong when the trader is looking at the gap: the archive publishes a
+ * day at a time, so a trade closed yesterday becomes readable today without
+ * anything on screen changing.
+ */
+export function useCheckTrade() {
+  return useMutation({
+    mutationFn: async (id: number) =>
+      (await apiRequest("POST", `/api/trades/${id}/check`, {})).json(),
+    onSuccess: invalidateTrades,
+  });
+}
+
 export function useCheckOutcomes() {
   return useMutation({
     mutationFn: async () => (await apiRequest("POST", "/api/outcomes/check", {})).json(),

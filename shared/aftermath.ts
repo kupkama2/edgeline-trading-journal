@@ -27,6 +27,7 @@
  * different thing and the only one a journal is entitled to make.
  */
 import type { TradeWithTags } from "./schema";
+import { AFTERMATH_HORIZON_MS } from "./binance";
 
 /**
  * Did price demonstrably reach one of the trade's ORIGINAL levels?
@@ -77,6 +78,31 @@ export function outcomeUnknown(t: TradeWithTags): boolean {
   const said = t.noManagementOutcome;
   if (said != null && said !== "undetermined") return false;
   return impliedOutcome(t) == null;
+}
+
+/**
+ * Closed, but the price path was never filled in — and could still be.
+ *
+ * The archive publishes a day at a time, so a trade closed this morning has
+ * no file covering its own exit yet. The reader withholds MAE and MFE rather
+ * than measuring them over a window it only half saw, which is right, and
+ * leaves a trade that is settled but unmeasured.
+ *
+ * Nothing used to bring those back. The sweep's worklist was `outcomeUnknown`
+ * alone, and a trade whose PLAN outcome had already been decided was never
+ * looked at again — so the numbers withheld on Monday stayed missing for good,
+ * however much data the archive published on Tuesday.
+ *
+ * Bounded by the aftermath horizon: past it there is nothing further to learn,
+ * and retrying forever would fill the per-run budget with trades that can
+ * never be completed while newer ones queued behind them.
+ */
+export function pathIncomplete(t: TradeWithTags, now = Date.now()): boolean {
+  if (t.status !== "closed" || t.exitPrice == null) return false;
+  if (t.mae != null && t.mfe != null) return false;
+  const exit = t.exitTime ? new Date(t.exitTime).getTime() : null;
+  if (exit == null || !Number.isFinite(exit)) return false;
+  return now - exit < AFTERMATH_HORIZON_MS + 7 * 24 * 60 * 60 * 1000;
 }
 
 /**

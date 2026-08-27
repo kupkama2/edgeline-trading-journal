@@ -9,8 +9,9 @@
  * Three rules keep it from being worse than nothing:
  *
  *   It never overwrites a human answer. `outcomeUnknown` is true only for a
- *   blank or a parked "undetermined", so a trade you have already settled is
- *   not visited at all.
+ *   blank or a parked "undetermined", and it is checked where the write
+ *   happens rather than where the worklist is built — a trade can be read for
+ *   its price path long after its verdict was settled by hand.
  *
  *   It never guesses. An unmatched symbol, a bar that touched both levels, a
  *   feed that is down — all leave the trade exactly as it was. A blank is
@@ -29,7 +30,7 @@ import {
   type BinanceSymbol,
   type PairRef,
 } from "@shared/binance";
-import { outcomeUnknown } from "@shared/aftermath";
+import { outcomeUnknown, pathIncomplete } from "@shared/aftermath";
 import type { TradeWithTags } from "@shared/schema";
 import { fetchCandles, fetchCatalogue, intervalFor, readCandles } from "./binance";
 import { catalogue, collapsePairSymbolsOnce, storageFor } from "./storage";
@@ -137,7 +138,13 @@ export async function ensureCatalogue(force = false): Promise<BinanceSymbol[]> {
  * Read the aftermath of every parked trade that has one, and settle what can
  * be settled.
  */
-export async function checkOutcomes(userId: number): Promise<CheckSummary> {
+/**
+ * @param only  A single trade id, when the trader asked for this one by name.
+ *              Skips the hourly throttle and the per-run cap: an explicit
+ *              request knows something the schedule does not, which is that
+ *              somebody is looking at this trade right now.
+ */
+export async function checkOutcomes(userId: number, only?: number): Promise<CheckSummary> {
   const store = storageFor(userId);
   const out: CheckSummary = { checked: 0, resolved: [], pending: 0, unmatched: 0, measured: [] };
 
@@ -152,8 +159,16 @@ export async function checkOutcomes(userId: number): Promise<CheckSummary> {
   const all = await store.listTrades();
   const now = Date.now();
   const due = all
-    .filter(outcomeUnknown)
+    /*
+     * Two errands, not one. A trade can have its plan outcome settled and
+     * still be missing MAE and MFE — the archive had not published the day of
+     * its own exit when it was last read — and the worklist used to be
+     * `outcomeUnknown` alone, so those numbers were withheld once and never
+     * returned to.
+     */
+    .filter((t) => (only != null ? t.id === only : outcomeUnknown(t) || pathIncomplete(t, now)))
     .filter((t) => {
+      if (only != null) return true;
       const at = (t as any).outcomeCheckedAt as string | null | undefined;
       return !at || now - new Date(at).getTime() > RECHECK_MS;
     })
@@ -192,14 +207,28 @@ export async function checkOutcomes(userId: number): Promise<CheckSummary> {
     else out.unmatched++;
   }
 
-  for (const { trade: t, pair } of matched.slice(0, MAX_PER_RUN)) {
+  for (const { trade: t, pair } of only != null ? matched : matched.slice(0, MAX_PER_RUN)) {
     try {
       const read = await readTrade(t, pair);
       out.checked++;
       const stamp = new Date().toISOString();
       const patch: Record<string, unknown> = { outcomeCheckedAt: stamp };
 
-      if (read.settled) {
+      /*
+       * The guard against overwriting a human answer, at the point where the
+       * damage would be done.
+       *
+       * It used to live in the worklist filter — `outcomeUnknown` decided who
+       * got visited, and a trade you had already settled was simply never
+       * looked at. That held only while the worklist had one errand in it.
+       * Adding the price-path errand brought answered trades back into the
+       * loop, and with the guard upstream the settler cheerfully wrote over a
+       * verdict the trader had typed themselves.
+       *
+       * Here it cannot drift: whatever the reason a trade is being read, its
+       * plan outcome is only written when nobody has given one.
+       */
+      if (read.settled && outcomeUnknown(t)) {
         patch.noManagementOutcome = read.settled.verdict;
         patch.outcomeSource = "auto";
         patch.outcomeHitAt = read.settled.hitAt;
