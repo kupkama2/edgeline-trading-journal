@@ -64,6 +64,47 @@ export interface Measured {
   fields: string[];
 }
 
+/** One field the market would change, and what it would change it from. */
+export interface FieldChange {
+  field: "mae" | "mfe" | "postExitPeak" | "postExitAdverse";
+  from: number;
+  to: number;
+}
+
+export interface TradeSuggestion {
+  tradeId: number;
+  symbol: string;
+  pair: string;
+  changes: FieldChange[];
+}
+
+/**
+ * Does the market's reading extend this extreme, rather than pull it in?
+ *
+ * MAE, MFE and the two aftermath prices are all maxima, and which arithmetic
+ * direction "further" points in depends on both the field and the side. On a
+ * long the best price is the highest and the worst is the lowest; on a short
+ * it is exactly the other way round, so a short's MFE improving means the
+ * number going DOWN.
+ *
+ * A hair either way is the two instruments disagreeing about a wick rather
+ * than news, so it takes a real move to be worth interrupting anybody about.
+ */
+const MATTERS = 0.0005;
+
+export function extendsExtreme(
+  field: FieldChange["field"],
+  had: number,
+  found: number,
+  direction: string,
+): boolean {
+  if (!(had > 0) || !(found > 0)) return false;
+  if (Math.abs(found - had) / had < MATTERS) return false;
+  const favourable = field === "mfe" || field === "postExitPeak";
+  const wantHigher = direction === "long" ? favourable : !favourable;
+  return wantHigher ? found > had : found < had;
+}
+
 export interface CheckSummary {
   checked: number;
   resolved: Resolved[];
@@ -73,6 +114,12 @@ export interface CheckSummary {
   unmatched: number;
   /** Trades whose MAE/MFE or aftermath prices were filled in from the candles. */
   measured: Measured[];
+  /**
+   * Where the market disagrees with a number already on the trade — offered,
+   * never applied. See the comment at the point they are collected for why
+   * only extensions of an extreme qualify.
+   */
+  suggestions: TradeSuggestion[];
   /** Set when the price feed itself failed; the caller should say so quietly. */
   error?: string;
 }
@@ -146,7 +193,14 @@ export async function ensureCatalogue(force = false): Promise<BinanceSymbol[]> {
  */
 export async function checkOutcomes(userId: number, only?: number): Promise<CheckSummary> {
   const store = storageFor(userId);
-  const out: CheckSummary = { checked: 0, resolved: [], pending: 0, unmatched: 0, measured: [] };
+  const out: CheckSummary = {
+    checked: 0,
+    resolved: [],
+    pending: 0,
+    unmatched: 0,
+    measured: [],
+    suggestions: [],
+  };
 
   let cat: BinanceSymbol[];
   try {
@@ -265,6 +319,44 @@ export async function checkOutcomes(userId: number, only?: number): Promise<Chec
         }
       }
       if (filled.length) out.measured.push({ tradeId: t.id, symbol: t.symbol, fields: filled });
+
+      /*
+       * Where the market disagrees with what is already recorded.
+       *
+       * Refusing to overwrite is right and stays. But refusing SILENTLY throws
+       * the disagreement away, and the disagreement is the interesting part:
+       * you read 1.20 off a chart, the archive says the wick reached 1.35, and
+       * the trade ran a third further in your favour than your record of it.
+       * Nothing on screen ever said so.
+       *
+       * Only ever offered to EXTEND an extreme, never to shrink one. These are
+       * maxima: a machine reading that falls short of a hand-read one usually
+       * means the hand read a finer timeframe or a wick this feed's bars did
+       * not resolve, and pulling the number in would quietly shrink a real
+       * excursion. Finding MORE is new information; finding less is a coarser
+       * instrument.
+       */
+      const changes: FieldChange[] = [];
+      for (const [field, value] of [
+        ["mae", read.path.mae],
+        ["mfe", read.path.mfe],
+        ["postExitPeak", read.path.postExitPeak],
+        ["postExitAdverse", read.path.postExitAdverse],
+      ] as const) {
+        const had = (t as any)[field] as number | null;
+        if (value == null || had == null) continue;
+        if (extendsExtreme(field, had, value, t.direction)) {
+          changes.push({ field, from: had, to: value });
+        }
+      }
+      if (changes.length) {
+        out.suggestions.push({
+          tradeId: t.id,
+          symbol: t.symbol,
+          pair: pair.symbol,
+          changes,
+        });
+      }
 
       await store.updateTrade(t.id, patch as any);
     } catch (err: any) {
