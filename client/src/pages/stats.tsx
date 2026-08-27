@@ -22,6 +22,7 @@ import { useEffect, useState } from "react";
 import { useRoute } from "wouter";
 import { BarChart3, Repeat } from "lucide-react";
 import { StyleSwitcher } from "@/components/style-switcher";
+import { DenomToggle } from "@/lib/denom";
 import { useStyleScopedTrades } from "@/lib/style-filter";
 import { useTrades } from "@/lib/data";
 import { closedTrades } from "@shared/breakdowns";
@@ -85,7 +86,14 @@ export default function Stats() {
               : "what your management and your habits are doing to it."}
           </p>
         </div>
-        <StyleSwitcher />
+        {/* One switch for the whole page. R and dollars are not two
+            renderings of one number — they agree only when the size never
+            varies — so flipping card by card would let two cards on the same
+            screen answer in different units. */}
+        <div className="flex flex-wrap items-center gap-2">
+          <DenomToggle />
+          <StyleSwitcher />
+        </div>
       </div>
 
       <div

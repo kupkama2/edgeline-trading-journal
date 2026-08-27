@@ -43,6 +43,7 @@ import {
   EXIT_REASON_LABELS,
   getPrestige,
 } from "@shared/metrics";
+import { useFig } from "@/lib/denom";
 import type { TradeWithTags } from "@shared/schema";
 
 /* ------------------------------ utilities ------------------------------ */
@@ -239,6 +240,7 @@ function WeeklyGate({
 /* --------------------------------- page -------------------------------- */
 
 export default function Dashboard({ embedded = false }: { embedded?: boolean } = {}) {
+  const fig = useFig();
   const { data: trades, isLoading } = useTrades();
   const { data: tags = [] } = useMistakeTags();
   const { activeStyleId, scope } = useStyleFilter();
@@ -366,14 +368,18 @@ export default function Dashboard({ embedded = false }: { embedded?: boolean } =
 
   const statStrip = [
     { label: "Win rate", value: `${Math.round(stats.winRate * 100)}%` },
-    { label: "Expectancy", value: fmtR(stats.expectancyR) },
-    { label: "Avg winner", value: fmtR(stats.avgWinnerR) },
-    { label: "Avg loser", value: fmtR(stats.avgLoserR) },
+    // Follows the page switch: same three trades, the other unit.
+    { label: "Expectancy", value: fig(stats.expectancyR, stats.expectancyPnL) },
+    { label: "Avg winner", value: fig(stats.avgWinnerR, stats.avgWinnerPnL) },
+    { label: "Avg loser", value: fig(stats.avgLoserR, stats.avgLoserPnL) },
     {
       label: "Profit factor",
       value: isFinite(stats.profitFactor) ? stats.profitFactor.toFixed(2) : "∞",
     },
     { label: "Avg capture", value: `${Math.round(stats.avgCapture * 100)}%` },
+    /* Net R and Net P&L stay side by side whichever unit is on. They are the
+       page's headline pair and the whole reason for the switch is that they
+       can disagree — collapsing them into one would remove the comparison. */
     { label: "Net R", value: fmtR(stats.totalR), tone: stats.totalR >= 0 ? "up" : "down" },
     {
       label: "Net P&L",

@@ -43,6 +43,19 @@ export interface RDistribution {
   /** Largest win and loss, in R. */
   bestR: number;
   worstR: number;
+  /**
+   * The same five figures in dollars.
+   *
+   * Not a conversion of the ones above — they are computed over the trades'
+   * own realised P&L, which is R times whatever each trade actually risked.
+   * That is why they can tell a different story: a median of +0.4R next to a
+   * median of −$30 means the trades above the middle were the small ones.
+   * Deriving these by multiplying by "a typical 1R" would hide exactly that.
+   */
+  medianPnL: number;
+  meanPnL: number;
+  bestPnL: number;
+  worstPnL: number;
 }
 
 /** Bin widths we are willing to draw, smallest first. */
@@ -58,10 +71,21 @@ function quantile(sorted: number[], q: number): number {
 }
 
 export function rDistribution(trades: TradeWithTags[]): RDistribution | null {
-  const rs = closedTrades(trades)
-    .map((t) => computeMetrics(t).actualR)
-    .filter((r): r is number => r != null && isFinite(r));
+  /*
+   * R and dollars are read off the SAME trades, in one pass, so the two sets
+   * of figures always describe the same sample. Filtering twice would let a
+   * trade with an R but no P&L into one column and not the other, and the
+   * pair would quietly stop being comparable.
+   */
+  const pairs = closedTrades(trades)
+    .map((t) => {
+      const m = computeMetrics(t);
+      return { r: m.actualR, pnl: m.actualPnL ?? 0 };
+    })
+    .filter((x): x is { r: number; pnl: number } => x.r != null && isFinite(x.r));
+  const rs = pairs.map((x) => x.r);
   if (!rs.length) return null;
+  const pnls = pairs.map((x) => x.pnl).sort((a, b) => a - b);
 
   const sorted = [...rs].sort((a, b) => a - b);
   const lo = sorted[0];
@@ -106,6 +130,13 @@ export function rDistribution(trades: TradeWithTags[]): RDistribution | null {
       grossWin > 0 ? wins.slice(0, topN).reduce((a, b) => a + b, 0) / grossWin : 0,
     bestR: hi,
     worstR: lo,
+    medianPnL: quantile(pnls, 0.5),
+    meanPnL: pnls.reduce((a, b) => a + b, 0) / pnls.length,
+    /* The best and worst DOLLAR outcomes, which need not be the same trades
+       as the best and worst R — that mismatch is the size question showing
+       up in the distribution. */
+    bestPnL: pnls[pnls.length - 1],
+    worstPnL: pnls[0],
   };
 }
 
