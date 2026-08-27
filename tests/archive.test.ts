@@ -34,6 +34,8 @@ const DAY = 86_400_000;
 const HOUR = 3_600_000;
 
 let feed: Server;
+let app: Server;
+let base: string;
 let userId: number;
 let store: any;
 let checkOutcomes: (id: number) => Promise<any>;
@@ -158,9 +160,64 @@ describe.skipIf(!DB)("settling a perp out of the file archive", () => {
     ({ checkOutcomes } = await import("../server/outcomes"));
     const { ensureCatalogue } = await import("../server/outcomes");
     await ensureCatalogue(true);
+
+    // The routes too: the chart reads the archive by a different path from the
+    // settler, and the two got to disagree once already.
+    const express = (await import("express")).default;
+    const { registerRoutes } = await import("../server/routes");
+    const server = express();
+    server.use(express.json({ limit: "25mb" }));
+    server.use((req, _res, next) => {
+      (req as any).userId = userId;
+      next();
+    });
+    app = createServer(server);
+    await registerRoutes(app, server);
+    await new Promise<void>((r) => app.listen(0, "127.0.0.1", r));
+    const addr = app.address();
+    base = `http://127.0.0.1:${typeof addr === "object" && addr ? addr.port : 0}`;
   });
 
-  afterAll(() => new Promise<void>((r) => (feed ? feed.close(() => r()) : r())));
+  afterAll(async () => {
+    const shut = (x: Server | undefined) =>
+      new Promise<void>((r) => (x ? x.close(() => r()) : r()));
+    await shut(feed);
+    await shut(app);
+  });
+
+  it("draws the chart from the perp archive, not from spot", async () => {
+    /*
+     * The half that was missing. The settler grew the archive fallback and the
+     * chart route did not — so a trade could be settled against the perp while
+     * the chart beneath it drew the SPOT book and labelled itself accordingly.
+     * Both now resolve the pair through the same rule.
+     */
+    const t0 = Math.floor((Date.now() - 4 * DAY) / DAY) * DAY;
+    // The day BEFORE the entry is published too: the chart pads back half the
+    // hold, and a missing first file stops the gather before it starts.
+    days = new Map([
+      [ymd(t0 - DAY), flatDay(t0 - DAY, 100)],
+      [ymd(t0), flatDay(t0, 100)],
+      [ymd(t0 + DAY), flatDay(t0 + DAY, 100, { hour: 5, high: 131, low: 99 })],
+      [ymd(t0 + 2 * DAY), flatDay(t0 + 2 * DAY, 105)],
+      [ymd(t0 + 3 * DAY), flatDay(t0 + 3 * DAY, 105)],
+    ]);
+    const t = await closed({
+      symbol: "BTC",
+      entryTime: new Date(t0 + HOUR).toISOString(),
+      exitTime: new Date(t0 + 2 * DAY + HOUR).toISOString(),
+    });
+
+    const r = await fetch(`${base}/api/trades/${t.id}/candles?interval=1h`).then((x) => x.json());
+    expect(r.pair).toBe("BTCUSDT");
+    expect(r.market).toBe("futures");
+    expect(r.candles.length).toBeGreaterThan(0);
+    // Said out loud: these bars came from the written-down perp list and the
+    // file archive, because the live futures book refused.
+    expect(r.books.fallback).toBe(true);
+    // And they are the archive's bars — the spike only the perp file has.
+    expect(Math.max(...r.candles.map((c: any) => c.h))).toBe(131);
+  });
 
   it("reads the perp the API refuses, and settles from it", async () => {
     // Three whole days published, the target tagged on the middle one.

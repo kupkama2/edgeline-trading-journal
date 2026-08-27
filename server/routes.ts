@@ -24,7 +24,11 @@ import { ProxyAgent, fetch as undiciFetch } from "undici";
 import { checkOutcomes, ensureCatalogue } from "./outcomes";
 import { fetchCandles, feedStatus, intervalFor, type Interval } from "./binance";
 
-import { binanceSymbolForTrade, collapseToInstrument } from "@shared/binance";
+import {
+  binanceSymbolForTrade,
+  collapseToInstrument,
+  pairForTradeWithFallback,
+} from "@shared/binance";
 import Anthropic from "@anthropic-ai/sdk";
 import {
   insertTradeSchema,
@@ -633,7 +637,22 @@ export async function registerRoutes(
     if (!trade) return res.status(404).json({ message: "Trade not found" });
     try {
       const cat = await ensureCatalogue();
-      const pair = binanceSymbolForTrade(trade, cat);
+      /*
+       * The same resolution the settling path uses, and for the same reason.
+       *
+       * This route used to call binanceSymbolForTrade directly, which answers
+       * from the catalogue it is handed — so with fapi returning 451 from a US
+       * host the catalogue came back spot-only and every perp trade drew its
+       * SPOT chart. Nothing looked broken; the chart just quietly showed a
+       * different instrument from the one that had been traded, and said
+       * "spot" in the corner where nobody reads it.
+       *
+       * Worse, it disagreed with the numbers beside it: the settler had
+       * already grown this fallback, so a trade could be settled against the
+       * perp while the chart under it drew spot. One shared rule now, so the
+       * two cannot drift apart again.
+       */
+      const pair = pairForTradeWithFallback(trade, cat);
       if (!pair) {
         /*
          * No pair is two very different situations and the chart has to be
@@ -658,6 +677,13 @@ export async function registerRoutes(
       const books = {
         futures: cat.filter((s) => s.market === "futures").length,
         spot: cat.filter((s) => s.market !== "futures").length,
+        /*
+         * Whether THIS chart came from the written-down perp list rather than
+         * the venue's own catalogue. The pair says "futures" either way, and
+         * the difference is worth surfacing: it means the live book refused
+         * and these bars came out of the archive.
+         */
+        fallback: pair.market === "futures" && cat.every((s) => s.market !== "futures"),
       };
 
       const entry = new Date(trade.entryTime).getTime();
@@ -710,12 +736,54 @@ export async function registerRoutes(
         win = { from: before - BAR_MS[interval] * 600, to: before };
       }
 
+      /*
+       * Ask for the perp; settle for spot rather than for nothing.
+       *
+       * Preferring the perp is the point — it is the instrument that was
+       * actually traded, and the archive can serve it when the live book
+       * refuses. But the archive has no file for today, and a chart that
+       * answers a refusal with a blank rectangle is worse than one that draws
+       * spot and says so: the two books sit within a fraction of a percent of
+       * each other nearly all of the time, and a labelled approximation is
+       * still a chart.
+       *
+       * Only the CHART gets this licence. Settling a stop against the wrong
+       * book is a wrong answer at exactly the price that decides the result,
+       * so outcomes.ts refuses instead — see the comment there.
+       */
+      let used = pair;
+      /*
+       * The first failure is kept rather than swallowed. If nothing can be
+       * drawn in the end it is rethrown, because "451 from fapi.binance.com"
+       * is a diagnosis and an empty candle array is a mystery — and a feed
+       * that breaks silently stays broken for a week.
+       */
+      let firstErr: unknown = null;
+      let candles = await fetchCandles(pair, interval, win.from, win.to, 1200).catch((e) => {
+        firstErr = e;
+        return [];
+      });
+      if (candles.length === 0 && books.fallback) {
+        // The PLAIN resolver on purpose: the fallback one would re-point at
+        // the perp again, which is the pair that just came back empty.
+        const spotPair = binanceSymbolForTrade(trade, cat);
+        if (spotPair && spotPair.market === "spot") {
+          const asSpot = await fetchCandles(spotPair, interval, win.from, win.to, 1200).catch(() => []);
+          if (asSpot.length > 0) {
+            used = spotPair;
+            candles = asSpot;
+          }
+        }
+      }
+
+      if (candles.length === 0 && firstErr) throw firstErr;
+
       res.json({
-        pair: pair.symbol,
-        market: pair.market,
+        pair: used.symbol,
+        market: used.market,
         interval,
-        books,
-        candles: await fetchCandles(pair, interval, win.from, win.to, 1200),
+        books: { ...books, fallback: books.fallback && used.market === "futures" },
+        candles,
       });
     } catch (err: any) {
       res.json({ pair: null, candles: [], error: String(err?.message ?? err), feed: feedStatus() });

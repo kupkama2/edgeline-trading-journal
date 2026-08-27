@@ -63,7 +63,12 @@ export function useTradeCandles(tradeId: number | null, interval?: string) {
     market?: "futures" | "spot";
     interval?: string;
     /** How many pairs each Binance book contributed to the catalogue in use. */
-    books?: { futures: number; spot: number };
+    books?: {
+      futures: number;
+      spot: number;
+      /** These perp bars came from the file archive, the live book having refused. */
+      fallback?: boolean;
+    };
     candles: { t: number; o: number; h: number; l: number; c: number }[];
     error?: string;
     feed?: { lastError: string | null; lastTriedAt: string | null; lastOkAt: string | null } | null;

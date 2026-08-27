@@ -205,6 +205,14 @@ export function TradeChart({ trade }: { trade: TradeWithTags }) {
             perp book unreachable from the server
           </span>
         )}
+        {/* The perp, but out of the published files rather than the live book.
+            Worth saying: it is the right instrument, and it stops a day or so
+            short of now, because the archive publishes a day at a time. */}
+        {data.books?.fallback && (
+          <span className="text-muted-foreground" data-testid="chart-from-archive">
+            from the file archive
+          </span>
+        )}
         {tf === "auto" && data.interval && <span>{data.interval} candles</span>}
         {isFetching && <span data-testid="chart-refetching">…</span>}
 

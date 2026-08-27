@@ -21,12 +21,11 @@
  *   thing that can tell "the market said so" from "I said so" after the fact.
  */
 import {
-  binanceSymbolForTrade,
   firstTouch,
-  listedAsPerp,
+  pairForTradeWithFallback,
+  SEED_CATALOGUE,
   pathExtremes,
   scanWindow,
-  SEED_CATALOGUE,
   type BinanceSymbol,
   type PairRef,
 } from "@shared/binance";
@@ -186,14 +185,9 @@ export async function checkOutcomes(userId: number): Promise<CheckSummary> {
    * wrong exactly at the level that decides the answer. If the archive cannot
    * be reached either, the read fails and the trade is left where it was.
    */
-  const perpsMissing = cat.every((s) => s.market !== "futures");
-
   const matched: { trade: TradeWithTags; pair: PairRef }[] = [];
   for (const t of due) {
-    let pair = binanceSymbolForTrade(t, cat);
-    if (perpsMissing && (!pair || pair.market === "spot") && listedAsPerp(t.symbol)) {
-      pair = binanceSymbolForTrade(t, SEED_CATALOGUE) ?? pair;
-    }
+    const pair = pairForTradeWithFallback(t, cat);
     if (pair) matched.push({ trade: t, pair });
     else out.unmatched++;
   }

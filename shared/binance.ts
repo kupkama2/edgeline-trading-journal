@@ -275,6 +275,42 @@ export function binanceSymbolForTrade(
   return matchBinanceSymbol(trade.symbol, catalogue);
 }
 
+/**
+ * The pair to read for a trade, allowing for a futures book that refused.
+ *
+ * `binanceSymbolForTrade` answers from the catalogue it is handed, and that
+ * is the problem when the catalogue is the thing that failed: fapi returns
+ * 451 from a US host, the catalogue comes back spot-only, and every perp
+ * trade resolves to its SPOT pair. Nothing about that looks broken — the
+ * chart draws, the numbers are numbers — but a liquidation cascade wicks the
+ * perp through levels spot never prints, which is precisely the level that
+ * decides whether a stop was hit.
+ *
+ * So when the futures book is missing entirely, a coin known to have a perp
+ * is re-pointed at it. The archive does not need the catalogue to serve that
+ * pair, and reading the right book from a file beats reading the wrong book
+ * live.
+ *
+ * This lives here, and not in either caller, because it already went wrong
+ * once by living in one of them: the settling path grew the rule and the
+ * chart route did not, so trades settled against the perp while the chart
+ * beneath them drew spot and said so.
+ */
+export function pairForTradeWithFallback(
+  trade: { symbol: string; contract?: string | null },
+  catalogue: BinanceSymbol[],
+): PairRef | null {
+  const pair = binanceSymbolForTrade(trade, catalogue);
+  // An empty catalogue is vacuously "no futures", which is the right reading:
+  // the venue never answered, so the perp book is exactly as unavailable as
+  // it is when it answered with spot alone.
+  const perpsMissing = catalogue.every((s) => s.market !== "futures");
+  if (perpsMissing && (!pair || pair.market === "spot") && listedAsPerp(trade.symbol)) {
+    return binanceSymbolForTrade(trade, SEED_CATALOGUE) ?? pair;
+  }
+  return pair;
+}
+
 /* ------------------------------ the path ------------------------------ */
 
 export interface PathExtremes {
