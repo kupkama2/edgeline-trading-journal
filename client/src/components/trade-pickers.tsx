@@ -62,7 +62,7 @@ export function AccountPicker({
           value={value}
           onChange={(e) => onChange(e.target.value)}
           placeholder={placeholder}
-          className="h-9 w-56 text-xs"
+          className="h-9 w-56 max-w-full text-xs"
           data-testid={`input-${testIdPrefix}`}
         />
         {known.length > 0 && (
@@ -92,7 +92,7 @@ export function AccountPicker({
         } else onChange(v === NO_ACCOUNT ? "" : v);
       }}
     >
-      <SelectTrigger className="h-9 w-56 text-xs" data-testid={`select-${testIdPrefix}`}>
+      <SelectTrigger className="h-9 w-56 max-w-full text-xs" data-testid={`select-${testIdPrefix}`}>
         <SelectValue placeholder={emptyLabel} />
       </SelectTrigger>
       <SelectContent>

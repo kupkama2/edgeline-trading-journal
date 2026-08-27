@@ -13,6 +13,7 @@
  */
 import type { MistakeTag, TradeWithTags } from "./schema";
 import { aggregate, computeMetrics, exitTimingRead, mistakeCostLeaderboard } from "./metrics";
+import { cohort, managementCohorts } from "./cohorts";
 import { demonCountsInRange } from "./demons";
 import { dayKey } from "./daily";
 
@@ -73,9 +74,44 @@ export interface InsightsBundle {
     totalDeltaR: number;
     avgCapture: number;
   };
+  /**
+   * The week's trades split by outcome AND by whether a hand was taken in
+   * them, with the untouched plan alongside for the two managed halves.
+   *
+   * The one aggregate `totalDeltaR` above nets those two against each other,
+   * which is the summary that hides the finding: a week that cut its losers
+   * beautifully and dumped its winners reads as "management +3R" and looks
+   * fine. The model cannot report a habit it was only shown the net of.
+   */
+  managed: {
+    /** Closed trades this week that could be classified at all. */
+    classified: number;
+    /** Closed, but nothing says whether the plan finished or you did. */
+    unclassified: number;
+    won: CohortLine;
+    lost: CohortLine;
+    /** The control group: same split, on trades you did not touch. */
+    wonLeftAlone: CohortLine;
+    lostLeftAlone: CohortLine;
+  };
   demons: { name: string; count: number }[];
   costliest: { name: string; cost: number; trades: number }[];
   reflections: ReflectionEntry[];
+}
+
+/** One cohort, trimmed to what the model can actually reason about. */
+export interface CohortLine {
+  trades: number;
+  totalR: number;
+  avgR: number;
+  /** How many of them have an answer to "left alone, what would it have done?" */
+  measured: number;
+  /** Realised R over those measured ones — the left half of the comparison. */
+  actualR: number | null;
+  /** What the untouched plan would have paid, over those SAME trades. */
+  planR: number | null;
+  /** Realised minus plan. Positive means the hand was worth taking. */
+  deltaR: number | null;
 }
 
 /* Bounds on what gets sent to the model: enough to find a pattern, not so much
@@ -111,6 +147,19 @@ export function buildInsightsBundle(
 
   const tagNames = Object.fromEntries(tags.map((t) => [t.id, t.name]));
   const agg = aggregate(inWeek);
+  const split = managementCohorts(inWeek);
+  const line = (id: Parameters<typeof cohort>[1]): CohortLine => {
+    const c = cohort(split, id);
+    return {
+      trades: c.trades,
+      totalR: c.totalR,
+      avgR: c.avgR,
+      measured: c.measured,
+      actualR: c.actualOnMeasuredR,
+      planR: c.planR,
+      deltaR: c.deltaR,
+    };
+  };
 
   const reflections: ReflectionEntry[] = inWeek
     .map((t) => {
@@ -160,6 +209,14 @@ export function buildInsightsBundle(
       avgLoserR: agg.avgLoserR,
       totalDeltaR: agg.totalDeltaR,
       avgCapture: agg.avgCapture,
+    },
+    managed: {
+      classified: split.closed - split.unclassified,
+      unclassified: split.unclassified,
+      won: line("wonManaged"),
+      lost: line("lostManaged"),
+      wonLeftAlone: line("wonAlone"),
+      lostLeftAlone: line("lostAlone"),
     },
     demons: demonCountsInRange(trades, tags, fromIso, toIso)
       .slice(0, 6)

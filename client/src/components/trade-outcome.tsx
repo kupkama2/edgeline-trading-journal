@@ -75,6 +75,15 @@ export interface OutcomeFieldsProps {
   /** One-click fee suggestions from the account's schedule, when it has one. */
   feeChips?: { label: string; amount: number }[];
   testPrefix: string;
+  /**
+   * Rendered inside the exit tile, under the price and time.
+   *
+   * The average-close solver used to float above this whole component as a
+   * loose panel. It writes the exit price and disambiguates what that field
+   * means, so it belongs in the box with it — a helper for a field, sitting
+   * outside the section that field is in, reads as an unrelated warning.
+   */
+  exitExtra?: React.ReactNode;
   /** Prefills a price when a reason implies one ("stopped out" => the stop). */
   onPickReason?: (reason: string) => void;
   /**
@@ -198,6 +207,37 @@ export function TradeOutcomeFields(p: OutcomeFieldsProps) {
     return { tone: "flat" as const, text: "Stop was about right — it went nowhere either way." };
   })();
 
+  /*
+   * Whether "your read" has been answered, and what it says.
+   *
+   * The exit axis does not apply to a stop-out — a trade that hit its stop
+   * never went near its target, so an ungraded exit there is a question that
+   * does not arise, not one you skipped. Folding on "all three answered"
+   * would leave every stopped-out trade permanently open on a question it
+   * cannot be asked; axisApplies is the same rule the statistics use.
+   */
+  const wantsExitGrade = p.exitReason !== "stop";
+  const graded =
+    p.grades.entry != null &&
+    p.grades.stop != null &&
+    (!wantsExitGrade || p.grades.exit != null);
+  const gradeSummary = (() => {
+    const said = (
+      [
+        ["entry", p.grades.entry],
+        ["stop", p.grades.stop],
+        ["exit", wantsExitGrade ? p.grades.exit : null],
+      ] as const
+    )
+      .map(([axis, g]) => (g ? `${axis} ${gradeLabel(axis, g)?.toLowerCase()}` : null))
+      .filter(Boolean);
+    const extras = [
+      p.demonIds.length ? `${p.demonIds.length} demon${p.demonIds.length === 1 ? "" : "s"}` : null,
+      p.highlights.length ? `${p.highlights.length} green flag${p.highlights.length === 1 ? "" : "s"}` : null,
+    ].filter(Boolean);
+    return [...said, ...extras].join(" · ") || "not graded yet";
+  })();
+
   const toggleDemon = (id: number) =>
     p.setDemonIds(
       p.demonIds.includes(id) ? p.demonIds.filter((x) => x !== id) : [...p.demonIds, id],
@@ -210,6 +250,7 @@ export function TradeOutcomeFields(p: OutcomeFieldsProps) {
         title="The exit"
         hint="where and when you actually got out"
         testId={`section-${p.testPrefix}-exit`}
+        tone="exit"
       >
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-1">
@@ -232,6 +273,8 @@ export function TradeOutcomeFields(p: OutcomeFieldsProps) {
           testId={`input-${p.testPrefix}-exit-time`}
         />
       </div>
+
+      {p.exitExtra}
 
       {/* ---- stage 2: facts about the close ---- */}
       {priced && (
@@ -296,91 +339,93 @@ export function TradeOutcomeFields(p: OutcomeFieldsProps) {
           title="What price did"
           hint="how far it went with you, and how far without you"
           testId={`section-${p.testPrefix}-path`}
+          tone="path"
         >
         <>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <LevelLabel kind="mae" text="Worst while in" />
-              <Input
-                type="number"
-                step="any"
-                inputMode="decimal"
-                value={p.mae}
-                onChange={(e) => p.setMae(e.target.value)}
-                className="h-9 font-mono text-sm"
-                data-testid={`input-${p.testPrefix}-mae`}
-              />
-            </div>
-            <div className="space-y-1">
-              <LevelLabel kind="mfe" text="Best while in" />
-              <Input
-                type="number"
-                step="any"
-                inputMode="decimal"
-                value={p.mfe}
-                onChange={(e) => p.setMfe(e.target.value)}
-                className="h-9 font-mono text-sm"
-                data-testid={`input-${p.testPrefix}-mfe`}
-              />
-            </div>
+          {/*
+            Four prices, two questions, one row.
+
+            They were two stacked grids with a caption between them and a
+            three-line explainer under each of the bottom pair — around 260px
+            of form for four numbers. The split is real and worth keeping (in
+            the trade is what you lived through, after the exit is what you
+            missed), so it survives as two labelled boxes side by side rather
+            than as two rows: same grouping, half the height, and the pairing
+            is now something you SEE instead of something a caption asserts.
+
+            Adverse left, favourable right, in both boxes — the same way round
+            as the bands below and as every R in the app.
+          */}
+          <div className="grid gap-2.5 sm:grid-cols-2">
+            {[
+              {
+                key: "in" as const,
+                title: "While you were in",
+                left: { kind: "mae" as const, text: "Worst held", value: p.mae, set: p.setMae, id: "mae" },
+                right: { kind: "mfe" as const, text: "Best held", value: p.mfe, set: p.setMfe, id: "mfe" },
+              },
+              {
+                key: "after" as const,
+                title: "Once you were out",
+                left: {
+                  kind: "fellAfter" as const,
+                  text: "Fell to",
+                  value: p.postExitAdverse,
+                  set: p.setPostExitAdverse,
+                  id: "post-exit-adverse",
+                },
+                right: {
+                  kind: "ranAfter" as const,
+                  text: "Ran on to",
+                  value: p.postExitPeak,
+                  set: p.setPostExitPeak,
+                  id: "post-exit-peak",
+                },
+              },
+            ].map((group) => (
+              <div
+                key={group.key}
+                className="space-y-1.5 rounded-lg border border-border/60 bg-secondary/20 px-2.5 py-2"
+                data-testid={`group-${p.testPrefix}-path-${group.key}`}
+              >
+                <p className={LABEL}>{group.title}</p>
+                <div className="grid grid-cols-2 gap-2.5">
+                  {[group.left, group.right].map((fld) => (
+                    <div key={fld.id} className="space-y-1">
+                      <LevelLabel kind={fld.kind} text={fld.text} />
+                      <Input
+                        type="number"
+                        step="any"
+                        inputMode="decimal"
+                        value={fld.value}
+                        onChange={(e) => fld.set(e.target.value)}
+                        className="h-9 font-mono text-sm"
+                        data-testid={`input-${p.testPrefix}-${fld.id}`}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
           </div>
 
-          {/* After you were out, both ways. The pair is the point: one of
-              them prices what leaving cost, the other what it saved, and a
-              form that only ever asks the first one can only ever conclude
-              "hold longer".
+          {/* The pair on the right is the half a journal usually never asks
+              for, so it gets the one line of explanation the four boxes no
+              longer carry each. Both directions, deliberately: a form that
+              only ever asks how much further it ran can only ever conclude
+              "hold longer". */}
+          <p className="text-[10px] leading-snug text-muted-foreground">
+            After you were out, both ways — one prices what leaving cost you, the other what it
+            saved you. On a stop-out, "fell to" is what the stop was worth.
+          </p>
 
-              Adverse on the LEFT in both rows, favourable on the right, the
-              same way round as the bands below and as every R in the app.
-              Left column reads worst-held over got-worse-without-you; right
-              column reads best-held over ran-on-without-you. Alternating them
-              put a red label under a green one and made two rows that measure
-              the same thing look like they measured different ones. */}
           <div className="space-y-1">
-            <p className={LABEL}>Once you were out, it went…</p>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1">
-                <LevelLabel kind="fellAfter" text="Against you, to" />
-                <Input
-                  type="number"
-                  step="any"
-                  inputMode="decimal"
-                  placeholder="against you, to…"
-                  value={p.postExitAdverse}
-                  onChange={(e) => p.setPostExitAdverse(e.target.value)}
-                  className="h-9 font-mono text-sm"
-                  data-testid={`input-${p.testPrefix}-post-exit-adverse`}
-                />
-                <p className="text-[10px] leading-snug text-muted-foreground">
-                  How much worse it got without you. On a stop-out this is what the stop
-                  saved you.
-                </p>
-              </div>
-              <div className="space-y-1">
-                <LevelLabel kind="ranAfter" text="Your way, to" />
-                <Input
-                  type="number"
-                  step="any"
-                  inputMode="decimal"
-                  placeholder="your way, to…"
-                  value={p.postExitPeak}
-                  onChange={(e) => p.setPostExitPeak(e.target.value)}
-                  className="h-9 font-mono text-sm"
-                  data-testid={`input-${p.testPrefix}-post-exit-peak`}
-                />
-                <p className="text-[10px] leading-snug text-muted-foreground">
-                  The half of "it went higher" you were not in for — up to where your stop
-                  level broke.
-                </p>
-              </div>
-            </div>
             {/* The two ranges on one axis, which is where the comparison
                 lives: "it did most of its work after I left" and "I sat
                 through the whole move and took the middle" are different
                 problems with different fixes, and four numbers in four boxes
                 say neither out loud. */}
             <PathBands
-              className="pt-1"
               direction={p.timing?.direction ?? "long"}
               entry={p.timing?.entryPrice ?? null}
               stop={p.timing?.initialStop ?? null}
@@ -442,6 +487,13 @@ export function TradeOutcomeFields(p: OutcomeFieldsProps) {
           title="Your read"
           hint="what you make of all that"
           testId={`section-${p.testPrefix}-read`}
+          tone="read"
+          collapsible
+          /* Open while there is something to answer; folded once it has been
+             answered, with the answer in the header. Re-reading a trade you
+             already graded should not cost you four rows of buttons. */
+          defaultOpen={!graded}
+          summary={gradeSummary}
         >
         <>
           {/* What the numbers say, right where the grade is picked. The grade

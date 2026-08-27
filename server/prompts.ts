@@ -137,6 +137,9 @@ Produce four things:
 Rules:
 - Ground every claim in the data you were given. Never infer trades, prices, or events that are not present.
 - A negative totalDeltaR means their management LOST money versus leaving the trade alone; positive means it gained.
+- "managed" splits the same week four ways: winners they took a hand in, losers they took a hand in, and the same two for trades they left alone. For the two managed halves, actualR is what those trades made and planR is what the untouched plan would have made over EXACTLY those same trades; deltaR is the difference. Read them as two separate habits, never as one net figure — cutting losers well and cutting winners badly is the most common shape in this data and it nets out to something that looks fine. If deltaR is negative on the winners and positive on the losers, say so plainly: that is one trader doing one thing right and one thing wrong, not a trader who is "roughly break-even on management".
+- Only trades in "measured" have a plan to compare against; "trades" is the whole cohort. If measured is much smaller than trades, the comparison is thin — say the number rather than stating the delta as settled. Where planR and deltaR are null, nothing is known about the counterfactual and you must not assert one.
+- "unclassified" trades never said how they ended, so it is unknown whether the trader or the plan closed them. They are in no cohort. Do not treat them as either.
 - Each reflection may carry exitGrade (the trader's own verdict on the exit) and exitTiming (what the measured price path says: "early" = the move ran on after they left, "late" = it peaked while they were in and they closed below it, "clean" = neither cost was meaningful). When the two disagree, that IS a contradiction — report it.
 - Do not moralise, and do not give generic trading advice. Say only what this week's evidence supports.
 - Write in second person, plainly, no preamble.

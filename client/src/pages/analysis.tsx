@@ -11,6 +11,7 @@ import { ImportCsvDialog } from "@/components/import-csv";
 import { EquityCurve } from "@/components/equity-curve";
 import { ExcursionChart } from "@/components/excursion-chart";
 import { EdgeCard } from "@/components/edge-card";
+import { CohortCard } from "@/components/cohort-card";
 import { RDistributionChart } from "@/components/r-distribution";
 import { describeShape, rDistribution } from "@shared/distribution";
 import { setJumpDay } from "@/lib/jump";
@@ -403,6 +404,12 @@ export default function Analysis({ embedded = false }: { embedded?: boolean } = 
       {/* Sits directly above the travel chart on purpose: that one shows how far
           each trade went, this one says what your decisions did with it. */}
       <EdgeCard trades={scoped} />
+
+      {/* The same trades, sliced the other way. The card above files them by
+          what the plan was going to do; this one by how they finished and
+          whether you touched them, which is the slice you actually think in
+          after a week. They can disagree, and where they do is the finding. */}
+      <CohortCard trades={scoped} />
 
       {/* ------------------------ MAE / MFE excursion ------------------------ */}
       <Card className="border-card-border bg-card p-4">
