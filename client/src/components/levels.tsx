@@ -156,6 +156,7 @@ export function LevelLadder({
   extraTps = [],
   exit,
   className = "",
+  bare = false,
 }: {
   direction: string;
   entry?: number | null;
@@ -164,6 +165,14 @@ export function LevelLadder({
   extraTps?: (number | null | undefined)[];
   exit?: number | null;
   className?: string;
+  /**
+   * Drop the priced legend and keep only the rail.
+   *
+   * Beside a form the legend is the only place the numbers appear. Beside a
+   * read-only view they are already on screen an inch above, and printing
+   * them twice makes a small space look busy without saying anything new.
+   */
+  bare?: boolean;
 }) {
   const ok = (v: unknown): v is number => typeof v === "number" && isFinite(v);
   if (!ok(entry) || (!ok(stop) && !ok(target))) return null;
@@ -221,12 +230,13 @@ export function LevelLadder({
       </div>
 
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px]">
-        {marks.map((m) => (
-          <span key={`${m.kind}-${m.price}-t`} className={`flex items-center gap-1 ${LEVEL[m.kind].text}`}>
-            <span className={`h-1.5 w-1.5 rounded-full ${LEVEL[m.kind].dot}`} />
-            {m.label} <span className="font-mono text-foreground/80">{num(m.price)}</span>
-          </span>
-        ))}
+        {!bare &&
+          marks.map((m) => (
+            <span key={`${m.kind}-${m.price}-t`} className={`flex items-center gap-1 ${LEVEL[m.kind].text}`}>
+              <span className={`h-1.5 w-1.5 rounded-full ${LEVEL[m.kind].dot}`} />
+              {m.label} <span className="font-mono text-foreground/80">{num(m.price)}</span>
+            </span>
+          ))}
         {rr != null && (
           <span className="ml-auto font-mono text-muted-foreground" data-testid="ladder-rr">
             {rr.toFixed(2)}R to target
