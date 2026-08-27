@@ -61,6 +61,8 @@ export interface DrawdownStats {
   /** Whether the curve has since recovered past that peak. */
   recovered: boolean;
   currentDrawdownR: number;
+  /** The same open drawdown in dollars — the peak-to-here fall in money. */
+  currentDrawdownPnL: number;
   bestDay: DayResult | null;
   worstDay: DayResult | null;
   /** Cumulative R after each trading day, for drawing the curve. */
@@ -74,6 +76,7 @@ const EMPTY: DrawdownStats = {
   troughLengthDays: 0,
   recovered: false,
   currentDrawdownR: 0,
+  currentDrawdownPnL: 0,
   bestDay: null,
   worstDay: null,
   equityR: [],
@@ -140,6 +143,7 @@ export function drawdown(trades: TradeWithTags[]): DrawdownStats {
     troughLengthDays: troughLength,
     recovered,
     currentDrawdownR: Math.max(0, peakR - cumR),
+    currentDrawdownPnL: Math.max(0, peakPnL - cumPnL),
     bestDay: sortedByPnL[sortedByPnL.length - 1] ?? null,
     worstDay: sortedByPnL[0] ?? null,
     equityR,

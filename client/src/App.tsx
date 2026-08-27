@@ -8,6 +8,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { Shell, ThemeProvider } from "@/components/shell";
 import { GuardrailProvider } from "@/components/daily-guard";
 import { StyleFilterProvider } from "@/lib/style-filter";
+import { DenomProvider } from "@/lib/denom";
 import { LoginGate } from "@/components/login-gate";
 import NotFound from "@/pages/not-found";
 import Journal from "@/pages/journal";
@@ -87,6 +88,9 @@ function App() {
           <Toaster />
           <LoginGate>
             <StyleFilterProvider>
+              {/* Inside the gate, because the unit is remembered per account
+                  the same way the filters are. */}
+              <DenomProvider>
               <GuardrailProvider>
                 <Router hook={useHashLocation}>
                   <Shell>
@@ -94,6 +98,7 @@ function App() {
                   </Shell>
                 </Router>
               </GuardrailProvider>
+              </DenomProvider>
             </StyleFilterProvider>
           </LoginGate>
         </TooltipProvider>

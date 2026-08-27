@@ -12,6 +12,7 @@ import { EquityCurve } from "@/components/equity-curve";
 import { ExcursionChart } from "@/components/excursion-chart";
 import { EdgeCard } from "@/components/edge-card";
 import { CohortCard } from "@/components/cohort-card";
+import { SizeCard } from "@/components/size-card";
 import { RDistributionChart } from "@/components/r-distribution";
 import { describeShape, rDistribution } from "@shared/distribution";
 import { setJumpDay } from "@/lib/jump";
@@ -33,6 +34,7 @@ import { MIN_SAMPLE, simulate } from "@shared/montecarlo";
 import { missedStats } from "@shared/missed";
 import { excursions, exitTimingSummary, stopQuality, summariseExcursions } from "@shared/excursion";
 import { fmtFees, fmtMoney, fmtR } from "@shared/metrics";
+import { useDenom, useFig } from "@/lib/denom";
 
 /**
  * Where the number comes from.
@@ -79,8 +81,12 @@ function ExpectancyBar({ value, scale }: { value: number; scale: number }) {
 }
 
 function SliceTable({ rows, empty }: { rows: Slice[]; empty: string }) {
-  // One shared scale across the table, so a tall bar means "better than the
-  // others" rather than "widest in its own row".
+  const fig = useFig();
+  const { denom } = useDenom();
+  /* The BAR always reads R, whichever unit the columns are in. It exists to
+     compare buckets against each other, and in dollars a bucket of big
+     positions towers over a better one that happened to be traded small —
+     which is the exact confusion this page is meant to remove. */
   const scale = Math.max(...rows.map((r) => Math.abs(r.expectancyR)), 0.5);
   // The fees column only earns its width once something is actually paying it.
   const showFees = rows.some((r) => r.totalFees > 0);
@@ -97,13 +103,18 @@ function SliceTable({ rows, empty }: { rows: Slice[]; empty: string }) {
             <th className="py-1.5 pr-2 text-left font-medium">Bucket</th>
             <th className="px-2 py-1.5 text-right font-medium">n</th>
             <th className="px-2 py-1.5 text-right font-medium">Win %</th>
-            <th className="px-2 py-1.5 text-right font-medium">Exp R</th>
-            <th className="px-2 py-1.5 text-right font-medium">Total R</th>
+            <th className="px-2 py-1.5 text-right font-medium">{denom === "USD" ? "Exp $" : "Exp R"}</th>
+            <th className="px-2 py-1.5 text-right font-medium">{denom === "USD" ? "Total $" : "Total R"}</th>
             <th className="px-2 py-1.5 text-right font-medium">
               {showFees ? "Net P&L" : "P&L"}
             </th>
             {showFees && <th className="px-2 py-1.5 text-right font-medium">Fees</th>}
-            <th className="w-28 py-1.5 pl-2 text-left font-medium">vs zero</th>
+            {/* Always the R bar, whichever unit the columns show — said out
+                loud, because a bar that did not follow the column it sits
+                beside would otherwise read as a mislabelled one. */}
+            <th className="w-28 py-1.5 pl-2 text-left font-medium">
+              vs zero{denom === "USD" ? " (R)" : ""}
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -123,10 +134,10 @@ function SliceTable({ rows, empty }: { rows: Slice[]; empty: string }) {
                   r.expectancyR >= 0 ? "text-emerald-500" : "text-red-500"
                 }`}
               >
-                {fmtR(r.expectancyR)}
+                {fig(r.expectancyR, r.count ? r.totalPnL / r.count : 0)}
               </td>
               <td className="px-2 py-1.5 text-right font-mono text-muted-foreground">
-                {fmtR(r.totalR)}
+                {fig(r.totalR, r.totalPnL)}
               </td>
               <td className="px-2 py-1.5 text-right font-mono text-muted-foreground">
                 {fmtMoney(r.totalPnL)}
@@ -180,6 +191,8 @@ function Stat({
 }
 
 export default function Analysis({ embedded = false }: { embedded?: boolean } = {}) {
+  const fig = useFig();
+  const { denom } = useDenom();
   const { data: trades = [], isLoading } = useTrades();
   const { data: tags = [] } = useMistakeTags();
   const scoped = useStyleScopedTrades(trades);
@@ -278,7 +291,7 @@ export default function Analysis({ embedded = false }: { embedded?: boolean } = 
         {dd.equityR.length >= 2 && (
           <div className="mb-4">
             <p className="mb-1 text-[10px] uppercase tracking-wider text-muted-foreground">
-              Equity, cumulative R by day
+              Equity, cumulative {denom === "USD" ? "P&L" : "R"} by day
             </p>
             <EquityCurve
               points={dd.equityR}
@@ -292,7 +305,10 @@ export default function Analysis({ embedded = false }: { embedded?: boolean } = 
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
           <Stat
             label="Max drawdown"
-            value={`${dd.maxDrawdownR.toFixed(2)}R`}
+            /* Both legs negated: a drawdown is a fall, and fmtR signs its
+               input — so the positive magnitude the module reports would
+               print as "+2.00R", which reads as a gain. */
+            value={fig(-dd.maxDrawdownR, -dd.maxDrawdownPnL)}
             hint={
               dd.troughDay
                 ? `${dd.troughLengthDays}d to ${dd.troughDay}${dd.recovered ? " · recovered" : " · not recovered"}`
@@ -303,7 +319,7 @@ export default function Analysis({ embedded = false }: { embedded?: boolean } = 
           />
           <Stat
             label="Currently"
-            value={dd.currentDrawdownR > 0 ? `−${dd.currentDrawdownR.toFixed(2)}R` : "at highs"}
+            value={dd.currentDrawdownR > 0 ? fig(-dd.currentDrawdownR, -dd.currentDrawdownPnL) : "at highs"}
             hint={dd.currentDrawdownR > 0 ? "below your peak" : "no open drawdown"}
             tone={dd.currentDrawdownR > 0 ? "bad" : "good"}
           />
@@ -363,18 +379,23 @@ export default function Analysis({ embedded = false }: { embedded?: boolean } = 
           </div>
           <RDistributionChart d={dist} />
           <div className="mt-3 grid grid-cols-2 gap-4 sm:grid-cols-4">
+            {/* Read in whichever unit is switched on. Deliberately not a
+                conversion of one another: the dollar figures come off the
+                trades' own realised P&L, so a positive median R beside a
+                negative median dollar says the trades above the middle were
+                the small ones — which no single unit can tell you. */}
             <Stat
               label="Typical trade"
-              value={fmtR(dist.medianR)}
+              value={fig(dist.medianR, dist.medianPnL)}
               hint="median — half above, half below"
-              tone={dist.medianR >= 0 ? "good" : "bad"}
+              tone={(denom === "USD" ? dist.medianPnL : dist.medianR) >= 0 ? "good" : "bad"}
               testId="stat-median-r"
             />
             <Stat
               label="Average trade"
-              value={fmtR(dist.meanR)}
+              value={fig(dist.meanR, dist.meanPnL)}
               hint="expectancy per trade"
-              tone={dist.meanR >= 0 ? "good" : "bad"}
+              tone={(denom === "USD" ? dist.meanPnL : dist.meanR) >= 0 ? "good" : "bad"}
             />
             <Stat
               label="Best single win"
@@ -385,7 +406,7 @@ export default function Analysis({ embedded = false }: { embedded?: boolean } = 
             />
             <Stat
               label="Range"
-              value={`${fmtR(dist.worstR)} … ${fmtR(dist.bestR)}`}
+              value={`${fig(dist.worstR, dist.worstPnL)} … ${fig(dist.bestR, dist.bestPnL)}`}
               hint={`${dist.count} closed trades`}
             />
           </div>
@@ -410,6 +431,10 @@ export default function Analysis({ embedded = false }: { embedded?: boolean } = 
           whether you touched them, which is the slice you actually think in
           after a week. They can disagree, and where they do is the finding. */}
       <CohortCard trades={scoped} />
+
+      {/* The third slice of the same trades: not what you did after the entry,
+          but how much you had on when you did it. */}
+      <SizeCard trades={scoped} />
 
       {/* ------------------------ MAE / MFE excursion ------------------------ */}
       <Card className="border-card-border bg-card p-4">

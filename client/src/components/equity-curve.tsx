@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from "react";
 import { fmtMoney, fmtR } from "@shared/metrics";
+import { useDenom } from "@/lib/denom";
 
 /**
  * The equity curve: cumulative R by trading day.
@@ -22,7 +23,13 @@ export interface EquityPoint {
 
 const W = 800;
 const H = 180;
-const PAD = { top: 12, right: 56, bottom: 20, left: 8 };
+/*
+ * The right gutter holds the end-of-curve label, so it has to fit the widest
+ * thing that label can say. "+35.74R" needed 56px; "+$51,209" does not fit in
+ * it and ran off the edge of the chart the moment the page could be read in
+ * dollars.
+ */
+const PAD = { top: 12, right: 76, bottom: 20, left: 8 };
 
 export function EquityCurve({
   points,
@@ -35,10 +42,20 @@ export function EquityCurve({
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const [hover, setHover] = useState<number | null>(null);
+  /*
+   * The curve follows the page's unit. Both series are already on every
+   * point, and they are genuinely different curves rather than one rescaled:
+   * a run of small winners lifts the R line and barely moves the dollar one.
+   * Leaving the biggest chart on the page in R while every figure around it
+   * said dollars was the half-done version of this switch.
+   */
+  const { denom } = useDenom();
+  const at = (p: EquityPoint) => (denom === "USD" ? p.cumulativePnL : p.cumulativeR);
+  const label = (v: number) => (denom === "USD" ? fmtMoney(v) : fmtR(v));
 
   const geom = useMemo(() => {
     if (points.length < 2) return null;
-    const ys = points.map((p) => p.cumulativeR);
+    const ys = points.map(at);
     // Zero is always in view: the whole point of the curve is which side of
     // flat you are on, and a clipped baseline hides exactly that.
     const lo = Math.min(0, ...ys);
@@ -49,19 +66,19 @@ export function EquityCurve({
     const y = (v: number) =>
       PAD.top + ((hi - v) / span) * (H - PAD.top - PAD.bottom);
     return { x, y, zero: y(0) };
-  }, [points]);
+  }, [points, denom]);
 
   if (!geom) return null;
 
   const path = points
-    .map((p, i) => `${i ? "L" : "M"}${geom.x(i).toFixed(1)},${geom.y(p.cumulativeR).toFixed(1)}`)
+    .map((p, i) => `${i ? "L" : "M"}${geom.x(i).toFixed(1)},${geom.y(at(p)).toFixed(1)}`)
     .join(" ");
   const last = points[points.length - 1];
   const h = hover != null ? points[hover] : null;
   const dayDelta =
     hover != null && hover > 0
-      ? points[hover].cumulativeR - points[hover - 1].cumulativeR
-      : h?.cumulativeR ?? 0;
+      ? at(points[hover]) - at(points[hover - 1])
+      : (h ? at(h) : 0);
 
   function onMove(e: React.MouseEvent<SVGSVGElement>) {
     const box = e.currentTarget.getBoundingClientRect();
@@ -116,7 +133,7 @@ export function EquityCurve({
             />
             <circle
               cx={geom.x(hover)}
-              cy={geom.y(h.cumulativeR)}
+              cy={geom.y(at(h))}
               r={4}
               className="fill-sky-400 stroke-background"
               strokeWidth={2}
@@ -127,11 +144,14 @@ export function EquityCurve({
 
         {/* Direct label on the last point: where the account stands now. */}
         <text
-          x={geom.x(points.length - 1) + 6}
-          y={geom.y(last.cumulativeR) + 4}
+          x={Math.min(geom.x(points.length - 1) + 6, W - 2)}
+          y={geom.y(at(last)) + 4}
+          /* Right-anchored when it would otherwise start past the gutter, so
+             a six-figure account still prints inside the picture. */
+          textAnchor={geom.x(points.length - 1) + 6 > W - 2 ? "end" : "start"}
           className="fill-foreground font-mono text-[11px]"
         >
-          {fmtR(last.cumulativeR)}
+          {label(at(last))}
         </text>
       </svg>
 
@@ -148,7 +168,7 @@ export function EquityCurve({
           <p className="font-mono text-muted-foreground">
             total {fmtR(h.cumulativeR)} · {fmtMoney(h.cumulativePnL)}
           </p>
-          <p className="font-mono text-muted-foreground">day {fmtR(dayDelta)}</p>
+          <p className="font-mono text-muted-foreground">day {label(dayDelta)}</p>
           {onSelect && <p className="text-muted-foreground">click to open the day</p>}
         </div>
       )}
