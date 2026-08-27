@@ -55,7 +55,7 @@ import {
 import { overrodeThePlan } from "@shared/grades";
 import { exposureOf, fmtExposure } from "@shared/symbols";
 import { GradeBadges } from "@/components/grade-picker";
-import { LEVEL, LevelLabel, LevelLadder } from "@/components/levels";
+import { LEVEL, LevelLabel, LevelLadder, PathBands } from "@/components/levels";
 import { StyleChip } from "@/components/style-switcher";
 import { TradeImageGallery } from "@/components/trade-images";
 /*
@@ -1070,6 +1070,37 @@ function TradeBody({
               />
             </div>
           )}
+
+          {/*
+            The same two bands the editor draws, and the reason the four prices
+            above are not enough on their own.
+
+            "Ran on to 226.88" and "best held 220.12" are two numbers you have
+            to subtract in your head, against an entry you have to scroll up
+            for. On one axis they are a picture: how far the trade went while
+            you were in it, how far it went once you were out, and — the whole
+            point — whether the second range starts where the first one ended
+            or reaches somewhere you never saw.
+
+            "I sat through the move and took the middle" and "it did all its
+            work after I left" are different mistakes with different fixes, and
+            they look identical as four prices in a row.
+
+            Self-guarding: nothing is drawn without an entry to measure from and
+            at least one excursion to measure, so an unlogged trade shows the
+            prices and no empty axis.
+          */}
+          <PathBands
+            className="mt-3"
+            direction={trade.direction}
+            entry={trade.entryPrice}
+            stop={trade.initialStop}
+            exit={trade.exitPrice}
+            mae={trade.mae}
+            mfe={trade.mfe}
+            postExitPeak={trade.postExitPeak}
+            postExitAdverse={trade.postExitAdverse}
+          />
 
           {/* Size and the clock: true of the trade, but not decisions about
               price, so they sit apart from the four that are. */}
