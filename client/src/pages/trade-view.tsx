@@ -184,9 +184,21 @@ function Fig({
         <p
           className={`font-mono text-sm ${
             tone === "good" ? "text-emerald-400" : tone === "bad" ? "text-primary" : ""
-          } ${edit ? "cursor-text rounded hover:bg-secondary/40" : ""} ${saving ? "opacity-50" : ""}`}
+          } ${
+            edit
+              ? // A dotted underline that firms up on hover: enough to say
+                // "this one answers to a double-click" without turning a page
+                // of figures into a page of form controls.
+                "cursor-text rounded decoration-dotted underline-offset-4 hover:bg-secondary/40 hover:underline"
+              : ""
+          } ${saving ? "opacity-50" : ""}`}
           data-testid={testId}
           title={edit ? "Double-click to edit" : undefined}
+          /* The second mousedown of a double-click is what selects the word.
+             Swallowing it means the value does not flash highlighted on its
+             way to becoming an input — which read as the click having done
+             nothing at all. */
+          onMouseDown={edit ? (e) => e.detail > 1 && e.preventDefault() : undefined}
           onDoubleClick={
             edit ? () => setTyping(edit.current == null ? "" : String(edit.current)) : undefined
           }
@@ -927,6 +939,60 @@ function TradeBody({
             extraTps={tps.slice(1)}
             exit={trade.exitPrice}
           />
+
+          {/*
+            What price DID, in the same prices as what you decided.
+
+            The strip at the top gives these in R, which is the right unit for
+            comparing trades and the wrong one for reading a chart: "+2.00R"
+            does not tell you where to look. The four decisions are prices, so
+            the four facts are shown as prices beside them — and they are the
+            numbers most often typed in by hand, so they are editable in place
+            like the rest.
+          */}
+          {(trade.mfe != null ||
+            trade.mae != null ||
+            trade.postExitPeak != null ||
+            trade.postExitAdverse != null ||
+            trade.status === "closed") && (
+            <div
+              className="mt-3 grid grid-cols-2 gap-3 border-t border-border/50 pt-3 font-mono text-sm sm:grid-cols-4"
+              data-testid="view-path"
+            >
+              <Fig
+                label="Best held"
+                icon="mfe"
+                value={trade.mfe != null ? num(trade.mfe) : "—"}
+                hint="while you were in"
+                testId="view-mfe-price"
+                edit={editable("mfe", trade.mfe)}
+              />
+              <Fig
+                label="Worst held"
+                icon="mae"
+                value={trade.mae != null ? num(trade.mae) : "—"}
+                hint="while you were in"
+                testId="view-mae-price"
+                edit={editable("mae", trade.mae)}
+              />
+              <Fig
+                label="Ran on to"
+                icon="ranAfter"
+                value={trade.postExitPeak != null ? num(trade.postExitPeak) : "—"}
+                hint="after you left"
+                testId="view-peak-price"
+                edit={editable("postExitPeak", trade.postExitPeak)}
+              />
+              <Fig
+                label="Fell to"
+                icon="fellAfter"
+                value={trade.postExitAdverse != null ? num(trade.postExitAdverse) : "—"}
+                hint="after you left"
+                testId="view-adverse-price"
+                edit={editable("postExitAdverse", trade.postExitAdverse)}
+              />
+            </div>
+          )}
 
           {/* Size and the clock: true of the trade, but not decisions about
               price, so they sit apart from the four that are. */}
