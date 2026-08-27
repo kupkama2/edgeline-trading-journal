@@ -146,6 +146,39 @@ describe("what the walk has to get right", () => {
     expect(trades[1]).toMatchObject({ direction: "short", size: 4, entryPrice: 105, exitPrice: 103 });
   });
 
+  it("comes back to flat on sizes that do not divide cleanly", () => {
+    /*
+     * 0.1 + 0.2 - 0.3 is 5.6e-17, not zero, and crypto positions are routinely
+     * fractional. Comparing the running position to zero exactly left a
+     * fifty-quadrillionth of a coin open, so a closed trade came out as still
+     * running with its exit discarded — the one part of a closed trade that
+     * cannot be reconstructed from anywhere else.
+     */
+    const { trades, problems } = tradesFromFills([
+      f("buy", 0.1, 100, "2026-08-25 10:00"),
+      f("buy", 0.2, 100, "2026-08-25 10:05"),
+      f("sell", 0.3, 110, "2026-08-25 11:00"),
+    ]);
+    expect(trades).toHaveLength(1);
+    expect(trades[0].stillOpen).toBe(false);
+    expect(trades[0].exitPrice).toBe(110);
+    expect(problems).toEqual([]);
+  });
+
+  it("does not open a phantom trade out of the same residue", () => {
+    // The other half: a residue left behind would make the NEXT fill look
+    // like an add to a position that is not there.
+    const { trades } = tradesFromFills([
+      f("buy", 0.1, 100, "2026-08-25 10:00"),
+      f("buy", 0.2, 100, "2026-08-25 10:05"),
+      f("sell", 0.3, 110, "2026-08-25 11:00"),
+      f("buy", 1, 120, "2026-08-25 12:00"),
+      f("sell", 1, 130, "2026-08-25 13:00"),
+    ]);
+    expect(trades).toHaveLength(2);
+    expect(trades[1]).toMatchObject({ size: 1, entryPrice: 120, exitPrice: 130 });
+  });
+
   it("says a position that never comes back to flat is still running", () => {
     const { trades, problems } = tradesFromFills([
       f("buy", 3, 100, "2026-08-25 10:00"),

@@ -174,6 +174,22 @@ export function tradesFromFills(fills: LoggedFill[]): Reconstruction {
       .sort((a, b) => (a.f.time === b.f.time ? a.i - b.i : a.f.time < b.f.time ? -1 : 1))
       .map(({ f }) => f);
 
+    /*
+     * Flat, allowing for the arithmetic.
+     *
+     * 0.1 + 0.2 - 0.3 is 5.6e-17, not zero, and crypto positions are routinely
+     * fractional — 0.187 BTC bought in two clips and sold in one. Comparing
+     * the running position to zero exactly left a position of a
+     * fifty-quadrillionth of a coin still open, so the trade came out as
+     * "still running" with its exit thrown away: the one part of a closed
+     * trade that cannot be reconstructed from anywhere else.
+     *
+     * Scaled to the sizes in play, because "small" for a position of 15
+     * contracts and for one of 0.0004 BTC are different numbers.
+     */
+    const scale = Math.max(...ordered.map((f) => f.qty), 1);
+    const flat = (n: number) => Math.abs(n) <= scale * 1e-9;
+
     /** The trade currently being built, or null while flat. */
     let open: {
       direction: "long" | "short";
@@ -229,7 +245,10 @@ export function tradesFromFills(fills: LoggedFill[]): Reconstruction {
     for (const f of ordered) {
       const signed = f.side === "buy" ? f.qty : -f.qty;
 
-      if (pos === 0) {
+      if (flat(pos)) {
+        // Snap, so a residue too small to mean anything cannot decide the
+        // direction of the next comparison either.
+        pos = 0;
         open = { direction: signed > 0 ? "long" : "short", opens: [], closes: [] };
         open.opens.push({ price: f.price, size: f.qty, time: f.time, fill: f });
         pos = signed;
@@ -248,6 +267,7 @@ export function tradesFromFills(fills: LoggedFill[]): Reconstruction {
       open!.closes.push({ price: f.price, size: closing, time: f.time, fill: f });
       const leftOver = f.qty - closing;
       pos += Math.sign(signed) * closing;
+      if (flat(pos)) pos = 0;
 
       if (pos === 0) {
         settle();
@@ -257,7 +277,7 @@ export function tradesFromFills(fills: LoggedFill[]): Reconstruction {
          * surplus away instead would silently lose a position the log plainly
          * records.
          */
-        if (leftOver > 0) {
+        if (!flat(leftOver)) {
           open = { direction: signed > 0 ? "long" : "short", opens: [], closes: [] };
           open.opens.push({ price: f.price, size: leftOver, time: f.time, fill: f });
           pos = Math.sign(signed) * leftOver;
