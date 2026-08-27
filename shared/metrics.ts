@@ -275,6 +275,17 @@ export interface AggregateStats {
   expectancyR: number;
   avgWinnerR: number;
   avgLoserR: number;
+  /**
+   * The same three in dollars.
+   *
+   * Not conversions — each is the mean of the trades' own realised P&L, so a
+   * flat expectancy in R beside a negative one in dollars says the losers
+   * were the big positions. Multiplying an R average by "a typical 1R" would
+   * produce a plausible number that hides exactly that.
+   */
+  expectancyPnL: number;
+  avgWinnerPnL: number;
+  avgLoserPnL: number;
   profitFactor: number;
   avgCapture: number;
   totalR: number;
@@ -300,6 +311,12 @@ export function aggregate(trades: Trade[]): AggregateStats {
   const pnls = rows.map((r) => r.m.actualPnL ?? 0);
   const winners = rs.filter((r) => r > 0);
   const losers = rs.filter((r) => r <= 0);
+  /* Split on the trade's own R so the dollar averages cover exactly the same
+     trades as the R ones — splitting the dollars on their own sign would put
+     a fee-negative scratch in a different bucket in one column than in the
+     other. */
+  const winnerPnls = rows.filter((r) => (r.m.actualR ?? 0) > 0).map((r) => r.m.actualPnL ?? 0);
+  const loserPnls = rows.filter((r) => (r.m.actualR ?? 0) <= 0).map((r) => r.m.actualPnL ?? 0);
   const grossWin = pnls.filter((p) => p > 0).reduce((a, b) => a + b, 0);
   const grossLoss = Math.abs(pnls.filter((p) => p < 0).reduce((a, b) => a + b, 0));
   const captures = rows
@@ -319,6 +336,9 @@ export function aggregate(trades: Trade[]): AggregateStats {
     expectancyR: avg(rs),
     avgWinnerR: avg(winners),
     avgLoserR: avg(losers),
+    expectancyPnL: avg(pnls),
+    avgWinnerPnL: avg(winnerPnls),
+    avgLoserPnL: avg(loserPnls),
     profitFactor: grossLoss > 0 ? grossWin / grossLoss : grossWin > 0 ? Infinity : 0,
     avgCapture: avg(captures),
     totalR: rs.reduce((a, b) => a + b, 0),

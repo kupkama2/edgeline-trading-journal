@@ -58,6 +58,8 @@ export interface Sized {
   /** Realised dollars, from R and the risk actually taken. */
   pnl: number;
   symbol: string;
+  /** When it happened, so "big" can be told apart from "recent". */
+  at: string;
 }
 
 /**
@@ -80,9 +82,12 @@ export function sizedTrades(trades: (Trade & { fills?: TradeFill[] })[]): Sized[
       r: m.actualR,
       pnl: m.actualR * m.riskDollars,
       symbol: t.symbol,
+      at: t.exitTime ?? t.entryTime,
     });
   }
-  return out;
+  // Chronological, because the confound checks below are about order and the
+  // caller's array is in whatever order the query returned.
+  return out.sort((a, b) => a.at.localeCompare(b.at));
 }
 
 /** A mean with the uncertainty on it — the only honest way to print one. */
@@ -161,6 +166,49 @@ export interface SizingReport {
   rhoNoise: number | null;
   /** What varying the size actually did to the money. */
   flatSized: FlatSized | null;
+  /**
+   * The other things that could be producing the difference.
+   *
+   * A size split is only about size if size is the only thing that changes
+   * across it, and on a real journal it usually is not. Two confounds are
+   * common enough to be worth testing rather than mentioning:
+   *
+   *   Time. Traders size up as an account grows, so the "smallest quarter"
+   *   quietly becomes last year and the "largest" becomes this month — and
+   *   the card would be comparing early-you against recent-you and calling
+   *   it a size effect.
+   *
+   *   Instrument. If the small trades are one symbol and the big ones
+   *   another, the finding is about what you trade rather than how much.
+   *
+   * Neither is fatal. Both change what the number means, and a card that
+   * cannot see them will state a conclusion it has not earned.
+   */
+  confounds: Confounds | null;
+}
+
+export interface Confounds {
+  /** Rank correlation between when a trade happened and how big it was. */
+  timeRho: number | null;
+  /** Size and time move together enough that the bands are really eras. */
+  driftsWithTime: boolean;
+  /**
+   * MEAN risk over the older half of the record and over the newer half.
+   *
+   * The mean rather than the median, because on real data the drift lives in
+   * the tails: a record whose typical trade is $200 throughout can still have
+   * every one of its big trades in the last month, and a median summary
+   * reports "$200 against $200" underneath a warning it cannot justify.
+   */
+  earlyRisk: number;
+  lateRisk: number;
+  /** The typical trade in each half, which often has not moved at all. */
+  earlyTypical: number;
+  lateTypical: number;
+  /** The symbol that dominates each bucket, when one does. */
+  dominant: { index: number; symbol: string; share: number }[];
+  /** The two end buckets are mostly different instruments. */
+  differentInstruments: boolean;
 }
 
 export interface FlatSized {
@@ -219,6 +267,7 @@ export function sizingReport(
     rho: null,
     rhoNoise: null,
     flatSized: null,
+    confounds: null,
   };
   // One bucket per MIN_PER_BUCKET at least, or the quantiles are decoration.
   if (measured < bucketCount * MIN_PER_BUCKET) return empty;
@@ -284,6 +333,72 @@ export function sizingReport(
       at: medianRisk,
       topContributor: topContributor(rows, medianRisk),
     },
+    confounds: confoundsFor(rows, buckets),
+  };
+}
+
+/**
+ * What else, besides size, differs across these buckets.
+ *
+ * rows arrives chronological, so the time test is a rank correlation between
+ * position in the record and risk — no dates, no bucketing by month, and
+ * immune to a long gap between trades.
+ */
+function confoundsFor(rows: Sized[], buckets: SizeBucket[]): Confounds {
+  const order = rows.map((_, i) => i);
+  const timeRho = spearman(order, rows.map((x) => x.risk));
+  const noise = rows.length > 3 ? 2 / Math.sqrt(rows.length - 1) : null;
+
+  const half = Math.floor(rows.length / 2);
+  const med = (xs: number[]) => quantile([...xs].sort((a, b) => a - b), 0.5);
+  const mean = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
+  const early = rows.slice(0, half).map((x) => x.risk);
+  const late = rows.slice(half).map((x) => x.risk);
+  const earlyRisk = mean(early);
+  const lateRisk = mean(late);
+  /*
+   * A rank correlation alone is not enough to fire on. It can clear its
+   * threshold on a pattern too subtle to describe, and a warning whose own
+   * evidence line reads "$200 against $200" is worse than no warning. So the
+   * average size has to have actually moved as well — then there is always
+   * something concrete to point at.
+   */
+  const moved =
+    Math.min(earlyRisk, lateRisk) > 0 &&
+    Math.abs(lateRisk - earlyRisk) / Math.min(earlyRisk, lateRisk) >= 0.25;
+
+  const dominant = buckets.map((b) => {
+    const syms = new Map<string, number>();
+    for (const id of b.tradeIds) {
+      const sym = rows.find((x) => x.id === id)?.symbol;
+      if (sym) syms.set(sym, (syms.get(sym) ?? 0) + 1);
+    }
+    let top = { symbol: "", n: 0 };
+    syms.forEach((n, symbol) => {
+      if (n > top.n) top = { symbol, n };
+    });
+    return { index: b.index, symbol: top.symbol, share: b.trades ? top.n / b.trades : 0 };
+  });
+
+  const first = dominant[0];
+  const last = dominant[dominant.length - 1];
+
+  return {
+    timeRho,
+    driftsWithTime: timeRho != null && noise != null && Math.abs(timeRho) >= noise && moved,
+    earlyRisk,
+    lateRisk,
+    earlyTypical: med(early),
+    lateTypical: med(late),
+    dominant,
+    /* Both ends have to be concentrated AND on different names. One bucket
+       being 90% NQ says nothing on its own if the other one is too. */
+    differentInstruments:
+      first != null &&
+      last != null &&
+      first.symbol !== last.symbol &&
+      first.share > 0.5 &&
+      last.share > 0.5,
   };
 }
 

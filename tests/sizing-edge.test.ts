@@ -47,7 +47,9 @@ const run = (from: number, n: number, size: number, r: number) =>
 describe("which trades can be measured at all", () => {
   it("takes closed trades that have a size and an outcome", () => {
     const rows = sizedTrades([t(1, 2, 120)]);
-    expect(rows).toEqual([{ id: 1, risk: 20, r: 2, pnl: 40, symbol: "TEST" }]);
+    expect(rows).toEqual([
+      { id: 1, risk: 20, r: 2, pnl: 40, symbol: "TEST", at: "2026-08-03T10:00:00.000Z" },
+    ]);
   });
 
   it("drops a trade with no stop, which has no 1R to be a size of", () => {
@@ -306,5 +308,101 @@ describe("how concentrated the sizing edge is", () => {
     // Every contribution is R × 0, so there is no movement to attribute.
     const rep = sizingReport([...run(1, 6, 2, 1), ...run(7, 6, 2, -1)]);
     expect(rep.flatSized!.topContributor).toBeNull();
+  });
+});
+
+describe("what else could explain the split", () => {
+  /*
+   * A size split is only about size if size is the only thing changing across
+   * it. On a real journal it usually is not, and the two that bite hardest —
+   * an account that grew, and different instruments at different sizes — both
+   * look exactly like a size effect from inside the table.
+   */
+
+  /** One trade at a given size and time, so order and size can be varied apart. */
+  const when = (id: number, size: number, r: number, day: number, symbol = "TEST") =>
+    trade({
+      id,
+      symbol,
+      status: "closed",
+      direction: "long",
+      entryPrice: 100,
+      initialStop: 90,
+      initialTarget: 130,
+      size,
+      sizeUnit: "base",
+      pointValue: 1,
+      exitPrice: 100 + r * 10,
+      exitReason: "target",
+      entryTime: `2026-08-${String(day).padStart(2, "0")}T09:30:00.000Z`,
+      exitTime: `2026-08-${String(day).padStart(2, "0")}T10:00:00.000Z`,
+    } as any);
+
+  it("notices when the size bands are really eras", () => {
+    // Sizes climb monotonically with the calendar: the "smallest quarter" is
+    // simply the start of the record.
+    const rows = Array.from({ length: 16 }, (_, i) => when(i + 1, 1 + i * 0.5, 1, i + 1));
+    const c = sizingReport(rows).confounds!;
+    expect(c.driftsWithTime).toBe(true);
+    expect(c.lateRisk).toBeGreaterThan(c.earlyRisk);
+  });
+
+  it("sees a drift that lives only in the tails", () => {
+    /*
+     * The case the medians missed. The typical trade is $20 from beginning to
+     * end; only the outsized ones moved, and they all landed late. A median
+     * summary reports "$20 against $20" underneath a warning it cannot
+     * justify, which is why the halves are averaged instead.
+     */
+    const rows = [
+      ...Array.from({ length: 8 }, (_, i) => when(i + 1, 2, 1, i + 1)),
+      ...Array.from({ length: 6 }, (_, i) => when(i + 9, 2, 1, i + 9)),
+      ...Array.from({ length: 2 }, (_, i) => when(i + 15, 40, 1, i + 15)),
+    ];
+    const c = sizingReport(rows).confounds!;
+    expect(c.earlyTypical).toBeCloseTo(c.lateTypical);
+    expect(c.lateRisk).toBeGreaterThan(c.earlyRisk * 2);
+    expect(c.driftsWithTime).toBe(true);
+  });
+
+  it("will not fire on a rank pattern it cannot describe", () => {
+    /*
+     * A correlation can clear its threshold on something too subtle to put a
+     * number to, and a warning whose own evidence reads "$20 against $20" is
+     * worse than no warning. The average has to have moved as well.
+     */
+    const rows = Array.from({ length: 16 }, (_, i) => when(i + 1, 2 + i * 0.001, 1, i + 1));
+    expect(sizingReport(rows).confounds!.driftsWithTime).toBe(false);
+  });
+
+  it("stays quiet when size and time are unrelated", () => {
+    // Same four sizes, shuffled through the calendar rather than ramped.
+    const sizes = [1, 4, 2, 3, 3, 1, 4, 2, 2, 4, 1, 3, 4, 2, 3, 1];
+    const rows = sizes.map((sz, i) => when(i + 1, sz, 1, i + 1));
+    expect(sizingReport(rows).confounds!.driftsWithTime).toBe(false);
+  });
+
+  it("notices when the ends are different instruments", () => {
+    const rows = [
+      ...Array.from({ length: 8 }, (_, i) => when(i + 1, 1, 1, i + 1, "SOL")),
+      ...Array.from({ length: 8 }, (_, i) => when(i + 9, 4, 1, i + 9, "NQ")),
+    ];
+    const c = sizingReport(rows).confounds!;
+    expect(c.differentInstruments).toBe(true);
+    expect(c.dominant[0].symbol).toBe("SOL");
+    expect(c.dominant[c.dominant.length - 1].symbol).toBe("NQ");
+  });
+
+  it("does not call one symbol a confound when every bucket is that symbol", () => {
+    const rows = Array.from({ length: 16 }, (_, i) => when(i + 1, 1 + (i % 4), 1, i + 1, "NQ"));
+    expect(sizingReport(rows).confounds!.differentInstruments).toBe(false);
+  });
+
+  it("orders by time whatever order the caller passes", () => {
+    // Newest first, which is how the journal lists them.
+    const rows = Array.from({ length: 16 }, (_, i) => when(16 - i, 1 + (16 - i) * 0.5, 1, 16 - i));
+    const c = sizingReport(rows).confounds!;
+    expect(c.driftsWithTime).toBe(true);
+    expect(c.lateRisk).toBeGreaterThan(c.earlyRisk);
   });
 });

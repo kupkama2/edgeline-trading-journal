@@ -96,6 +96,8 @@ export function SizeCard({ trades }: { trades: TradeWithTags[] }) {
             <Verdict rep={rep} />
             <FlatSized rep={rep} onOpen={(id) => navigate(`/trade/${id}`)} />
           </div>
+
+          <Confounds rep={rep} />
         </>
       )}
     </Card>
@@ -306,6 +308,85 @@ function FlatSized({
           — one bet going your way is not yet a sizing habit.
         </p>
       )}
+    </div>
+  );
+}
+
+/**
+ * What else, besides size, differs across these buckets.
+ *
+ * A size split is only about size if size is the only thing changing across
+ * it, and on a real journal it usually is not. Two confounds are common
+ * enough to be tested rather than mentioned in prose:
+ *
+ *   Time. Traders size up as the account grows, so the smallest quarter
+ *   quietly becomes last year and the largest becomes this month. The card
+ *   would then be comparing early-you against recent-you and calling the
+ *   difference a size effect.
+ *
+ *   Instrument. If the small trades are one symbol and the big ones another,
+ *   the finding is about what you trade, not how much.
+ *
+ * Neither invalidates the table. Both change what it means, and silence about
+ * them is what turns a reading into a wrong conclusion. Rendered only when
+ * something actually fired, so a clean split stays clean.
+ */
+function Confounds({ rep }: { rep: ReturnType<typeof sizingReport> }) {
+  const c = rep.confounds;
+  if (!c) return null;
+  const grew = c.lateRisk > c.earlyRisk;
+  const notes: React.ReactNode[] = [];
+
+  if (c.driftsWithTime) {
+    /* When the typical trade has NOT moved but the average has, the drift is
+       entirely in the tails — which is a sharper finding than "you sized up",
+       and saying only the average would leave it looking like across-the-board
+       growth. */
+    const tailsOnly =
+      Math.abs(c.lateTypical - c.earlyTypical) <
+      0.15 * Math.max(c.earlyTypical, c.lateTypical, 1);
+    notes.push(
+      <>
+        <span className="font-medium">
+          {grew ? "Your bigger trades are the recent ones." : "Your bigger trades are the old ones."}
+        </span>{" "}
+        The older half of your record averages {fmtAmount(c.earlyRisk, 0)} a trade and the newer
+        half {fmtAmount(c.lateRisk, 0)}
+        {tailsOnly
+          ? `, though the typical trade is about ${fmtAmount(c.earlyTypical, 0)} in both — the change is all in the outsized ones`
+          : ""}
+        . So the bands above are partly {grew ? "then against now" : "now against then"}: some of
+        any gap is you getting better or worse, not you being big or small.
+      </>,
+    );
+  }
+  if (c.differentInstruments) {
+    const first = c.dominant[0];
+    const last = c.dominant[c.dominant.length - 1];
+    notes.push(
+      <>
+        <span className="font-medium">Different instruments.</span> The smallest quarter is{" "}
+        {Math.round(first.share * 100)}% {first.symbol} and the largest is{" "}
+        {Math.round(last.share * 100)}% {last.symbol} — a difference between those two markets
+        would show up here looking exactly like a size effect.
+      </>,
+    );
+  }
+  if (notes.length === 0) return null;
+
+  return (
+    <div
+      className="mt-2.5 space-y-1 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2"
+      data-testid="size-confounds"
+    >
+      <p className="text-[10px] uppercase tracking-wider text-amber-500">
+        What else could explain it
+      </p>
+      {notes.map((n, i) => (
+        <p key={i} className="text-[10px] leading-snug text-muted-foreground">
+          {n}
+        </p>
+      ))}
     </div>
   );
 }

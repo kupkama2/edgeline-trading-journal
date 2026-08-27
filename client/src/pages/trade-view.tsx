@@ -542,6 +542,17 @@ function TradeBody({
    * stop — writing "3.2" into the price column would not be a correction, it
    * would be a different trade.
    */
+  /**
+   * An R reading in this trade's own dollars.
+   *
+   * Exact, not an estimate: 1R on this trade cost a known amount, so "+2.4R"
+   * IS "$480 at the high". Null when there is nothing to convert — the figure
+   * then falls back to whatever it said before, rather than printing "$0" for
+   * a path that was never logged.
+   */
+  const inDollars = (r: number | null | undefined) =>
+    r != null && isFinite(r) && m.riskDollars > 0 ? `${fmtMoney(r * m.riskDollars)} of it` : null;
+
   const editable = (field: string, current: number | null, required = false): Editable => ({
     field,
     current,
@@ -784,24 +795,36 @@ function TradeBody({
           <Fig
             label="Best reach"
             value={m.mfeR != null ? fmtR(m.mfeR) : "—"}
-            /* What share you kept only means something once you are out. On a
-               running trade there is no exit to have kept anything of — and
-               falling back to "no path logged" was a flat contradiction of the
-               figure right above it. */
-            hint={
+            /*
+             * Both units, rather than the page-wide R/USD switch the stats
+             * carry. On ONE trade the switch would be a downgrade: R is the
+             * better unit here because it is measured against this trade's own
+             * plan, and hiding it to show dollars would lose the comparison the
+             * figure exists for. Showing the money underneath costs a line and
+             * loses nothing — it is the same question ("how much was I up at
+             * the high?") answered permanently.
+             *
+             * What share you kept only means something once you are out. On a
+             * running trade there is no exit to have kept anything of — and
+             * falling back to "no path logged" was a flat contradiction of the
+             * figure right above it.
+             */
+            hint={inDollars(m.mfeR) ?? (
               m.captureRatio != null
                 ? `kept ${Math.round(m.captureRatio * 100)}%`
                 : trade.status === "closed"
                   ? "no path logged"
                   : "high so far"
-            }
+            )}
             edit={editable("mfe", trade.mfe)}
             testId="view-mfe"
           />
           <Fig
             label="Worst dip"
             value={m.maeR != null ? fmtR(m.maeR) : "—"}
-            hint={trade.status === "closed" ? "heat taken" : "heat so far"}
+            hint={
+              inDollars(m.maeR) ?? (trade.status === "closed" ? "heat taken" : "heat so far")
+            }
             edit={editable("mae", trade.mae)}
             testId="view-mae"
           />
@@ -812,7 +835,10 @@ function TradeBody({
             <Fig
               label="After exit"
               value={fmtR(m.leftBehindR)}
-              hint={m.leftBehindR >= 0.5 ? "ran on without you" : "died on cue"}
+              hint={
+                inDollars(m.leftBehindR) ??
+                (m.leftBehindR >= 0.5 ? "ran on without you" : "died on cue")
+              }
               testId="view-left-behind"
               edit={editable("postExitPeak", trade.postExitPeak)}
             />
