@@ -598,79 +598,6 @@ export function TradeEditor({
           )}
         </div>
 
-        {/*
-          Pinned, because the editor grew long enough that the numbers you are
-          editing FOR sat below everything you were editing. Typing an exit
-          price and scrolling back down to see what it did to R is not
-          checking your work, it is remembering it — and a live preview you
-          cannot see while you type is not a live preview.
-
-          Top rather than bottom: sticky never lifts an element above where it
-          falls in flow, so a bottom bar would stay invisible until you had
-          already scrolled to it. Opaque, because form fields sliding under a
-          translucent strip is how a wrong number gets read as a right one.
-        */}
-        {previewMetrics && (
-          /* An opaque shell does the pinning so the strip itself can keep
-             its tint. The offset is negative on purpose: the dialog scrolls
-             inside 24px of padding, so a plain top-0 would pin the bar 24px
-             down and leave a band above it where form rows slide past in
-             full view. -top-6 pins it 24px higher — flush with the visible
-             edge — and the shell's matching pt-6 fills that band, which the
-             scroll container clips away rather than painting over the
-             heading. */
-          <div className="sticky -top-6 z-20 bg-background pb-1 pt-6">
-          <div
-            className="grid grid-cols-2 gap-2 rounded-md border border-border/60 bg-secondary/30 p-2.5 text-center font-mono text-xs shadow-sm sm:grid-cols-4"
-            data-testid="edit-preview-metrics"
-          >
-            {/* P&L leads. R is this journal's unit, but the broker's
-                statement is in dollars, and the fastest way to know a
-                trade was logged correctly is that this figure matches the
-                one on the exchange. */}
-            <div>
-              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                {previewMetrics.fees > 0 ? "Net P&L" : "P&L"}
-              </p>
-              <p
-                className={`text-sm font-semibold ${
-                  (previewMetrics.actualPnL ?? 0) >= 0 ? "text-emerald-400" : "text-primary"
-                }`}
-                data-testid="edit-preview-pnl"
-              >
-                {previewMetrics.actualPnL != null ? fmtMoney(previewMetrics.actualPnL) : "—"}
-              </p>
-              {previewMetrics.fees > 0 && (
-                <p className="text-[10px] text-muted-foreground">
-                  {fmtMoney(previewMetrics.grossPnL)} gross
-                </p>
-              )}
-            </div>
-            <div>
-              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Actual</p>
-              <p
-                className={
-                  (previewMetrics.actualR ?? 0) >= 0 ? "text-emerald-400" : "text-primary"
-                }
-              >
-                {fmtR(previewMetrics.actualR)}
-              </p>
-            </div>
-            <div>
-              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">No-mgmt</p>
-              <p>{fmtR(previewMetrics.potentialR)}</p>
-            </div>
-            <div>
-              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Capture</p>
-              <p>
-                {previewMetrics.captureRatioClipped != null
-                  ? `${Math.round(previewMetrics.captureRatioClipped * 100)}%`
-                  : "—"}
-              </p>
-            </div>
-          </div>
-          </div>
-        )}
 
         {/* What the card said, and what was left alone. Filling the fields
             silently would be the wrong kind of helpful: these are numbers you
@@ -1378,6 +1305,81 @@ export function TradeEditor({
               <TradeImageGallery tradeId={trade.id} />
             </div>
 
+            {/*
+                  Pinned to the BOTTOM, and last in the form.
+
+                  The numbers you are editing FOR have to be visible while you
+                  type, and at the top they were competing with the heading and
+                  the section you were reading. A sticky bottom edge lifts the bar
+                  up out of its flow position to sit on the viewport floor, so it
+                  follows you down the whole form — and settles back into place
+                  above Save when you reach the end, which is the one moment it
+                  must not be covering anything.
+
+                  Opaque, because form fields sliding under a translucent strip is
+                  how a wrong number gets read as a right one.
+                */}
+            {previewMetrics && (
+              /* An opaque shell does the pinning so the strip itself can keep
+                 its tint. The offset is negative on purpose: the dialog scrolls
+                 inside 24px of padding, so a plain top-0 would pin the bar 24px
+                 down and leave a band above it where form rows slide past in
+                 full view. -top-6 pins it 24px higher — flush with the visible
+                 edge — and the shell's matching pt-6 fills that band, which the
+                 scroll container clips away rather than painting over the
+                 heading. */
+              <div className="sticky bottom-0 z-20 -mb-1 bg-background pb-2 pt-1">
+              <div
+                className="grid grid-cols-2 gap-2 rounded-md border border-border/60 bg-secondary/30 p-2.5 text-center font-mono text-xs shadow-sm sm:grid-cols-4"
+                data-testid="edit-preview-metrics"
+              >
+                {/* P&L leads. R is this journal's unit, but the broker's
+                    statement is in dollars, and the fastest way to know a
+                    trade was logged correctly is that this figure matches the
+                    one on the exchange. */}
+                <div>
+                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                    {previewMetrics.fees > 0 ? "Net P&L" : "P&L"}
+                  </p>
+                  <p
+                    className={`text-sm font-semibold ${
+                      (previewMetrics.actualPnL ?? 0) >= 0 ? "text-emerald-400" : "text-primary"
+                    }`}
+                    data-testid="edit-preview-pnl"
+                  >
+                    {previewMetrics.actualPnL != null ? fmtMoney(previewMetrics.actualPnL) : "—"}
+                  </p>
+                  {previewMetrics.fees > 0 && (
+                    <p className="text-[10px] text-muted-foreground">
+                      {fmtMoney(previewMetrics.grossPnL)} gross
+                    </p>
+                  )}
+                </div>
+                <div>
+                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Actual</p>
+                  <p
+                    className={
+                      (previewMetrics.actualR ?? 0) >= 0 ? "text-emerald-400" : "text-primary"
+                    }
+                  >
+                    {fmtR(previewMetrics.actualR)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">No-mgmt</p>
+                  <p>{fmtR(previewMetrics.potentialR)}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Capture</p>
+                  <p>
+                    {previewMetrics.captureRatioClipped != null
+                      ? `${Math.round(previewMetrics.captureRatioClipped * 100)}%`
+                      : "—"}
+                  </p>
+                </div>
+              </div>
+              </div>
+            )}
             <div className="flex gap-2">
               <Button
                 variant="outline"
