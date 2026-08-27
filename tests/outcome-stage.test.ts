@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { outcomeStage, resolveLifecycle } from "../client/src/components/trade-outcome";
+import { outcomeStage, pathQuestions, resolveLifecycle } from "../client/src/components/trade-outcome";
 
 /**
  * The rule that decides what a trade is asked.
@@ -113,5 +113,36 @@ describe("reconciling the picked state with the exit price", () => {
     // that trade silently reopens itself.
     expect(ok(resolveLifecycle("closed", "0"))).toBe("closed");
     expect("error" in resolveLifecycle("open", "0")).toBe(true);
+  });
+});
+
+describe("what a running trade gets asked about its path", () => {
+  /*
+   * The two halves of "what price did" become knowable at different moments,
+   * and gating both on the exit price is what put the Best reach field on the
+   * read-only view and nowhere in the editor: an open position had a figure
+   * you could see and no box to type it into.
+   */
+  it("asks a live position how far it has gone", () => {
+    expect(pathQuestions("", true)).toEqual({ held: true, after: false });
+  });
+
+  it("does not ask a live position what happened after an exit it has not had", () => {
+    expect(pathQuestions("", true).after).toBe(false);
+    expect(pathQuestions("   ", true).after).toBe(false);
+  });
+
+  it("asks a closed trade both halves", () => {
+    expect(pathQuestions("112", false)).toEqual({ held: true, after: true });
+  });
+
+  it("asks a trade that never filled neither", () => {
+    expect(pathQuestions("", false)).toEqual({ held: false, after: false });
+  });
+
+  it("follows the exit price, not the flag, once one is typed", () => {
+    // Typing an exit into a trade still marked open is how closing works;
+    // the questions have to follow the price rather than wait for the state.
+    expect(pathQuestions("112", true)).toEqual({ held: true, after: true });
   });
 });

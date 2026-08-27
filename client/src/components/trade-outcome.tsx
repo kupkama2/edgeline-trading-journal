@@ -74,6 +74,17 @@ export interface OutcomeFieldsProps {
   extraHighlights?: string[];
   /** One-click fee suggestions from the account's schedule, when it has one. */
   feeChips?: { label: string; amount: number }[];
+  /**
+   * The position is still open.
+   *
+   * Everything else in this form needs an exit to be about — but how far
+   * price has gone with you and against you is knowable while the trade is
+   * running, and it is the number you most want to write down before you
+   * forget it. Gating the excursion pair behind an exit price meant a live
+   * trade had nowhere to record its own high, which is exactly backwards:
+   * that is the trade you are still watching.
+   */
+  live?: boolean;
   testPrefix: string;
   /**
    * Rendered inside the exit tile, under the price and time.
@@ -115,6 +126,27 @@ export function outcomeStage(
   return { priced, explained: priced && exitReason != null };
 }
 
+/**
+ * Which halves of "what price did" the trade can answer.
+ *
+ * The two are not the same question and they became knowable at different
+ * times, which is the whole reason this exists as a rule rather than as one
+ * `priced &&` around both. How far a position has run either way is readable
+ * off the chart while it is still open — and is the number most easily lost
+ * by tomorrow. What happened AFTER the exit needs an exit to be after.
+ *
+ * Gating both on the exit price meant an open trade had nowhere to record its
+ * own high: the field existed on the read-only view and vanished the moment
+ * you opened the editor to type into it.
+ */
+export function pathQuestions(
+  exitPrice: string,
+  live: boolean,
+): { held: boolean; after: boolean } {
+  const { priced } = outcomeStage(exitPrice, null);
+  return { held: priced || live, after: priced };
+}
+
 export type Lifecycle = "pending" | "open" | "closed";
 
 /**
@@ -144,6 +176,7 @@ export function resolveLifecycle(
 
 export function TradeOutcomeFields(p: OutcomeFieldsProps) {
   const { priced, explained } = outcomeStage(p.exitPrice, p.exitReason);
+  const path = pathQuestions(p.exitPrice, p.live === true);
 
   /**
    * The arithmetic reading of this exit, from the form's own fields.
@@ -333,11 +366,21 @@ export function TradeOutcomeFields(p: OutcomeFieldsProps) {
       )}
       </FormSection>
 
-      {priced && (
+      {/*
+        Shown while the trade is still running too, with only the half that
+        makes sense: how far it has gone either way is knowable now, and it is
+        the number most likely to be lost by tomorrow. What happened AFTER the
+        exit needs an exit to be after.
+      */}
+      {path.held && (
         <FormSection
           icon={Activity}
-          title="What price did"
-          hint="how far it went with you, and how far without you"
+          title={priced ? "What price did" : "What price has done"}
+          hint={
+            priced
+              ? "how far it went with you, and how far without you"
+              : "how far it has gone either way, so far"
+          }
           testId={`section-${p.testPrefix}-path`}
           tone="path"
         >
@@ -356,32 +399,52 @@ export function TradeOutcomeFields(p: OutcomeFieldsProps) {
             Adverse left, favourable right, in both boxes — the same way round
             as the bands below and as every R in the app.
           */}
-          <div className="grid gap-2.5 sm:grid-cols-2">
+          <div className={`grid gap-2.5 ${path.after ? "sm:grid-cols-2" : ""}`}>
             {[
               {
                 key: "in" as const,
-                title: "While you were in",
-                left: { kind: "mae" as const, text: "Worst held", value: p.mae, set: p.setMae, id: "mae" },
-                right: { kind: "mfe" as const, text: "Best held", value: p.mfe, set: p.setMfe, id: "mfe" },
-              },
-              {
-                key: "after" as const,
-                title: "Once you were out",
+                /* Past tense only once it is past. On a running trade this is
+                   a live reading, and calling it "while you were in" reads as
+                   a question about a trade that is over. */
+                title: priced ? "While you were in" : "So far, in the trade",
                 left: {
-                  kind: "fellAfter" as const,
-                  text: "Fell to",
-                  value: p.postExitAdverse,
-                  set: p.setPostExitAdverse,
-                  id: "post-exit-adverse",
+                  kind: "mae" as const,
+                  text: priced ? "Worst held" : "Worst so far",
+                  value: p.mae,
+                  set: p.setMae,
+                  id: "mae",
                 },
                 right: {
-                  kind: "ranAfter" as const,
-                  text: "Ran on to",
-                  value: p.postExitPeak,
-                  set: p.setPostExitPeak,
-                  id: "post-exit-peak",
+                  kind: "mfe" as const,
+                  text: priced ? "Best held" : "Best so far",
+                  value: p.mfe,
+                  set: p.setMfe,
+                  id: "mfe",
                 },
               },
+              // What happened after the exit needs an exit to be after.
+              ...(path.after
+                ? [
+                    {
+                      key: "after" as const,
+                      title: "Once you were out",
+                      left: {
+                        kind: "fellAfter" as const,
+                        text: "Fell to",
+                        value: p.postExitAdverse,
+                        set: p.setPostExitAdverse,
+                        id: "post-exit-adverse",
+                      },
+                      right: {
+                        kind: "ranAfter" as const,
+                        text: "Ran on to",
+                        value: p.postExitPeak,
+                        set: p.setPostExitPeak,
+                        id: "post-exit-peak",
+                      },
+                    },
+                  ]
+                : []),
             ].map((group) => (
               <div
                 key={group.key}
@@ -415,8 +478,18 @@ export function TradeOutcomeFields(p: OutcomeFieldsProps) {
               only ever asks how much further it ran can only ever conclude
               "hold longer". */}
           <p className="text-[10px] leading-snug text-muted-foreground">
-            After you were out, both ways — one prices what leaving cost you, the other what it
-            saved you. On a stop-out, "fell to" is what the stop was worth.
+            {priced ? (
+              <>
+                After you were out, both ways — one prices what leaving cost you, the other what
+                it saved you. On a stop-out, "fell to" is what the stop was worth.
+              </>
+            ) : (
+              <>
+                Worth writing down now rather than reconstructing later — the high and the low
+                this position has seen are what decide whether the exit was early or late, and
+                they are hardest to recover once the chart has moved on.
+              </>
+            )}
           </p>
 
           <div className="space-y-1">
@@ -452,6 +525,11 @@ export function TradeOutcomeFields(p: OutcomeFieldsProps) {
             )}
           </div>
 
+          {/* Which level the untouched plan would have reached first is a
+              question about a finished trade. On a running one it has not
+              happened yet, and answering it early would be a forecast getting
+              stored as a fact. */}
+          {path.after && (
           <div>
             <p className={`mb-1.5 ${LABEL}`}>Untouched plan would have hit…</p>
             <div className="flex flex-wrap gap-1.5">
@@ -476,6 +554,7 @@ export function TradeOutcomeFields(p: OutcomeFieldsProps) {
               ))}
             </div>
           </div>
+          )}
         </>
         </FormSection>
       )}

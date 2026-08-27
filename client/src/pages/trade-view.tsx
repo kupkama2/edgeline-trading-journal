@@ -88,6 +88,40 @@ export interface Editable {
 }
 
 /**
+ * What a finished inline edit means.
+ *
+ * Four different nothings, and telling them apart is the whole rule:
+ *
+ *   - a value that is not a number — a slip, put the old one back
+ *   - an empty box you clicked away from — you looked and left, keep what
+ *     was there. This is the common one, and treating it as "delete" wiped
+ *     numbers people were only reading
+ *   - an empty box you pressed Enter on — somebody saying "clear this", so
+ *     clear it, unless the trade cannot exist without the column
+ *   - the same value it already had — nothing to write
+ *
+ * Blur otherwise commits exactly as Enter does: abandoning a field by looking
+ * at something else is the commonest way to finish an edit, and losing the
+ * number to it is indistinguishable from the edit never having worked.
+ */
+export type EditOutcome = { save: false } | { save: true; value: number | null };
+
+export function readEdit(
+  raw: string,
+  via: "enter" | "blur",
+  edit: { current: number | null; required?: boolean },
+): EditOutcome {
+  const text = raw.trim();
+  if (text === "") {
+    if (via === "blur" || edit.required) return { save: false };
+    return edit.current == null ? { save: false } : { save: true, value: null };
+  }
+  const next = Number(text);
+  if (!isFinite(next)) return { save: false };
+  return next === edit.current ? { save: false } : { save: true, value: next };
+}
+
+/**
  * Small labelled figure; the page is mostly these.
  *
  * Given an `edit`, a double-click turns it into the number behind it and
@@ -123,19 +157,15 @@ function Fig({
   const [saving, setSaving] = useState(false);
   const { toast } = useToast();
 
-  async function commit() {
+  /** Hand what was typed to readEdit, and write it if it says to. */
+  async function commit(via: "enter" | "blur") {
     if (typing == null || !edit) return;
-    const raw = typing.trim();
-    const next = raw === "" ? null : Number(raw);
-    // Nonsense, or emptying a column the trade cannot exist without. Both put
-    // the old value back rather than sending something the server will refuse.
-    if (raw !== "" && !isFinite(next as number)) return setTyping(null);
-    if (next == null && edit.required) return setTyping(null);
+    const outcome = readEdit(typing, via, edit);
     setTyping(null);
-    if (next === edit.current) return;
+    if (!outcome.save) return;
     setSaving(true);
     try {
-      await edit.save(next);
+      await edit.save(outcome.value);
     } catch (err: any) {
       /*
        * Said out loud. Without this the field simply snapped back to its old
@@ -168,7 +198,7 @@ function Fig({
           value={typing}
           onChange={(e) => setTyping(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter") void commit();
+            if (e.key === "Enter") void commit("enter");
             // Escape gets out with the old value intact. Without it the only
             // way out of a mis-click is to save something.
             if (e.key === "Escape") setTyping(null);
@@ -176,7 +206,7 @@ function Fig({
             // open, or leaving one would throw the trade away too.
             e.stopPropagation();
           }}
-          onBlur={() => void commit()}
+          onBlur={() => void commit("blur")}
           className="w-full rounded border border-primary/50 bg-transparent px-1 py-0.5 font-mono text-sm outline-none"
           data-testid={`inline-${edit?.field}`}
         />
@@ -188,8 +218,10 @@ function Fig({
             edit
               ? // A dotted underline that firms up on hover: enough to say
                 // "this one answers to a double-click" without turning a page
-                // of figures into a page of form controls.
-                "cursor-text rounded decoration-dotted underline-offset-4 hover:bg-secondary/40 hover:underline"
+                // of figures into a page of form controls. The padding is not
+                // decoration — an unlogged figure renders as a single em-dash,
+                // and a one-character double-click target is one you miss.
+                "-mx-1 cursor-text rounded px-1 decoration-dotted underline-offset-4 hover:bg-secondary/40 hover:underline"
               : ""
           } ${saving ? "opacity-50" : ""}`}
           data-testid={testId}
@@ -206,7 +238,16 @@ function Fig({
           {value}
         </p>
       )}
-      {hint && <p className="text-[10px] text-muted-foreground">{hint}</p>}
+      {/*
+        An empty figure you can fill in should say so. "no path logged" is a
+        true statement that reads as a dead end — the one moment the hint is
+        worth spending on the way to change it rather than on what it means.
+      */}
+      {edit && edit.current == null && typing == null ? (
+        <p className="text-[10px] text-muted-foreground/70">double-click to log it</p>
+      ) : (
+        hint && <p className="text-[10px] text-muted-foreground">{hint}</p>
+      )}
     </div>
   );
 }
@@ -743,14 +784,24 @@ function TradeBody({
           <Fig
             label="Best reach"
             value={m.mfeR != null ? fmtR(m.mfeR) : "—"}
-            hint={m.captureRatio != null ? `kept ${Math.round(m.captureRatio * 100)}%` : "no path logged"}
+            /* What share you kept only means something once you are out. On a
+               running trade there is no exit to have kept anything of — and
+               falling back to "no path logged" was a flat contradiction of the
+               figure right above it. */
+            hint={
+              m.captureRatio != null
+                ? `kept ${Math.round(m.captureRatio * 100)}%`
+                : trade.status === "closed"
+                  ? "no path logged"
+                  : "high so far"
+            }
             edit={editable("mfe", trade.mfe)}
             testId="view-mfe"
           />
           <Fig
             label="Worst dip"
             value={m.maeR != null ? fmtR(m.maeR) : "—"}
-            hint="heat taken"
+            hint={trade.status === "closed" ? "heat taken" : "heat so far"}
             edit={editable("mae", trade.mae)}
             testId="view-mae"
           />

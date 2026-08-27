@@ -1086,6 +1086,11 @@ export function TradeEditor({
               setHighlights={setHighlights}
               extraHighlights={knownHighlights(allTrades)}
               testPrefix="edit"
+              /* A running position still has a high and a low, and they are
+                 the numbers most easily lost by tomorrow. Without this the
+                 only place to type them was a section gated behind an exit
+                 price — so an open trade had nowhere to record its own path. */
+              live={lifecycle === "open"}
               /* Sits inside the exit tile, directly under the price it
                  writes and whose meaning it is disambiguating. */
               exitExtra={
