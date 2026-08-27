@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useToast } from "@/hooks/use-toast";
 import {
   CandlestickSeries,
   ColorType,
@@ -45,6 +46,23 @@ import { parseExtraTargets } from "@shared/schema";
  * the exit cannot answer any of them — you would be looking at the version of
  * events where leaving was obviously right.
  */
+/** A textarea, a select, and the command browsers have not removed yet. */
+function fallbackCopy(text: string): boolean {
+  try {
+    const el = document.createElement("textarea");
+    el.value = text;
+    el.style.position = "fixed";
+    el.style.opacity = "0";
+    document.body.appendChild(el);
+    el.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(el);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
 const HEIGHT = 300;
 
 /** What the timeframe row offers. "auto" lets the server fit the hold. */
@@ -278,6 +296,23 @@ function Candles({
 }) {
   const { theme } = useTheme();
   const hostRef = useRef<HTMLDivElement>(null);
+  const { toast } = useToast();
+  /** How many decimals this instrument is quoted to, so the copy is exact. */
+  const copyPrice = (price: number) => {
+    const text = price.toFixed(digitsFor(price));
+    const said = () =>
+      toast({ title: `Copied ${text}`, description: "Right-click the chart at any level." });
+    /*
+     * The async clipboard needs a secure context, which a LAN address is not.
+     * The old execCommand path still works there, and silently copying
+     * nothing would be the worst of the three outcomes.
+     */
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).then(said, () => fallbackCopy(text) && said());
+    } else if (fallbackCopy(text)) {
+      said();
+    }
+  };
   /* Read by the autoscale provider, which is installed once and must always
      see the current levels rather than the ones that existed at mount. */
   const levelsRef = useRef(levels);
@@ -518,7 +553,29 @@ function Candles({
 
   return (
     <div className="relative">
-      <div ref={hostRef} style={{ height: HEIGHT }} data-testid="chart-canvas" />
+      <div
+        ref={hostRef}
+        style={{ height: HEIGHT }}
+        data-testid="chart-canvas"
+        /*
+         * Right-click copies the price under the cursor.
+         *
+         * Reading a level off a chart and typing it somewhere else is most of
+         * what filling in MAE, MFE and a corrected stop actually is, and doing
+         * it by eye off the axis loses a digit about as often as not. The
+         * browser menu is no loss here — there is nothing in it for a canvas.
+         */
+        onContextMenu={(e) => {
+          const a = api.current;
+          const host = hostRef.current;
+          if (!a || !host) return;
+          const y = e.clientY - host.getBoundingClientRect().top;
+          const price = a.series.coordinateToPrice(y);
+          if (price == null || !isFinite(price as number)) return;
+          e.preventDefault();
+          copyPrice(Number(price));
+        }}
+      />
       <span
         ref={readoutRef}
         className="pointer-events-none absolute left-1 top-1 z-10 font-mono text-[10px] text-muted-foreground"

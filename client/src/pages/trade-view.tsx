@@ -34,7 +34,14 @@ import {
   Sparkles,
   Trash2,
 } from "lucide-react";
-import { useCheckTrade, useDeleteFill, useDeleteTrade, useMistakeTags, useTrades } from "@/lib/data";
+import {
+  useCheckTrade,
+  useDeleteFill,
+  useDeleteTrade,
+  useMistakeTags,
+  useTrades,
+  useUpdateTrade,
+} from "@/lib/data";
 import { parseExtraTargets, parsePlaybook, type TradeWithTags } from "@shared/schema";
 import { computeMetrics, fmtFees, fmtMoney, fmtR, EXIT_REASON_LABELS } from "@shared/metrics";
 import { positionLedger } from "@shared/fills";
@@ -68,31 +75,100 @@ import { NewTradeCard } from "@/components/new-trade-card";
 import { FillDialog } from "@/components/fill-dialog";
 import { ResolveTradeDialog } from "@/components/resolve-trade";
 
-/** Small labelled figure; the page is mostly these. */
+/** A figure the page will let you correct without opening the editor. */
+export interface Editable {
+  /** The trade column this figure is showing. */
+  field: string;
+  /** What is stored, which is not always what is displayed — R is derived. */
+  current: number | null;
+  save: (v: number | null) => Promise<unknown>;
+}
+
+/**
+ * Small labelled figure; the page is mostly these.
+ *
+ * Given an `edit`, a double-click turns it into the number behind it and
+ * Enter puts it back. Correcting how far a trade ran without you is a
+ * two-second thought, and routing it through the full editor — open, find the
+ * field among thirty others, save, close — costs more attention than the
+ * correction is worth, which is how records stay wrong.
+ *
+ * The RAW value is what gets edited, never the rendering. These figures mostly
+ * show R, and R is derived from a price against the stop; letting someone type
+ * "3.2R" into a box that writes a price would store 3.2 as the price and
+ * destroy the trade.
+ */
 function Fig({
   label,
   value,
   hint,
   tone,
   testId,
+  edit,
 }: {
   label: string;
   value: React.ReactNode;
   hint?: string;
   tone?: "good" | "bad";
   testId?: string;
+  edit?: Editable;
 }) {
+  const [typing, setTyping] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  async function commit() {
+    if (typing == null || !edit) return;
+    const raw = typing.trim();
+    const next = raw === "" ? null : Number(raw);
+    if (raw !== "" && !isFinite(next as number)) return setTyping(null);
+    setTyping(null);
+    if (next === edit.current) return;
+    setSaving(true);
+    try {
+      await edit.save(next);
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <div>
       <p className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</p>
-      <p
-        className={`font-mono text-sm ${
-          tone === "good" ? "text-emerald-400" : tone === "bad" ? "text-primary" : ""
-        }`}
-        data-testid={testId}
-      >
-        {value}
-      </p>
+      {typing != null ? (
+        <input
+          autoFocus
+          type="number"
+          step="any"
+          inputMode="decimal"
+          value={typing}
+          onChange={(e) => setTyping(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") void commit();
+            // Escape gets out with the old value intact. Without it the only
+            // way out of a mis-click is to save something.
+            if (e.key === "Escape") setTyping(null);
+            // The overlay closes on Escape from anywhere; not while a field is
+            // open, or leaving one would throw the trade away too.
+            e.stopPropagation();
+          }}
+          onBlur={() => void commit()}
+          className="w-full rounded border border-primary/50 bg-transparent px-1 py-0.5 font-mono text-sm outline-none"
+          data-testid={`inline-${edit?.field}`}
+        />
+      ) : (
+        <p
+          className={`font-mono text-sm ${
+            tone === "good" ? "text-emerald-400" : tone === "bad" ? "text-primary" : ""
+          } ${edit ? "cursor-text rounded hover:bg-secondary/40" : ""} ${saving ? "opacity-50" : ""}`}
+          data-testid={testId}
+          title={edit ? "Double-click to edit" : undefined}
+          onDoubleClick={
+            edit ? () => setTyping(edit.current == null ? "" : String(edit.current)) : undefined
+          }
+        >
+          {value}
+        </p>
+      )}
       {hint && <p className="text-[10px] text-muted-foreground">{hint}</p>}
     </div>
   );
@@ -195,9 +271,21 @@ export default function TradeView({ under = "/" }: { under?: string }) {
   closeRef.current = close;
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
       // A stacked write dialog gets first refusal: Escape closes that and
       // leaves the trade open behind it.
-      if (e.key === "Escape" && !innerOpenRef.current) closeRef.current();
+      if (innerOpenRef.current) return;
+      /*
+       * And so does a field being typed in. This handler listens in the
+       * CAPTURE phase, so it sees the key before the field does and
+       * stopPropagation down there comes far too late — Escape out of a
+       * half-typed correction used to throw the whole trade away with it.
+       */
+      const el = document.activeElement;
+      const tag = el?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (el instanceof HTMLElement && el.isContentEditable) return;
+      closeRef.current();
     };
     document.addEventListener("keydown", onKey, true);
     return () => document.removeEventListener("keydown", onKey, true);
@@ -345,6 +433,18 @@ function TradeBody({
    */
   const [rechecking, setRechecking] = useState(false);
   const [suggestion, setSuggestion] = useState<FieldChange[] | null>(null);
+  const updateTrade = useUpdateTrade();
+  /*
+   * Binds a figure to the column behind it. The RAW value, never the
+   * rendering: these mostly show R, and R is a price measured against the
+   * stop — writing "3.2" into the price column would not be a correction, it
+   * would be a different trade.
+   */
+  const editable = (field: string, current: number | null): Editable => ({
+    field,
+    current,
+    save: (v) => updateTrade.mutateAsync({ id: trade.id, trade: { [field]: v } as any }),
+  });
   const checkTrade = useCheckTrade();
   async function recheck() {
     setRechecking(true);
@@ -553,11 +653,15 @@ function TradeBody({
             label="Best reach"
             value={m.mfeR != null ? fmtR(m.mfeR) : "—"}
             hint={m.captureRatio != null ? `kept ${Math.round(m.captureRatio * 100)}%` : "no path logged"}
+            edit={editable("mfe", trade.mfe)}
+            testId="view-mfe"
           />
           <Fig
             label="Worst dip"
             value={m.maeR != null ? fmtR(m.maeR) : "—"}
             hint="heat taken"
+            edit={editable("mae", trade.mae)}
+            testId="view-mae"
           />
           {/* The counterfactual leg: what the move did after you left. This is
               the number that says "if I had not closed it, it reached X" —
@@ -568,6 +672,7 @@ function TradeBody({
               value={fmtR(m.leftBehindR)}
               hint={m.leftBehindR >= 0.5 ? "ran on without you" : "died on cue"}
               testId="view-left-behind"
+              edit={editable("postExitPeak", trade.postExitPeak)}
             />
           )}
         </div>
@@ -675,10 +780,17 @@ function TradeBody({
         <Card className="border-card-border bg-card p-4">
           <h2 className="mb-3 text-sm font-semibold tracking-tight">The plan</h2>
           <div className="grid grid-cols-2 gap-3 font-mono text-sm sm:grid-cols-4">
-            <Fig label="Entry" value={num(trade.entryPrice)} testId="view-entry" />
+            <Fig
+              label="Entry"
+              value={num(trade.entryPrice)}
+              testId="view-entry"
+              edit={editable("entryPrice", trade.entryPrice)}
+            />
             <Fig
               label="Stop"
               value={<span className="text-primary">{num(trade.initialStop)}</span>}
+              testId="view-stop"
+              edit={editable("initialStop", trade.initialStop)}
             />
             <Fig
               label={tps.length > 1 ? "Targets" : "Target"}
