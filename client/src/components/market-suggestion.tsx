@@ -177,9 +177,15 @@ export function MarketSuggestion({
             type="button"
             variant="outline"
             onClick={() => {
-              // Straight into the editor with the market's numbers in the
-              // fields, so "nearly right" does not mean starting over.
-              store.set(dismissKey(trade.id, changes), "1");
+              /*
+               * The editor, with the claim left standing.
+               *
+               * Dismissing here would be wrong twice over: nothing has been
+               * decided yet, and if the editor is closed without touching
+               * these fields the disagreement is still true — silencing it
+               * would lose the finding to a button that only meant "not like
+               * this".
+               */
               onClose();
               window.location.hash = `#/trade/${trade.id}/edit`;
             }}

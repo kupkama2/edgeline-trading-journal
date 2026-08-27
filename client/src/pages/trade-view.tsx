@@ -81,6 +81,8 @@ export interface Editable {
   field: string;
   /** What is stored, which is not always what is displayed — R is derived. */
   current: number | null;
+  /** A column the trade cannot exist without; emptying it is not a correction. */
+  required?: boolean;
   save: (v: number | null) => Promise<unknown>;
 }
 
@@ -115,17 +117,32 @@ function Fig({
 }) {
   const [typing, setTyping] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const { toast } = useToast();
 
   async function commit() {
     if (typing == null || !edit) return;
     const raw = typing.trim();
     const next = raw === "" ? null : Number(raw);
+    // Nonsense, or emptying a column the trade cannot exist without. Both put
+    // the old value back rather than sending something the server will refuse.
     if (raw !== "" && !isFinite(next as number)) return setTyping(null);
+    if (next == null && edit.required) return setTyping(null);
     setTyping(null);
     if (next === edit.current) return;
     setSaving(true);
     try {
       await edit.save(next);
+    } catch (err: any) {
+      /*
+       * Said out loud. Without this the field simply snapped back to its old
+       * value and the trader was left to guess whether it had saved — which is
+       * the worst of the three things that can happen to an edit.
+       */
+      toast({
+        title: "That didn't save",
+        description: String(err?.message ?? err).slice(0, 160),
+        variant: "destructive",
+      });
     } finally {
       setSaving(false);
     }
@@ -440,9 +457,10 @@ function TradeBody({
    * stop — writing "3.2" into the price column would not be a correction, it
    * would be a different trade.
    */
-  const editable = (field: string, current: number | null): Editable => ({
+  const editable = (field: string, current: number | null, required = false): Editable => ({
     field,
     current,
+    required,
     save: (v) => updateTrade.mutateAsync({ id: trade.id, trade: { [field]: v } as any }),
   });
   const checkTrade = useCheckTrade();
@@ -784,13 +802,13 @@ function TradeBody({
               label="Entry"
               value={num(trade.entryPrice)}
               testId="view-entry"
-              edit={editable("entryPrice", trade.entryPrice)}
+              edit={editable("entryPrice", trade.entryPrice, true)}
             />
             <Fig
               label="Stop"
               value={<span className="text-primary">{num(trade.initialStop)}</span>}
               testId="view-stop"
-              edit={editable("initialStop", trade.initialStop)}
+              edit={editable("initialStop", trade.initialStop, true)}
             />
             <Fig
               label={tps.length > 1 ? "Targets" : "Target"}
