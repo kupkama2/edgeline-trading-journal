@@ -320,11 +320,18 @@ export function FormSection({
 }) {
   return (
     <section className="space-y-3" data-testid={testId}>
-      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 border-b border-border/60 pb-1.5">
-        <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-foreground/80">
-          <Icon className="h-3.5 w-3.5 text-muted-foreground" />
-          {title}
+      {/*
+        A heading has to be findable while scrolling past it, and a thin grey
+        rule reading THE SETUP was not: it looked like the label of the field
+        under it rather than the top of a section. The icon gets a tinted
+        badge and the title gets the size of a heading, so the four questions
+        are four landmarks instead of four more captions.
+      */}
+      <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 border-b border-border/60 pb-2">
+        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-primary/10">
+          <Icon className="h-3.5 w-3.5 text-primary" />
         </span>
+        <span className="text-sm font-semibold tracking-tight">{title}</span>
         {hint && <span className="text-[10px] text-muted-foreground">{hint}</span>}
       </div>
       {children}

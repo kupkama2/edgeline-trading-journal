@@ -55,6 +55,7 @@ import {
 import { overrodeThePlan } from "@shared/grades";
 import { exposureOf, fmtExposure } from "@shared/symbols";
 import { GradeBadges } from "@/components/grade-picker";
+import { LEVEL, LevelLabel, LevelLadder } from "@/components/levels";
 import { StyleChip } from "@/components/style-switcher";
 import { TradeImageGallery } from "@/components/trade-images";
 /*
@@ -107,6 +108,7 @@ function Fig({
   tone,
   testId,
   edit,
+  icon,
 }: {
   label: string;
   value: React.ReactNode;
@@ -114,6 +116,8 @@ function Fig({
   tone?: "good" | "bad";
   testId?: string;
   edit?: Editable;
+  /** Draws the label in the level vocabulary the rest of the app uses. */
+  icon?: keyof typeof LEVEL;
 }) {
   const [typing, setTyping] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -150,7 +154,11 @@ function Fig({
 
   return (
     <div>
-      <p className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</p>
+      {icon ? (
+        <LevelLabel kind={icon} text={label} />
+      ) : (
+        <p className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</p>
+      )}
       {typing != null ? (
         <input
           autoFocus
@@ -441,6 +449,30 @@ function TradeBody({
   );
 
   const m = computeMetrics(trade);
+  /** One line, always — the two-line wrap in a narrow column read as a bug. */
+  const when = (iso: string) =>
+    new Date(iso).toLocaleString(undefined, {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  const sizeText = `${num(trade.size)}${trade.sizeUnit === "quote" ? " USD" : ""}`;
+  // For a contract quoted in dollars per coin or per ounce, what the position
+  // actually holds is the more useful of the two.
+  const sizeHint =
+    fmtExposure(exposureOf(trade.symbol, trade.size, trade.pointValue)) ??
+    (trade.pointValue !== 1 ? `$${trade.pointValue}/pt` : undefined);
+  /** How long it was on, in the coarsest unit that still says something. */
+  const held = (() => {
+    if (!trade.exitTime) return null;
+    const ms = new Date(trade.exitTime).getTime() - new Date(trade.entryTime).getTime();
+    if (!(ms > 0)) return null;
+    const mins = Math.round(ms / 60000);
+    if (mins < 90) return `${mins}m`;
+    const hours = mins / 60;
+    return hours < 36 ? `${hours.toFixed(hours < 10 ? 1 : 0)}h` : `${Math.round(hours / 24)}d`;
+  })();
   const led = positionLedger(trade);
 
   /*
@@ -646,21 +678,50 @@ function TradeBody({
 
       {/* ------------------------------ result ------------------------------ */}
       <Card className="border-card-border bg-card p-4">
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4 lg:grid-cols-6">
-          <Fig
-            label="Result"
-            value={trade.status === "closed" ? fmtR(m.actualR) : "—"}
-            hint={trade.status === "closed" ? EXIT_REASON_LABELS[trade.exitReason ?? "other"] : "still running"}
-            tone={trade.status === "closed" ? (win ? "good" : "bad") : undefined}
-            testId="view-actual-r"
-          />
-          <Fig
-            label={m.fees > 0 ? "Net P&L" : "P&L"}
-            value={trade.status === "closed" ? fmtMoney(m.actualPnL) : "—"}
-            hint={m.fees > 0 ? `${fmtMoney(m.grossPnL)} gross − ${fmtFees(m.fees)}` : undefined}
-            tone={trade.status === "closed" ? (win ? "good" : "bad") : undefined}
-            testId="view-pnl"
-          />
+        {/*
+          The result leads, at the size it deserves.
+          It used to be one of seven identical figures in a flat row, so the
+          answer to "how did this go" carried exactly the weight of the point
+          value beside it. The rest are supporting detail and now read as it.
+        */}
+        <div className="mb-3 flex flex-wrap items-start gap-x-8 gap-y-2 border-b border-border/50 pb-3">
+          <div>
+            <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Result</p>
+            <p
+              className={`font-mono text-3xl font-semibold leading-none ${
+                trade.status !== "closed" ? "" : win ? "text-emerald-400" : "text-primary"
+              }`}
+              data-testid="view-actual-r"
+            >
+              {trade.status === "closed" ? fmtR(m.actualR) : "—"}
+            </p>
+            <p className="mt-1 text-[10px] text-muted-foreground">
+              {trade.status === "closed"
+                ? EXIT_REASON_LABELS[trade.exitReason ?? "other"]
+                : "still running"}
+            </p>
+          </div>
+          <div>
+            <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+              {m.fees > 0 ? "Net P&L" : "P&L"}
+            </p>
+            <p
+              className={`font-mono text-xl font-semibold leading-none ${
+                trade.status !== "closed" ? "" : win ? "text-emerald-400" : "text-primary"
+              }`}
+              data-testid="view-pnl"
+            >
+              {trade.status === "closed" ? fmtMoney(m.actualPnL) : "—"}
+            </p>
+            {m.fees > 0 && (
+              <p className="mt-1 text-[10px] text-muted-foreground">
+                {fmtMoney(m.grossPnL)} gross − {fmtFees(m.fees)}
+              </p>
+            )}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
           <Fig label="1R" value={`$${num(m.riskDollars, 0)}`} hint={`${num(m.risk)} pts`} />
           <Fig
             label="Planned R:R"
@@ -794,69 +855,97 @@ function TradeBody({
       </Suspense>
 
       {/* ------------------------------ the plan ---------------------------- */}
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+      {/*
+        Side by side only when there is something to put beside. A trade with
+        one entry and one exit — most of them — used to sit next to a
+        half-page card whose entire contents were the sentence "no scaling
+        logged", and an empty column that tall reads as something failing to
+        load.
+      */}
+      <div
+        className={`grid gap-4 ${
+          trade.fills.length > 0 ? "lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]" : "grid-cols-1"
+        }`}
+      >
         <Card className="border-card-border bg-card p-4">
           <h2 className="mb-3 text-sm font-semibold tracking-tight">The plan</h2>
+
+          {/*
+            The four decisions, in the vocabulary the editor already speaks.
+            Entry, stop, target and exit carry an icon and a colour everywhere
+            else in the app; the view was the one place they were four
+            identical grey labels, so the same trade looked like two different
+            things depending on which window you were in.
+          */}
           <div className="grid grid-cols-2 gap-3 font-mono text-sm sm:grid-cols-4">
             <Fig
               label="Entry"
+              icon="entry"
               value={num(trade.entryPrice)}
               testId="view-entry"
               edit={editable("entryPrice", trade.entryPrice, true)}
             />
             <Fig
               label="Stop"
-              value={<span className="text-primary">{num(trade.initialStop)}</span>}
+              icon="stop"
+              value={<span className="text-red-400">{num(trade.initialStop)}</span>}
               testId="view-stop"
               edit={editable("initialStop", trade.initialStop, true)}
             />
             <Fig
               label={tps.length > 1 ? "Targets" : "Target"}
+              icon="target"
               value={
                 <span className="text-emerald-400" data-testid="view-targets">
                   {tps.map((x) => num(x)).join(" → ") || "—"}
                 </span>
               }
             />
-            <Fig
-              label="Size"
-              value={`${num(trade.size)}${trade.sizeUnit === "quote" ? " USD" : ""}`}
-              // For a contract quoted in dollars per coin or per ounce, what
-              // the position actually holds is the more useful of the two.
-              hint={
-                fmtExposure(exposureOf(trade.symbol, trade.size, trade.pointValue)) ??
-                (trade.pointValue !== 1 ? `$${trade.pointValue}/pt` : undefined)
-              }
-            />
-            <Fig
-              label="Entered"
-              value={
-                <span className="text-xs">
-                  {new Date(trade.entryTime).toLocaleString(undefined, {
-                    month: "short",
-                    day: "numeric",
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  })}
-                </span>
-              }
-            />
-            {trade.exitTime && (
+            {trade.exitPrice != null ? (
               <Fig
-                label="Exited"
-                value={
-                  <span className="text-xs">
-                    {new Date(trade.exitTime).toLocaleString(undefined, {
-                      month: "short",
-                      day: "numeric",
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })}
-                  </span>
-                }
+                label="Exit"
+                icon="exit"
+                value={<span className="text-sky-400">{num(trade.exitPrice)}</span>}
+                testId="view-exit"
+                edit={editable("exitPrice", trade.exitPrice)}
               />
+            ) : (
+              <Fig label="Size" value={sizeText} hint={sizeHint} />
             )}
-            {trade.exitPrice != null && <Fig label="Exit" value={num(trade.exitPrice)} />}
+          </div>
+
+          {/* The same ladder the editor draws. It is the one thing that makes
+              four prices read as a trade rather than as four prices, and the
+              view was going without it. */}
+          <LevelLadder
+            bare
+            className="mt-3"
+            direction={trade.direction}
+            entry={trade.entryPrice}
+            stop={trade.initialStop}
+            target={trade.initialTarget}
+            extraTps={tps.slice(1)}
+            exit={trade.exitPrice}
+          />
+
+          {/* Size and the clock: true of the trade, but not decisions about
+              price, so they sit apart from the four that are. */}
+          <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 border-t border-border/50 pt-2.5 text-[11px] text-muted-foreground">
+            {trade.exitPrice != null && (
+              <span>
+                Size <span className="font-mono text-foreground">{sizeText}</span>
+                {sizeHint ? ` · ${sizeHint}` : ""}
+              </span>
+            )}
+            <span>
+              In <span className="font-mono text-foreground">{when(trade.entryTime)}</span>
+            </span>
+            {trade.exitTime && (
+              <span>
+                Out <span className="font-mono text-foreground">{when(trade.exitTime)}</span>
+              </span>
+            )}
+            {held && <span>held {held}</span>}
           </div>
 
           {playbookRows.length > 0 && (
@@ -878,8 +967,10 @@ function TradeBody({
         </Card>
 
         {/* --------------------------- how it went -------------------------- */}
-        <Card className="border-card-border bg-card p-4">
-          <h2 className="mb-3 text-sm font-semibold tracking-tight">How it was worked</h2>
+        <Card className={`border-card-border bg-card p-4 ${trade.fills.length ? "" : "py-2.5"}`}>
+          {trade.fills.length > 0 && (
+            <h2 className="mb-3 text-sm font-semibold tracking-tight">How it was worked</h2>
+          )}
 
           {trade.fills.length === 0 ? (
             <p className="text-xs text-muted-foreground">
