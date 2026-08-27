@@ -39,7 +39,12 @@ import { parseExtraTargets, parsePlaybook, type TradeWithTags } from "@shared/sc
 import { computeMetrics, fmtFees, fmtMoney, fmtR, EXIT_REASON_LABELS } from "@shared/metrics";
 import { positionLedger } from "@shared/fills";
 import { parseHighlights } from "@shared/highlights";
-import { pathIncomplete } from "@shared/aftermath";
+import { couldLearnMore, pathIncomplete } from "@shared/aftermath";
+import {
+  alreadyDismissed,
+  MarketSuggestion,
+  type FieldChange,
+} from "@/components/market-suggestion";
 import { overrodeThePlan } from "@shared/grades";
 import { exposureOf, fmtExposure } from "@shared/symbols";
 import { GradeBadges } from "@/components/grade-picker";
@@ -339,6 +344,7 @@ function TradeBody({
    * nothing would be indistinguishable from one that was broken.
    */
   const [rechecking, setRechecking] = useState(false);
+  const [suggestion, setSuggestion] = useState<FieldChange[] | null>(null);
   const checkTrade = useCheckTrade();
   async function recheck() {
     setRechecking(true);
@@ -346,6 +352,19 @@ function TradeBody({
       const res: any = await checkTrade.mutateAsync(trade.id);
       const settled = (res?.resolved ?? []).length > 0;
       const measured = (res?.measured ?? []).length > 0;
+
+      /*
+       * A disagreement is a decision, not a notification. The market saying
+       * the trade went further than your record of it is the one result worth
+       * stopping for, so it opens the window rather than joining a toast that
+       * disappears in four seconds.
+       */
+      const mine = (res?.suggestions ?? []).find((x: any) => x.tradeId === trade.id);
+      if (mine?.changes?.length && !alreadyDismissed(trade.id, mine.changes)) {
+        setSuggestion(mine.changes);
+        return;
+      }
+
       toast(
         settled || measured
           ? {
@@ -608,15 +627,17 @@ function TradeBody({
         numbers, and recent enough that the archive could still be publishing
         data about it.
       */}
-      {trade.status === "closed" && pathIncomplete(trade) && (
+      {couldLearnMore(trade) && (
         <div
           className="flex flex-wrap items-center gap-2 rounded-md border border-border/60 px-3 py-2 text-[11px]"
           data-testid="panel-recheck"
         >
           <span className="text-muted-foreground">
-            {trade.mae == null && trade.mfe == null
-              ? "No price path on this one yet — the archive publishes a day at a time."
-              : "The price path is only half filled in."}
+            {pathIncomplete(trade)
+              ? trade.mae == null && trade.mfe == null
+                ? "No price path on this one yet — the archive publishes a day at a time."
+                : "The price path is only half filled in."
+              : "The archive publishes a day at a time, so it may know more about this one than it did."}
           </span>
           <Button
             type="button"
@@ -635,6 +656,14 @@ function TradeBody({
             Ask the market again
           </Button>
         </div>
+      )}
+
+      {suggestion && (
+        <MarketSuggestion
+          trade={trade}
+          changes={suggestion}
+          onClose={() => setSuggestion(null)}
+        />
       )}
 
       <Suspense fallback={null}>

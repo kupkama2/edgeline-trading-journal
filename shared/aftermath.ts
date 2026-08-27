@@ -106,6 +106,27 @@ export function pathIncomplete(t: TradeWithTags, now = Date.now()): boolean {
 }
 
 /**
+ * Could the market still have something to say about this trade?
+ *
+ * Broader than `pathIncomplete` on purpose. A trade with every number filled
+ * in can still be wrong about how far it went — the archive publishes a day
+ * at a time, so the reading taken the morning after an exit saw a fraction of
+ * the aftermath — and that is exactly the case where the record understates
+ * what happened. So the offer to ask again stands for any closed trade young
+ * enough for more data to exist, whether or not it looks complete.
+ *
+ * The background sweep keeps the narrower list. Re-reading every recent trade
+ * hourly to look for disagreements would spend the call budget on questions
+ * nobody asked; this is the one a trader asks by pressing a button.
+ */
+export function couldLearnMore(t: TradeWithTags, now = Date.now()): boolean {
+  if (t.status !== "closed" || t.exitPrice == null) return false;
+  const exit = t.exitTime ? new Date(t.exitTime).getTime() : null;
+  if (exit == null || !Number.isFinite(exit)) return false;
+  return now - exit < AFTERMATH_HORIZON_MS + 7 * 24 * 60 * 60 * 1000;
+}
+
+/**
  * Parked deliberately, rather than never asked.
  *
  * Same errand either way, but they read differently: one is a trade you have
