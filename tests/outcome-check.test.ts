@@ -153,6 +153,33 @@ describe.skipIf(!DB)("settling parked trades against the feed", () => {
     expect(after.outcomeSource).toBe("auto");
   });
 
+  it("fills the path on a trade whose verdict a human already gave", async () => {
+    /*
+     * The two errands have to coexist. Widening the worklist to bring back
+     * trades that were settled but never measured put ANSWERED trades in
+     * front of the settler again — and with the guard living in the worklist
+     * filter, it wrote over a verdict the trader had typed themselves.
+     *
+     * So the guard moved to the write. A trade read for its price path keeps
+     * the answer it was given, and gains the numbers it was missing.
+     */
+    const t = await closedTrade({
+      symbol: "AAA",
+      exitTime: ago(3),
+      noManagementOutcome: "stop_first",
+      mae: null,
+      mfe: null,
+    });
+    await checkOutcomes(userId);
+    const after = await store.getTrade(t.id);
+    // Untouched, and still not claimed as the market's answer.
+    expect(after.noManagementOutcome).toBe("stop_first");
+    expect(after.outcomeSource).toBeNull();
+    // But the errand it was actually visited for did happen.
+    expect(after.mae).not.toBeNull();
+    expect(after.mfe).not.toBeNull();
+  });
+
   it("never touches an answer a human already gave", async () => {
     // The feed would say target_first for AAA. It must not get the chance:
     // a wrong overwrite here is indistinguishable from the trader's own

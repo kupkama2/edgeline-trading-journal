@@ -595,6 +595,22 @@ export async function registerRoutes(
    * by the market. Crypto only, and only where the pair is unambiguous — see
    * server/outcomes.ts for why every uncertainty ends as "leave it parked".
    */
+  /*
+   * One trade, asked for by name.
+   *
+   * The sweep is throttled to hourly per trade and capped per run, both of
+   * which are right for something nobody is watching. Neither is right when
+   * the trader has the trade open and can see the gap: the archive publishes
+   * a day at a time, so "closed yesterday, no path yet" becomes "closed
+   * yesterday, the file is up now" without anything on screen changing.
+   */
+  app.post("/api/trades/:id/check", async (req, res) => {
+    const id = Number(req.params.id);
+    const trade = await store(req).getTrade(id);
+    if (!trade) return res.status(404).json({ message: "Trade not found" });
+    res.json(await checkOutcomes((req as any).userId, id));
+  });
+
   app.post("/api/outcomes/check", async (req, res) => {
     // Same guard store() applies. Passing an absent id into storageFor would
     // scope the query to nobody, which is one typo away from scoping it to
