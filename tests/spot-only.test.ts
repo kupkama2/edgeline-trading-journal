@@ -37,11 +37,15 @@ let userId: number;
 let store: any;
 let checkOutcomes: (id: number) => Promise<any>;
 
+/** Every path the stub was asked for — how "did it try the perp?" is answered. */
+const asked: string[] = [];
+
 /** Spot answers; the perp book refuses exactly the way the real one does. */
 function startFeed(): Promise<number> {
   return new Promise((resolve) => {
     feed = createServer((req, res) => {
       const u = new URL(req.url ?? "/", "http://x");
+      asked.push(u.pathname + u.search);
       if (u.pathname.startsWith("/fapi/")) {
         res.statusCode = 451;
         res.setHeader("content-type", "application/json");
@@ -175,16 +179,45 @@ describe.skipIf(!DB)("when only the spot book answers", () => {
     expect(after.outcomeSource).toBe("auto");
   });
 
-  it("still draws the chart, and says which book it had to use", async () => {
+  it("asks for the perp first, and draws spot rather than nothing", async () => {
+    /*
+     * Both halves of the rule at once.
+     *
+     * The chart ASKS for the perp, because that is the instrument that was
+     * traded and the archive can serve it when the live book refuses. Here
+     * neither can — fapi 451s and the archive stub has no files — so rather
+     * than answer a refusal with a blank rectangle it draws spot and says so.
+     * The two books sit within a fraction of a percent of each other nearly
+     * all of the time, and a labelled approximation is still a chart.
+     */
+    asked.length = 0;
     const t = await closed({ symbol: "BTC", exitTime: ago(3) });
     const r = await fetch(`${base}/api/trades/${t.id}/candles`).then((x) => x.json());
+
+    // It tried the perp. Before this, the spot-only catalogue decided the pair
+    // and the futures book was never asked at all.
+    expect(asked.some((u) => u.startsWith("/fapi/") && u.includes("BTCUSDT"))).toBe(true);
+
     expect(r.pair).toBe("BTCUSDT");
     expect(r.market).toBe("spot");
     expect(r.candles.length).toBeGreaterThan(0);
     // What the chart's "perp book unreachable" line is keyed off. A count of
     // zero perps is the only thing that separates "spot because that is where
     // it trades" from "spot because the perp book refused".
-    expect(r.books).toEqual({ futures: 0, spot: 2 });
+    expect(r.books).toMatchObject({ futures: 0, spot: 2 });
+    // And it is not claiming these bars came from the perp.
+    expect(r.books.fallback).toBe(false);
+  });
+
+  it("leaves a spot-only coin alone entirely", async () => {
+    // JUNKX has no perp, so there is nothing to reach for and no futures
+    // request to make — the ordinary path, unchanged.
+    asked.length = 0;
+    const t = await closed({ symbol: "JUNKX", exitTime: ago(3) });
+    const r = await fetch(`${base}/api/trades/${t.id}/candles`).then((x) => x.json());
+    expect(r.market).toBe("spot");
+    expect(r.candles.length).toBeGreaterThan(0);
+    expect(asked.some((u) => u.startsWith("/fapi/") && u.includes("JUNKX"))).toBe(false);
   });
 
   it("hands back older bars when the chart is scrolled off its left edge", async () => {
