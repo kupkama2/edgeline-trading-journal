@@ -1332,11 +1332,12 @@ export function NewTradeCard({
           </div>
 
           {closedMode && (
-            <div
-              className="space-y-3 rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3"
-              data-testid="section-exit-fields"
-            >
-              <div className="flex flex-wrap items-center gap-2">
+            /* A strip, not a box. The three questions below are boxes of
+               their own now, and a box around three boxes reads as a nesting
+               level that means nothing — the emerald line still says which
+               mode you are in, which is all it was ever saying. */
+            <div className="space-y-3" data-testid="section-exit-fields">
+              <div className="flex flex-wrap items-center gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/5 px-2.5 py-1.5">
                 <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-400" />
                 <p className="text-[11px] font-semibold text-emerald-400">
                   {autoClosed

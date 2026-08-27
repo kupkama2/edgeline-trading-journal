@@ -18,6 +18,7 @@ import { useToast } from "@/hooks/use-toast";
 import { ArrowUpRight, CheckCircle2, Clock3, Loader2, Minus, Pencil, Plus, Trash2 } from "lucide-react";
 import { useAccountSettings, useMistakeTags, useUpdateTrade, useAddTradeImage, archiveDataUrl, parseScreenshot, fileToDownscaledDataUrl,
   useAddFill,
+  useTradeImages,
 } from "@/lib/data";
 import { suggestFees } from "@shared/fees";
 import { knownHighlights, parseHighlights, serializeHighlights } from "@shared/highlights";
@@ -39,7 +40,7 @@ const TradeChart = lazy(() =>
 import { parseExtraTargets, parsePlaybook, type TradeWithTags } from "@shared/schema";
 import { type CloseCard, type CloseFill, closeFromCard, readHeadline, saysAnythingAboutClose } from "@shared/close-card";
 import { LevelLabel, LevelLadder, type LevelKind } from "@/components/levels";
-import { ClipboardList, Layers, NotebookPen } from "lucide-react";
+import { ClipboardList, Image as ImageIcon, Layers, LineChart, NotebookPen } from "lucide-react";
 import { AverageCloseSolver } from "@/components/average-close";
 import { useCloseCardPaste } from "@/lib/close-paste";
 import { computeMetrics, fmtFees, fmtMoney, fmtR, EXIT_REASON_LABELS } from "@shared/metrics";
@@ -113,6 +114,11 @@ export function TradeEditor({
   const [sizeUnit, setSizeUnit] = useState<"base" | "quote">("base");
   const { data: styles = [] } = useStyles();
   const { data: allTrades = [] } = useTrades();
+  /* Only so the folded Screenshots tile can say how many are in it. The
+     gallery fetches the same key, so this costs one cache read, not a
+     second request. */
+  const { data: tradeImages = [] } = useTradeImages(trade?.id ?? null);
+  const imageCount = tradeImages.length;
   const deleteFill = useDeleteFill();
   const addFill = useAddFill();
   const [merging, setMerging] = useState(false);
@@ -586,9 +592,14 @@ export function TradeEditor({
   );
 
   return (
-    <div className="space-y-4" data-testid="panel-trade-editor">
+    <div className="min-w-0 space-y-3" data-testid="panel-trade-editor">
       <div>
-        <div className="flex items-center gap-2 text-base font-semibold">
+        {/* min-w-0 and pr-7 are load-bearing. The dialog is a grid, and a grid
+            item's automatic minimum is its content width — so a header row
+            carrying an unshrinkable control widened the whole dialog past the
+            viewport on a phone and took every field in it along. pr-7 keeps
+            the state pills out from under the dialog's own close button. */}
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5 pr-7 text-base font-semibold">
           <Pencil className="h-4 w-4 text-muted-foreground" />
           Edit {trade ? typedSymbol(trade) : ""}
           {readingCard && (
@@ -596,7 +607,62 @@ export function TradeEditor({
               reading your screenshot…
             </span>
           )}
+          {/*
+              Where the trade is in its life — beside its name, because that is
+              what it is: which trade this is, and which trade it currently is.
+
+              It used to be a block of its own between the setup and the exit,
+              with its own heading and its own margins, costing forty pixels of
+              a form that is already too tall to hold in one screen. Up here it
+              costs none, and reads as a state rather than a question.
+           */}
+          {trade && (
+            <div
+              className="ml-auto flex shrink-0 items-center gap-0.5 rounded-lg border border-border/60 bg-secondary/40 p-0.5"
+              data-testid="section-edit-lifecycle"
+              role="group"
+              aria-label="Trade state"
+            >
+              {(
+                [
+                  { id: "pending", label: "Waiting", icon: Clock3 },
+                  { id: "open", label: "Open", icon: ArrowUpRight },
+                  { id: "closed", label: "Closed", icon: CheckCircle2 },
+                ] as const
+              ).map(({ id, label, icon: Icon }) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => setLifecycle(id)}
+                  data-testid={`button-edit-lifecycle-${id}`}
+                  aria-pressed={lifecycle === id}
+                  title={id === "pending" ? "Waiting to fill" : label}
+                  className={`flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium transition-colors ${
+                    lifecycle === id
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  <Icon className="h-3.5 w-3.5" />
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
+        {/* The two ways the state and the exit price can contradict each
+            other, said next to the control that sets one of them. */}
+        {trade && lifecycle === "closed" && !outcomeStage(f.exitPrice ?? "", null).priced && (
+          <p className="mt-1 text-[11px] text-amber-500" data-testid="text-edit-needs-exit">
+            Fill in the exit price below to close it.
+          </p>
+        )}
+        {trade && lifecycle !== "closed" && outcomeStage(f.exitPrice ?? "", null).priced && (
+          <p className="mt-1 text-[11px] text-amber-500" data-testid="text-edit-has-exit">
+            There is an exit price below — clear it to put this back to{" "}
+            {lifecycle === "pending" ? "waiting" : "open"}.
+          </p>
+        )}
 
 
         {/* What the card said, and what was left alone. Filling the fields
@@ -765,8 +831,14 @@ export function TradeEditor({
               title="The setup"
               hint="what you planned, and what you put on"
               testId="section-edit-setup"
+              tone="plan"
             >
-            <div className="grid grid-cols-2 gap-3">
+            {/* Three columns where there were two. Nine short fields stacked
+                two-abreast is five rows of scrolling for nine numbers that
+                each need about a hundred pixels; the dialog is 896px wide and
+                was spending half of it on nothing. Two on a phone, three from
+                the tablet breakpoint up. */}
+            <div className="grid grid-cols-2 gap-x-3 gap-y-2.5 [&>*]:min-w-0 sm:grid-cols-3">
               <div className="min-w-0 space-y-1">
                 <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
                   Symbol
@@ -902,7 +974,7 @@ export function TradeEditor({
                   reward leg three times the length of the risk leg is a fact
                   you see before you have finished reading it. Spans the grid
                   because it is about the fields either side of it. */}
-              <div className="col-span-2">
+              <div className="col-span-2 sm:col-span-3">
                 <LevelLadder
                   direction={direction}
                   entry={numOrNull(f.entryPrice ?? "")}
@@ -939,7 +1011,7 @@ export function TradeEditor({
                 />
               </div>
               {styles.length > 0 && (
-                <div className="col-span-2 space-y-1" data-testid="section-edit-style">
+                <div className="col-span-2 space-y-1 sm:col-span-3" data-testid="section-edit-style">
                   <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
                     Style
                   </label>
@@ -983,56 +1055,6 @@ export function TradeEditor({
             </div>
             </FormSection>
 
-            {/* Where the trade is in its life, editable at every step.
-                The entry card asks this when logging; nothing asked it again
-                afterwards, so an order that never filled could not be walked
-                back and a trade closed by mistake could not be reopened. The
-                three states are the whole life of a trade: waiting for a
-                fill, live, done. */}
-            <div data-testid="section-edit-lifecycle">
-              <p className="mb-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
-                State
-              </p>
-              <div className="flex flex-wrap gap-1.5">
-                {(
-                  [
-                    { id: "pending", label: "Waiting to fill", icon: Clock3 },
-                    { id: "open", label: "Open", icon: ArrowUpRight },
-                    { id: "closed", label: "Closed", icon: CheckCircle2 },
-                  ] as const
-                ).map(({ id, label, icon: Icon }) => (
-                  <Button
-                    key={id}
-                    type="button"
-                    size="sm"
-                    variant={lifecycle === id ? "default" : "outline"}
-                    className="h-7 gap-1.5 px-2 text-[11px]"
-                    onClick={() => setLifecycle(id)}
-                    data-testid={`button-edit-lifecycle-${id}`}
-                    aria-pressed={lifecycle === id}
-                  >
-                    <Icon className="h-3.5 w-3.5" />
-                    {label}
-                  </Button>
-                ))}
-              </div>
-              {lifecycle === "closed" && !outcomeStage(f.exitPrice ?? "", null).priced && (
-                <p className="mt-1.5 text-[11px] text-amber-500" data-testid="text-edit-needs-exit">
-                  Fill in the exit price below to close it.
-                </p>
-              )}
-              {lifecycle !== "closed" && outcomeStage(f.exitPrice ?? "", null).priced && (
-                <p className="mt-1.5 text-[11px] text-amber-500" data-testid="text-edit-has-exit">
-                  There is an exit price below — clear it to put this back to{" "}
-                  {lifecycle === "pending" ? "waiting" : "open"}.
-                </p>
-              )}
-            </div>
-
-            {/* Sits directly above the exit price, because that is the field
-                it writes and the one whose meaning it is disambiguating. */}
-            {trade && <AverageCloseSolver trade={trade} onUse={(v) => setF((p) => ({ ...p, exitPrice: v }))} />}
-
             {/* The same questions the entry card asks when logging a
                 completed trade — one component, so an open trade is never
                 asked to grade an exit it has not had. */}
@@ -1064,6 +1086,14 @@ export function TradeEditor({
               setHighlights={setHighlights}
               extraHighlights={knownHighlights(allTrades)}
               testPrefix="edit"
+              /* Sits inside the exit tile, directly under the price it
+                 writes and whose meaning it is disambiguating. */
+              exitExtra={
+                <AverageCloseSolver
+                  trade={trade}
+                  onUse={(v) => setF((p) => ({ ...p, exitPrice: v }))}
+                />
+              }
               timing={{
                 direction,
                 entryPrice: numOrNull(f.entryPrice ?? ""),
@@ -1082,13 +1112,30 @@ export function TradeEditor({
                 Always rendered, not only when fills exist — a section that
                 appears once you already have what it is for cannot be how you
                 get your first one. */}
-            <div data-testid="section-edit-fills">
-              <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
-                <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-foreground/80">
-                  <Layers className="h-3.5 w-3.5 text-muted-foreground" />
-                  Partials and adds
-                </span>
-                <div className="flex gap-1.5">
+            {/* The two buttons live in the header, so logging a partial is one
+                click whether or not the list below is folded away — a section
+                you have to open before you can use it is a section with a
+                step in front of it. */}
+            <FormSection
+              icon={Layers}
+              title="Partials and adds"
+              hint="scaling in and out"
+              testId="section-edit-fills"
+              tone="extra"
+              collapsible
+              /* Keyed on "has any at all", so logging the FIRST partial opens
+                 the tile that is about to have something in it. Without the
+                 remount, defaultOpen is read once at mount and the new row
+                 lands inside a box that stays shut. */
+              key={trade.fills.length > 0 ? "fills" : "no-fills"}
+              defaultOpen={trade.fills.length > 0}
+              summary={
+                trade.fills.length === 0
+                  ? "nothing scaled — one entry, one exit"
+                  : `${trade.fills.length} logged`
+              }
+              aside={
+                <>
                   <Button
                     type="button"
                     size="sm"
@@ -1111,15 +1158,16 @@ export function TradeEditor({
                     <Plus className="h-3 w-3 text-sky-400" />
                     Added size
                   </Button>
-                </div>
-              </div>
+                </>
+              }
+            >
               {trade.fills.length === 0 ? (
                 <p
                   className="rounded-md border border-dashed border-border/60 px-2.5 py-2 text-[11px] text-muted-foreground"
                   data-testid="text-edit-no-fills"
                 >
                   Nothing scaled — the whole position went on at {num(trade.entryPrice)} and came
-                  off in one piece. Log a partial or an add and the R above follows the blend.
+                  off in one piece. Log a partial or an add and the R below follows the blend.
                 </p>
               ) : (
                 <>
@@ -1204,14 +1252,17 @@ export function TradeEditor({
                 )}
                 </>
               )}
-            </div>
+            </FormSection>
 
-            {/* Inside the editor, not over it. The same form the live trade
-                view uses — one validator, one ledger, one shape of row — but a
-                partial logged while writing a trade up is part of writing it
-                up, and a window stacked on top made a small correction feel
-                like a separate errand while hiding the numbers it should be
-                read against. */}
+            {/* Outside the tile, not inside it: the two buttons that open this
+                sit in that tile's header and stay live while it is folded
+                away, so the form they open has to be somewhere that is always
+                rendered. Inside the editor, though, not over it — the same
+                form the live trade view uses, one validator, one ledger, one
+                shape of row, but a partial logged while writing a trade up is
+                part of writing it up, and a window stacked on top made a small
+                correction feel like a separate errand while hiding the numbers
+                it should be read against. */}
             {fillKind && (
               <FillForm
                 inline
@@ -1222,14 +1273,13 @@ export function TradeEditor({
             )}
 
 
-            {/* Fees explained where they're typed, since they change the R. */}
-
             <FormSection
               icon={NotebookPen}
               title="Why you took it"
               hint="the part only you can fill in"
               testId="section-edit-why"
-            />
+              tone="plan"
+            >
             <div className="space-y-1">
               <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
                 Rationale
@@ -1283,7 +1333,7 @@ export function TradeEditor({
               className="min-h-[60px] text-xs"
               data-testid="input-edit-notes"
             />
-
+            </FormSection>
 
             {/* The price path, here as well as on the trade's own page.
                 Editing is where the levels get corrected, and correcting a
@@ -1291,19 +1341,50 @@ export function TradeEditor({
                 a RUNNING trade too — the window simply ends at now — which is
                 the case that matters most, because that is the trade you can
                 still do something about. Renders nothing for anything Binance
-                cannot price. */}
-            <Suspense fallback={null}>
-        <TradeChart trade={trade} />
-      </Suspense>
+                cannot price.
+
+                Folded by default, and it is the single biggest thing folding
+                buys: three hundred pixels of picture between the fields and
+                the save button, on a surface whose whole complaint was its
+                height. The trade's own page shows it open — this is the form,
+                and here it is a reference you reach for rather than the thing
+                you came to look at. */}
+            <FormSection
+              icon={LineChart}
+              title="Price chart"
+              hint="the candles behind these numbers"
+              testId="section-edit-chart"
+              tone="extra"
+              collapsible
+              defaultOpen={false}
+              summary="open it to check a level against the candles"
+            >
+              <Suspense fallback={<div className="h-40 animate-pulse rounded-md bg-secondary/30" />}>
+                <TradeChart trade={trade} />
+              </Suspense>
+            </FormSection>
 
             {/* Attach here too, not only from the read-only detail view: Edit
                 is where you reach to change a trade, and a screenshot added to
                 a trade closed weeks ago is a change like any other. Images save
                 on their own, so they survive whether or not "Save changes" is
-                pressed. */}
-            <div className="border-t border-border/60 pt-3">
+                pressed — which is also why folding this away is safe. */}
+            <FormSection
+              icon={ImageIcon}
+              title="Screenshots"
+              hint="saved as you attach them, not on save"
+              testId="section-edit-images"
+              tone="extra"
+              collapsible
+              defaultOpen={false}
+              summary={
+                imageCount === 0
+                  ? "none attached"
+                  : `${imageCount} attached`
+              }
+            >
               <TradeImageGallery tradeId={trade.id} />
-            </div>
+            </FormSection>
 
             {/*
                   Pinned to the BOTTOM, and last in the form.

@@ -7,7 +7,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Camera, Clock, Loader2, X, type LucideIcon } from "lucide-react";
+import { Camera, ChevronDown, Clock, Loader2, X, type LucideIcon } from "lucide-react";
 
 /* ============================== helpers ============================== */
 
@@ -296,20 +296,53 @@ export function Dropzone({
 }
 
 /**
- * A titled band across a form.
+ * A titled band across a form — as a tile, not a rule.
  *
  * A trade write-up is four different questions wearing the same clothes — what
  * you planned, how it ended, what price actually did, and what you make of it
  * — and a single unbroken column of inputs makes them all look like one long
  * chore. The headings are there so you know which question you are answering
  * and can stop when that question is done.
+ *
+ * A heading alone was not enough. The editor is a very tall form, and a thin
+ * rule between runs of identical grey inputs still scrolls past as one
+ * undifferentiated column: the eye has nothing to grab. So each question is a
+ * box with its own edge and its own colour — the exit sky, the way the exit
+ * level is drawn everywhere else in the app; what price did amber; your read
+ * violet — and you can tell at a glance which part of the write-up is on
+ * screen without reading a word.
+ *
+ * Collapsing exists for the same reason and matters more: a form you have to
+ * scroll for a minute to reach the save button of is a form you stop filling
+ * in. A closed tile is never an empty one — it says what is inside it — so
+ * folding a section away hides its inputs, not its contents.
  */
+export type SectionTone = "plan" | "exit" | "path" | "read" | "extra";
+
+const TONE: Record<SectionTone, { badge: string; edge: string; head: string }> = {
+  /* The plan is what YOU drew, so it borrows the entry level's neutral. */
+  plan: { badge: "bg-foreground/10 text-foreground/75", edge: "border-card-border", head: "bg-secondary/30" },
+  exit: { badge: "bg-sky-500/15 text-sky-400", edge: "border-sky-500/25", head: "bg-sky-500/[0.06]" },
+  path: { badge: "bg-amber-500/15 text-amber-400", edge: "border-amber-500/25", head: "bg-amber-500/[0.06]" },
+  read: { badge: "bg-violet-500/15 text-violet-400", edge: "border-violet-500/25", head: "bg-violet-500/[0.06]" },
+  /* Attachments, fills, the chart: things hung off the trade rather than
+     questions about it. Deliberately quiet so the four questions stay louder. */
+  extra: { badge: "bg-secondary text-muted-foreground", edge: "border-card-border", head: "bg-secondary/20" },
+};
+
 export function FormSection({
   icon: Icon,
   title,
   hint,
   children,
   testId,
+  tone = "plan",
+  collapsible = false,
+  defaultOpen = true,
+  /** Shown in the header in place of the hint while folded away. */
+  summary,
+  /** Controls that belong to the section but stay reachable while it is shut. */
+  aside,
 }: {
   icon: LucideIcon;
   title: string;
@@ -317,24 +350,63 @@ export function FormSection({
   /** Optional: a heading can also just introduce the run of fields below it. */
   children?: React.ReactNode;
   testId?: string;
+  tone?: SectionTone;
+  collapsible?: boolean;
+  defaultOpen?: boolean;
+  summary?: React.ReactNode;
+  aside?: React.ReactNode;
 }) {
-  return (
-    <section className="space-y-3" data-testid={testId}>
+  const [open, setOpen] = useState(defaultOpen);
+  const t = TONE[tone];
+  const shut = collapsible && !open;
+
+  const heading = (
+    <>
+      <span
+        className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md ${t.badge}`}
+      >
+        <Icon className="h-3.5 w-3.5" />
+      </span>
+      <span className="text-sm font-semibold tracking-tight">{title}</span>
       {/*
-        A heading has to be findable while scrolling past it, and a thin grey
-        rule reading THE SETUP was not: it looked like the label of the field
-        under it rather than the top of a section. The icon gets a tinted
-        badge and the title gets the size of a heading, so the four questions
-        are four landmarks instead of four more captions.
+        While open, the hint says what the question is for. While shut, the
+        summary says what the answer currently is — which is the only thing
+        that makes folding a section safe rather than a way to forget it.
       */}
-      <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 border-b border-border/60 pb-2">
-        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-primary/10">
-          <Icon className="h-3.5 w-3.5 text-primary" />
-        </span>
-        <span className="text-sm font-semibold tracking-tight">{title}</span>
-        {hint && <span className="text-[10px] text-muted-foreground">{hint}</span>}
+      <span className="min-w-0 truncate text-[10px] text-muted-foreground">
+        {shut ? (summary ?? hint) : hint}
+      </span>
+    </>
+  );
+
+  return (
+    <section
+      className={`overflow-hidden rounded-xl border ${t.edge} bg-card/30`}
+      data-testid={testId}
+      data-open={collapsible ? (open ? "true" : "false") : undefined}
+    >
+      <div className={`flex items-center gap-x-2.5 px-3 py-2 ${t.head}`}>
+        {collapsible ? (
+          <button
+            type="button"
+            onClick={() => setOpen((o) => !o)}
+            aria-expanded={open}
+            data-testid={testId ? `${testId}-toggle` : undefined}
+            className="flex min-w-0 flex-1 items-center gap-x-2.5 text-left"
+          >
+            {heading}
+            <ChevronDown
+              className={`ml-auto h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform ${
+                open ? "rotate-180" : ""
+              }`}
+            />
+          </button>
+        ) : (
+          <div className="flex min-w-0 flex-1 items-center gap-x-2.5">{heading}</div>
+        )}
+        {aside && <div className="flex shrink-0 items-center gap-1.5">{aside}</div>}
       </div>
-      {children}
+      {children && !shut && <div className="space-y-3 px-3 pb-3 pt-3">{children}</div>}
     </section>
   );
 }
