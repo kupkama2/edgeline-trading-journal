@@ -33,6 +33,7 @@ import { AccountPicker, SetupTagPicker } from "@/components/trade-pickers";
 import { TradeOutcomeFields } from "@/components/trade-outcome";
 import { normalizeSetupTags } from "@shared/setups";
 import { splitSourceFromTags } from "@shared/sources";
+import { conflictWarning, directionWarning, readDirection } from "@shared/direction";
 import { SymbolPicker } from "@/components/symbol-picker";
 import { knownHighlights, serializeHighlights } from "@shared/highlights";
 import { suggestSize } from "@shared/sizing";
@@ -56,6 +57,22 @@ type SetupForm = z.input<typeof setupFormSchema>;
 
 const RISK_BUDGET_KEY = "edgeline.riskBudget";
 const ACCOUNT_KEY = "edgeline.lastAccount";
+
+/**
+ * An empty or half-typed box is not a price.
+ *
+ * Number("") is 0, and a zero here is a real level rather than an absent one.
+ * Coercing would read a cleared stop as a stop AT zero — which the ladder
+ * draws as a plan collapsed onto one end of its axis, and which the direction
+ * reader would take as a confident vote for "long". Both at exactly the moment
+ * the field is being edited.
+ */
+const priceOrNull = (v: unknown): number | null => {
+  const t = String(v ?? "").trim();
+  if (t === "") return null;
+  const n = Number(t);
+  return isFinite(n) ? n : null;
+};
 
 export function NewTradeCard({
   onOrdersDetected,
@@ -211,6 +228,37 @@ export function NewTradeCard({
   });
 
   const v = form.watch();
+
+  /*
+   * Long or short, read off the levels.
+   *
+   * It is not really a separate decision: a stop under the entry and a target
+   * over it IS a long, and there is no other trade those three prices
+   * describe. Asking for the direction as well is asking the same question
+   * twice, and the second answer is the one that gets left on whatever it
+   * happened to default to — which then flips the sign of every R the trade
+   * ever reports.
+   *
+   * Inferred only while the buttons are untouched. The moment somebody picks
+   * one they own it, and a form that keeps changing the answer back is a form
+   * you cannot use; from then on a disagreement is said out loud instead.
+   */
+  const [directionPicked, setDirectionPicked] = useState(false);
+  const levelRead = useMemo(
+    () =>
+      readDirection(priceOrNull(v.entryPrice), priceOrNull(v.initialStop), priceOrNull(v.initialTarget)),
+    [v.entryPrice, v.initialStop, v.initialTarget],
+  );
+  useEffect(() => {
+    if (directionPicked || !levelRead.implied) return;
+    if (form.getValues("direction") === levelRead.implied) return;
+    form.setValue("direction", levelRead.implied as any, { shouldValidate: false });
+  }, [levelRead.implied, directionPicked, form]);
+  const directionMismatch = directionWarning(
+    v.direction === "short" ? "short" : "long",
+    levelRead,
+  );
+  const levelConflict = conflictWarning(levelRead);
 
   /*
    * What one contract of this symbol is worth, resolved exactly as the server
@@ -376,7 +424,17 @@ export function NewTradeCard({
         }
       }
       if (r.symbol) form.setValue("symbol", r.symbol);
-      if (r.direction) form.setValue("direction", r.direction);
+      if (r.direction) {
+        /*
+         * A direction read off the chart counts as answered, so the level
+         * reader stands down rather than overwriting it a tick later. It is at
+         * least as good a source as the levels are — and where the two
+         * disagree that is a suspect parse worth a banner, not something to
+         * resolve silently in favour of whichever ran last.
+         */
+        setDirectionPicked(true);
+        form.setValue("direction", r.direction);
+      }
       if (r.entryPrice != null) form.setValue("entryPrice", r.entryPrice as any);
       if (r.initialStop != null) form.setValue("initialStop", r.initialStop as any);
       if (r.initialTarget != null) form.setValue("initialTarget", r.initialTarget as any);
@@ -576,6 +634,9 @@ export function NewTradeCard({
     // The account survives the reset on purpose — next trade, same account.
     store.set(ACCOUNT_KEY, account.trim());
     setPb({ setupName: "", stopLogic: "", targetLogic: "", confidence: null, standAside: "" });
+    // A new trade is a new blank. Left set, one manual pick would switch the
+    // inference off for every trade logged afterwards in the same session.
+    setDirectionPicked(false);
     form.reset({
       symbol: "",
       direction: "long",
@@ -590,20 +651,6 @@ export function NewTradeCard({
     setImage(null);
     setParsed(false);
   });
-
-  /**
-   * An empty box is not a price of zero.
-   *
-   * Number("") is 0, and a ladder handed a zero entry draws a plan that does
-   * not exist — the whole graphic collapses onto one end of the axis the
-   * moment a field is cleared, which is exactly when it is being edited.
-   */
-  const priceOrNull = (v: unknown) => {
-    const s = String(v ?? "").trim();
-    if (!s) return null;
-    const n = Number(s);
-    return Number.isFinite(n) ? n : null;
-  };
 
   /** A price field that says what KIND of price it is, in colour and mark. */
   const levelField = (name: keyof SetupForm, kind: LevelKind, label?: string) => (
@@ -989,9 +1036,24 @@ export function NewTradeCard({
               name="direction"
               render={({ field }) => (
                 <FormItem className="min-w-0 space-y-1">
-                  <FormLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                    Direction
-                  </FormLabel>
+                  <div className="flex items-center justify-between gap-2">
+                    <FormLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                      Direction
+                    </FormLabel>
+                    {/* Says WHY the buttons moved on their own. A control that
+                        changes without being touched and does not account for
+                        itself reads as a glitch, and the trader stops trusting
+                        the one field whose sign flips every R in the trade. */}
+                    {!directionPicked && levelRead.implied && (
+                      <span
+                        className="text-[9px] uppercase tracking-wider text-muted-foreground/70"
+                        title={`Read from your ${levelRead.from.join(" and ")}`}
+                        data-testid="text-direction-auto"
+                      >
+                        from your {levelRead.from.join(" + ")}
+                      </span>
+                    )}
+                  </div>
                   <div className="flex gap-1.5">
                     {(["long", "short"] as const).map((d) => (
                       <Button
@@ -1006,7 +1068,10 @@ export function NewTradeCard({
                               : "bg-primary text-primary-foreground"
                             : ""
                         }`}
-                        onClick={() => field.onChange(d)}
+                        onClick={() => {
+                          setDirectionPicked(true);
+                          field.onChange(d);
+                        }}
                         data-testid={`button-direction-${d}`}
                       >
                         {d === "long" ? (
@@ -1307,11 +1372,35 @@ export function NewTradeCard({
               )}
             />
 
+            {/*
+                The levels and the direction disagreeing.
+
+                Two different faults with two different sentences, because the
+                advice differs. A stated direction against one readable level
+                is "your stop is on the wrong side" — actionable. Both levels
+                on the same side of the entry is "one of these three prices is
+                a typo", and nothing here can say which, so pointing at the
+                stop would be a confident wrong answer.
+
+                This is the one field whose sign flips every R the trade will
+                ever report, and getting it wrong does not look wrong on the
+                row — it looks like a different trade that happened to you.
+            */}
+            {(levelConflict || directionMismatch) && (
+              <div
+                className="col-span-2 flex items-start gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/5 px-2.5 py-1.5 text-[11px] leading-snug text-amber-500"
+                data-testid="warning-direction"
+              >
+                <Ban className="mt-px h-3 w-3 shrink-0" />
+                <span>{levelConflict ?? directionMismatch}</span>
+              </div>
+            )}
+
             {/* The hour-of-day stats prove where the money leaks; the window
                 turns that into a nudge at the moment of the decision. A
                 warning, not a lock: outside-hours trades exist, but they
                 should never happen absent-mindedly. */}
-            {(() => {
+          {(() => {
               const style = styles.find((s) => s.id === styleId);
               if (!style) return null;
               const when = v.entryTime ? new Date(v.entryTime) : new Date();
