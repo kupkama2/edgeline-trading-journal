@@ -424,7 +424,17 @@ export function NewTradeCard({
         }
       }
       if (r.symbol) form.setValue("symbol", r.symbol);
-      if (r.direction) form.setValue("direction", r.direction);
+      if (r.direction) {
+        /*
+         * A direction read off the chart counts as answered, so the level
+         * reader stands down rather than overwriting it a tick later. It is at
+         * least as good a source as the levels are — and where the two
+         * disagree that is a suspect parse worth a banner, not something to
+         * resolve silently in favour of whichever ran last.
+         */
+        setDirectionPicked(true);
+        form.setValue("direction", r.direction);
+      }
       if (r.entryPrice != null) form.setValue("entryPrice", r.entryPrice as any);
       if (r.initialStop != null) form.setValue("initialStop", r.initialStop as any);
       if (r.initialTarget != null) form.setValue("initialTarget", r.initialTarget as any);
@@ -624,6 +634,9 @@ export function NewTradeCard({
     // The account survives the reset on purpose — next trade, same account.
     store.set(ACCOUNT_KEY, account.trim());
     setPb({ setupName: "", stopLogic: "", targetLogic: "", confidence: null, standAside: "" });
+    // A new trade is a new blank. Left set, one manual pick would switch the
+    // inference off for every trade logged afterwards in the same session.
+    setDirectionPicked(false);
     form.reset({
       symbol: "",
       direction: "long",
