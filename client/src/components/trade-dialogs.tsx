@@ -15,7 +15,7 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowUpRight, CheckCircle2, Clock3, Loader2, Minus, Pencil, Plus, Trash2 } from "lucide-react";
+import { ArrowUpRight, Ban, CheckCircle2, Clock3, Loader2, Minus, Pencil, Plus, Trash2 } from "lucide-react";
 import { useAccountSettings, useMistakeTags, useUpdateTrade, useAddTradeImage, archiveDataUrl, parseScreenshot, fileToDownscaledDataUrl,
   useAddFill,
   useTradeImages,
@@ -25,6 +25,7 @@ import { knownHighlights, parseHighlights, serializeHighlights } from "@shared/h
 import { AccountPicker, HighlightPicker, SetupTagPicker } from "@/components/trade-pickers";
 import { normalizeSetupTags } from "@shared/setups";
 import { splitSourceFromTags } from "@shared/sources";
+import { conflictWarning, directionWarning, readDirection } from "@shared/direction";
 import { useDeleteFill, useStyles, useTrades } from "@/lib/data";
 import { styleColor } from "@/lib/style-filter";
 import { collapseFills, positionLedger } from "@shared/fills";
@@ -434,6 +435,15 @@ export function TradeEditor({
     setF((p) => ({ ...p, [k]: e.target.value }));
 
   const numOrNull = (v: string) => (v.trim() === "" || !isFinite(Number(v)) ? null : Number(v));
+
+  /* Read only to be reported. See the banner below for why it never writes. */
+  const levelRead = readDirection(
+    numOrNull(f.entryPrice ?? ""),
+    numOrNull(f.initialStop ?? ""),
+    numOrNull(f.initialTarget ?? ""),
+  );
+  const directionMismatch = directionWarning(direction, levelRead);
+  const levelConflict = conflictWarning(levelRead);
 
   const previewMetrics = useMemo(() => {
     if (!trade) return null;
@@ -970,6 +980,31 @@ export function TradeEditor({
                   />
                 </div>
               ))}
+              {/*
+                  The levels disagreeing with the direction.
+
+                  A warning here, never a correction. On a NEW trade the
+                  direction is a blank waiting to be filled and reading it off
+                  the levels is help; on a saved one it is an answer somebody
+                  gave, and silently rewriting it while a stop is half-typed
+                  would change the sign of every R on a trade that already has
+                  statistics built on it.
+
+                  Which is exactly why it earns a banner: this is the field
+                  whose sign flips the whole trade, and a stop corrected to the
+                  wrong side of the entry turns a loser into a winner without
+                  looking wrong on the row.
+              */}
+              {(levelConflict || directionMismatch) && (
+                <div
+                  className="col-span-2 flex items-start gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/5 px-2.5 py-1.5 text-[11px] leading-snug text-amber-500 sm:col-span-3"
+                  data-testid="warning-edit-direction"
+                >
+                  <Ban className="mt-px h-3 w-3 shrink-0" />
+                  <span>{levelConflict ?? directionMismatch}</span>
+                </div>
+              )}
+
               {/* The plan, to scale. Two prices are two numbers to subtract; a
                   reward leg three times the length of the risk leg is a fact
                   you see before you have finished reading it. Spans the grid
