@@ -17,14 +17,42 @@ import { computeProgression, type Progression } from "@shared/xp";
  */
 
 /** Account-level on purpose: discipline doesn't reset when you switch books. */
-export function useProgression(): Progression {
-  const { data: trades = [] } = useTrades();
-  const { data: notes = [] } = useDailyNotes();
-  const { data: reviews = [] } = useWeeklyReviews();
+export function useProgression(): Progression & { ready: boolean } {
+  const trades = useTrades();
+  const notes = useDailyNotes();
+  const reviews = useWeeklyReviews();
+  /*
+   * "Ready" means all three queries have answered at least once. Until then
+   * the progression is computed over empty arrays and is not a baseline of
+   * anything — it is the shape of a journal with nothing in it.
+   */
+  const ready = trades.isFetched && notes.isFetched && reviews.isFetched;
   return useMemo(
-    () => computeProgression(trades, notes, reviews),
-    [trades, notes, reviews],
+    () => ({
+      ...computeProgression(trades.data ?? [], notes.data ?? [], reviews.data ?? []),
+      ready,
+    }),
+    [trades.data, notes.data, reviews.data, ready],
   );
+}
+
+/**
+ * The toast's line-by-line, with repeats folded.
+ *
+ * Four trades earning the same +5 is one fact, not four lines of the same
+ * text — and the cap of four lines was being spent entirely on copies.
+ */
+export function itemise(events: { label: string; points: number }[]): string {
+  const seen = new Map<string, { points: number; n: number }>();
+  for (const e of events) {
+    const cur = seen.get(e.label);
+    if (cur) cur.n += 1;
+    else seen.set(e.label, { points: e.points, n: 1 });
+  }
+  return Array.from(seen.entries())
+    .slice(0, 4)
+    .map(([label, { points, n }]) => `${label} +${points}${n > 1 ? ` ×${n}` : ""}`)
+    .join(" · ");
 }
 
 const SEEN_KEY = "edgeline.xp.seen";
@@ -43,10 +71,19 @@ export function XpToaster() {
   const prev = useRef<{ ids: Set<string>; level: number } | null>(null);
 
   useEffect(() => {
+    /*
+     * Not before the data is in. The first render happens while the queries
+     * are still loading, so "the backlog" it absorbed was an empty list — and
+     * the moment the trades arrived, every event in the journal was new
+     * against it. That fired a level-up toast on every single page load, with
+     * a level jump from 1 to wherever the account actually is, and the four
+     * lines under it were four copies of whatever event came first.
+     */
+    if (!p.ready) return;
     const ids = new Set(p.events.map((e) => e.id));
     if (!prev.current) {
-      // First render absorbs the backlog silently — opening the app after a
-      // week of entries must not detonate a pile of toasts.
+      // First render WITH data absorbs the backlog silently — opening the app
+      // after a week of entries must not detonate a pile of toasts.
       prev.current = { ids, level: p.level.level };
       store.set(SEEN_KEY, String(p.level.totalXp));
       return;
@@ -61,10 +98,7 @@ export function XpToaster() {
     if (!fresh.length) return;
 
     const gained = fresh.reduce((a, e) => a + e.points, 0);
-    const itemised = fresh
-      .slice(0, 4)
-      .map((e) => `${e.label} +${e.points}`)
-      .join(" · ");
+    const itemised = itemise(fresh);
     const clean = fresh.some((e) => e.id.endsWith(":clean"));
 
     const fire = (kind: "level" | "clean") => {
@@ -89,7 +123,7 @@ export function XpToaster() {
       toast({ title: `+${gained} XP`, description: itemised });
     }
     store.set(SEEN_KEY, String(p.level.totalXp));
-  }, [p.events, p.level.totalXp, p.level.level, p.level.title, toast]);
+  }, [p.ready, p.events, p.level.totalXp, p.level.level, p.level.title, toast]);
 
   if (!burst) return null;
   return (
