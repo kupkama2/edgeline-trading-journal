@@ -29,6 +29,7 @@ import { unzipSync, strFromU8 } from "fflate";
 import { fetch as undiciFetch } from "undici";
 import type { Candle, Market } from "@shared/binance";
 import { egressFor } from "./egress";
+import { settleAll } from "./pool";
 
 /** Overridable so the whole path can be driven against a local stub. */
 const ARCHIVE_BASE = (process.env.BINANCE_ARCHIVE_BASE || "https://data.binance.vision").replace(
@@ -208,16 +209,22 @@ export async function archiveCandles(
   let coveredTo = 0;
   let stoppedBecause: string | undefined;
 
-  for (const piece of pieces) {
-    try {
-      candles.push(...(await fetchPiece(piece.url)));
-      coveredTo = Math.min(piece.through, endMs);
-    } catch (err: any) {
-      // Today's file simply does not exist yet, which is the ordinary case and
-      // not an error — but it ends the run either way.
-      stoppedBecause = String(err?.message ?? err);
+  /*
+   * Fetched a few at a time, read in order. The run still ends at the first
+   * file that is not there — today's, usually, which is the ordinary case
+   * and not an error — so the bars never skip a hole; the pieces past it
+   * were merely downloaded for nothing, which costs a little bandwidth and
+   * saves the sequential version's fifteen-second wait on a month of days.
+   */
+  const fetched = await settleAll(pieces, 6, (piece) => fetchPiece(piece.url));
+  for (let i = 0; i < pieces.length; i++) {
+    const r = fetched[i];
+    if (r.status === "rejected") {
+      stoppedBecause = String((r.reason as any)?.message ?? r.reason);
       break;
     }
+    candles.push(...r.value);
+    coveredTo = Math.min(pieces[i].through, endMs);
   }
 
   return {

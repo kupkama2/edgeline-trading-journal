@@ -21,6 +21,7 @@
 import { fetch as undiciFetch } from "undici";
 import { egressFor } from "./egress";
 import { archiveCandles } from "./binance-archive";
+import { fetchListedPerps, listingStatus, type ListingStatus } from "./binance-listing";
 import type { BinanceSymbol, Candle, Market } from "@shared/binance";
 
 /**
@@ -92,28 +93,71 @@ export interface FeedStatus {
   catalogueError: string | null;
   /** When the historical archive last answered — the perp path from a US host. */
   archiveOkAt: string | null;
+  /**
+   * Where the perp book came from last time: the futures API, the archive
+   * bucket's folder listing when the API refused, or nowhere.
+   */
+  futuresSource: "fapi" | "listing" | "none";
+  /** The bucket listing's own record: names fetched, census run, errors. */
+  listing: ListingStatus;
 }
-const status: FeedStatus = {
+const status: Omit<FeedStatus, "listing"> = {
   lastError: null,
   lastTriedAt: null,
   lastOkAt: null,
   books: { futures: 0, spot: 0 },
   catalogueError: null,
   archiveOkAt: null,
+  futuresSource: "none",
 };
-export const feedStatus = (): FeedStatus => ({ ...status });
+export const feedStatus = (): FeedStatus => ({ ...status, listing: listingStatus() });
+
+/** Perp symbols the last catalogue fetch took from the bucket listing. */
+let listed: string[] = [];
+export const lastListed = (): string[] => listed.slice();
+
+/**
+ * Hosts that answered 451, and when.
+ *
+ * A geo-block does not lift between one request and the next, and asking
+ * three futures hosts in turn before every archive read was costing every
+ * chart a round of refusals it could have predicted. So a 451 is remembered
+ * per host and book for a few hours, and the archive is asked straight away.
+ * Remembered per BOOK as well as host because a test stub serves both books
+ * from one host, and so, one day, might a mirror.
+ *
+ * `forgetRefusals` is for the status endpoint's ?refresh=1 — the moment
+ * somebody has changed something and wants the question asked again.
+ */
+const REFUSAL_TTL_MS = 6 * 60 * 60 * 1000;
+const refusals = new Map<string, { at: number; error: string }>();
+const bookOf = (path: string) => (path.startsWith("/fapi") ? "/fapi" : "/api");
+export function forgetRefusals(): void {
+  refusals.clear();
+}
 
 /** Try each host in turn; the last failure is what gets reported. */
 async function getAny(hosts: string[], path: string): Promise<any> {
   let failure: unknown;
   for (const host of hosts) {
+    const key = host + bookOf(path);
+    const held = refusals.get(key);
+    if (held && Date.now() - held.at < REFUSAL_TTL_MS) {
+      failure = new Error(held.error);
+      continue;
+    }
     try {
       const out = await get(host, path);
       status.lastOkAt = new Date().toISOString();
       status.lastError = null;
+      refusals.delete(key);
       return out;
-    } catch (err) {
+    } catch (err: any) {
       failure = err;
+      const msg = String(err?.message ?? err);
+      if (/HTTP 451\b/.test(msg)) {
+        refusals.set(key, { at: Date.now(), error: `${msg} (remembered; not asked again for a few hours)` });
+      }
     }
   }
   throw failure ?? new Error("no hosts configured");
@@ -161,6 +205,8 @@ export async function fetchCatalogue(): Promise<BinanceSymbol[]> {
   ]);
 
   const out: BinanceSymbol[] = [];
+  listed = [];
+  status.futuresSource = "none";
   if (futures.status === "fulfilled") {
     for (const s of futures.value?.symbols ?? []) {
       // Quarterlies and anything not a straight perp are skipped.
@@ -172,6 +218,23 @@ export async function fetchCatalogue(): Promise<BinanceSymbol[]> {
         status: String(s.status),
         market: "futures",
       });
+    }
+    status.futuresSource = "fapi";
+  } else {
+    /*
+     * The API refused the perp book — 451 from a US host, every time. The
+     * archive bucket lists the same perps and refuses nobody, so the names
+     * come from there instead, provisionally TRADING until the liveness
+     * census (the caller runs it, in the background) says otherwise. A
+     * listing that fails too leaves the book empty, which is what it was.
+     */
+    try {
+      const rows = await fetchListedPerps();
+      out.push(...rows);
+      listed = rows.map((r) => r.symbol);
+      status.futuresSource = "listing";
+    } catch {
+      // listingStatus() carries the reason; the books count says the rest.
     }
   }
   if (spot.status === "fulfilled") {

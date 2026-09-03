@@ -35,6 +35,7 @@ import { normalizeSetupTags } from "@shared/setups";
 import { splitSourceFromTags } from "@shared/sources";
 import { conflictWarning, directionWarning, readDirection } from "@shared/direction";
 import { SymbolPicker } from "@/components/symbol-picker";
+import { venueOfAccount } from "@shared/hyperliquid";
 import { knownHighlights, serializeHighlights } from "@shared/highlights";
 import { suggestSize } from "@shared/sizing";
 import { inSessionWindow, windowLabel } from "@shared/session";
@@ -1025,6 +1026,7 @@ export function NewTradeCard({
                       value={(field.value as string) ?? ""}
                       onChange={field.onChange}
                       trades={allTrades}
+                      venue={venueOfAccount(account)}
                       onBlur={field.onBlur}
                       name={field.name}
                       placeholder="NQ, MBTZ6, SOL…"

@@ -561,6 +561,22 @@ export const binanceSymbols = pgTable("binance_symbols", {
 
 export type BinanceSymbolRow = typeof binanceSymbols.$inferSelect;
 
+/**
+ * Hyperliquid's perp universe, cached from the venue.
+ *
+ * One row per coin — Hyperliquid has no spot pair to tell apart from the
+ * perp, so the coin IS the instrument. Delisted coins stay, flagged, because
+ * an old trade on one still has to be recognised as a Hyperliquid perp.
+ */
+export const hyperliquidSymbols = pgTable("hyperliquid_symbols", {
+  /** As the venue writes it: "BTC", "kPEPE". */
+  name: text("name").primaryKey(),
+  maxLeverage: integer("max_leverage"),
+  delisted: boolean("delisted").notNull().default(false),
+  fetchedAt: text("fetched_at").notNull(),
+});
+export type HyperliquidSymbolRow = typeof hyperliquidSymbols.$inferSelect;
+
 /* ========================== account settings ======================== */
 
 /**

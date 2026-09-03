@@ -26,6 +26,9 @@ describe("what the feed says when it refuses", () => {
     const port = (srv.address() as any).port;
     process.env.BINANCE_BASE = `http://127.0.0.1:${port}`;
     process.env.BINANCE_FUTURES_BASE = `http://127.0.0.1:${port}`;
+    // The bucket listing too, or a refused API would go and read the real
+    // bucket — and succeed, which is not what this test is about.
+    process.env.BINANCE_LISTING_BASE = `http://127.0.0.1:${port}`;
 
     const { fetchCatalogue, feedStatus } = await import("../server/binance");
     await expect(fetchCatalogue()).rejects.toThrow();

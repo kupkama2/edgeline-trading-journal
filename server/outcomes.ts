@@ -32,7 +32,8 @@ import {
 } from "@shared/binance";
 import { outcomeUnknown, pathIncomplete } from "@shared/aftermath";
 import type { TradeWithTags } from "@shared/schema";
-import { fetchCandles, fetchCatalogue, intervalFor, readCandles } from "./binance";
+import { fetchCandles, fetchCatalogue, intervalFor, lastListed, readCandles } from "./binance";
+import { probeListed } from "./binance-listing";
 import { catalogue, collapsePairSymbolsOnce, storageFor } from "./storage";
 
 /** How stale the pair list may get. Listings are daily news at most. */
@@ -131,8 +132,32 @@ export interface CheckSummary {
  */
 let backfilled = false;
 
+/**
+ * How the liveness census runs after a listing-sourced refresh.
+ *
+ * In the background by default — six hundred folder probes are nobody's
+ * chart to wait on. Awaited when a test wants to see the verdict land, and
+ * skipped under the test runner otherwise, so a suite whose stub answered
+ * the listing does not spend a minute probing folders it never stubbed.
+ */
+export type Census = "background" | "await" | "skip";
+const defaultCensus = (): Census => (process.env.NODE_ENV === "test" ? "skip" : "background");
+
+/** Ask the bucket which listed perps still publish, and demote the rest. */
+async function runCensus(symbols: string[]): Promise<void> {
+  try {
+    const { dead } = await probeListed(symbols);
+    if (dead.length) await catalogue.markDelisted(dead);
+  } catch {
+    // A failed census leaves every row as it was: provisional, not wrong.
+  }
+}
+
 /** Refresh the cached pair list when it is missing or a day old. */
-export async function ensureCatalogue(force = false): Promise<BinanceSymbol[]> {
+export async function ensureCatalogue(
+  force = false,
+  census: Census = defaultCensus(),
+): Promise<BinanceSymbol[]> {
   const last = await catalogue.lastFetchedAt();
   const partial = (await catalogue.list()).every((r) => r.market !== "futures");
   const ttl = partial ? PARTIAL_TTL_MS : CATALOGUE_TTL_MS;
@@ -141,6 +166,11 @@ export async function ensureCatalogue(force = false): Promise<BinanceSymbol[]> {
     try {
       const rows = await fetchCatalogue();
       if (rows.length) await catalogue.replace(rows);
+      const listed = lastListed();
+      if (rows.length && listed.length && census !== "skip") {
+        const run = runCensus(listed);
+        if (census === "await") await run;
+      }
     } catch {
       // A failed refresh falls back to whatever is cached. An out-of-date
       // catalogue costs at worst a coin listed this week going unmatched,

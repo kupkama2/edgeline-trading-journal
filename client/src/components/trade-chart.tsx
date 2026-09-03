@@ -65,6 +65,10 @@ function fallbackCopy(text: string): boolean {
 
 const HEIGHT = 300;
 
+/** A day, the way the chips say it: "2 Sep". */
+const dayOf = (ms: number) =>
+  new Date(ms).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+
 /** What the timeframe row offers. "auto" lets the server fit the hold. */
 const TIMEFRAMES = [
   { id: "auto", label: "Auto" },
@@ -226,9 +230,23 @@ export function TradeChart({ trade }: { trade: TradeWithTags }) {
         {/* The perp, but out of the published files rather than the live book.
             Worth saying: it is the right instrument, and it stops a day or so
             short of now, because the archive publishes a day at a time. */}
-        {data.books?.fallback && (
+        {data.source === "archive" && (
           <span className="text-muted-foreground" data-testid="chart-from-archive">
             from the file archive
+          </span>
+        )}
+        {/* The archive publishes a day at a time, so its last day is usually
+            missing. Spot fills that gap when the coin has a spot pair — a
+            labelled approximation within a fraction of a percent, and only
+            for the bars after the archive stopped. */}
+        {data.tail && (
+          <span className="text-muted-foreground" data-testid="chart-spot-tail">
+            spot after {dayOf(data.tail.from)}
+          </span>
+        )}
+        {data.archiveShort && !data.tail && data.coveredTo != null && (
+          <span className="text-amber-500" data-testid="chart-archive-short">
+            archive ends {dayOf(data.coveredTo)}
           </span>
         )}
         {tf === "auto" && data.interval && <span>{data.interval} candles</span>}
