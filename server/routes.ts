@@ -34,6 +34,7 @@ import {
   insertTradeSchema,
   updateTradeSchema,
   missingRisk,
+  lifecycleConflict,
   insertMistakeTagSchema,
   insertTradingStyleSchema,
   insertWeeklyReviewSchema,
@@ -510,6 +511,20 @@ export async function registerRoutes(
         message:
           "A trade needs a stop and a target once it is open — 1R is measured entry-to-stop.",
         issues: missing.map((f) => ({ path: ["trade", f], message: `${f} is required` })),
+      });
+    }
+    /*
+     * Same shape, same reason: a PATCH carries only what changed, so the
+     * merged row is the only thing that can be checked. Without this a
+     * {status:"closed"} with no exit — or an exit price on a trade marked
+     * open — was accepted, and the row silently fell out of every statistic
+     * while still showing on the journal.
+     */
+    const conflict = lifecycleConflict(merged);
+    if (conflict.length) {
+      return res.status(400).json({
+        message: conflict[0].message,
+        issues: conflict.map((c) => ({ path: ["trade", c.field], message: c.message })),
       });
     }
 

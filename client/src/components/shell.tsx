@@ -154,11 +154,12 @@ export function Shell({ children }: { children: React.ReactNode }) {
     <div className="min-h-screen bg-background text-foreground">
       <header className="sticky top-0 z-40 border-b border-border/70 bg-background/85 backdrop-blur supports-[backdrop-filter]:bg-background/70">
         <div className="mx-auto flex h-14 max-w-6xl items-center gap-3 px-4 sm:px-6">
-          <Link href="/">
-            <a className="flex items-center gap-2 shrink-0" data-testid="link-home">
-              <Logo className="h-6 w-6 text-primary" />
-              <span className="text-sm font-bold tracking-tight">Edgeline</span>
-            </a>
+          {/* wouter 3 renders its own <a>; wrapping another one nested two
+              anchors and React warned on every page. Attributes go on the
+              Link and it passes them through. */}
+          <Link href="/" className="flex items-center gap-2 shrink-0" data-testid="link-home">
+            <Logo className="h-6 w-6 text-primary" />
+            <span className="text-sm font-bold tracking-tight">Edgeline</span>
           </Link>
 
           <nav className="ml-2 flex items-center gap-1 overflow-x-auto">
@@ -168,18 +169,18 @@ export function Shell({ children }: { children: React.ReactNode }) {
               const active =
                 location === href || (href === "/calendar" && location === "/daily");
               return (
-                <Link key={href} href={href}>
-                  <a
-                    data-testid={`link-${label.toLowerCase()}`}
-                    className={`flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors whitespace-nowrap ${
-                      active
-                        ? "bg-secondary text-foreground"
-                        : "text-muted-foreground hover:text-foreground"
-                    }`}
-                  >
-                    <Icon className="h-3.5 w-3.5" />
-                    <span className="hidden sm:inline">{label}</span>
-                  </a>
+                <Link
+                  key={href}
+                  href={href}
+                  data-testid={`link-${label.toLowerCase()}`}
+                  className={`flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors whitespace-nowrap ${
+                    active
+                      ? "bg-secondary text-foreground"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  <Icon className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline">{label}</span>
                 </Link>
               );
             })}

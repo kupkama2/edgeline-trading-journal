@@ -709,8 +709,13 @@ export function NewTradeCard({
   );
 
   return (
-    <Card className="border-card-border bg-card p-4 sm:p-5">
-      <div className="flex items-center justify-between gap-2">
+    /* min-w-0 is load-bearing. Inside the trade dialog this card is a grid
+       item, and a grid item's automatic minimum is its content width — the
+       three state pills in one unwrappable row were 371px of min-content,
+       which widened the whole dialog past a 390px phone and dragged every
+       field in it off the right edge. */
+    <Card className="min-w-0 border-card-border bg-card p-4 sm:p-5">
+      <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1.5">
         <button
           type="button"
           onClick={() => setExpanded((e) => !e)}
@@ -736,7 +741,7 @@ export function NewTradeCard({
             ⌘V
           </kbd>
         )}
-        <div className={`flex items-center gap-2 ${expanded ? "" : "hidden"}`}>
+        <div className={`flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5 ${expanded ? "" : "hidden"}`}>
           {parsed && (
             <Badge variant="secondary" className="text-[10px]" data-testid="badge-ai-prefill">
               AI pre-filled · verify

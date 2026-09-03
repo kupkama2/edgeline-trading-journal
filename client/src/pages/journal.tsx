@@ -355,7 +355,10 @@ export default function Journal() {
               {pending.length} could open
             </span>
           </div>
-          <div className="grid gap-2 md:grid-cols-2">
+          {/* [&>*]:min-w-0 — a grid track will not shrink below its child's
+              content width, and a row with two nowrap buttons was 25px wider
+              than a phone column. */}
+          <div className="grid gap-2 [&>*]:min-w-0 md:grid-cols-2">
             {pending.map((t) => (
               <PendingTradeRow
                 key={t.id}

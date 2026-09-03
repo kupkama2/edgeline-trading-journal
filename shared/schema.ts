@@ -435,8 +435,49 @@ export const missingRisk = (v: {
     ? (["initialStop", "initialTarget"] as const).filter((f) => v[f] == null)
     : [];
 
+/**
+ * The two ways a trade's state and its exit price can contradict each other.
+ *
+ * The editor already refuses both (see resolveLifecycle in trade-outcome.tsx),
+ * but the server did not, and a rule that lives only in one client is a rule
+ * every other writer — the CSV importer, the batch fill importer, a curl —
+ * gets to break. Both contradictions are silent once stored:
+ *
+ *   closed with no exit   — the row says "closed" in the journal and drops
+ *                           out of every statistic, because closedTrades()
+ *                           needs an exit price to compute anything
+ *   open with an exit     — the row shows a P&L and is counted nowhere
+ *
+ * Neither is a trade that happened. Cancelled is grouped with pending: an
+ * order that never became a position has no price it left at.
+ */
+export const lifecycleConflict = (v: {
+  status?: string | null;
+  exitPrice?: number | null;
+}): { field: "exitPrice"; message: string }[] => {
+  const status = v.status ?? "open";
+  const priced = v.exitPrice != null;
+  if (status === "closed" && !priced) {
+    return [{ field: "exitPrice", message: "A closed trade needs an exit price" }];
+  }
+  if (status !== "closed" && priced) {
+    return [
+      {
+        field: "exitPrice",
+        message: `${status === "open" ? "An open" : status === "cancelled" ? "A cancelled" : "A pending"} trade cannot carry an exit price — clear it, or mark the trade closed`,
+      },
+    ];
+  }
+  return [];
+};
+
 function requireRiskOnceLive(
-  v: { status?: string | null; initialStop?: number | null; initialTarget?: number | null },
+  v: {
+    status?: string | null;
+    initialStop?: number | null;
+    initialTarget?: number | null;
+    exitPrice?: number | null;
+  },
   ctx: z.RefinementCtx,
 ) {
   for (const field of missingRisk(v)) {
@@ -445,6 +486,9 @@ function requireRiskOnceLive(
       path: [field],
       message: `${field} is required once a trade is open or closed`,
     });
+  }
+  for (const { field, message } of lifecycleConflict(v)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: [field], message });
   }
 }
 
