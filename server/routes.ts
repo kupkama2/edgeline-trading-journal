@@ -22,18 +22,28 @@ function store(req: { userId?: number }) {
 }
 import { ProxyAgent, fetch as undiciFetch } from "undici";
 import { checkOutcomes, ensureCatalogue } from "./outcomes";
-import { fetchCandles, feedStatus, intervalFor, type Interval } from "./binance";
+import {
+  feedStatus,
+  fetchCandles,
+  forgetRefusals,
+  intervalFor,
+  readCandles,
+  type Interval,
+} from "./binance";
+import { ensureHyperliquid, hyperliquidStatus } from "./hyperliquid";
 
 import {
   binanceSymbolForTrade,
   collapseToInstrument,
   pairForTradeWithFallback,
+  type Candle,
 } from "@shared/binance";
 import Anthropic from "@anthropic-ai/sdk";
 import {
   insertTradeSchema,
   updateTradeSchema,
   missingRisk,
+  lifecycleConflict,
   insertMistakeTagSchema,
   insertTradingStyleSchema,
   insertWeeklyReviewSchema,
@@ -127,6 +137,17 @@ const BAR_MS: Record<Interval, number> = {
   "1d": 86_400_000,
 };
 const ALLOWED_INTERVALS = ["1m", "15m", "1h", "4h", "1d"] as const;
+
+/**
+ * How far past the exit the chart runs, at the least.
+ *
+ * It used to be one and a half holds, which for a thirty-hour swing meant the
+ * chart stopped two days after you left — and stayed stopped, while the
+ * position you were asking about kept trading. A week is long enough that a
+ * trade closed on Monday shows the rest of its week, and the window still
+ * runs to now when now is nearer than that.
+ */
+const RECENT_AFTERMATH_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
  * Perplexity Sonar — `sonar-pro` supports vision (image_url content blocks) and
@@ -512,6 +533,20 @@ export async function registerRoutes(
         issues: missing.map((f) => ({ path: ["trade", f], message: `${f} is required` })),
       });
     }
+    /*
+     * Same shape, same reason: a PATCH carries only what changed, so the
+     * merged row is the only thing that can be checked. Without this a
+     * {status:"closed"} with no exit — or an exit price on a trade marked
+     * open — was accepted, and the row silently fell out of every statistic
+     * while still showing on the journal.
+     */
+    const conflict = lifecycleConflict(merged);
+    if (conflict.length) {
+      return res.status(400).json({
+        message: conflict[0].message,
+        issues: conflict.map((c) => ({ path: ["trade", c.field], message: c.message })),
+      });
+    }
 
     const updated = await store(req).updateTrade(
       Number(req.params.id),
@@ -641,6 +676,18 @@ export async function registerRoutes(
     }
   });
 
+  /** Hyperliquid's perps, for the picker. Cached in the database. */
+  app.get("/api/hyperliquid/symbols", async (_req, res) => {
+    try {
+      const perps = await ensureHyperliquid();
+      res.json(
+        perps.filter((p) => !p.delisted).map((p) => ({ name: p.name, maxLeverage: p.maxLeverage })),
+      );
+    } catch {
+      res.json([]);
+    }
+  });
+
   /**
    * Candles around one trade, for its chart.
    *
@@ -708,7 +755,15 @@ export async function registerRoutes(
       // Half the hold before, and the same again after — enough aftermath to
       // show a level being reached without you.
       const from = entry - held * 0.5;
-      const to = Math.min(Date.now(), exit + held * 1.5);
+      /*
+       * The window's near end — one and a half holds past the exit — is what
+       * chooses the bar size, so a two-hour scalp keeps its one-minute bars.
+       * The far end runs to now, at least a week past the exit, within what
+       * those bars can show; that is the part the trader sees change from
+       * one day to the next.
+       */
+      const nearTo = Math.min(Date.now(), exit + held * 1.5);
+      const to = Math.min(Date.now(), Math.max(nearTo, exit + RECENT_AFTERMATH_MS));
       /*
        * A requested timeframe wins over the automatic one, and the WINDOW
        * moves to suit it rather than the bar count doing the moving.
@@ -726,13 +781,21 @@ export async function registerRoutes(
       const asked = String(req.query.interval ?? "");
       const interval = (ALLOWED_INTERVALS as readonly string[]).includes(asked)
         ? (asked as Interval)
-        : intervalFor(to - from);
+        : intervalFor(nearTo - from);
       const widest = BAR_MS[interval] * 700;
       const narrowest = BAR_MS[interval] * 40;
       const mid = (entry + exit) / 2;
       let win = { from, to };
       if (to - from > widest) {
-        win = { from: Math.max(from, mid - widest / 2), to: Math.min(to, mid + widest / 2) };
+        /*
+         * Too many bars. When the trade itself fits, keep it whole and trim
+         * the aftermath to what the budget allows; when even the trade does
+         * not fit at this bar size, centre on it and show what can be shown.
+         */
+        win =
+          nearTo - from <= widest
+            ? { from, to: from + widest }
+            : { from: Math.max(from, mid - widest / 2), to: Math.min(to, mid + widest / 2) };
       } else if (to - from < narrowest) {
         const end = Math.min(Date.now(), Math.max(to, mid + narrowest / 2));
         win = { from: end - narrowest, to: end };
@@ -748,7 +811,8 @@ export async function registerRoutes(
        * look at, so history arrives a page at a time as it is asked for.
        */
       const before = Number(req.query.before);
-      if (Number.isFinite(before) && before > 0) {
+      const paging = Number.isFinite(before) && before > 0;
+      if (paging) {
         win = { from: before - BAR_MS[interval] * 600, to: before };
       }
 
@@ -775,30 +839,71 @@ export async function registerRoutes(
        * that breaks silently stays broken for a week.
        */
       let firstErr: unknown = null;
-      let candles = await fetchCandles(pair, interval, win.from, win.to, 1200).catch((e) => {
+      let candles: Candle[] = [];
+      let source: "api" | "archive" = "api";
+      let coveredTo = win.to;
+      try {
+        const read = await readCandles(pair, interval, win.from, win.to, 1200);
+        candles = read.candles;
+        source = read.source;
+        coveredTo = read.coveredTo;
+      } catch (e) {
         firstErr = e;
-        return [];
-      });
-      if (candles.length === 0 && books.fallback) {
-        // The PLAIN resolver on purpose: the fallback one would re-point at
-        // the perp again, which is the pair that just came back empty.
-        const spotPair = binanceSymbolForTrade(trade, cat);
-        if (spotPair && spotPair.market === "spot") {
-          const asSpot = await fetchCandles(spotPair, interval, win.from, win.to, 1200).catch(() => []);
-          if (asSpot.length > 0) {
-            used = spotPair;
-            candles = asSpot;
-          }
+      }
+      /*
+       * The spot book, for this coin: the catalogue with its perps removed,
+       * so the plain resolver cannot hand back the pair that just refused.
+       * Null for a perp-only coin — 1000PEPE has no spot pair, and PEPE's is
+       * a thousand times cheaper, which is not an approximation but a wrong
+       * chart.
+       */
+      const spotPair =
+        pair.market === "futures"
+          ? binanceSymbolForTrade(trade, cat.filter((s) => s.market === "spot"))
+          : null;
+      if (candles.length === 0 && spotPair) {
+        const asSpot = await fetchCandles(spotPair, interval, win.from, win.to, 1200).catch(() => []);
+        if (asSpot.length > 0) {
+          used = spotPair;
+          candles = asSpot;
+          source = "api";
+          coveredTo = win.to;
         }
       }
 
       if (candles.length === 0 && firstErr) throw firstErr;
+
+      /*
+       * The archive's missing day, filled from spot.
+       *
+       * The day-files stop a day or so short of now, so a chart drawn from
+       * them ends yesterday however many times you reload it — and for a
+       * trade closed today, ends before its own exit. The spot book answers
+       * live from a host that refuses nobody, and for the stretch AFTER the
+       * archive stopped its bars are appended and labelled as such. Only the
+       * chart gets this licence; settling a stop against the wrong book is a
+       * wrong answer at exactly the price that decides it.
+       */
+      const archiveShort = source === "archive" && win.to - coveredTo > BAR_MS[interval];
+      let tail: { market: "spot"; from: number; bars: number } | null = null;
+      if (archiveShort && !paging && spotPair && used.market === "futures") {
+        const more = await fetchCandles(spotPair, interval, coveredTo + 1, win.to, 1200).catch(() => []);
+        const fresh = more.filter((c) => c.t > coveredTo);
+        if (fresh.length > 0) {
+          candles = [...candles, ...fresh];
+          tail = { market: "spot", from: coveredTo, bars: fresh.length };
+        }
+      }
 
       res.json({
         pair: used.symbol,
         market: used.market,
         interval,
         books: { ...books, fallback: books.fallback && used.market === "futures" },
+        source,
+        coveredTo,
+        archiveShort,
+        tail,
         candles,
       });
     } catch (err: any) {
@@ -817,17 +922,28 @@ export async function registerRoutes(
      * waiting on a TTL to find out whether you fixed it.
      */
     const force = req.query.refresh === "1" || req.query.refresh === "true";
+    // A forced refresh asks even the hosts that answered 451 last time —
+    // that they might not any more is the whole reason someone is here.
+    if (force) forgetRefusals();
     const cat = await ensureCatalogue(force).catch(() => []);
+    const hl = await ensureHyperliquid(force).catch(() => []);
     const status = feedStatus();
     res.json({
       pairs: cat.length,
       futures: cat.filter((s) => s.market === "futures").length,
       spot: cat.filter((s) => s.market === "spot").length,
+      delisted: cat.filter((s) => s.status === "DELISTED").length,
       // Which list is actually in play. Without this a healthy-looking count
       // would hide the fact that every one of them came from a hardcoded
       // fallback and no price will resolve.
       source: status.lastOkAt ? "binance" : "seed",
       ...status,
+      hyperliquid: {
+        ...hyperliquidStatus(),
+        // What the picker can offer right now, from the cache, delisted left out.
+        listed: hl.filter((p) => !p.delisted).length,
+        delisted: hl.filter((p) => p.delisted).length,
+      },
     });
   });
 

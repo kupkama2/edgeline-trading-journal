@@ -208,15 +208,18 @@ export function PendingTradeRow({
     }
   }
   return (
-    <Card className="p-3" data-testid={`row-pending-${t.id}`}>
+    <Card className="min-w-0 p-3" data-testid={`row-pending-${t.id}`}>
       <div className="flex items-center gap-2">
         {t.direction === "long" ? (
-          <ArrowUpRight className="h-3.5 w-3.5 text-emerald-500" />
+          <ArrowUpRight className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
         ) : (
-          <ArrowDownRight className="h-3.5 w-3.5 text-red-500" />
+          <ArrowDownRight className="h-3.5 w-3.5 shrink-0 text-red-500" />
         )}
-        <span className="font-mono text-xs font-semibold">{t.symbol}</span>
-        <span className="font-mono text-[11px] text-muted-foreground">
+        <span className="shrink-0 font-mono text-xs font-semibold">{t.symbol}</span>
+        {/* The one thing in the row allowed to give way. Everything else is a
+            control or a name; the size-at-price can lose its tail on a phone
+            and still say what it needs to. */}
+        <span className="min-w-0 truncate font-mono text-[11px] text-muted-foreground">
           {t.size}
           {t.sizeUnit === "quote" ? " USD" : ""} @ {num(t.entryPrice)}
         </span>
@@ -242,7 +245,7 @@ export function PendingTradeRow({
         <Button
           variant="ghost"
           size="sm"
-          className="ml-auto h-7 px-2 text-[11px]"
+          className="ml-auto h-7 shrink-0 px-2 text-[11px]"
           onClick={onEdit}
           data-testid={`button-fill-${t.id}`}
         >
@@ -252,7 +255,7 @@ export function PendingTradeRow({
         <Button
           variant="ghost"
           size="icon"
-          className="h-7 w-7 text-muted-foreground hover:text-destructive"
+          className="h-7 w-7 shrink-0 text-muted-foreground hover:text-destructive"
           onClick={onResolve}
           aria-label="Never filled"
           data-testid={`button-resolve-pending-${t.id}`}

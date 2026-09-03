@@ -128,6 +128,10 @@ const SEED_ASSETS = [
   "TLM", "ALICE", "DAR", "ATA", "CTK", "BAKE", "BURGER", "XEM", "SFP",
   "AUDIO", "KDA", "RVN", "ICX", "ZEN", "LRC", "ONG", "NKN", "ARPA", "CHR",
   "OGN", "CVC", "COTI", "DUSK", "MTL", "PERP", "UNFI", "LINA", "FLM", "XVG",
+  // Thousand-lots. Binance writes the cheap coins as 1000PEPE, so this must
+  // too, or a kPEPE trade from Hyperliquid has no perp to be pointed at.
+  "1000PEPE", "1000SHIB", "1000BONK", "1000FLOKI", "1000LUNC", "1000XEC",
+  "1000SATS", "1000RATS", "1000CAT", "1000CHEEMS", "1000WHY",
 ];
 
 /** The fallback catalogue: every seeded asset as its USDT perp. */
@@ -142,6 +146,19 @@ export const SEED_CATALOGUE: BinanceSymbol[] = SEED_ASSETS.map((baseAsset) => ({
 const SEED_SET = new Set(SEED_ASSETS);
 
 /**
+ * The other way a thousand-lot gets written.
+ *
+ * Hyperliquid names a thousand PEPE "kPEPE"; Binance names the same contract
+ * "1000PEPE". They are one price, and a trade logged under the Hyperliquid
+ * spelling must still find its Binance candles. So a name that starts with a
+ * k is also tried as 1000-whatever — TRIED, not assumed: "KAVA" becomes a
+ * harmless "1000AVA" that no catalogue contains, and only a hit counts.
+ */
+export function perpAliases(key: string): string[] {
+  return /^K[A-Z0-9]{2,}$/.test(key) ? [key, `1000${key.slice(1)}`] : [key];
+}
+
+/**
  * Does this coin have a perp at all?
  *
  * Answered from the written-down list rather than the live catalogue, and that
@@ -154,7 +171,7 @@ const SEED_SET = new Set(SEED_ASSETS);
  */
 export function listedAsPerp(raw: string | null | undefined): boolean {
   const key = (raw ?? "").trim().toUpperCase();
-  return key ? SEED_SET.has(key) : false;
+  return key ? perpAliases(key).some((k) => SEED_SET.has(k)) : false;
 }
 
 /* ------------------------------ the catalogue ------------------------------ */
@@ -244,16 +261,17 @@ export function matchBinanceSymbol(
     return null;
   };
 
-  // Already a pair: "BTCUSDT" typed straight in. It may exist in both books.
-  const exact = pick(live.filter((s) => s.symbol === key));
-  if (exact) return exact;
+  for (const name of perpAliases(key)) {
+    // Already a pair: "BTCUSDT" typed straight in. It may exist in both books.
+    const exact = pick(live.filter((s) => s.symbol === name));
+    if (exact) return exact;
 
-  // A bare asset: "HYPE" -> the best-quoted pair it trades in.
-  const asBase = live.filter((s) => s.baseAsset === key);
-  if (asBase.length === 0) return null;
-  for (const q of QUOTE_RANK) {
-    const hit = pick(asBase.filter((s) => s.quoteAsset === q));
-    if (hit) return hit;
+    // A bare asset: "HYPE" -> the best-quoted pair it trades in.
+    const asBase = live.filter((s) => s.baseAsset === name);
+    for (const q of QUOTE_RANK) {
+      const hit = pick(asBase.filter((s) => s.quoteAsset === q));
+      if (hit) return hit;
+    }
   }
   return null;
 }

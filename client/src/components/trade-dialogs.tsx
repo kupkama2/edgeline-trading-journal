@@ -54,6 +54,7 @@ import {
   type Lifecycle,
 } from "@/components/trade-outcome";
 import { SymbolPicker } from "@/components/symbol-picker";
+import { venueOfAccount } from "@shared/hyperliquid";
 import {
   agoLabel,
   clearDraft,
@@ -857,6 +858,7 @@ export function TradeEditor({
                   value={f.symbol ?? ""}
                   onChange={(v) => setF((p) => ({ ...p, symbol: v }))}
                   trades={allTrades}
+                  venue={venueOfAccount(account)}
                   testId="input-edit-symbol"
                   className="h-9 font-mono text-sm"
                 />

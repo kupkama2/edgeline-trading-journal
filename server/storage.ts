@@ -11,6 +11,7 @@ import {
   users,
   invites,
   binanceSymbols,
+  hyperliquidSymbols,
 } from "@shared/schema";
 import type {
   InsertTrade,
@@ -373,6 +374,12 @@ CREATE TABLE IF NOT EXISTS binance_symbols (
   fetched_at TEXT NOT NULL,
   PRIMARY KEY (symbol, market)
 );
+CREATE TABLE IF NOT EXISTS hyperliquid_symbols (
+  name TEXT PRIMARY KEY,
+  max_leverage INTEGER,
+  delisted BOOLEAN NOT NULL DEFAULT FALSE,
+  fetched_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS invites (
   id SERIAL PRIMARY KEY,
   email TEXT NOT NULL UNIQUE,
@@ -708,6 +715,64 @@ export const catalogue = {
       }
     });
     return rows.length;
+  },
+
+  /**
+   * The liveness census's verdict on listing-sourced perps.
+   *
+   * Only ever DEMOTES: a folder that has published nothing for two weeks is
+   * marked delisted, and nothing here promotes a row back. The next daily
+   * refresh replaces every row anyway, and the census runs again after it.
+   */
+  async markDelisted(symbols: string[]): Promise<number> {
+    let changed = 0;
+    for (let i = 0; i < symbols.length; i += 500) {
+      const done = await db
+        .update(binanceSymbols)
+        .set({ status: "DELISTED" })
+        .where(
+          and(
+            eq(binanceSymbols.market, "futures"),
+            inArray(binanceSymbols.symbol, symbols.slice(i, i + 500)),
+          ),
+        )
+        .returning({ symbol: binanceSymbols.symbol });
+      changed += done.length;
+    }
+    return changed;
+  },
+};
+
+/** Hyperliquid's perp universe, cached the same way. */
+export const hyperliquid = {
+  async list(): Promise<{ name: string; maxLeverage: number | null; delisted: boolean }[]> {
+    const rows = await db.select().from(hyperliquidSymbols);
+    return rows.map((r) => ({ name: r.name, maxLeverage: r.maxLeverage, delisted: r.delisted }));
+  },
+
+  async lastFetchedAt(): Promise<string | null> {
+    const [row] = await db
+      .select({ at: hyperliquidSymbols.fetchedAt })
+      .from(hyperliquidSymbols)
+      .orderBy(desc(hyperliquidSymbols.fetchedAt))
+      .limit(1);
+    return row?.at ?? null;
+  },
+
+  async replace(
+    perps: { name: string; maxLeverage: number | null; delisted: boolean }[],
+  ): Promise<number> {
+    if (perps.length === 0) return 0;
+    const fetchedAt = new Date().toISOString();
+    await db.transaction(async (tx) => {
+      await tx.delete(hyperliquidSymbols);
+      for (let i = 0; i < perps.length; i += 500) {
+        await tx
+          .insert(hyperliquidSymbols)
+          .values(perps.slice(i, i + 500).map((p) => ({ ...p, fetchedAt })));
+      }
+    });
+    return perps.length;
   },
 };
 

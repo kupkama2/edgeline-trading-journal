@@ -180,6 +180,11 @@ describe.skipIf(!DB)("when only the spot book answers", () => {
   });
 
   it("asks for the perp first, and draws spot rather than nothing", async () => {
+    // The catalogue fetch above already heard the 451, and a refusal is
+    // remembered for hours; forgetting it here is what lets this test watch
+    // the perp genuinely being asked for.
+    const { forgetRefusals } = await import("../server/binance");
+    forgetRefusals();
     /*
      * Both halves of the rule at once.
      *
@@ -197,6 +202,12 @@ describe.skipIf(!DB)("when only the spot book answers", () => {
     // It tried the perp. Before this, the spot-only catalogue decided the pair
     // and the futures book was never asked at all.
     expect(asked.some((u) => u.startsWith("/fapi/") && u.includes("BTCUSDT"))).toBe(true);
+
+    // And having been refused with a 451, it does not ask that host again on
+    // the next chart — the archive is consulted straight away.
+    asked.length = 0;
+    await fetch(`${base}/api/trades/${t.id}/candles?interval=1h`);
+    expect(asked.some((u) => u.startsWith("/fapi/"))).toBe(false);
 
     expect(r.pair).toBe("BTCUSDT");
     expect(r.market).toBe("spot");

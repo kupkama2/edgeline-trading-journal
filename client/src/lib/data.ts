@@ -41,7 +41,15 @@ export function useCheckTrade() {
   return useMutation({
     mutationFn: async (id: number) =>
       (await apiRequest("POST", `/api/trades/${id}/check`, {})).json(),
-    onSuccess: invalidateTrades,
+    onSuccess: (_res, id) => {
+      invalidateTrades();
+      // The chart keeps its candles for five minutes, and "ask the market
+      // again" is the one moment that memory is exactly wrong: the archive
+      // may have published the day the chart was missing.
+      queryClient.invalidateQueries({
+        predicate: (q) => String(q.queryKey[0] ?? "").startsWith(`/api/trades/${id}/candles`),
+      });
+    },
   });
 }
 
@@ -73,6 +81,13 @@ export function useBinanceSymbols() {
 }
 
 /** Candles around one trade, or an empty set when it is not a crypto pair. */
+/** Hyperliquid's perps, for the picker. Delisted ones are already left out. */
+export function useHyperliquidSymbols() {
+  return useQuery<{ name: string; maxLeverage: number | null }[]>({
+    queryKey: ["/api/hyperliquid/symbols"],
+  });
+}
+
 export function useTradeCandles(tradeId: number | null, interval?: string) {
   return useQuery<{
     pair: string | null;
@@ -86,6 +101,14 @@ export function useTradeCandles(tradeId: number | null, interval?: string) {
       fallback?: boolean;
     };
     candles: { t: number; o: number; h: number; l: number; c: number }[];
+    /** Live API, or the day-files — which stop a day or so short of now. */
+    source?: "api" | "archive";
+    /** The last instant the archive's files reach, when they were the source. */
+    coveredTo?: number;
+    /** The archive stopped short of the window's end. */
+    archiveShort?: boolean;
+    /** Bars past the archive's reach, read from the spot book instead. */
+    tail?: { market: "spot"; from: number; bars: number } | null;
     error?: string;
     feed?: { lastError: string | null; lastTriedAt: string | null; lastOkAt: string | null } | null;
   }>({

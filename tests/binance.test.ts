@@ -9,6 +9,7 @@ import {
   firstTouch,
   matchBinanceSymbol,
   pathExtremes,
+  perpAliases,
   type BinanceSymbol,
   type Candle,
 } from "../shared/binance";
@@ -437,5 +438,43 @@ describe("the fallback catalogue", () => {
     expect(listedAsPerp("NQ")).toBe(false);
     expect(listedAsPerp(null)).toBe(false);
     expect(listedAsPerp("")).toBe(false);
+  });
+});
+
+describe("a thousand-lot written the Hyperliquid way", () => {
+  /*
+   * kPEPE on Hyperliquid is 1000PEPE on Binance: one contract, two spellings.
+   * The trap is the spot pair — PEPEUSDT trades at a thousandth of the price,
+   * and a chart drawn from it would be confidently, invisibly wrong.
+   */
+  const thousand: BinanceSymbol[] = [
+    perp("1000PEPEUSDT", "1000PEPE", "USDT"),
+    spot("PEPEUSDT", "PEPE", "USDT"),
+    perp("KAVAUSDT", "KAVA", "USDT"),
+  ];
+
+  it("finds the 1000-contract for a kPEPE trade", () => {
+    expect(matchBinanceSymbol("kPEPE", thousand)).toEqual({ symbol: "1000PEPEUSDT", market: "futures" });
+    expect(matchBinanceSymbol("KPEPE", thousand)).toEqual({ symbol: "1000PEPEUSDT", market: "futures" });
+  });
+
+  it("never sends it to the spot pair, which is a thousand times cheaper", () => {
+    expect(matchBinanceSymbol("KPEPE", [spot("PEPEUSDT", "PEPE", "USDT")])).toBeNull();
+  });
+
+  it("does not misread a coin that merely starts with a K", () => {
+    expect(matchBinanceSymbol("KAVA", thousand)).toEqual({ symbol: "KAVAUSDT", market: "futures" });
+    expect(perpAliases("KAVA")).toEqual(["KAVA", "1000AVA"]);
+    expect(perpAliases("K")).toEqual(["K"]);
+    expect(perpAliases("BTC")).toEqual(["BTC"]);
+  });
+
+  it("knows the written-down list carries the thousand-lots too", () => {
+    expect(listedAsPerp("kPEPE")).toBe(true);
+    expect(listedAsPerp("1000SHIB")).toBe(true);
+    expect(matchBinanceSymbol("KBONK", SEED_CATALOGUE)).toEqual({
+      symbol: "1000BONKUSDT",
+      market: "futures",
+    });
   });
 });

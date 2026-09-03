@@ -1,11 +1,13 @@
 /**
  * Picking what you traded.
  *
- * Three kinds of answer share one box, in the order they are actually wanted:
- * the instruments already in your log (you trade the same handful daily), then
- * the futures contracts the journal knows how to size, then whatever you type
- * that matches neither — which is assumed to be a crypto asset, because that
- * is what a symbol this journal has never seen almost always is.
+ * Four kinds of answer share one box, in the order they are actually wanted:
+ * the instruments already in your log (you trade the same handful daily),
+ * then the futures contracts the journal knows how to size, then every perp
+ * the two venues list — the one the trade's account points at first — and
+ * finally whatever you type that matches none of them, which is assumed to
+ * be a crypto asset, because that is what a symbol this journal has never
+ * seen almost always is.
  *
  * It stays a text field rather than becoming a dropdown. A dropdown would make
  * the unknown case a second-class citizen behind a "new…" option, and the
@@ -20,15 +22,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Input } from "@/components/ui/input";
 import { CONTRACTS, type ContractSpec } from "@shared/symbols";
-import { useBinanceSymbols } from "@/lib/data";
+import { useBinanceSymbols, useHyperliquidSymbols } from "@/lib/data";
 import type { TradeWithTags } from "@shared/schema";
+import type { Venue } from "@shared/hyperliquid";
+
+type Group = "yours" | "contracts" | Venue;
 
 interface Option {
   /** What goes in the field. */
   value: string;
-  /** Right-hand detail: the contract's name, or how often you've traded it. */
+  /** Right-hand detail: the contract's name, the pair, or how often you've traded it. */
   detail: string;
-  group: "yours" | "contracts" | "binance";
+  group: Group;
 }
 
 /** Instruments already in the log, most recently traded first. */
@@ -58,16 +63,30 @@ function contractDetail(c: ContractSpec): string {
   return `${c.label} · ${size}`;
 }
 
+const HEADING: Record<Group, string> = {
+  yours: "Your instruments",
+  contracts: "Futures contracts",
+  binance: "Listed on Binance",
+  hyperliquid: "Hyperliquid perps",
+};
+
 export function SymbolPicker({
   value,
   onChange,
   trades,
+  venue = null,
   testId = "input-symbol",
   ...rest
 }: {
   value: string;
   onChange: (v: string) => void;
   trades: TradeWithTags[];
+  /**
+   * The venue the trade's account points at, when its name says. It only
+   * RANKS — that venue's perps come first and carry the heading — so a
+   * misread account costs a scroll and never changes what a symbol means.
+   */
+  venue?: Venue | null;
   testId?: string;
 } & Omit<React.ComponentProps<typeof Input>, "value" | "onChange">) {
   const [open, setOpen] = useState(false);
@@ -75,15 +94,20 @@ export function SymbolPicker({
   const boxRef = useRef<HTMLDivElement>(null);
 
   /*
-   * Every pair Binance actually trades, cached server-side.
+   * Every pair Binance trades and every perp Hyperliquid lists, both cached
+   * server-side.
    *
    * This is what turns "whatever you type is assumed to be crypto" into
    * knowing: the journal can now tell a real ticker from a typo, and — the
-   * part that earns its keep — the pair it resolves to is the same one the
-   * outcome checker will read candles from. Picking the symbol from this list
-   * is how a trade becomes one the market can answer for you.
+   * part that earns its keep — the Binance pair it resolves to is the same
+   * one the outcome checker will read candles from. Picking the symbol from
+   * this list is how a trade becomes one the market can answer for you.
    */
   const { data: pairs = [] } = useBinanceSymbols();
+  const { data: hl = [] } = useHyperliquidSymbols();
+  const home: Venue = venue ?? "binance";
+  const away: Venue = home === "binance" ? "hyperliquid" : "binance";
+
   const all = useMemo<Option[]>(() => {
     const mine = fromHistory(trades);
     const owned = new Set(mine.map((m) => m.value));
@@ -92,25 +116,48 @@ export function SymbolPicker({
       // it twice would push the useful half of the list off the bottom.
       .filter((c) => !owned.has(c.root))
       .map((c) => ({ value: c.root, detail: contractDetail(c), group: "contracts" as const }));
+
     /*
      * The COIN, not the pair. What gets stored on a trade is the instrument —
      * LTC, never LTCUSDT — so offering the pair would have you pick one string
-     * and watch a different one appear. One row per coin, deduped across the
-     * two books and every quote it trades against, with the pair as the hint.
+     * and watch a different one appear. One row per coin across both venues:
+     * a coin on both is listed once, under the venue the account points at,
+     * with the other venue in the hint. Binance rows arrive futures first, so
+     * the first pair seen per coin is the perp when there is one.
+     *
+     * Hyperliquid's own spelling is kept in the hint (kPEPE) while the row's
+     * value is upper-cased like every other symbol here, so typing "KP" finds
+     * it and what lands on the trade matches the journal's one convention.
      */
-    const seen = new Set<string>();
+    const onBinance = new Map<string, (typeof pairs)[number]>();
+    for (const p of pairs) if (!onBinance.has(p.baseAsset)) onBinance.set(p.baseAsset, p);
+    const onHl = new Map<string, (typeof hl)[number]>();
+    for (const h of hl) onHl.set(h.name.toUpperCase(), h);
+
     const listed: Option[] = [];
-    for (const p of pairs) {
-      if (owned.has(p.baseAsset) || seen.has(p.baseAsset)) continue;
-      seen.add(p.baseAsset);
-      listed.push({
-        value: p.baseAsset,
-        detail: `${p.symbol}${p.market === "futures" ? " perp" : ""}`,
-        group: "binance",
-      });
+    const coins = Array.from(new Set(Array.from(onBinance.keys()).concat(Array.from(onHl.keys()))));
+    for (const coin of coins) {
+      if (owned.has(coin)) continue;
+      const b = onBinance.get(coin);
+      const h = onHl.get(coin);
+      const group: Venue =
+        home === "hyperliquid" ? (h ? "hyperliquid" : "binance") : b ? "binance" : "hyperliquid";
+      const detail =
+        group === "hyperliquid"
+          ? [
+              h!.name !== coin ? h!.name : null,
+              `HL perp${h!.maxLeverage ? ` ${h!.maxLeverage}×` : ""}`,
+              b ? "Binance too" : null,
+            ]
+              .filter(Boolean)
+              .join(" · ")
+          : [`${b!.symbol}${b!.market === "futures" ? " perp" : ""}`, h ? "HL too" : null]
+              .filter(Boolean)
+              .join(" · ");
+      listed.push({ value: coin, detail, group });
     }
     return [...mine, ...table, ...listed];
-  }, [trades, pairs]);
+  }, [trades, pairs, hl, home]);
 
   const q = value.trim().toUpperCase();
   const matches = useMemo(() => {
@@ -119,10 +166,12 @@ export function SymbolPicker({
     const contains = all.filter((o) => !o.value.startsWith(q) && o.value.includes(q));
     // Thousands of pairs contain a two-letter string, so a plain "contains"
     // sweep buries your own instruments under alphabetical noise. Prefix
-    // matches, and your history within them, come first.
-    const rank = (o: Option) => (o.group === "yours" ? 0 : o.group === "contracts" ? 1 : 2);
+    // matches, and your history within them, come first; then the venue
+    // this account trades on, then the other one.
+    const rank = (o: Option) =>
+      o.group === "yours" ? 0 : o.group === "contracts" ? 1 : o.group === home ? 2 : 3;
     return [...starts.sort((a, b) => rank(a) - rank(b)), ...contains.sort((a, b) => rank(a) - rank(b))].slice(0, 8);
-  }, [all, q]);
+  }, [all, q, home]);
 
   /*
    * "This is a new asset" is only worth saying once nothing matches at all.
@@ -189,17 +238,13 @@ export function SymbolPicker({
           className="absolute z-50 mt-1 w-full min-w-[16rem] overflow-hidden rounded-md border border-border bg-popover shadow-lg"
           data-testid="symbol-suggestions"
         >
-          {(["yours", "contracts", "binance"] as const).map((group) => {
+          {(["yours", "contracts", home, away] as const).map((group) => {
             const rows = matches.filter((m) => m.group === group);
             if (rows.length === 0) return null;
             return (
-              <div key={group}>
+              <div key={group} data-testid={`symbol-group-${group}`}>
                 <p className="px-2.5 pb-0.5 pt-1.5 text-[9px] uppercase tracking-wider text-muted-foreground">
-                  {group === "yours"
-                    ? "Your instruments"
-                    : group === "contracts"
-                      ? "Futures contracts"
-                      : "Listed on Binance"}
+                  {HEADING[group]}
                 </p>
                 {rows.map((o) => {
                   const i = matches.indexOf(o);

@@ -104,9 +104,31 @@ function startFeed(): Promise<number> {
           JSON.stringify({
             symbols: [
               { symbol: "BTCUSDT", baseAsset: "BTC", quoteAsset: "USDT", status: "TRADING" },
+              // Spot pairs for the two chart-window tests below. Those use
+              // coins nothing else in this file reads, because the archive
+              // reader caches by URL and a day BTC published for an earlier
+              // test would otherwise turn up "published" for a later one.
+              { symbol: "BNBUSDT", baseAsset: "BNB", quoteAsset: "USDT", status: "TRADING" },
+              { symbol: "ADAUSDT", baseAsset: "ADA", quoteAsset: "USDT", status: "TRADING" },
             ],
           }),
         );
+      }
+      /*
+       * The spot book answers live — it is the mirror that refuses nobody —
+       * and flat at 90, a price nothing in the archive prints, so a bar's
+       * provenance is legible from its close. Hourly whatever was asked;
+       * every chart test here asks for 1h.
+       */
+      if (u.pathname === "/api/v3/klines") {
+        const start = Number(u.searchParams.get("startTime"));
+        const end = Number(u.searchParams.get("endTime"));
+        const out: unknown[] = [];
+        for (let t = Math.ceil(start / HOUR) * HOUR; t <= end && out.length < 1000; t += HOUR) {
+          out.push([t, 90, 90.5, 89.5, 90, "1", t + HOUR - 1]);
+        }
+        res.setHeader("content-type", "application/json");
+        return res.end(JSON.stringify(out));
       }
       // The archive: /data/futures/um/daily/klines/BTCUSDT/1h/BTCUSDT-1h-2026-08-24.zip
       const m = /\/data\/futures\/um\/daily\/klines\/[^/]+\/[^/]+\/[^-]+-[^-]+-(\d{4}-\d{2}-\d{2})\.zip$/.exec(
@@ -217,6 +239,57 @@ describe.skipIf(!DB)("settling a perp out of the file archive", () => {
     expect(r.books.fallback).toBe(true);
     // And they are the archive's bars — the spike only the perp file has.
     expect(Math.max(...r.candles.map((c: any) => c.h))).toBe(131);
+  });
+
+  it("runs to now rather than stopping just past the exit", async () => {
+    /*
+     * The complaint, verbatim: the chart ended two days after the exit and
+     * stayed there while the coin kept trading. A one-day hold now shows
+     * the week after it — as far as the archive has published, and it is
+     * said out loud where that is.
+     */
+    const t0 = Math.floor((Date.now() - 6 * DAY) / DAY) * DAY;
+    days = new Map([-1, 0, 1, 2, 3, 4].map((d) => [ymd(t0 + d * DAY), flatDay(t0 + d * DAY, 100)]));
+    const t = await closed({
+      symbol: "BNB",
+      entryTime: new Date(t0 + HOUR).toISOString(),
+      exitTime: new Date(t0 + DAY + HOUR).toISOString(),
+    });
+    const r = await fetch(`${base}/api/trades/${t.id}/candles?interval=1h`).then((x) => x.json());
+    expect(r.source).toBe("archive");
+    expect(r.pair).toBe("BNBUSDT");
+    // The archive's last published day is where its bars stop…
+    expect(r.coveredTo).toBe(t0 + 5 * DAY - 1);
+    const archived = r.candles.filter((c: any) => c.t <= r.coveredTo);
+    expect(archived[archived.length - 1].t).toBe(t0 + 4 * DAY + 23 * HOUR);
+    // …which is well past exit + 1.5 holds, where the chart used to end.
+    expect(archived[archived.length - 1].t).toBeGreaterThan(t0 + DAY + HOUR + 36 * HOUR);
+    expect(r.archiveShort).toBe(true);
+  });
+
+  it("fills the archive's unpublished day from spot, and says so", async () => {
+    const t0 = Math.floor((Date.now() - 4 * DAY) / DAY) * DAY;
+    days = new Map([-1, 0, 1, 2].map((d) => [ymd(t0 + d * DAY), flatDay(t0 + d * DAY, 100)]));
+    const t = await closed({
+      symbol: "ADA",
+      entryTime: new Date(t0 + HOUR).toISOString(),
+      exitTime: new Date(t0 + DAY + HOUR).toISOString(),
+    });
+    const r = await fetch(`${base}/api/trades/${t.id}/candles?interval=1h`).then((x) => x.json());
+    expect(r.source).toBe("archive");
+    expect(r.market).toBe("futures");
+    expect(r.tail).toMatchObject({ market: "spot", from: r.coveredTo });
+    expect(r.tail.bars).toBeGreaterThan(0);
+    // Every bar past the archive's reach is spot's, and none before it is.
+    const after = r.candles.filter((c: any) => c.t > r.coveredTo);
+    const before = r.candles.filter((c: any) => c.t <= r.coveredTo);
+    expect(after.length).toBe(r.tail.bars);
+    expect(after.every((c: any) => c.c === 90)).toBe(true);
+    expect(before.every((c: any) => c.c === 100)).toBe(true);
+    // And the tail reaches the present, which is the whole point.
+    expect(after[after.length - 1].t).toBeGreaterThan(Date.now() - 2 * HOUR);
+    // In time order, so the chart engine accepts it.
+    for (let i = 1; i < r.candles.length; i++) expect(r.candles[i].t).toBeGreaterThan(r.candles[i - 1].t);
   });
 
   it("reads the perp the API refuses, and settles from it", async () => {
