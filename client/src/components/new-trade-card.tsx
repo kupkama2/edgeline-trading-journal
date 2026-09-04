@@ -365,7 +365,15 @@ export function NewTradeCard({
     return {
       risk,
       rr: reward / risk,
-      riskDollars: isFinite(perPoint) ? risk * perPoint : null,
+      /*
+       * No size is no dollar risk — not a risk of nothing.
+       *
+       * An empty size box reads as 0, which multiplies out to a real,
+       * meaningless "$0" in the two places this feeds: the RISK $ field and
+       * the summary under the button. Null instead, so both say they do not
+       * know yet rather than quoting a figure nobody can lose.
+       */
+      riskDollars: isFinite(perPoint) && perPoint > 0 ? risk * perPoint : null,
       // "3 contracts" says nothing about how much Bitcoin that is; this does.
       exposure: fmtExposure(exposureOf(v.symbol, qty, perContract)),
     };
@@ -1554,8 +1562,30 @@ export function NewTradeCard({
                 className="flex items-center gap-3 font-mono text-[11px] text-muted-foreground"
                 data-testid="text-risk-preview"
               >
+                {/*
+                    Money first, and the price distance said to be one.
+
+                    This row opened with "Risk 417.40" — the stop distance in
+                    price, no unit — sitting beside "1R $103". Two numbers, one
+                    labelled "Risk" and the other carrying the dollar sign, and
+                    the trade risked $103. Read left to right it says you are
+                    about to risk four hundred dollars, at the exact moment the
+                    size is being chosen: the one number here that must not be
+                    misread.
+
+                    So the word "Risk" now belongs to the money, which is what
+                    it means everywhere else in the journal, and the distance
+                    keeps its place while saying what it measures. The separate
+                    1R is gone because it was the same figure twice.
+                */}
                 <span>
-                  Risk <span className="text-foreground">{num(preview.risk)}</span>
+                  Risk{" "}
+                  <span className="text-foreground">
+                    {preview.riskDollars != null ? `$${num(preview.riskDollars, 0)}` : "—"}
+                  </span>
+                </span>
+                <span title="how far the stop is from the entry, in price">
+                  stop <span className="text-foreground">{num(preview.risk)}</span> pts
                 </span>
                 <span>
                   R:R{" "}
@@ -1563,11 +1593,6 @@ export function NewTradeCard({
                     {num(preview.rr, 1)}
                   </span>
                 </span>
-                {preview.riskDollars != null && (
-                  <span>
-                    1R <span className="text-foreground">${num(preview.riskDollars, 0)}</span>
-                  </span>
-                )}
                 {preview.exposure && (
                   <span
                     data-testid="text-exposure"
