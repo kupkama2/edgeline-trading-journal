@@ -35,6 +35,7 @@ import { fetchCatalogue, intervalFor, lastListed } from "./binance";
 import { fetchCandlesAt, pairForTradeAt, readCandlesAt } from "./candles";
 import { fundingForTrade } from "./funding";
 import { hyperliquidNames } from "./hyperliquid";
+import { venueOfAccount } from "@shared/hyperliquid";
 import { probeListed } from "./binance-listing";
 import { catalogue, collapsePairSymbolsOnce, storageFor } from "./storage";
 
@@ -247,10 +248,13 @@ export async function checkOutcomes(userId: number, only?: number): Promise<Chec
     return { ...out, error: String(err?.message ?? err) };
   }
   if (cat.length === 0) return { ...out, error: "No Binance pair list available yet." };
-  const hlNames = await hyperliquidNames().catch(() => [] as string[]);
 
   const all = await store.listTrades();
   const now = Date.now();
+  // Hyperliquid's coin list, only when some trade's account points there.
+  const hlNames = all.some((t) => venueOfAccount(t.account) === "hyperliquid")
+    ? await hyperliquidNames().catch(() => [] as string[])
+    : [];
   /*
    * Three errands, not one. A trade can have its plan outcome settled and
    * still be missing MAE and MFE — the archive had not published the day of

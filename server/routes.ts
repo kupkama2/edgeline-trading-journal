@@ -33,6 +33,7 @@ import {
 import { ensureHyperliquid, fetchAllMids, hyperliquidNames, hyperliquidStatus } from "./hyperliquid";
 import { fetchCandlesAt, pairForTradeAt, readCandlesAt } from "./candles";
 import { syncHyperliquid } from "./hl-sync";
+import { venueOfAccount } from "@shared/hyperliquid";
 
 import {
   binanceSymbolForTrade,
@@ -732,7 +733,9 @@ export async function registerRoutes(
     );
     if (open.length === 0) return res.json({});
     const cat = await ensureCatalogue().catch(() => []);
-    const hlNames = await hyperliquidNames().catch(() => [] as string[]);
+    const hlNames = open.some((t) => venueOfAccount(t.account) === "hyperliquid")
+      ? await hyperliquidNames().catch(() => [] as string[])
+      : [];
     const at = Date.now();
     const out: Record<number, { price: number; at: number; venue: "binance" | "hyperliquid"; book: "perp" | "spot" }> = {};
 
@@ -802,7 +805,13 @@ export async function registerRoutes(
        * perp while the chart under it drew spot. One shared rule now, so the
        * two cannot drift apart again.
        */
-      const hlNames = await hyperliquidNames().catch(() => [] as string[]);
+      // The venue's coin list is only worth asking for when the account
+      // points there: asking on every Binance chart would let an unreachable
+      // Hyperliquid cost a Binance trade a timeout.
+      const hlNames =
+        venueOfAccount(trade.account) === "hyperliquid"
+          ? await hyperliquidNames().catch(() => [] as string[])
+          : [];
       const pair = pairForTradeAt(trade, cat, hlNames);
       if (!pair) {
         /*
