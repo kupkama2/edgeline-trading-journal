@@ -478,3 +478,31 @@ describe("a thousand-lot written the Hyperliquid way", () => {
     });
   });
 });
+
+describe("a perp the census marked delisted", () => {
+  /*
+   * A dead folder in the archive still holds every bar the contract printed,
+   * and an old trade on it has a chart and an outcome waiting there. So a
+   * DELISTED pair is matched — but only when nothing live does, and never a
+   * Binance halt status, which is a price not to be trusted right now.
+   */
+  const dead = (symbol: string, base: string) => ({
+    symbol, baseAsset: base, quoteAsset: "USDT", status: "DELISTED", market: "futures" as const,
+  });
+
+  it("is matched when it is the only pair the coin ever had", () => {
+    expect(matchBinanceSymbol("OLD", [dead("OLDUSDT", "OLD")])).toEqual({
+      symbol: "OLDUSDT",
+      market: "futures",
+    });
+  });
+
+  it("never beats a live pair of the same coin", () => {
+    const both = [dead("OLDUSDT", "OLD"), spot("OLDUSDT", "OLD", "USDT")];
+    expect(matchBinanceSymbol("OLD", both)).toEqual({ symbol: "OLDUSDT", market: "spot" });
+  });
+
+  it("is not confused with a halted pair, which stays unmatched", () => {
+    expect(matchBinanceSymbol("OLD", [spot("OLDUSDT", "OLD", "USDT", "BREAK")])).toBeNull();
+  });
+});

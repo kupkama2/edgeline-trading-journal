@@ -12,6 +12,7 @@ import {
   invites,
   binanceSymbols,
   hyperliquidSymbols,
+  accountBalances,
 } from "@shared/schema";
 import type {
   InsertTrade,
@@ -28,6 +29,8 @@ import type {
   TradeFill,
   AccountSettings,
   UpsertAccountSettings,
+  AccountBalance,
+  InsertAccountBalance,
   User,
   Invite,
   BinanceSymbolRow,
@@ -138,6 +141,9 @@ ALTER TABLE trades ADD COLUMN IF NOT EXISTS point_value DOUBLE PRECISION NOT NUL
 -- A trade that never became a position: why, and (if it simply never filled)
 -- whether the target would have been reached anyway.
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS cancel_reason TEXT;
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS funding DOUBLE PRECISION;
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS funding_checked_at TEXT;
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS external_id TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS would_have_hit_target BOOLEAN;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS rationale TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS rationale_tags TEXT;
@@ -198,6 +204,15 @@ CREATE TABLE IF NOT EXISTS account_settings (
   fee_mode TEXT NOT NULL DEFAULT 'percent',
   maker_fee DOUBLE PRECISION NOT NULL DEFAULT 0,
   taker_fee DOUBLE PRECISION NOT NULL DEFAULT 0
+);
+ALTER TABLE account_settings ADD COLUMN IF NOT EXISTS wallet TEXT;
+CREATE TABLE IF NOT EXISTS account_balances (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL,
+  account TEXT NOT NULL,
+  at TEXT NOT NULL,
+  balance DOUBLE PRECISION NOT NULL,
+  note TEXT
 );
 CREATE TABLE IF NOT EXISTS mistake_tags (
   id SERIAL PRIMARY KEY,
@@ -847,6 +862,11 @@ export interface IStorage {
 
   listAccountSettings(): Promise<AccountSettings[]>;
   upsertAccountSettings(s: UpsertAccountSettings): Promise<AccountSettings>;
+  listAccountBalances(): Promise<AccountBalance[]>;
+  addAccountBalance(b: InsertAccountBalance): Promise<AccountBalance>;
+  deleteAccountBalance(id: number): Promise<void>;
+  /** The trade a venue wrote, by the id the venue gave it. */
+  tradeByExternalId(externalId: string): Promise<TradeWithTags | undefined>;
 
   listTradeImages(tradeId: number): Promise<TradeImage[]>;
   imageUsage(): Promise<{ images: number; bytes: number }>;
@@ -1240,6 +1260,7 @@ export class DatabaseStorage implements IStorage {
           // Omitted means "leave it as it is": the fee editor saves without
           // knowing about kinds, and it must not quietly relive an account.
           ...(s.kind ? { kind: s.kind } : {}),
+          ...(s.wallet !== undefined ? { wallet: s.wallet } : {}),
         })
         .where(eq(accountSettings.id, existing.id))
         .returning();
@@ -1253,10 +1274,50 @@ export class DatabaseStorage implements IStorage {
         makerFee: s.makerFee,
         takerFee: s.takerFee,
         kind: s.kind ?? "live",
+        wallet: s.wallet ?? null,
         userId: this.userId,
       })
       .returning();
     return row;
+  }
+
+  /* ------------------------------- balances ------------------------------ */
+
+  async listAccountBalances(): Promise<AccountBalance[]> {
+    return db
+      .select()
+      .from(accountBalances)
+      .where(this.owns(accountBalances))
+      .orderBy(accountBalances.at);
+  }
+
+  async addAccountBalance(b: InsertAccountBalance): Promise<AccountBalance> {
+    const [row] = await db
+      .insert(accountBalances)
+      .values({
+        account: b.account.trim(),
+        at: b.at ?? new Date().toISOString(),
+        balance: b.balance,
+        note: b.note ?? null,
+        userId: this.userId,
+      })
+      .returning();
+    return row;
+  }
+
+  async deleteAccountBalance(id: number): Promise<void> {
+    await db
+      .delete(accountBalances)
+      .where(and(eq(accountBalances.id, id), this.owns(accountBalances)));
+  }
+
+  async tradeByExternalId(externalId: string): Promise<TradeWithTags | undefined> {
+    const [row] = await db
+      .select({ id: trades.id })
+      .from(trades)
+      .where(and(eq(trades.externalId, externalId), this.owns(trades)))
+      .limit(1);
+    return row ? this.getTrade(row.id) : undefined;
   }
 
   /* -------------------------------- images ------------------------------- */

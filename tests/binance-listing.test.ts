@@ -213,13 +213,16 @@ describe.skipIf(!DB)("the perp book, read off the bucket when the API refuses", 
     expect(feedStatus().listing.probedLive).toBe(2);
   });
 
-  it("matches a live perp and refuses the dead one", async () => {
+  it("matches a live perp, and a dead one only because nothing live exists", async () => {
     const { ensureCatalogue } = await import("../server/outcomes");
     const cat = await ensureCatalogue();
     expect(matchBinanceSymbol("ETH", cat)).toEqual({ symbol: "ETHUSDT", market: "futures" });
     // The perp over the spot pair of the same name, as ever.
     expect(matchBinanceSymbol("BTC", cat)).toEqual({ symbol: "BTCUSDT", market: "futures" });
-    expect(matchBinanceSymbol("DEAD", cat)).toBeNull();
+    // DEAD has no live pair anywhere, and its archive folder still holds
+    // every bar it printed: an old trade on it keeps its chart. The picker
+    // is a different question and still leaves it out (next test).
+    expect(matchBinanceSymbol("DEAD", cat)).toEqual({ symbol: "DEADUSDT", market: "futures" });
   });
 
   it("offers only the live ones to the picker, perps first", async () => {

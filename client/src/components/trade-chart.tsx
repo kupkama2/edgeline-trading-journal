@@ -216,7 +216,13 @@ export function TradeChart({ trade }: { trade: TradeWithTags }) {
         {/* Which book, because a perp and its spot pair are different prices
             and the answer to "did my stop get hit" depends on which one you
             were actually resting an order in. */}
-        <span>{data.market === "futures" ? "perp" : "spot"}</span>
+        <span>
+          {data.venue === "hyperliquid"
+            ? "Hyperliquid perp"
+            : data.market === "futures"
+              ? "perp"
+              : "spot"}
+        </span>
         {/* Spot on a coin that HAS a perp is not a preference, it is a
             refusal — the perp book would not answer the server. Saying so
             here is the difference between a diagnosis and a mystery, and it

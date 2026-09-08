@@ -25,17 +25,19 @@ import { checkOutcomes, ensureCatalogue } from "./outcomes";
 import {
   feedStatus,
   fetchCandles,
+  fetchSpotPrices,
   forgetRefusals,
   intervalFor,
-  readCandles,
   type Interval,
 } from "./binance";
-import { ensureHyperliquid, hyperliquidStatus } from "./hyperliquid";
+import { ensureHyperliquid, fetchAllMids, hyperliquidNames, hyperliquidStatus } from "./hyperliquid";
+import { fetchCandlesAt, pairForTradeAt, readCandlesAt } from "./candles";
+import { syncHyperliquid } from "./hl-sync";
+import { venueOfAccount } from "@shared/hyperliquid";
 
 import {
   binanceSymbolForTrade,
   collapseToInstrument,
-  pairForTradeWithFallback,
   type Candle,
 } from "@shared/binance";
 import Anthropic from "@anthropic-ai/sdk";
@@ -56,6 +58,7 @@ import {
   analyzeRationaleSchema,
   directionEnum,
   sizeUnitEnum,
+  insertAccountBalanceSchema,
 } from "@shared/schema";
 import {
   contractFor,
@@ -676,6 +679,93 @@ export async function registerRoutes(
     }
   });
 
+  /**
+   * Pull a wallet's fills into the journal.
+   *
+   * Every account that names a wallet, or just the one asked for. What
+   * comes back is a count per account of what was written, updated, left
+   * alone, or could not be reconstructed — the last of which is said out
+   * loud rather than guessed at.
+   */
+  app.post("/api/hyperliquid/sync", async (req, res) => {
+    const userId = (req as any).userId as number | undefined;
+    if (!userId) return res.status(401).json({ message: "No account on request" });
+    const only = typeof req.body?.account === "string" ? req.body.account : undefined;
+    try {
+      res.json(await syncHyperliquid(userId, only));
+    } catch (err: any) {
+      res.status(502).json({ message: String(err?.message ?? err) });
+    }
+  });
+
+  /* ---------------------------- account balances ---------------------------- */
+
+  app.get("/api/account-balances", async (req, res) => {
+    res.json(await store(req).listAccountBalances());
+  });
+
+  app.post("/api/account-balances", async (req, res) => {
+    const parsed = insertAccountBalanceSchema.safeParse(req.body);
+    if (!parsed.success)
+      return res.status(400).json({ message: "Invalid balance", issues: parsed.error.issues });
+    if (parsed.data.at && !Number.isFinite(new Date(parsed.data.at).getTime()))
+      return res.status(400).json({ message: "That is not a date" });
+    res.status(201).json(await store(req).addAccountBalance(parsed.data));
+  });
+
+  app.delete("/api/account-balances/:id", async (req, res) => {
+    await store(req).deleteAccountBalance(Number(req.params.id));
+    res.status(204).end();
+  });
+
+  /**
+   * Where every open crypto trade's market is right now.
+   *
+   * One price per trade, from the venue the trade's account names:
+   * Hyperliquid's mids come in a single call; Binance's come from the spot
+   * mirror, which answers from anywhere — and is labelled spot, because
+   * for a perp it is within basis of the truth rather than the truth.
+   * The standing against the plan is worked out on the client from this.
+   */
+  app.get("/api/marks", async (req, res) => {
+    const open = (await store(req).listTrades()).filter(
+      (t) => t.status === "open" && !t.contract?.trim(),
+    );
+    if (open.length === 0) return res.json({});
+    const cat = await ensureCatalogue().catch(() => []);
+    const hlNames = open.some((t) => venueOfAccount(t.account) === "hyperliquid")
+      ? await hyperliquidNames().catch(() => [] as string[])
+      : [];
+    const at = Date.now();
+    const out: Record<number, { price: number; at: number; venue: "binance" | "hyperliquid"; book: "perp" | "spot" }> = {};
+
+    const wanted = open.map((t) => ({ t, pair: pairForTradeAt(t, cat, hlNames) }));
+    if (wanted.some((w) => w.pair?.venue === "hyperliquid")) {
+      const mids = await fetchAllMids().catch(() => ({}) as Record<string, number>);
+      for (const { t, pair } of wanted) {
+        if (pair?.venue !== "hyperliquid") continue;
+        const p = mids[pair.symbol];
+        if (p) out[t.id] = { price: p, at, venue: "hyperliquid", book: "perp" };
+      }
+    }
+    const spotOf = new Map<number, string>();
+    for (const { t, pair } of wanted) {
+      if (!pair || pair.venue === "hyperliquid") continue;
+      const spot = binanceSymbolForTrade(t, cat.filter((s) => s.market === "spot"));
+      if (spot) spotOf.set(t.id, spot.symbol);
+    }
+    if (spotOf.size > 0) {
+      const prices = await fetchSpotPrices(Array.from(new Set(spotOf.values()))).catch(
+        () => ({}) as Record<string, number>,
+      );
+      for (const [id, sym] of Array.from(spotOf.entries())) {
+        const p = prices[sym];
+        if (p) out[id] = { price: p, at, venue: "binance", book: "spot" };
+      }
+    }
+    res.json(out);
+  });
+
   /** Hyperliquid's perps, for the picker. Cached in the database. */
   app.get("/api/hyperliquid/symbols", async (_req, res) => {
     try {
@@ -715,7 +805,14 @@ export async function registerRoutes(
        * perp while the chart under it drew spot. One shared rule now, so the
        * two cannot drift apart again.
        */
-      const pair = pairForTradeWithFallback(trade, cat);
+      // The venue's coin list is only worth asking for when the account
+      // points there: asking on every Binance chart would let an unreachable
+      // Hyperliquid cost a Binance trade a timeout.
+      const hlNames =
+        venueOfAccount(trade.account) === "hyperliquid"
+          ? await hyperliquidNames().catch(() => [] as string[])
+          : [];
+      const pair = pairForTradeAt(trade, cat, hlNames);
       if (!pair) {
         /*
          * No pair is two very different situations and the chart has to be
@@ -746,7 +843,10 @@ export async function registerRoutes(
          * the difference is worth surfacing: it means the live book refused
          * and these bars came out of the archive.
          */
-        fallback: pair.market === "futures" && cat.every((s) => s.market !== "futures"),
+        fallback:
+          pair.venue !== "hyperliquid" &&
+          pair.market === "futures" &&
+          cat.every((s) => s.market !== "futures"),
       };
 
       const entry = new Date(trade.entryTime).getTime();
@@ -843,7 +943,7 @@ export async function registerRoutes(
       let source: "api" | "archive" = "api";
       let coveredTo = win.to;
       try {
-        const read = await readCandles(pair, interval, win.from, win.to, 1200);
+        const read = await readCandlesAt(pair, interval, win.from, win.to, 1200);
         candles = read.candles;
         source = read.source;
         coveredTo = read.coveredTo;
@@ -857,8 +957,10 @@ export async function registerRoutes(
        * a thousand times cheaper, which is not an approximation but a wrong
        * chart.
        */
+      // Hyperliquid has no spot book to settle for, and its live API answers
+      // to the present — neither fallback below applies to it.
       const spotPair =
-        pair.market === "futures"
+        pair.venue !== "hyperliquid" && pair.market === "futures"
           ? binanceSymbolForTrade(trade, cat.filter((s) => s.market === "spot"))
           : null;
       if (candles.length === 0 && spotPair) {
@@ -900,6 +1002,7 @@ export async function registerRoutes(
         market: used.market,
         interval,
         books: { ...books, fallback: books.fallback && used.market === "futures" },
+        venue: used.venue ?? "binance",
         source,
         coveredTo,
         archiveShort,

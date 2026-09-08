@@ -1,3 +1,5 @@
+import { useAccountBalances } from "@/lib/data";
+import { equityAt, fmtPercent, riskPercent } from "@shared/equity";
 /**
  * One trade, in full — the single place a trade is ever looked at.
  *
@@ -534,6 +536,12 @@ function TradeBody({
    * nothing would be indistinguishable from one that was broken.
    */
   const [rechecking, setRechecking] = useState(false);
+  // The balance logged for this account before the trade, so 1R can also be
+  // read as the share of the account it was. Blank when no such balance
+  // exists — a balance logged afterwards says nothing about what was at
+  // risk then.
+  const { data: balances = [] } = useAccountBalances();
+  const equityThen = equityAt(balances, trade.account, trade.entryTime);
   const [suggestion, setSuggestion] = useState<FieldChange[] | null>(null);
   const updateTrade = useUpdateTrade();
   /*
@@ -767,7 +775,7 @@ function TradeBody({
           </div>
           <div>
             <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
-              {m.fees > 0 ? "Net P&L" : "P&L"}
+              {m.fees > 0 || m.funding !== 0 ? "Net P&L" : "P&L"}
             </p>
             <p
               className={`font-mono text-xl font-semibold leading-none ${
@@ -777,16 +785,37 @@ function TradeBody({
             >
               {trade.status === "closed" ? fmtMoney(m.actualPnL) : "—"}
             </p>
-            {m.fees > 0 && (
-              <p className="mt-1 text-[10px] text-muted-foreground">
-                {fmtMoney(m.grossPnL)} gross − {fmtFees(m.fees)}
+            {(m.fees > 0 || m.funding !== 0) && (
+              <p className="mt-1 text-[10px] text-muted-foreground" data-testid="view-pnl-breakdown">
+                {fmtMoney(m.grossPnL)} gross
+                {m.fees > 0 && <> − {fmtFees(m.fees)} fees</>}
+                {/* Funding is signed as received, so a positive figure is money
+                    the position was paid to hold. Estimated from the venue's
+                    rate history on the opening notional, and said to be. */}
+                {m.funding !== 0 && (
+                  <span
+                    title="Estimated from the venue's funding-rate history over the hold, on the opening notional."
+                    data-testid="view-funding"
+                  >
+                    {" "}
+                    {m.funding > 0 ? "+" : "−"} {fmtFees(m.funding)} funding (est.)
+                  </span>
+                )}
               </p>
             )}
           </div>
         </div>
 
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
-          <Fig label="1R" value={`$${num(m.riskDollars, 0)}`} hint={`${num(m.risk)} pts`} />
+          <Fig
+            label="1R"
+            value={`$${num(m.riskDollars, 0)}`}
+            hint={
+              riskPercent(m.riskDollars, equityThen) != null
+                ? `${num(m.risk)} pts · ${fmtPercent(riskPercent(m.riskDollars, equityThen))} of equity`
+                : `${num(m.risk)} pts`
+            }
+          />
           <Fig
             label="Planned R:R"
             value={plannedRr != null ? num(plannedRr, 1) : "—"}

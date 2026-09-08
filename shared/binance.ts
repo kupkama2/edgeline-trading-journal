@@ -193,6 +193,12 @@ export interface BinanceSymbol {
 export interface PairRef {
   symbol: string;
   market: Market;
+  /**
+   * Which exchange the bars come from. Absent means Binance, which every
+   * caller assumed before Hyperliquid was one of the answers; "hyperliquid"
+   * means `symbol` is the venue's coin name and `market` is always futures.
+   */
+  venue?: "binance" | "hyperliquid";
 }
 
 /**
@@ -252,7 +258,6 @@ export function matchBinanceSymbol(
 ): PairRef | null {
   const key = (raw ?? "").trim().toUpperCase();
   if (!key) return null;
-  const live = catalogue.filter((s) => s.status === "TRADING");
   const pick = (rows: BinanceSymbol[]) => {
     for (const m of MARKET_RANK) {
       const hit = rows.find((s) => s.market === m);
@@ -260,20 +265,37 @@ export function matchBinanceSymbol(
     }
     return null;
   };
+  const search = (rows: BinanceSymbol[]): PairRef | null => {
+    for (const name of perpAliases(key)) {
+      // Already a pair: "BTCUSDT" typed straight in. It may exist in both books.
+      const exact = pick(rows.filter((s) => s.symbol === name));
+      if (exact) return exact;
 
-  for (const name of perpAliases(key)) {
-    // Already a pair: "BTCUSDT" typed straight in. It may exist in both books.
-    const exact = pick(live.filter((s) => s.symbol === name));
-    if (exact) return exact;
-
-    // A bare asset: "HYPE" -> the best-quoted pair it trades in.
-    const asBase = live.filter((s) => s.baseAsset === name);
-    for (const q of QUOTE_RANK) {
-      const hit = pick(asBase.filter((s) => s.quoteAsset === q));
-      if (hit) return hit;
+      // A bare asset: "HYPE" -> the best-quoted pair it trades in.
+      const asBase = rows.filter((s) => s.baseAsset === name);
+      for (const q of QUOTE_RANK) {
+        const hit = pick(asBase.filter((s) => s.quoteAsset === q));
+        if (hit) return hit;
+      }
     }
-  }
-  return null;
+    return null;
+  };
+
+  /*
+   * Live pairs first, always. Then — and only when nothing live matches —
+   * the pairs the liveness census marked DELISTED. Those are perps whose
+   * folder in the archive has stopped growing, and the archive still holds
+   * every bar they ever printed: a trade from before the delisting has a
+   * chart and a settled outcome waiting in those files, and refusing to
+   * read them would throw away an answer that exists. What this must never
+   * do is prefer a dead pair to a live one, which the ordering guarantees.
+   * Binance's own non-trading statuses (BREAK, SETTLING) are not consulted:
+   * a halted pair is a pair whose price is not to be trusted right now.
+   */
+  return (
+    search(catalogue.filter((s) => s.status === "TRADING")) ??
+    search(catalogue.filter((s) => s.status === "DELISTED"))
+  );
 }
 
 /**

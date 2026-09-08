@@ -32,7 +32,7 @@ import { egressFor } from "./egress";
 import { settleAll } from "./pool";
 
 /** Overridable so the whole path can be driven against a local stub. */
-const ARCHIVE_BASE = (process.env.BINANCE_ARCHIVE_BASE || "https://data.binance.vision").replace(
+export const ARCHIVE_BASE = (process.env.BINANCE_ARCHIVE_BASE || "https://data.binance.vision").replace(
   /\/+$/,
   "",
 );
@@ -172,6 +172,38 @@ async function fetchPiece(url: string): Promise<Candle[]> {
     if (cache.size >= CACHE_MAX) cache.delete(cache.keys().next().value as string);
     cache.set(url, bars);
     return bars;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * One archive file as text, for the readers that are not candles.
+ *
+ * The funding-rate files live in the same bucket as the klines and unzip
+ * the same way; only what is inside differs. Cached by URL like the day
+ * files, because a sweep over a month of trades asks for the same month's
+ * funding again and again.
+ */
+const textCache = new Map<string, string>();
+export async function fetchArchiveText(url: string): Promise<string> {
+  const hit = textCache.get(url);
+  if (hit != null) return hit;
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 20_000);
+  try {
+    const res = await undiciFetch(url, {
+      signal: ctl.signal,
+      dispatcher: egressFor(ARCHIVE_BASE),
+    } as any);
+    if (!res.ok) throw new Error(`archive → HTTP ${res.status} on ${new URL(url).pathname}`);
+    const entries = unzipSync(new Uint8Array(await res.arrayBuffer()));
+    const name = Object.keys(entries)[0];
+    if (!name) throw new Error(`archive → empty zip at ${new URL(url).pathname}`);
+    const text = strFromU8(entries[name]);
+    if (textCache.size >= CACHE_MAX) textCache.delete(textCache.keys().next().value as string);
+    textCache.set(url, text);
+    return text;
   } finally {
     clearTimeout(timer);
   }
