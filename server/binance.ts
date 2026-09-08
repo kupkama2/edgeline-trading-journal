@@ -399,3 +399,24 @@ export function intervalFor(spanMs: number): Interval {
   if (hours <= 24 * 14) return "1h";
   return "4h";
 }
+
+/**
+ * The spot mirror's last price for each pair, in one request.
+ *
+ * For an open trade's "where is it now". The perp's own price lives on the
+ * futures API, which refuses a US host, and this is the book that answers
+ * from anywhere — within basis of the perp, and labelled spot wherever it
+ * is shown, because within basis is not the same as the price the position
+ * is marked at.
+ */
+export async function fetchSpotPrices(symbols: string[]): Promise<Record<string, number>> {
+  const out: Record<string, number> = {};
+  if (symbols.length === 0) return out;
+  const q = encodeURIComponent(JSON.stringify(symbols));
+  const rows: any = await getAny(SPOT_HOSTS, `/api/v3/ticker/price?symbols=${q}`);
+  for (const r of Array.isArray(rows) ? rows : []) {
+    const p = Number(r?.price);
+    if (typeof r?.symbol === "string" && Number.isFinite(p) && p > 0) out[r.symbol] = p;
+  }
+  return out;
+}

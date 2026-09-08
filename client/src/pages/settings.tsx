@@ -1,3 +1,7 @@
+import { useAccountBalances, useAddAccountBalance, useHyperliquidSync } from "@/lib/data";
+import { isWalletAddress, venueOfAccount } from "@shared/hyperliquid";
+import { fmtAmount } from "@shared/metrics";
+import { latestEquity } from "@shared/equity";
 import { useMemo, useState } from "react";
 import { MembersCard } from "@/components/members-card";
 import { Card } from "@/components/ui/card";
@@ -47,11 +51,60 @@ function AccountFeesRow({
   others,
 }: {
   name: string;
-  existing: { feeMode: string; makerFee: number; takerFee: number; kind?: string } | undefined;
+  existing:
+    | { feeMode: string; makerFee: number; takerFee: number; kind?: string; wallet?: string | null }
+    | undefined;
   /** The other accounts, for folding a passed evaluation into one of them. */
   others: string[];
 }) {
   const save = useSaveAccountSettings();
+  const sync = useHyperliquidSync();
+  const { data: balances = [] } = useAccountBalances();
+  const addBalance = useAddAccountBalance();
+  const [wallet, setWallet] = useState(existing?.wallet ?? "");
+  const [balance, setBalance] = useState("");
+  const equity = latestEquity(balances, name);
+  const walletDirty = (existing?.wallet ?? "") !== wallet.trim();
+  const walletOk = wallet.trim() === "" || isWalletAddress(wallet);
+  const looksHl = venueOfAccount(name) === "hyperliquid";
+
+  async function saveWallet() {
+    await save.mutateAsync({
+      name,
+      feeMode: mode,
+      makerFee: Number(maker) || 0,
+      takerFee: Number(taker) || 0,
+      wallet: wallet.trim() || null,
+    });
+    toast({
+      title: wallet.trim() ? "Wallet saved" : "Wallet cleared",
+      description: wallet.trim()
+        ? `${name} will sync its fills from Hyperliquid.`
+        : `${name} is back to trades logged by hand.`,
+    });
+  }
+
+  async function syncNow() {
+    const r = await sync.mutateAsync(name);
+    const a = r.accounts[0];
+    if (!a) return toast({ title: "Nothing synced", description: r.message ?? "No wallet on this account." });
+    if (a.error) return toast({ title: "Hyperliquid did not answer", description: a.error });
+    const parts = [
+      `${a.created} new`,
+      `${a.updated} updated`,
+      `${a.unchanged} unchanged`,
+      ...(a.unreconstructed ? [`${a.unreconstructed} fill${a.unreconstructed === 1 ? "" : "s"} from before the record`] : []),
+    ];
+    toast({ title: `Synced ${name}`, description: `${a.fills} fills read — ${parts.join(", ")}.` });
+  }
+
+  async function logBalance() {
+    const v = Number(balance.replace(/[,$\s]/g, ""));
+    if (!Number.isFinite(v) || v < 0) return;
+    await addBalance.mutateAsync({ account: name, balance: v });
+    setBalance("");
+    toast({ title: "Balance logged", description: `${name} is ${fmtAmount(v, 0)} as of now.` });
+  }
   const merge = useMergeAccounts();
   const { toast } = useToast();
   const isEval = existing?.kind === "evaluation";
@@ -134,7 +187,7 @@ function AccountFeesRow({
           onChange={(e) => setMaker(e.target.value)}
           inputMode="decimal"
           placeholder="0"
-          className="h-7 w-16 font-mono text-[11px]"
+          className="h-7 w-20 font-mono text-[11px]"
           data-testid={`input-maker-${name}`}
         />
       </label>
@@ -145,7 +198,7 @@ function AccountFeesRow({
           onChange={(e) => setTaker(e.target.value)}
           inputMode="decimal"
           placeholder="0"
-          className="h-7 w-16 font-mono text-[11px]"
+          className="h-7 w-20 font-mono text-[11px]"
           data-testid={`input-taker-${name}`}
         />
       </label>
@@ -163,6 +216,86 @@ function AccountFeesRow({
           Save
         </Button>
       )}
+
+      {/*
+        What the account is WORTH, and where its trades come from.
+
+        The balance is a snapshot, logged: deposits and withdrawals move it
+        in ways the journal cannot see, so it is never computed. Once one is
+        logged, every risk figure gains a percentage beside its dollars. The
+        wallet is only offered where the name suggests a venue that has one;
+        with it saved, the venue writes this account's trades itself.
+      */}
+      <div
+        className="flex w-full flex-wrap items-center gap-2 border-t border-border/40 pt-1.5 text-[10px]"
+        data-testid={`account-equity-${name}`}
+      >
+        <span className="text-muted-foreground">
+          {equity != null ? (
+            <>
+              balance <span className="font-mono text-foreground">{fmtAmount(equity, 0)}</span>
+            </>
+          ) : (
+            "no balance logged — risk shows in dollars only"
+          )}
+        </span>
+        <Input
+          value={balance}
+          onChange={(e) => setBalance(e.target.value)}
+          inputMode="decimal"
+          placeholder={equity != null ? "new balance" : "balance now"}
+          className="h-7 w-28 font-mono text-[11px]"
+          data-testid={`input-balance-${name}`}
+        />
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 px-2 text-[11px]"
+          onClick={logBalance}
+          disabled={addBalance.isPending || balance.trim() === ""}
+          data-testid={`button-log-balance-${name}`}
+        >
+          Log
+        </Button>
+
+        {(looksHl || existing?.wallet) && (
+          <span className="ml-auto flex flex-wrap items-center gap-1.5">
+            <Input
+              value={wallet}
+              onChange={(e) => setWallet(e.target.value)}
+              placeholder="0x… Hyperliquid wallet"
+              spellCheck={false}
+              className={`h-7 w-56 max-w-full font-mono text-[11px] ${walletOk ? "" : "border-primary/60"}`}
+              data-testid={`input-wallet-${name}`}
+            />
+            {walletDirty && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 px-2 text-[11px]"
+                onClick={saveWallet}
+                disabled={save.isPending || !walletOk}
+                data-testid={`button-save-wallet-${name}`}
+              >
+                <Check className="mr-1 h-3 w-3" />
+                Save
+              </Button>
+            )}
+            {existing?.wallet && !walletDirty && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 px-2 text-[11px]"
+                onClick={syncNow}
+                disabled={sync.isPending}
+                data-testid={`button-sync-${name}`}
+              >
+                {sync.isPending ? "Syncing…" : "Sync fills"}
+              </Button>
+            )}
+          </span>
+        )}
+      </div>
 
       {/*
         What the account IS, which decides whether it counts.

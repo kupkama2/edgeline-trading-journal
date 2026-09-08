@@ -193,6 +193,12 @@ export interface BinanceSymbol {
 export interface PairRef {
   symbol: string;
   market: Market;
+  /**
+   * Which exchange the bars come from. Absent means Binance, which every
+   * caller assumed before Hyperliquid was one of the answers; "hyperliquid"
+   * means `symbol` is the venue's coin name and `market` is always futures.
+   */
+  venue?: "binance" | "hyperliquid";
 }
 
 /**

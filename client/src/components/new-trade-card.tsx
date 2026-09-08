@@ -1,3 +1,5 @@
+import { useAccountBalances } from "@/lib/data";
+import { fmtPercent, latestEquity, parseRiskBudget, riskPercent } from "@shared/equity";
 /**
  * The entry card: log a setup by hand or drop a chart and confirm the numbers.
  */
@@ -296,6 +298,15 @@ export function NewTradeCard({
   const [sizeMode, setSizeMode] = useState<"auto" | "manual">("manual");
   /** Empty means "risk is whatever the size works out to". */
   const [riskOverride, setRiskOverride] = useState("");
+  /*
+   * The account's logged balance, so a budget can be typed as "1%" and so
+   * every dollar of risk here can also be read as a share of the account.
+   * Nothing is computed from trades: a balance is a snapshot somebody
+   * logged in Settings, and without one the percent is simply absent.
+   */
+  const { data: balances = [] } = useAccountBalances();
+  const equity = latestEquity(balances, account);
+  const budget = parseRiskBudget(riskOverride, equity);
   useEffect(() => {
     setCustomMult(remembered != null ? String(remembered) : "");
   }, [remembered, v.symbol]);
@@ -330,11 +341,11 @@ export function NewTradeCard({
         symbol: v.symbol ?? "",
         entryPrice: Number(v.entryPrice),
         initialStop: Number(v.initialStop),
-        riskDollars: Number(riskOverride),
+        riskDollars: budget.dollars ?? 0,
         sizeUnit,
         pointValue: perContract,
       }),
-    [v.symbol, v.entryPrice, v.initialStop, riskOverride, sizeUnit, perContract],
+    [v.symbol, v.entryPrice, v.initialStop, budget.dollars, sizeUnit, perContract],
   );
 
   // Keep the size honest to the risk while risk is driving. Writing only on a
@@ -1583,7 +1594,19 @@ export function NewTradeCard({
                   <span className="text-foreground">
                     {preview.riskDollars != null ? `$${num(preview.riskDollars, 0)}` : "—"}
                   </span>
+                  {/* The same risk as a share of the account, once a balance
+                      is logged — the number the sizing read is really about. */}
+                  {riskPercent(preview.riskDollars, equity) != null && (
+                    <span data-testid="text-risk-percent">
+                      {" "}({fmtPercent(riskPercent(preview.riskDollars, equity))})
+                    </span>
+                  )}
                 </span>
+                {budget.percent != null && equity == null && (
+                  <span className="text-amber-500" data-testid="text-budget-needs-balance">
+                    {budget.percent}% of what? log this account's balance in Settings
+                  </span>
+                )}
                 <span title="how far the stop is from the entry, in price">
                   stop <span className="text-foreground">{num(preview.risk)}</span> pts
                 </span>

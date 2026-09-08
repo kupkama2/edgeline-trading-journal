@@ -23,7 +23,6 @@
  */
 import {
   firstTouch,
-  pairForTradeWithFallback,
   SEED_CATALOGUE,
   pathExtremes,
   scanWindow,
@@ -32,7 +31,10 @@ import {
 } from "@shared/binance";
 import { outcomeUnknown, pathIncomplete } from "@shared/aftermath";
 import type { TradeWithTags } from "@shared/schema";
-import { fetchCandles, fetchCatalogue, intervalFor, lastListed, readCandles } from "./binance";
+import { fetchCatalogue, intervalFor, lastListed } from "./binance";
+import { fetchCandlesAt, pairForTradeAt, readCandlesAt } from "./candles";
+import { fundingForTrade } from "./funding";
+import { hyperliquidNames } from "./hyperliquid";
 import { probeListed } from "./binance-listing";
 import { catalogue, collapsePairSymbolsOnce, storageFor } from "./storage";
 
@@ -48,6 +50,9 @@ const PARTIAL_TTL_MS = 60 * 60 * 1000;
 const RECHECK_MS = 60 * 60 * 1000;
 /** Work cap per call, so a first run on a long history stays polite. */
 const MAX_PER_RUN = 25;
+/** How long a closed trade keeps asking for funding the venue has not published. */
+const FUNDING_HORIZON_MS = 60 * 24 * 60 * 60 * 1000;
+const FUNDING_RECHECK_MS = 24 * 60 * 60 * 1000;
 
 export interface Resolved {
   tradeId: number;
@@ -121,6 +126,8 @@ export interface CheckSummary {
    * only extensions of an extreme qualify.
    */
   suggestions: TradeSuggestion[];
+  /** Trades whose funding over the hold was estimated this run. */
+  funded: { tradeId: number; symbol: string; funding: number; events: number }[];
   /** Set when the price feed itself failed; the caller should say so quietly. */
   error?: string;
 }
@@ -230,6 +237,7 @@ export async function checkOutcomes(userId: number, only?: number): Promise<Chec
     unmatched: 0,
     measured: [],
     suggestions: [],
+    funded: [],
   };
 
   let cat: BinanceSymbol[];
@@ -239,23 +247,40 @@ export async function checkOutcomes(userId: number, only?: number): Promise<Chec
     return { ...out, error: String(err?.message ?? err) };
   }
   if (cat.length === 0) return { ...out, error: "No Binance pair list available yet." };
+  const hlNames = await hyperliquidNames().catch(() => [] as string[]);
 
   const all = await store.listTrades();
   const now = Date.now();
+  /*
+   * Three errands, not one. A trade can have its plan outcome settled and
+   * still be missing MAE and MFE — the archive had not published the day of
+   * its own exit when it was last read — and the worklist used to be
+   * `outcomeUnknown` alone, so those numbers were withheld once and never
+   * returned to. The third errand, funding, needs a rate history rather
+   * than candles: it is asked once, then daily until the venue has published
+   * the settlements the hold spanned (Binance writes each month's file after
+   * the month ends), and not at all past sixty days, by which point it never
+   * will.
+   */
+  const wantsRead = (t: TradeWithTags) =>
+    only != null || outcomeUnknown(t) || pathIncomplete(t, now);
+  const readAllowed = (t: TradeWithTags) => {
+    if (only != null) return true;
+    const at = t.outcomeCheckedAt;
+    return !at || now - new Date(at).getTime() > RECHECK_MS;
+  };
+  const fundingDue = (t: TradeWithTags) => {
+    if (t.status !== "closed" || t.exitPrice == null || !t.exitTime || t.contract) return false;
+    if (t.funding != null) return false;
+    const exit = new Date(t.exitTime).getTime();
+    if (!Number.isFinite(exit) || now - exit > FUNDING_HORIZON_MS) return false;
+    const at = t.fundingCheckedAt;
+    return !at || now - new Date(at).getTime() > FUNDING_RECHECK_MS;
+  };
   const due = all
-    /*
-     * Two errands, not one. A trade can have its plan outcome settled and
-     * still be missing MAE and MFE — the archive had not published the day of
-     * its own exit when it was last read — and the worklist used to be
-     * `outcomeUnknown` alone, so those numbers were withheld once and never
-     * returned to.
-     */
-    .filter((t) => (only != null ? t.id === only : outcomeUnknown(t) || pathIncomplete(t, now)))
-    .filter((t) => {
-      if (only != null) return true;
-      const at = (t as any).outcomeCheckedAt as string | null | undefined;
-      return !at || now - new Date(at).getTime() > RECHECK_MS;
-    })
+    .filter((t) =>
+      only != null ? t.id === only : (wantsRead(t) && readAllowed(t)) || fundingDue(t),
+    )
     // Newest exit first: the trade you can still picture is the one worth
     // spending the call budget on when there are more than fit in one run.
     .sort((a, b) => (b.exitTime ?? b.entryTime).localeCompare(a.exitTime ?? a.entryTime));
@@ -286,17 +311,18 @@ export async function checkOutcomes(userId: number, only?: number): Promise<Chec
    */
   const matched: { trade: TradeWithTags; pair: PairRef }[] = [];
   for (const t of due) {
-    const pair = pairForTradeWithFallback(t, cat);
+    const pair = pairForTradeAt(t, cat, hlNames);
     if (pair) matched.push({ trade: t, pair });
     else out.unmatched++;
   }
 
   for (const { trade: t, pair } of only != null ? matched : matched.slice(0, MAX_PER_RUN)) {
     try {
-      const read = await readTrade(t, pair);
+      const blank = { mae: null, mfe: null, postExitPeak: null, postExitAdverse: null };
+      const read = wantsRead(t) ? await readTrade(t, pair) : { settled: null, path: blank };
       out.checked++;
       const stamp = new Date().toISOString();
-      const patch: Record<string, unknown> = { outcomeCheckedAt: stamp };
+      const patch: Record<string, unknown> = wantsRead(t) ? { outcomeCheckedAt: stamp } : {};
 
       /*
        * The guard against overwriting a human answer, at the point where the
@@ -388,7 +414,21 @@ export async function checkOutcomes(userId: number, only?: number): Promise<Chec
         });
       }
 
-      await store.updateTrade(t.id, patch as any);
+      if (only != null || fundingDue(t)) {
+        try {
+          const f = await fundingForTrade(t, pair);
+          patch.fundingCheckedAt = stamp;
+          if (f && f.events > 0) {
+            patch.funding = f.funding;
+            out.funded.push({ tradeId: t.id, symbol: t.symbol, funding: f.funding, events: f.events });
+          }
+        } catch {
+          // Funding refines the P&L; it is not the P&L. A venue that will
+          // not say costs the estimate, never the settle beside it.
+        }
+      }
+
+      if (Object.keys(patch).length) await store.updateTrade(t.id, patch as any);
     } catch (err: any) {
       // One bad symbol must not abandon the rest of the run.
       out.error ??= String(err?.message ?? err);
@@ -418,7 +458,7 @@ async function readTrade(
 
   const plan = { direction: t.direction, stop: t.initialStop, target: t.initialTarget };
   const coarse = intervalFor(to - from);
-  const read = await readCandles(pair, coarse, from, to);
+  const read = await readCandlesAt(pair, coarse, from, to);
   const bars = read.candles;
 
   const exitMs = t.exitTime ? new Date(t.exitTime).getTime() : null;
@@ -469,7 +509,7 @@ async function readTrade(
      * minute containing a full stop-to-target round trip is a genuine wick
      * event rather than ordinary movement.
      */
-    const fine = await fetchCandles(pair, "1m", touch.at, touch.at + barSpanMs(coarse));
+    const fine = await fetchCandlesAt(pair, "1m", touch.at, touch.at + barSpanMs(coarse));
     touch = firstTouch(fine, plan);
     // Still both inside one minute: unknowable from candles. Leave it parked
     // rather than pick the flattering one.

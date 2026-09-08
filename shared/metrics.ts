@@ -12,6 +12,11 @@ export interface TradeMetrics {
   grossPnL: number | null;
   /** Dollars paid in commission on this trade; 0 when not recorded. */
   fees: number;
+  /**
+   * Net funding over the hold as it hit the account — positive received,
+   * negative paid. Zero when unknown, and never for anything not a perp.
+   */
+  funding: number;
   mfeR: number | null;
   maeR: number | null;
   potentialR: number | null;
@@ -95,6 +100,15 @@ export function computeMetrics(t: Trade & { fills?: TradeFill[] }): TradeMetrics
   // nothing to deduct from. When zero (all history), every branch below is
   // bit-identical to the pre-fee arithmetic.
   const fees = t.exitPrice != null ? (t.fees ?? 0) : 0;
+  /*
+   * Funding is the other thing between the price action and the account.
+   * It is signed as received, so it comes OFF the costs: a short paid to
+   * hold has a smaller cost than its fees, a long that paid has a larger
+   * one. Zero for every trade it was never estimated on — the same
+   * bit-identical guarantee fees carry.
+   */
+  const funding = t.exitPrice != null ? (t.funding ?? 0) : 0;
+  const costs = fees - funding;
 
   const grossPnL =
     filledPnL != null
@@ -102,13 +116,13 @@ export function computeMetrics(t: Trade & { fills?: TradeFill[] }): TradeMetrics
       : t.exitPrice != null
         ? sign * (t.exitPrice - t.entryPrice) * perPoint
         : null;
-  const actualPnL = grossPnL != null ? grossPnL - fees : null;
+  const actualPnL = grossPnL != null ? grossPnL - costs : null;
   const actualR =
     safe && t.exitPrice != null
       ? filledPnL != null && riskDollars > 0
-        ? (filledPnL - fees) / riskDollars
-        : fees !== 0 && riskDollars > 0
-          ? (sign * (t.exitPrice - t.entryPrice) * perPoint - fees) / riskDollars
+        ? (filledPnL - costs) / riskDollars
+        : costs !== 0 && riskDollars > 0
+          ? (sign * (t.exitPrice - t.entryPrice) * perPoint - costs) / riskDollars
           : (sign * (t.exitPrice - t.entryPrice)) / risk
       : null;
   const mfeR = safe && t.mfe != null ? (sign * (t.mfe - t.entryPrice)) / risk : null;
@@ -148,6 +162,7 @@ export function computeMetrics(t: Trade & { fills?: TradeFill[] }): TradeMetrics
     actualPnL,
     grossPnL,
     fees,
+    funding,
     mfeR,
     maeR,
     potentialR,

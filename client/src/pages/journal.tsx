@@ -21,6 +21,8 @@ import { NewTradeCard } from "@/components/new-trade-card";
 import { useLocation } from "wouter";
 import { ClosedTradeRow, OpenTradeRow, PendingTradeRow } from "@/components/trade-rows";
 import { OwedCard } from "@/components/owed-card";
+import { HealthCard } from "@/components/health-card";
+import { useMarks } from "@/lib/data";
 import { openRisk, type SideRisk } from "@shared/exposure";
 import { fmtMoney } from "@shared/metrics";
 import { useOutcomeWatch } from "@/lib/outcome-watch";
@@ -123,6 +125,11 @@ function SortControl({
 
 export default function Journal() {
   const { data: trades, isLoading } = useTrades();
+  // Where each open crypto trade's market is now — asked only while there
+  // is something open to ask about.
+  const { data: marks } = useMarks(
+    (trades ?? []).some((t) => t.status === "open" && !t.contract?.trim()),
+  );
   const { data: tags = [] } = useMistakeTags();
   const { activeStyleId, scope } = useStyleFilter();
   const [, navigate] = useLocation();
@@ -221,6 +228,11 @@ export default function Journal() {
       {/* What the log is still missing, above the log itself — an errand
           nobody can see is an errand nobody runs. */}
       <OwedCard trades={closed} onOpen={openTrade} />
+
+      {/* And what the log is missing about itself: stops, accounts, exit
+          reasons — the blanks that drop a trade out of the numbers without
+          a word. */}
+      <HealthCard trades={scoped} onOpen={openTrade} />
 
       {/* The entry form gets its own column only while it is open. Closed, it
           is one line, and holding a half-empty column beside it just to keep
@@ -330,6 +342,7 @@ export default function Journal() {
                 <OpenTradeRow
                   key={t.id}
                   t={t}
+                  mark={marks?.[t.id] ?? null}
                   onSelect={() => viewTrade(t)}
                   onEdit={() => openTrade(t)}
                   onResolve={() => setResolving(t)}

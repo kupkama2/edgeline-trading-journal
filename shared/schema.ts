@@ -253,6 +253,19 @@ export const trades = pgTable("trades", {
    */
   fees: doublePrecision("fees"),
   /**
+   * Net funding over the hold, as it hit the account: positive received,
+   * negative paid. Estimated from the venue's rate history for perps; null
+   * until estimated, and never for anything that is not a perp.
+   */
+  funding: doublePrecision("funding"),
+  fundingCheckedAt: text("funding_checked_at"),
+  /**
+   * Where the trade came from when a venue wrote it rather than a person:
+   * "hl:<coin>:<first fill id>". Re-syncing finds the trade by this and
+   * fills in its exit instead of logging it twice.
+   */
+  externalId: text("external_id"),
+  /**
    * Green flags — JSON string[] of what went RIGHT ("Perfect Entry", "Let It
    * Run"). The positive counterpart to mistake tags, and sliced the same way
    * on Analysis so "perfect entry" earns an expectancy figure rather than a
@@ -607,7 +620,36 @@ export const accountSettings = pgTable("account_settings", {
    * "live" by default, so every account that already exists is unaffected.
    */
   kind: text("kind").notNull().default("live"), // 'live' | 'evaluation'
+  /** Hyperliquid wallet address, when this account IS one. Fills sync from it. */
+  wallet: text("wallet"),
 });
+
+/**
+ * What an account was worth, when.
+ *
+ * A balance is logged, not computed: deposits, withdrawals and the venue's
+ * own accounting all move it in ways the journal cannot see. Each row is a
+ * snapshot, and the equity behind any trade is the latest snapshot taken
+ * before it — which is why a row's date matters as much as its number.
+ */
+export const accountBalances = pgTable("account_balances", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull(),
+  account: text("account").notNull(),
+  /** ISO instant the balance was true at. */
+  at: text("at").notNull(),
+  balance: doublePrecision("balance").notNull(),
+  note: text("note"),
+});
+
+export const insertAccountBalanceSchema = z.object({
+  account: z.string().min(1).max(80),
+  at: z.string().min(1).optional(),
+  balance: z.number().finite(),
+  note: z.string().max(200).nullable().optional(),
+});
+export type AccountBalance = typeof accountBalances.$inferSelect;
+export type InsertAccountBalance = z.infer<typeof insertAccountBalanceSchema>;
 
 export const feeModeEnum = z.enum(["percent", "perContract"]);
 export const accountKindEnum = z.enum(["live", "evaluation"]);
@@ -617,6 +659,12 @@ export const upsertAccountSettingsSchema = z.object({
   makerFee: z.number().min(0),
   takerFee: z.number().min(0),
   kind: accountKindEnum.optional(),
+  /** Omitted leaves it alone; null clears it. */
+  wallet: z
+    .string()
+    .regex(/^0x[0-9a-fA-F]{40}$/, "A Hyperliquid address is 0x followed by 40 hex characters")
+    .nullable()
+    .optional(),
 });
 
 /** Move every trade from one account onto another — an eval that got funded. */

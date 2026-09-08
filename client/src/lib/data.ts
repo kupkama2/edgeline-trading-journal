@@ -17,6 +17,8 @@ import type {
   OrderRowParseResult,
 } from "@shared/schema";
 import type { InsightsBundle, WeeklyInsights } from "@shared/weekly-insights";
+import type { AccountBalance } from "@shared/schema";
+import type { Mark } from "@shared/marks";
 
 export function useTrades() {
   return useQuery<TradeWithTags[]>({ queryKey: ["/api/trades"] });
@@ -101,6 +103,8 @@ export function useTradeCandles(tradeId: number | null, interval?: string) {
       fallback?: boolean;
     };
     candles: { t: number; o: number; h: number; l: number; c: number }[];
+    /** Which exchange the bars are from. Binance unless the account says otherwise. */
+    venue?: "binance" | "hyperliquid";
     /** Live API, or the day-files — which stop a day or so short of now. */
     source?: "api" | "archive";
     /** The last instant the archive's files reach, when they were the source. */
@@ -608,4 +612,73 @@ export async function fileToDownscaledDataUrl(file: File): Promise<string> {
   } catch {
     return original;
   }
+}
+
+/* ------------------------------- venues ------------------------------- */
+
+export interface SyncSummary {
+  accounts: {
+    account: string;
+    fills: number;
+    created: number;
+    updated: number;
+    unchanged: number;
+    unreconstructed: number;
+    error?: string;
+  }[];
+  message?: string;
+}
+
+/**
+ * Pull a wallet's fills into the journal. Every account naming a wallet, or
+ * one by name. Writes trades, so the trade list is refreshed after.
+ */
+export function useHyperliquidSync() {
+  return useMutation({
+    mutationFn: async (account?: string) =>
+      (await apiRequest("POST", "/api/hyperliquid/sync", account ? { account } : {})).json() as Promise<SyncSummary>,
+    onSuccess: invalidateTrades,
+  });
+}
+
+/* ------------------------------ balances ------------------------------ */
+
+const invalidateBalances = () =>
+  queryClient.invalidateQueries({ queryKey: ["/api/account-balances"] });
+
+export function useAccountBalances() {
+  return useQuery<AccountBalance[]>({ queryKey: ["/api/account-balances"] });
+}
+
+export function useAddAccountBalance() {
+  return useMutation({
+    mutationFn: async (v: { account: string; balance: number; at?: string; note?: string | null }) =>
+      (await apiRequest("POST", "/api/account-balances", v)).json() as Promise<AccountBalance>,
+    onSuccess: invalidateBalances,
+  });
+}
+
+export function useDeleteAccountBalance() {
+  return useMutation({
+    mutationFn: async (id: number) => {
+      await apiRequest("DELETE", `/api/account-balances/${id}`);
+    },
+    onSuccess: invalidateBalances,
+  });
+}
+
+/* -------------------------------- marks -------------------------------- */
+
+/**
+ * Where every open crypto trade's market is now. Polled while the journal
+ * is on screen and there is something open; a minute is plenty for a
+ * glance and gentle on two public venues.
+ */
+export function useMarks(enabled: boolean) {
+  return useQuery<Record<number, Mark & { book: "perp" | "spot" }>>({
+    queryKey: ["/api/marks"],
+    enabled,
+    staleTime: 30_000,
+    refetchInterval: enabled ? 60_000 : false,
+  });
 }
