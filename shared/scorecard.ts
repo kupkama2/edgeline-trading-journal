@@ -51,6 +51,20 @@ export interface Scorecard {
   /** Winners and losers behind winRate, for the same reason. */
   wins: number;
   losses: number;
+  /**
+   * Closed trades with a stop, so an R could be measured: the win rate's
+   * denominator and everything else in R. A closed trade with no stop —
+   * which a venue's fills can produce — is money the account made or lost
+   * and no R at all, so it is in the dollar figures and out of these.
+   */
+  measured: number;
+  unmeasured: number;
+  /**
+   * Closed trades with no fee recorded. Fees are a click on the close, and
+   * a trade nobody clicked for counts as if it had traded free — which is
+   * the one way these net figures can quietly overstate.
+   */
+  noFee: number;
   /** Van Tharp's System Quality Number: mean/σ × √n, n capped at 100. */
   sqn: number;
   /** Total realised R and dollars, net of fees. */
@@ -82,8 +96,18 @@ export function scorecard(trades: TradeWithTags[]): Scorecard {
     .slice()
     .sort((a, b) => (a.exitTime ?? a.entryTime).localeCompare(b.exitTime ?? b.entryTime));
   const rows = closed.map((t) => ({ t, m: computeMetrics(t) }));
-  const rs = rows.map((r) => r.m.actualR ?? 0);
+  /*
+   * R needs a stop; money does not. A closed trade with no stop used to be
+   * folded in as 0R — not a win, but in the denominator, and a flat step
+   * in the curve — which understated the win rate and diluted expectancy
+   * by exactly the number of such trades. It is in the dollar figures,
+   * where it belongs, and counted so the card can say it was left out.
+   */
+  const measured = rows.filter((r) => r.m.actualR != null);
+  const rs = measured.map((r) => r.m.actualR as number);
   const pnls = rows.map((r) => r.m.actualPnL ?? 0);
+  const unmeasured = rows.length - measured.length;
+  const noFee = rows.filter((r) => r.t.fees == null).length;
 
   const wins = rs.filter((r) => r > 0);
   const losses = rs.filter((r) => r <= 0);
@@ -153,7 +177,7 @@ export function scorecard(trades: TradeWithTags[]): Scorecard {
 
   return {
     count: closed.length,
-    winRate: closed.length ? wins.length / closed.length : 0,
+    winRate: measured.length ? wins.length / measured.length : 0,
     payoff: avgLoss > 0 ? avgWin / avgLoss : avgWin > 0 ? Infinity : 0,
     expectancyR,
     profitFactor: grossLoss > 0 ? grossWin / grossLoss : grossWin > 0 ? Infinity : 0,
@@ -161,6 +185,9 @@ export function scorecard(trades: TradeWithTags[]): Scorecard {
     grossLoss,
     wins: wins.length,
     losses: losses.length,
+    measured: measured.length,
+    unmeasured,
+    noFee,
     sqn,
     totalR: rs.reduce((a, b) => a + b, 0),
     totalPnL: pnls.reduce((a, b) => a + b, 0),

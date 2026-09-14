@@ -220,7 +220,11 @@ export function ScorecardCard({ trades }: { trades: TradeWithTags[] }) {
             <Figure
               label="Win rate"
               value={`${Math.round(s.winRate * 100)}%`}
-              hint={`${s.wins} of ${s.count}`}
+              hint={
+                s.unmeasured > 0
+                  ? `${s.wins} of ${s.measured} · ${s.unmeasured} with no stop left out`
+                  : `${s.wins} of ${s.count}`
+              }
               testId="score-winrate"
               onClick={toDistribution}
               explains="the distribution behind it"
@@ -236,7 +240,7 @@ export function ScorecardCard({ trades }: { trades: TradeWithTags[] }) {
             <Figure
               label="Expectancy"
               value={fmtR(s.expectancyR)}
-              hint="per trade, net of fees"
+              hint="per trade, net of fees and funding"
               tone={s.expectancyR >= 0 ? "good" : "bad"}
               testId="score-expectancy"
               onClick={toDistribution}
@@ -255,6 +259,16 @@ export function ScorecardCard({ trades }: { trades: TradeWithTags[] }) {
               explains="the equity curve"
             />
           </div>
+
+          {/* The one way these net figures can overstate: a trade closed
+              without a fee clicked in counts as if it traded free. Said
+              here, beside the numbers it flatters, rather than nowhere. */}
+          {s.noFee > 0 && (
+            <p className="mt-2 text-[10px] leading-snug text-amber-500" data-testid="score-fee-gap">
+              {s.noFee} of {s.count} closed trades have no fee logged and count as if they traded
+              free. The journal lists them under &ldquo;closed without a fee&rdquo;.
+            </p>
+          )}
         </div>
 
         <div className="min-w-0">

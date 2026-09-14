@@ -153,3 +153,39 @@ describe("coach", () => {
     expect([...costs].sort((a, b) => b - a)).toEqual(costs);
   });
 });
+
+describe("what the scorecard counts, and what it says it left out", () => {
+  it("nets fees before deciding whether a trade won", () => {
+    // +$2 of price action, $5 of fees: a loss, and counted as one.
+    const s = scorecard([trade({ exitPrice: 100.2, fees: 5 }), ...many(3, 1)]);
+    expect(s.wins).toBe(3);
+    expect(s.losses).toBe(1);
+    expect(s.totalPnL).toBeCloseTo(0.2 - 5 + 3 * 10);
+    expect(s.noFee).toBe(3);
+  });
+
+  it("keeps a closed trade with no stop in the money and out of the R figures", () => {
+    /*
+     * A venue's fills can close a trade nobody set a stop on. It made or
+     * lost real money, so the dollar figures have it; it has no R, so it is
+     * neither a win nor a loss and not a flat step in the curve — and the
+     * card is told how many were left out, rather than quietly diluting
+     * the win rate by that many.
+     */
+    const s = scorecard([...many(2, 1), trade({ exitPrice: 90 }), trade({ initialStop: null, exitPrice: 130 })]);
+    expect(s.count).toBe(4);
+    expect(s.measured).toBe(3);
+    expect(s.unmeasured).toBe(1);
+    expect(s.wins).toBe(2);
+    expect(s.losses).toBe(1);
+    expect(s.winRate).toBeCloseTo(2 / 3);
+    expect(s.expectancyR).toBeCloseTo((1 + 1 - 1) / 3);
+    expect(s.curve).toHaveLength(3);
+    expect(s.totalPnL).toBeCloseTo(10 + 10 - 10 + 30);
+  });
+
+  it("counts the trades that carry no fee at all", () => {
+    const s = scorecard([trade({ fees: 1.2 }), trade({ fees: 0 }), trade({ fees: null })]);
+    expect(s.noFee).toBe(1);
+  });
+});

@@ -22,7 +22,7 @@ import { useLocation } from "wouter";
 import { ClosedTradeRow, OpenTradeRow, PendingTradeRow } from "@/components/trade-rows";
 import { OwedCard } from "@/components/owed-card";
 import { HealthCard } from "@/components/health-card";
-import { useMarks } from "@/lib/data";
+import { useAccountSettings, useMarks } from "@/lib/data";
 import { openRisk, type SideRisk } from "@shared/exposure";
 import { fmtMoney } from "@shared/metrics";
 import { useOutcomeWatch } from "@/lib/outcome-watch";
@@ -127,6 +127,14 @@ export default function Journal() {
   const { data: trades, isLoading } = useTrades();
   // Where each open crypto trade's market is now — asked only while there
   // is something open to ask about.
+  // Accounts with a fee schedule: a closed trade on one of them that carries
+  // no fee is a gap the health card names.
+  const { data: accountSettings = [] } = useAccountSettings();
+  const feeAccounts = new Set(
+    accountSettings
+      .filter((a) => a.makerFee > 0 || a.takerFee > 0)
+      .map((a) => a.name.trim().toLowerCase()),
+  );
   const { data: marks } = useMarks(
     (trades ?? []).some((t) => t.status === "open" && !t.contract?.trim()),
   );
@@ -232,7 +240,7 @@ export default function Journal() {
       {/* And what the log is missing about itself: stops, accounts, exit
           reasons — the blanks that drop a trade out of the numbers without
           a word. */}
-      <HealthCard trades={scoped} onOpen={openTrade} />
+      <HealthCard trades={scoped} onOpen={openTrade} feeAccounts={feeAccounts} />
 
       {/* The entry form gets its own column only while it is open. Closed, it
           is one line, and holding a half-empty column beside it just to keep
