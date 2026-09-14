@@ -3,8 +3,9 @@ import { fmtPercent, latestEquity, parseRiskBudget, riskPercent } from "@shared/
 /**
  * The entry card: log a setup by hand or drop a chart and confirm the numbers.
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { store } from "@/lib/scoped-storage";
+import { useIdleCollapse } from "@/hooks/use-idle-collapse";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -105,6 +106,15 @@ export function NewTradeCard({
    */
   const [expanded, setExpanded] = useState(defaultExpanded);
   useEffect(() => onExpandedChange?.(expanded), [expanded, onExpandedChange]);
+  /*
+   * And it closes on its own. Opening a trade keeps this page mounted
+   * underneath, so a form opened once used to stay open for the whole visit,
+   * holding nothing and taking the widest column. Thirty seconds without a
+   * hand on it and it folds back to its one line; what was typed stays,
+   * and the folded header says so. The rules are in lib/idle.
+   */
+  const cardRef = useRef<HTMLDivElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
 
   /**
    * Where the trade is in its life, chosen at logging time.
@@ -231,6 +241,15 @@ export function NewTradeCard({
   });
 
   const v = form.watch();
+  /*
+   * Something typed or pasted since the last save. A form that folded itself
+   * with half a trade inside must not read as an empty one.
+   */
+  const hasDraft =
+    image != null ||
+    [v.symbol, v.size, v.entryPrice, v.initialStop, v.initialTarget, v.rationale, v.notes].some(
+      (x) => String(x ?? "").trim() !== "",
+    );
 
   /*
    * Long or short, read off the levels.
@@ -527,6 +546,14 @@ export function NewTradeCard({
 
   const [analyzingRationale, setAnalyzingRationale] = useState(false);
 
+  useIdleCollapse({
+    active: expanded,
+    busy: parsing || analyzingRationale || createTrade.isPending,
+    card: cardRef,
+    body: bodyRef,
+    onIdle: () => setExpanded(false),
+  });
+
   const onSubmit = form.handleSubmit(async (values) => {
     const data = setupFormSchema.parse(values);
     let rationaleTags: string[] = [];
@@ -734,7 +761,7 @@ export function NewTradeCard({
        three state pills in one unwrappable row were 371px of min-content,
        which widened the whole dialog past a 390px phone and dragged every
        field in it off the right edge. */
-    <Card className="min-w-0 border-card-border bg-card p-4 sm:p-5">
+    <Card ref={cardRef} className="min-w-0 border-card-border bg-card p-4 sm:p-5">
       <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1.5">
         <button
           type="button"
@@ -746,8 +773,8 @@ export function NewTradeCard({
           <Sparkles className="h-4 w-4 shrink-0 text-primary" />
           <h2 className="text-sm font-semibold tracking-tight">Log a setup</h2>
           {!expanded && (
-            <span className="truncate text-[11px] text-muted-foreground">
-              click, or paste a chart
+            <span className="truncate text-[11px] text-muted-foreground" data-testid="text-entry-hint">
+              {hasDraft ? "draft kept · click to continue" : "click, or paste a chart"}
             </span>
           )}
           <ChevronDown
@@ -800,7 +827,7 @@ export function NewTradeCard({
       </div>
 
       {expanded && (
-      <>
+      <div ref={bodyRef}>
       <div className="mt-3" />
       <Dropzone
         testId="dropzone-setup"
@@ -1645,7 +1672,7 @@ export function NewTradeCard({
           )}
         </form>
       </Form>
-      </>
+      </div>
       )}
     </Card>
   );
