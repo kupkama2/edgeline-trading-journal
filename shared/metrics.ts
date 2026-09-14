@@ -286,6 +286,10 @@ export interface AggregateStats {
   count: number;
   wins: number;
   losses: number;
+  /** Closed trades with a stop, so an R could be measured: the R figures' sample. */
+  measured: number;
+  /** Closed trades with no stop — in the dollar figures, out of the R ones. */
+  unmeasured: number;
   winRate: number;
   expectancyR: number;
   avgWinnerR: number;
@@ -322,7 +326,10 @@ export function closedTrades<T extends Trade>(trades: T[]): T[] {
 export function aggregate(trades: Trade[]): AggregateStats {
   const closed = closedTrades(trades);
   const rows = closed.map((t) => ({ t, m: computeMetrics(t) }));
-  const rs = rows.map((r) => r.m.actualR ?? 0);
+  // R needs a stop; money does not. A closed trade without one is counted
+  // in dollars and left out of every R figure rather than folded in as 0R.
+  const measured = rows.filter((r) => r.m.actualR != null);
+  const rs = measured.map((r) => r.m.actualR as number);
   const pnls = rows.map((r) => r.m.actualPnL ?? 0);
   const winners = rs.filter((r) => r > 0);
   const losers = rs.filter((r) => r <= 0);
@@ -330,8 +337,8 @@ export function aggregate(trades: Trade[]): AggregateStats {
      trades as the R ones — splitting the dollars on their own sign would put
      a fee-negative scratch in a different bucket in one column than in the
      other. */
-  const winnerPnls = rows.filter((r) => (r.m.actualR ?? 0) > 0).map((r) => r.m.actualPnL ?? 0);
-  const loserPnls = rows.filter((r) => (r.m.actualR ?? 0) <= 0).map((r) => r.m.actualPnL ?? 0);
+  const winnerPnls = measured.filter((r) => (r.m.actualR as number) > 0).map((r) => r.m.actualPnL ?? 0);
+  const loserPnls = measured.filter((r) => (r.m.actualR as number) <= 0).map((r) => r.m.actualPnL ?? 0);
   const grossWin = pnls.filter((p) => p > 0).reduce((a, b) => a + b, 0);
   const grossLoss = Math.abs(pnls.filter((p) => p < 0).reduce((a, b) => a + b, 0));
   const captures = rows
@@ -347,7 +354,9 @@ export function aggregate(trades: Trade[]): AggregateStats {
     count: closed.length,
     wins: winners.length,
     losses: losers.length,
-    winRate: closed.length ? winners.length / closed.length : 0,
+    measured: measured.length,
+    unmeasured: rows.length - measured.length,
+    winRate: measured.length ? winners.length / measured.length : 0,
     expectancyR: avg(rs),
     avgWinnerR: avg(winners),
     avgLoserR: avg(losers),

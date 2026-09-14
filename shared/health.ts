@@ -19,6 +19,7 @@ export type HealthKind =
   | "no-stop"
   | "stale-open"
   | "no-exit-reason"
+  | "no-fee"
   | "no-target"
   | "no-account"
   | "path-unmeasured";
@@ -40,6 +41,10 @@ export const HEALTH_LABELS: Record<HealthKind, { title: string; why: string }> =
   "no-exit-reason": {
     title: "closed without saying how",
     why: "Stop, target, trailed or a decision — the exit reason is what splits managed trades from ones left alone.",
+  },
+  "no-fee": {
+    title: "closed without a fee",
+    why: "The account has a fee schedule, but this trade carries none — so it counts as if it traded free in every net figure. Pick a chip on its close.",
   },
   "no-target": {
     title: "no target",
@@ -84,12 +89,23 @@ export function staleAfterMs(trades: TradeWithTags[], styleId: number | null): n
   return Math.max(WEEK, m != null ? 3 * m : 0);
 }
 
-/** The gaps, most consequential first. Kinds with nothing in them are left out. */
-export function journalHealth(trades: TradeWithTags[], now = Date.now()): HealthIssue[] {
+/**
+ * The gaps, most consequential first. Kinds with nothing in them are left out.
+ *
+ * `feeAccounts` names the accounts with a fee schedule, lower-cased. Only a
+ * trade on one of those is flagged for carrying no fee — an account with no
+ * schedule has nothing to have been clicked.
+ */
+export function journalHealth(
+  trades: TradeWithTags[],
+  now = Date.now(),
+  feeAccounts: ReadonlySet<string> = new Set(),
+): HealthIssue[] {
   const byKind: Record<HealthKind, TradeWithTags[]> = {
     "no-stop": [],
     "stale-open": [],
     "no-exit-reason": [],
+    "no-fee": [],
     "no-target": [],
     "no-account": [],
     "path-unmeasured": [],
@@ -101,6 +117,13 @@ export function journalHealth(trades: TradeWithTags[], now = Date.now()): Health
     if (live(t) && t.initialTarget == null) byKind["no-target"].push(t);
     if (!t.account?.trim()) byKind["no-account"].push(t);
     if (t.status === "closed" && !t.exitReason) byKind["no-exit-reason"].push(t);
+    if (
+      t.status === "closed" &&
+      t.fees == null &&
+      feeAccounts.has((t.account ?? "").trim().toLowerCase())
+    ) {
+      byKind["no-fee"].push(t);
+    }
     if (t.status === "open") {
       const age = now - ms(t.entryTime);
       if (Number.isFinite(age) && age > staleAfterMs(trades, t.styleId)) byKind["stale-open"].push(t);
@@ -120,6 +143,7 @@ export function journalHealth(trades: TradeWithTags[], now = Date.now()): Health
     "no-stop",
     "stale-open",
     "no-exit-reason",
+    "no-fee",
     "no-target",
     "no-account",
     "path-unmeasured",

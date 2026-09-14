@@ -16,12 +16,15 @@ import type { TradeWithTags } from "@shared/schema";
 export function HealthCard({
   trades,
   onOpen,
+  feeAccounts,
 }: {
   trades: TradeWithTags[];
   onOpen: (t: TradeWithTags) => void;
+  /** Accounts with a fee schedule, lower-cased — where a missing fee is a gap. */
+  feeAccounts?: ReadonlySet<string>;
 }) {
   const [open, setOpen] = useState(false);
-  const issues = journalHealth(trades);
+  const issues = journalHealth(trades, Date.now(), feeAccounts);
   if (issues.length === 0) return null;
   const total = issues.reduce((n, i) => n + i.trades.length, 0);
 

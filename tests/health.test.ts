@@ -102,3 +102,31 @@ describe("an open trade held far longer than its style does", () => {
     expect(staleAfterMs(scalps, 2)).toBe(7 * DAY);
   });
 });
+
+describe("a closed trade carrying no fee, on an account that charges them", () => {
+  const feeAccounts = new Set(["binance futures"]);
+
+  it("is flagged only where the account has a schedule, and not for a recorded zero", () => {
+    const issues = journalHealth(
+      [
+        closed({ id: 1, fees: null }),
+        closed({ id: 2, fees: 0 }),
+        closed({ id: 3, fees: 1.5 }),
+        closed({ id: 4, fees: null, account: "Apex eval" }),
+        open({ id: 5, fees: null }),
+      ],
+      NOW,
+      feeAccounts,
+    );
+    expect(ids(issues, "no-fee")).toEqual([1]);
+  });
+
+  it("is not a gap at all without a schedule to have clicked", () => {
+    expect(kinds(journalHealth([closed({ id: 1, fees: null })], NOW))).toEqual([]);
+  });
+
+  it("sits after the exit reason in the order of consequence", () => {
+    const issues = journalHealth([closed({ id: 1, fees: null, exitReason: null })], NOW, feeAccounts);
+    expect(kinds(issues)).toEqual(["no-exit-reason", "no-fee"]);
+  });
+});
