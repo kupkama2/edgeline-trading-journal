@@ -113,8 +113,9 @@ export function journalHealth(
 
   for (const t of trades) {
     if (t.status === "cancelled") continue;
-    if (live(t) && t.initialStop == null) byKind["no-stop"].push(t);
-    if (live(t) && t.initialTarget == null) byKind["no-target"].push(t);
+    // A tilt trade owes no levels: it is logged to be counted, not measured.
+    if (live(t) && !t.tilt && t.initialStop == null) byKind["no-stop"].push(t);
+    if (live(t) && !t.tilt && t.initialTarget == null) byKind["no-target"].push(t);
     if (!t.account?.trim()) byKind["no-account"].push(t);
     if (t.status === "closed" && !t.exitReason) byKind["no-exit-reason"].push(t);
     if (

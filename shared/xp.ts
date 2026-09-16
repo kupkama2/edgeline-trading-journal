@@ -45,6 +45,10 @@ export function tradeXp(t: TradeWithTags): XpEvent[] {
     return ev;
   }
   if (t.status === "cancelled") return ev;
+  // A tilt trade earns nothing, whatever else is written on it. Marking one
+  // must never cost points either — the honest verdict is the whole game —
+  // so it is simply a trade outside the score, not a penalty inside it.
+  if (t.tilt) return ev;
 
   if (t.rationale?.trim()) add("rationale", "Wrote the why before the result", 10);
   if (t.initialStop != null && t.initialTarget != null)

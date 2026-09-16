@@ -6,8 +6,9 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowDownRight, ArrowUpRight, Camera, CheckCircle2,  HelpCircle, Minus, Pencil, Plus, Trash2, X } from "lucide-react";
-import { useUpdateTrade, useDeleteTrade } from "@/lib/data";
+import { ArrowDownRight, ArrowUpRight, Camera, CheckCircle2,  HelpCircle, Minus, Pencil, Plus, Skull, Trash2, X } from "lucide-react";
+import { useUpdateTrade, useDeleteTrade, useTrades } from "@/lib/data";
+import { tiltFromHere } from "@shared/tilt";
 import { parseExtraTargets, type TradeWithTags } from "@shared/schema";
 import { parseHighlights } from "@shared/highlights";
 import { computeMetrics, fmtFees, fmtMoney, fmtR, EXIT_REASON_LABELS } from "@shared/metrics";
@@ -345,6 +346,9 @@ export function ClosedTradeRow({
 }) {
   const m = computeMetrics(t);
   const del = useDeleteTrade();
+  const update = useUpdateTrade();
+  const { data: all = [] } = useTrades();
+  const { toast } = useToast();
   const win = (m.actualR ?? 0) >= 0;
   // The camera is a button, not a label: it both reports the count and is the
   // shortcut to add more, so attaching to a trade closed weeks ago is one
@@ -393,10 +397,11 @@ export function ClosedTradeRow({
           onSelect();
         }
       }}
-      className={`cursor-pointer rounded-lg border bg-card p-3 transition-colors hover:border-primary/40 ${
-        unknown ? "border-amber-500/40" : "border-card-border"
+      className={`group cursor-pointer rounded-lg border bg-card p-3 transition-colors hover:border-primary/40 ${
+        unknown ? "border-amber-500/40" : t.tilt ? "border-primary/30 opacity-80" : "border-card-border"
       }`}
       data-testid={`card-closed-trade-${t.id}`}
+      data-tilt={t.tilt ? "true" : undefined}
     >
       {/* Wraps on narrow screens: symbol, style, account, shots and reason are
           all shrink-0, so on a phone the money used to run off the card. The
@@ -418,6 +423,17 @@ export function ClosedTradeRow({
         <Badge variant="outline" className="shrink-0 text-[10px] capitalize">
           {t.exitReason ? EXIT_REASON_LABELS[t.exitReason] : "—"}
         </Badge>
+        {t.tilt && (
+          <Badge
+            variant="outline"
+            className="shrink-0 border-primary/50 text-[10px] text-primary"
+            title="Should not have been taken. In the tilt book, out of every number."
+            data-testid={`badge-tilt-${t.id}`}
+          >
+            <Skull className="mr-1 h-3 w-3" />
+            tilt
+          </Badge>
+        )}
         {unknown && (
           <button
             type="button"
@@ -449,6 +465,64 @@ export function ClosedTradeRow({
         >
           {fmtMoney(m.actualPnL)}
         </span>
+        {/* The verdict, flippable from the row: a skull that lights when the
+            trade is tilt, and "from here" for the day that went wrong at a
+            known point — this one and everything after it. Both surface on
+            hover on a desktop and stay put on a phone. */}
+        <Button
+          size="icon"
+          variant="ghost"
+          className={`h-6 w-6 shrink-0 ${
+            t.tilt
+              ? "text-primary"
+              : "text-muted-foreground hover:text-primary sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
+          }`}
+          onClick={(e) => {
+            e.stopPropagation();
+            // In the plan view the row leaves the list the moment it is
+            // marked — that is the point — so the toast says where it went.
+            update.mutate(
+              { id: t.id, trade: { tilt: !t.tilt } },
+              {
+                onSuccess: () =>
+                  toast(
+                    t.tilt
+                      ? { title: "Back in the plan", description: `${t.symbol} counts again.` }
+                      : {
+                          title: "Marked tilt",
+                          description: `${t.symbol} is out of the plan book and every number. Find it under Tilt.`,
+                        },
+                  ),
+              },
+            );
+          }}
+          aria-label={t.tilt ? "Back into the plan" : "Mark as tilt"}
+          aria-pressed={t.tilt}
+          title={t.tilt ? "In the tilt book — click to put it back in the plan" : "Mark as tilt: it should not have been taken"}
+          data-testid={`button-tilt-${t.id}`}
+        >
+          <Skull className="h-3 w-3" />
+        </Button>
+        {!t.tilt && (
+          <button
+            type="button"
+            className="shrink-0 rounded border border-border/60 px-1 py-0.5 font-mono text-[9px] text-muted-foreground transition-colors hover:border-primary/50 hover:text-primary sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
+            onClick={(e) => {
+              e.stopPropagation();
+              const ids = tiltFromHere(all, t.id);
+              Promise.all(ids.map((id) => update.mutateAsync({ id, trade: { tilt: true } }))).then(() =>
+                toast({
+                  title: `${ids.length} marked tilt`,
+                  description: "This one and everything after it that day.",
+                }),
+              );
+            }}
+            title="Everything after this one that day was tilt"
+            data-testid={`button-tilt-from-${t.id}`}
+          >
+            tilt from here
+          </button>
+        )}
         <Button
           size="icon"
           variant="ghost"

@@ -73,6 +73,12 @@ export const tradingStyles = pgTable("trading_styles", {
    */
   sessionStart: text("session_start"),
   sessionEnd: text("session_end"),
+  /**
+   * How many entries a day this book allows before the next one is tilt by
+   * default. Null means the book has no number, and the meter uses only the
+   * other signs.
+   */
+  maxTradesPerDay: integer("max_trades_per_day"),
 });
 
 const hhmm = z
@@ -83,7 +89,12 @@ const hhmm = z
 
 export const insertTradingStyleSchema = createInsertSchema(tradingStyles)
   .omit({ id: true, userId: true })
-  .extend({ name: z.string().min(1), sessionStart: hhmm, sessionEnd: hhmm });
+  .extend({
+    name: z.string().min(1),
+    sessionStart: hhmm,
+    sessionEnd: hhmm,
+    maxTradesPerDay: z.number().int().positive().nullable().optional(),
+  });
 
 export type InsertTradingStyle = z.infer<typeof insertTradingStyleSchema>;
 export type TradingStyle = typeof tradingStyles.$inferSelect;
@@ -144,6 +155,13 @@ export const trades = pgTable("trades", {
   exitPrice: doublePrecision("exit_price"),
   exitTime: text("exit_time"),
   status: text("status").notNull().default("open"), // 'pending' | 'open' | 'closed'
+  /**
+   * The trade should not have been taken: a verdict on the entry, never on
+   * the outcome — a tilt trade that won is still tilt. Tilt trades stay
+   * recorded and stay out of the plan book, so every headline number runs
+   * without them unless the tilt book is asked for. See shared/tilt.ts.
+   */
+  tilt: boolean("tilt").notNull().default(false),
   exitReason: text("exit_reason"), // see exitReasonEnum — the fact, not the verdict
   /**
    * Why a trade ended without ever becoming a real position. Distinct from
@@ -443,8 +461,10 @@ export const missingRisk = (v: {
   status?: string | null;
   initialStop?: number | null;
   initialTarget?: number | null;
+  /** A tilt trade owes nothing: it is logged to be counted, not measured. */
+  tilt?: boolean | null;
 }) =>
-  needsRisk(v.status)
+  needsRisk(v.status) && !v.tilt
     ? (["initialStop", "initialTarget"] as const).filter((f) => v[f] == null)
     : [];
 

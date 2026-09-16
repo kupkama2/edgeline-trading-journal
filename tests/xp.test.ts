@@ -119,3 +119,13 @@ describe("computeProgression", () => {
     expect(one).toBe(two);
   });
 });
+
+describe("a tilt trade", () => {
+  // Outside the score, not penalised inside it: marking a trade tilt must
+  // never be the losing move.
+  it("earns nothing, however well it is written up", () => {
+    expect(
+      tradeXp(trade({ tilt: true, rationale: "vah retest", notes: "chased it", exitReason: "stop" })),
+    ).toEqual([]);
+  });
+});

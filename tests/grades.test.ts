@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEMON_RETIRED_TO_GRADE, DEMON_TAXONOMY } from "../shared/demons";
+import { DEMON_RETIRED_TO_GRADE, DEMON_RETIRED_TO_TILT, DEMON_TAXONOMY } from "../shared/demons";
 import {
   GRADES,
   axisApplies,
@@ -295,7 +295,8 @@ describe("the demons the grades replaced", () => {
     // Sizing, plan-breaking and the trade you didn't take are not timing, and
     // retiring them with the rest would lose them entirely.
     expect(DEMON_TAXONOMY).toContain("Bet Too Large");
-    expect(DEMON_TAXONOMY).toContain("Trade Not In Plan");
+    // The tilt verdict left the taxonomy too: it is a flag on the trade now.
+    expect(DEMON_TAXONOMY).not.toContain(DEMON_RETIRED_TO_TILT);
     expect(DEMON_TAXONOMY).toContain("Didn't Take Planned Trade");
   });
 });
