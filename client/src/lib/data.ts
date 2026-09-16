@@ -1,4 +1,6 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
+import type { CloseRead } from "@shared/close-read";
+import type { ReadCloseRequest } from "@shared/schema";
 import { apiRequest, queryClient } from "./queryClient";
 import type {
   AccountSettings,
@@ -509,6 +511,20 @@ export function useWeeklyInsights() {
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: ["/api/weekly-reviews"] }),
   });
+}
+
+/** "What happened", read into the close form's fields. Null when it could not be read. */
+export async function readCloseNote(
+  text: string,
+  context: ReadCloseRequest["context"],
+): Promise<CloseRead | null> {
+  try {
+    const res = await apiRequest("POST", "/api/read-close", { text, context });
+    const json = await res.json();
+    return json?.ok && json.read ? (json.read as CloseRead) : null;
+  } catch {
+    return null;
+  }
 }
 
 export async function analyzeRationale(text: string): Promise<string[]> {

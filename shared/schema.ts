@@ -885,6 +885,22 @@ export const analyzeRationaleSchema = z.object({
 
 export type AnalyzeRationaleRequest = z.infer<typeof analyzeRationaleSchema>;
 
+/** "What happened", in the trader's words, with the numbers it is about. */
+export const readCloseSchema = z.object({
+  text: z.string().min(1).max(2000),
+  context: z.object({
+    direction: directionEnum,
+    entryPrice: z.number().nullable().optional(),
+    initialStop: z.number().nullable().optional(),
+    initialTarget: z.number().nullable().optional(),
+    exitPrice: z.number().nullable().optional(),
+    /** The journal's own green flags beyond the taxonomy, so they can be read too. */
+    highlights: z.array(z.string()).optional(),
+  }),
+});
+
+export type ReadCloseRequest = z.infer<typeof readCloseSchema>;
+
 export interface AnalyzeRationaleResult {
   tags: string[];
 }

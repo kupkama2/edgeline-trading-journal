@@ -7,7 +7,7 @@
  * Large" happens. The numbers here are the same ones the metrics engine uses,
  * so the suggested size produces exactly the 1R the risk field promised.
  */
-import { pointValueFor } from "./symbols";
+import { contractFor, pointValueFor } from "./symbols";
 
 export interface SizeSuggestion {
   /** The size to enter, in the unit the trade will be logged in. */
@@ -71,4 +71,45 @@ export function suggestSize(input: {
     actualRiskDollars: contracts * perContract,
     perUnitRisk: perContract,
   };
+}
+
+/* ------------------------------ the other unit ------------------------------ */
+
+/** "ETHUSDT" → "ETH", "BTC-PERP" → "BTC", "1000PEPEUSDT" → "1000PEPE". */
+export function coinOf(symbol: string | null | undefined): string {
+  let s = (symbol ?? "").trim().toUpperCase();
+  for (let i = 0; i < 2; i++) s = s.replace(/[-_/]?(USDT|USDC|BUSD|USD|PERP)$/, "");
+  return s;
+}
+
+const fmtDollars = (v: number) =>
+  "$" + v.toLocaleString("en-US", { maximumFractionDigits: v >= 100 ? 0 : 2 });
+const fmtQty = (v: number) => {
+  const dp = v >= 100 ? 0 : v >= 1 ? 2 : v >= 0.01 ? 4 : 6;
+  const fixed = v.toFixed(dp);
+  return fixed.includes(".") ? fixed.replace(/\.?0+$/, "") : fixed;
+};
+
+/**
+ * The size in the unit you did not type, at the entry price.
+ *
+ * Typed in coins, a position is also so many dollars; typed in dollars, it
+ * is also so many coins. Both are true at once, and the one you did not
+ * type is the one you are about to misjudge — so the form says it. Futures
+ * are bought in contracts and have no notional to convert; they get the
+ * contract's exposure instead (exposureOf), and this says nothing.
+ */
+export function notionalReadout(input: {
+  size: number;
+  sizeUnit: "base" | "quote";
+  entryPrice: number;
+  symbol: string | null | undefined;
+}): string | null {
+  const { size, sizeUnit, entryPrice } = input;
+  if (contractFor(input.symbol)) return null;
+  if (!isFinite(size) || size <= 0 || !isFinite(entryPrice) || entryPrice <= 0) return null;
+  const coin = coinOf(input.symbol) || "units";
+  return sizeUnit === "base"
+    ? `${fmtQty(size)} ${coin} ≈ ${fmtDollars(size * entryPrice)} at entry`
+    : `${fmtDollars(size)} ≈ ${fmtQty(size / entryPrice)} ${coin} at entry`;
 }

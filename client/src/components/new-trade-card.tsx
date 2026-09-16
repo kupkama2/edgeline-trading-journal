@@ -42,7 +42,7 @@ import { conflictWarning, directionWarning, readDirection } from "@shared/direct
 import { SymbolPicker } from "@/components/symbol-picker";
 import { venueOfAccount } from "@shared/hyperliquid";
 import { knownHighlights, serializeHighlights } from "@shared/highlights";
-import { suggestSize } from "@shared/sizing";
+import { suggestSize, notionalReadout } from "@shared/sizing";
 import { inSessionWindow, windowLabel } from "@shared/session";
 import { LevelLabel, LevelLadder, type LevelKind } from "@/components/levels";
 
@@ -147,6 +147,11 @@ export function NewTradeCard({
   const [postExitAdverse, setPostExitAdverse] = useState("");
   const [nmo, setNmo] = useState<string | null>(null);
   const [fees, setFees] = useState("");
+  /** How it ended, in the trader's words — the closed trade's post-mortem. */
+  const [closeNote, setCloseNote] = useState("");
+  const [readingClose, setReadingClose] = useState(false);
+  /** Whose call it was is usually in the rationale; the picker is there for when it is not. */
+  const [showSource, setShowSource] = useState(false);
   const { data: demons = [] } = useMistakeTags();
 
   /* Optional playbook / edge checklist — never required. */
@@ -447,6 +452,14 @@ export function NewTradeCard({
     };
   }, [v.entryPrice, v.initialStop, v.initialTarget, v.size, v.symbol, sizeUnit, perContract]);
 
+  // The size in the unit you did not type, at the entry price.
+  const sizeReadout = notionalReadout({
+    size: Number(v.size),
+    sizeUnit,
+    entryPrice: Number(v.entryPrice),
+    symbol: v.symbol,
+  });
+
   async function handleFile(file: File) {
     const dataUrl = await fileToDownscaledDataUrl(file);
     setImage(dataUrl);
@@ -657,7 +670,8 @@ export function NewTradeCard({
         // the trade record it produces, and chart replay lives in Tradesly /
         // Edgewonk. The column stays nullable so this can be revisited.
         setupScreenshot: null,
-        notes: data.notes || null,
+        // The close note is the post-mortem: same column, written at the close.
+        notes: loggingClosed && closeNote.trim() ? closeNote.trim() : data.notes || null,
         rationale: rationale || null,
         rationaleTags: rationaleTags.length ? JSON.stringify(rationaleTags) : null,
         playbook: playbookJson,
@@ -731,6 +745,7 @@ export function NewTradeCard({
     setDirectionPicked(false);
     setTiltMode(false);
     setPlanWord("");
+    setCloseNote("");
     form.reset({
       symbol: "",
       direction: "long",
@@ -947,7 +962,8 @@ export function NewTradeCard({
                   />
                 </FormControl>
                 <p className="text-[10px] leading-snug text-muted-foreground">
-                  Type it however you'd say it — tags get pulled out automatically on save.
+                  Type it however you'd say it — the setup, the why, whose call it was. Tags and
+                  the source get pulled out on save.
                 </p>
                 <SetupTagPicker
                   selected={setupTags}
@@ -962,110 +978,6 @@ export function NewTradeCard({
             )}
           />
 
-          {/* Optional playbook / edge checklist — collapsed by default so a
-              trade can still be logged in seconds. */}
-          <div hidden={asTilt}>
-            <button
-              type="button"
-              onClick={() => setShowPlaybook((s) => !s)}
-              className="flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
-              data-testid="button-toggle-playbook"
-              aria-expanded={showPlaybook}
-            >
-              <ClipboardList className="h-3.5 w-3.5" />
-              Playbook · optional
-              <ChevronDown
-                className={`h-3.5 w-3.5 transition-transform ${showPlaybook ? "rotate-180" : ""}`}
-              />
-            </button>
-
-            {showPlaybook && (
-              <div
-                className="mt-2 space-y-3 rounded-lg border border-border/60 bg-secondary/20 p-3"
-                data-testid="section-playbook"
-              >
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <div className="space-y-1">
-                    <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                      Trigger / setup name
-                    </label>
-                    <Input
-                      list="playbook-setups"
-                      value={pb.setupName}
-                      onChange={(e) => setPb((p) => ({ ...p, setupName: e.target.value }))}
-                      placeholder="e.g. VAH rejection"
-                      className="h-9 text-sm"
-                      data-testid="input-playbook-setup"
-                    />
-                    <datalist id="playbook-setups">
-                      {knownSetups.map((s) => (
-                        <option key={s} value={s} />
-                      ))}
-                    </datalist>
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                      Stop-placement logic
-                    </label>
-                    <Input
-                      value={pb.stopLogic}
-                      onChange={(e) => setPb((p) => ({ ...p, stopLogic: e.target.value }))}
-                      placeholder="e.g. above the swing high"
-                      className="h-9 text-sm"
-                      data-testid="input-playbook-stop"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                      Target logic
-                    </label>
-                    <Input
-                      value={pb.targetLogic}
-                      onChange={(e) => setPb((p) => ({ ...p, targetLogic: e.target.value }))}
-                      placeholder="e.g. prior day VAL"
-                      className="h-9 text-sm"
-                      data-testid="input-playbook-target"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                      Stand-aside condition
-                    </label>
-                    <Input
-                      value={pb.standAside}
-                      onChange={(e) => setPb((p) => ({ ...p, standAside: e.target.value }))}
-                      placeholder="e.g. skip if CPI within 15m"
-                      className="h-9 text-sm"
-                      data-testid="input-playbook-stand-aside"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <p className="mb-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
-                    Confidence
-                  </p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {[1, 2, 3, 4, 5].map((n) => (
-                      <Button
-                        key={n}
-                        type="button"
-                        size="sm"
-                        variant={pb.confidence === n ? "default" : "outline"}
-                        className="h-8 w-9 p-0 font-mono text-[11px]"
-                        onClick={() =>
-                          setPb((p) => ({ ...p, confidence: p.confidence === n ? null : n }))
-                        }
-                        data-testid={`button-playbook-confidence-${n}`}
-                      >
-                        {n}
-                      </Button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
 
           {styles.length > 0 && (
             <div className="space-y-1" data-testid="section-style-picker">
@@ -1105,20 +1017,34 @@ export function NewTradeCard({
               </p>
               <AccountPicker value={account} onChange={setAccount} known={knownAccounts} />
             </div>
-            <div className="space-y-1" data-testid="section-source-picker">
-              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                Source
-              </p>
-              <AccountPicker
-                value={source}
-                onChange={setSource}
-                known={knownSources}
-                testIdPrefix="source"
-                placeholder="e.g. Daniel, Severin, CBS, UB"
-                emptyLabel="My own idea"
-                newLabel="+ New source…"
-              />
-            </div>
+            {/* Whose call it was. Usually said in the rationale and pulled
+                out from there; the picker is one click away for when the
+                name is not one the journal knows yet. */}
+            {showSource || source.trim() ? (
+              <div className="space-y-1" data-testid="section-source-picker">
+                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  Source
+                </p>
+                <AccountPicker
+                  value={source}
+                  onChange={setSource}
+                  known={knownSources}
+                  testIdPrefix="source"
+                  placeholder="e.g. Daniel, Severin, CBS, UB"
+                  emptyLabel="My own idea"
+                  newLabel="+ New source…"
+                />
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setShowSource(true)}
+                className="self-end pb-2 text-[10px] text-muted-foreground underline decoration-dotted underline-offset-2 hover:text-foreground"
+                data-testid="button-show-source"
+              >
+                + whose call
+              </button>
+            )}
           </div>
 
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -1252,7 +1178,7 @@ export function NewTradeCard({
                                   : "text-muted-foreground hover:text-foreground"
                             }`}
                           >
-                            {u === "base" ? "contracts" : "usd"}
+                            {u === "base" ? (isFutures ? "contracts" : "units") : "usd"}
                           </button>
                         );
                       })}
@@ -1276,6 +1202,11 @@ export function NewTradeCard({
                     />
                   </FormControl>
                   <FormMessage className="text-[10px]" />
+                  {sizeReadout && (
+                    <p className="font-mono text-[10px] text-muted-foreground" data-testid="text-size-readout">
+                      {sizeReadout}
+                    </p>
+                  )}
                 </FormItem>
               )}
             />
@@ -1581,10 +1512,15 @@ export function NewTradeCard({
                 setHighlights={setHighlights}
                 extraHighlights={knownHighlights(allTrades)}
                 testPrefix="new"
+                note={closeNote}
+                setNote={setCloseNote}
+                autoPath={!isFutures}
+                onReading={setReadingClose}
                 timing={{
                   direction: v.direction === "short" ? "short" : "long",
                   entryPrice: isFinite(Number(v.entryPrice)) ? Number(v.entryPrice) : null,
                   initialStop: isFinite(Number(v.initialStop)) ? Number(v.initialStop) : null,
+                  initialTarget: isFinite(Number(v.initialTarget)) ? Number(v.initialTarget) : null,
                 }}
               />
             </div>
@@ -1705,7 +1641,7 @@ export function NewTradeCard({
             <Button
               type="submit"
               className="h-9 flex-1 min-w-[9rem] text-xs font-semibold"
-              disabled={createTrade.isPending || analyzingRationale || guard.locked}
+              disabled={createTrade.isPending || analyzingRationale || readingClose || guard.locked}
               data-testid="button-save-trade"
             >
               {(createTrade.isPending || analyzingRationale) && (
