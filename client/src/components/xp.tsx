@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { store } from "@/lib/scoped-storage";
 import { Card } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
-import { Award, Flame, Sparkles } from "lucide-react";
+import { Award, Star, Flame, Sparkles } from "lucide-react";
 import { useDailyNotes, useTrades, useWeeklyReviews } from "@/lib/data";
 import { computeProgression, type Progression } from "@shared/xp";
 
@@ -189,6 +189,30 @@ export function ProgressionCard() {
               style={{ width: `${Math.max(2, p.level.progress * 100)}%` }}
             />
           </div>
+        </div>
+
+        {/* The other run: trades executed well, back to back. Written-up
+            closes only, so a trade you have not looked at yet does not break
+            it — and a tilt trade always does. */}
+        <div
+          className="flex items-center gap-1.5"
+          title="Written-up trades in a row, each one traded well. A trade you haven't written up yet doesn't break it; one you have and didn't mark does."
+          data-testid="text-well-streak"
+        >
+          <Star
+            className={`h-4 w-4 ${
+              p.wellTraded.current > 0 ? "text-amber-400 fill-current" : "text-muted-foreground/40"
+            }`}
+          />
+          <span className="font-mono text-sm font-semibold">{p.wellTraded.current}</span>
+          <span className="text-[10px] text-muted-foreground">
+            traded well
+            {p.wellTraded.next && p.wellTraded.current > 0
+              ? ` · ${p.wellTraded.next.toGo} to ${p.wellTraded.next.name.toLowerCase()}`
+              : p.wellTraded.best > p.wellTraded.current
+                ? ` · best ${p.wellTraded.best}`
+                : ""}
+          </span>
         </div>
 
         <div

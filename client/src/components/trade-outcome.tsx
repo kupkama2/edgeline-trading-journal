@@ -32,13 +32,21 @@ import { HighlightPicker } from "@/components/trade-pickers";
 import type { MistakeTag } from "@shared/schema";
 
 import { LevelLabel, PathBands } from "@/components/levels";
-import { Activity, Gavel, Loader2, LogOut } from "lucide-react";
+import { Activity, Gavel, Loader2, LogOut, Star } from "lucide-react";
+import { aftermathWindowMs } from "@shared/aftermath";
 import { useState } from "react";
 import { Textarea } from "@/components/ui/textarea";
 import { readCloseNote } from "@/lib/data";
 import { closeReadSummary } from "@shared/close-read";
 
 const LABEL = "text-[10px] uppercase tracking-wider text-muted-foreground";
+
+/** "2 hours", "3 days" — how long a trade's aftermath window runs. */
+function fmtWindow(ms: number): string {
+  const hours = Math.round(ms / (60 * 60 * 1000));
+  if (hours < 48) return `${hours} hour${hours === 1 ? "" : "s"}`;
+  return `${Math.round(hours / 24)} days`;
+}
 
 /** An empty box is not a price of zero. */
 const numOrNull = (v: string) => {
@@ -123,6 +131,13 @@ export interface OutcomeFieldsProps {
   autoPath?: boolean;
   /** A read is in flight — parents hold the save until it lands. */
   onReading?: (busy: boolean) => void;
+  /** The execution verdict: waited for it, sized it, left it alone. */
+  wellTraded?: boolean;
+  setWellTraded?: (v: boolean) => void;
+  /** Set on a tilt trade, which can never also be traded well. */
+  tilt?: boolean;
+  /** For the line saying when the archive will have the aftermath. */
+  entryTime?: string;
 }
 
 /**
@@ -427,6 +442,31 @@ export function TradeOutcomeFields(p: OutcomeFieldsProps) {
           tone="read"
         >
         <>
+          {/* The verdict on the execution, next to the words that justify
+              it. Never about the result — a trade can be executed perfectly
+              and lose, and that is the one most worth marking. */}
+          {p.setWellTraded && !p.tilt && (
+            <button
+              type="button"
+              onClick={() => p.setWellTraded?.(!p.wellTraded)}
+              aria-pressed={p.wellTraded === true}
+              className={`flex w-full items-center gap-2 rounded-md border px-2.5 py-2 text-left transition-colors ${
+                p.wellTraded
+                  ? "border-amber-500/50 bg-amber-500/10 text-amber-400"
+                  : "border-border text-muted-foreground hover:border-amber-500/40 hover:text-foreground"
+              }`}
+              data-testid={`button-${p.testPrefix}-well-traded`}
+            >
+              <Star className={`h-4 w-4 shrink-0 ${p.wellTraded ? "fill-current" : ""}`} />
+              <span className="min-w-0 text-[11px] leading-snug">
+                <span className="font-semibold">
+                  {p.wellTraded ? "Traded it well" : "Was it traded well?"}
+                </span>{" "}
+                — waited for it, sized it, left it alone. Nothing to do with whether it paid.
+              </span>
+            </button>
+          )}
+
           {hasNote && (
             <div className="space-y-1.5">
               <Textarea
@@ -614,7 +654,13 @@ export function TradeOutcomeFields(p: OutcomeFieldsProps) {
           */}
           {p.autoPath && priced && (
             <p className="text-[10px] leading-snug text-muted-foreground" data-testid={`text-${p.testPrefix}-auto-path`}>
-              Left blank, the archive fills these in after you save. Type them to say it yourself.
+              Left blank, the archive fills these in. The two on the left as soon as it has the
+              day; the two on the right{" "}
+              {p.entryTime
+                ? `about ${fmtWindow(aftermathWindowMs({ entryTime: p.entryTime, exitTime: p.exitTime }))} after the exit`
+                : "once the move after your exit has had time to happen"}
+              , because a number written minutes after you left would be this trade's final answer
+              about the next two days. Type them to say it yourself.
             </p>
           )}
           <div className={`grid gap-2.5 ${path.after ? "sm:grid-cols-2" : ""}`}>

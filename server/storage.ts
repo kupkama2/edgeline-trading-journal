@@ -148,6 +148,9 @@ ALTER TABLE trades ADD COLUMN IF NOT EXISTS external_id TEXT;
 -- A verdict on the entry, off by default: nothing recorded before it existed
 -- was tilt until somebody says so (or the migration below does).
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS tilt BOOLEAN NOT NULL DEFAULT FALSE;
+-- The opposite verdict, off by default: nothing already logged was marked
+-- well traded, and nobody wants a streak they did not earn.
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS well_traded BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS would_have_hit_target BOOLEAN;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS rationale TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS rationale_tags TEXT;

@@ -6,9 +6,10 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowDownRight, ArrowUpRight, Camera, CheckCircle2,  HelpCircle, Minus, Pencil, Plus, Skull, Trash2, X } from "lucide-react";
+import { ArrowDownRight, ArrowUpRight, Camera, CheckCircle2,  HelpCircle, Minus, Pencil, Plus, Skull, Star, Trash2, X } from "lucide-react";
 import { useUpdateTrade, useDeleteTrade, useTrades } from "@/lib/data";
 import { tiltFromHere } from "@shared/tilt";
+import { isWellTraded } from "@shared/well-traded";
 import { parseExtraTargets, type TradeWithTags } from "@shared/schema";
 import { parseHighlights } from "@shared/highlights";
 import { computeMetrics, fmtFees, fmtMoney, fmtR, EXIT_REASON_LABELS } from "@shared/metrics";
@@ -434,6 +435,17 @@ export function ClosedTradeRow({
             tilt
           </Badge>
         )}
+        {isWellTraded(t) && (
+          <Badge
+            variant="outline"
+            className="shrink-0 border-amber-500/50 text-[10px] text-amber-400"
+            title="Traded well: waited for it, sized it, left it alone. Whatever it paid."
+            data-testid={`badge-well-${t.id}`}
+          >
+            <Star className="mr-1 h-3 w-3 fill-current" />
+            well traded
+          </Badge>
+        )}
         {unknown && (
           <button
             type="button"
@@ -503,6 +515,34 @@ export function ClosedTradeRow({
         >
           <Skull className="h-3 w-3" />
         </Button>
+        {/* The other verdict, on the execution. One tap from the row,
+            because the run it feeds is only worth keeping if marking a trade
+            costs nothing. */}
+        {!t.tilt && (
+          <Button
+            size="icon"
+            variant="ghost"
+            className={`h-6 w-6 shrink-0 ${
+              t.wellTraded
+                ? "text-amber-400"
+                : "text-muted-foreground hover:text-amber-400 sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
+            }`}
+            onClick={(e) => {
+              e.stopPropagation();
+              update.mutate({ id: t.id, trade: { wellTraded: !t.wellTraded } });
+            }}
+            aria-label={t.wellTraded ? "Not traded well after all" : "Mark as traded well"}
+            aria-pressed={t.wellTraded === true}
+            title={
+              t.wellTraded
+                ? "Traded well — click to take it back"
+                : "Mark as traded well: waited for it, sized it, left it alone"
+            }
+            data-testid={`button-well-${t.id}`}
+          >
+            <Star className={`h-3 w-3 ${t.wellTraded ? "fill-current" : ""}`} />
+          </Button>
+        )}
         {!t.tilt && (
           <button
             type="button"

@@ -62,6 +62,7 @@ import {
   insertAccountBalanceSchema,
 } from "@shared/schema";
 import { normalizeCloseRead } from "@shared/close-read";
+import { exclusiveVerdict } from "@shared/well-traded";
 import { HIGHLIGHT_TAXONOMY } from "@shared/highlights";
 import {
   contractFor,
@@ -517,7 +518,7 @@ export async function registerRoutes(
       contract: isContract ? typed : null,
     };
     res.status(201).json(
-      await store(req).createTrade(trade, parsed.data.mistakeTagIds ?? []),
+      await store(req).createTrade(exclusiveVerdict(trade), parsed.data.mistakeTagIds ?? []),
     );
   });
 
@@ -604,7 +605,8 @@ export async function registerRoutes(
 
     const updated = await store(req).updateTrade(
       Number(req.params.id),
-      trade,
+      // Tilt and well-traded are opposite verdicts; setting one clears the other.
+      exclusiveVerdict(trade),
       parsed.data.mistakeTagIds,
     );
     if (!updated) return res.status(404).json({ message: "Trade not found" });

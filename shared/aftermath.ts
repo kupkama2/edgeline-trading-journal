@@ -99,10 +99,79 @@ export function outcomeUnknown(t: TradeWithTags): boolean {
  */
 export function pathIncomplete(t: TradeWithTags, now = Date.now()): boolean {
   if (t.status !== "closed" || t.exitPrice == null) return false;
-  if (t.mae != null && t.mfe != null) return false;
-  const exit = t.exitTime ? new Date(t.exitTime).getTime() : null;
-  if (exit == null || !Number.isFinite(exit)) return false;
-  return now - exit < AFTERMATH_HORIZON_MS + 7 * 24 * 60 * 60 * 1000;
+  const exit = exitMs(t);
+  if (exit == null) return false;
+  if (now - exit >= AFTERMATH_HORIZON_MS + 7 * 24 * 60 * 60 * 1000) return false;
+  if (t.mae == null || t.mfe == null) return true;
+  // The aftermath is a second errand with its own clock: the two after-exit
+  // prices are withheld until the window below has run, so a trade whose
+  // held path was measured this morning still owes them this evening.
+  return (t.postExitPeak == null || t.postExitAdverse == null) && aftermathReady(t, now);
+}
+
+/* ---------------------------- the aftermath clock ---------------------------- */
+
+/**
+ * How long after the exit belongs to this trade, and when it can be read.
+ *
+ * The two after-exit prices answer "what did leaving cost me, and what did it
+ * save me". Both are only worth writing down over a window long enough to
+ * contain an answer — and the right length is the trade's own: a scalp held
+ * twenty minutes is answered by the next hour, a swing held a week is not.
+ *
+ * So the window is one and a half times the hold, never less than a couple of
+ * hours and never more than a week. Until it has run, the reader withholds
+ * both prices rather than writing a snapshot of whatever had happened by the
+ * time the app was next opened — because nothing rewrites them afterwards,
+ * and a number written at exit + 10 minutes would be frozen as the trade's
+ * final answer to a question about the next two days.
+ */
+export const AFTERMATH_HOLD_MULTIPLE = 1.5;
+export const AFTERMATH_MIN_MS = 2 * 60 * 60 * 1000;
+export const AFTERMATH_MAX_MS = 7 * 24 * 60 * 60 * 1000;
+
+const exitMs = (t: { exitTime?: string | null }): number | null => {
+  const ms = t.exitTime ? new Date(t.exitTime).getTime() : null;
+  return ms != null && Number.isFinite(ms) ? ms : null;
+};
+
+/** The window after the exit that is attributed to this trade. */
+export function aftermathWindowMs(t: {
+  entryTime: string;
+  exitTime?: string | null;
+}): number {
+  const exit = exitMs(t);
+  const entry = new Date(t.entryTime).getTime();
+  const held = exit != null && Number.isFinite(entry) ? Math.max(0, exit - entry) : 0;
+  return Math.min(AFTERMATH_MAX_MS, Math.max(AFTERMATH_MIN_MS, held * AFTERMATH_HOLD_MULTIPLE));
+}
+
+/** The instant the aftermath can be read. Null for a trade with no exit. */
+export function aftermathReadyAt(t: {
+  entryTime: string;
+  exitTime?: string | null;
+}): number | null {
+  const exit = exitMs(t);
+  return exit == null ? null : exit + aftermathWindowMs(t);
+}
+
+export function aftermathReady(
+  t: { entryTime: string; exitTime?: string | null },
+  now = Date.now(),
+): boolean {
+  const at = aftermathReadyAt(t);
+  return at != null && now >= at;
+}
+
+/**
+ * Closed, the after-exit prices are blank, and the window has not run yet —
+ * so they are coming rather than missing. The form and the trade page say so
+ * instead of showing two empty boxes that look like an errand.
+ */
+export function aftermathPending(t: TradeWithTags, now = Date.now()): boolean {
+  if (t.status !== "closed" || t.exitPrice == null) return false;
+  if (t.postExitPeak != null && t.postExitAdverse != null) return false;
+  return !aftermathReady(t, now);
 }
 
 /**

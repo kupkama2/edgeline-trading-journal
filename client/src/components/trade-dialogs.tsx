@@ -105,6 +105,8 @@ export function TradeEditor({
   const [grades, setGrades] = useState<GradeState>(EMPTY_GRADES);
   /** The close note is being read; the save waits for it. */
   const [readingClose, setReadingClose] = useState(false);
+  /** The execution verdict, edited here like any other field on the trade. */
+  const [wellTraded, setWellTraded] = useState(false);
   const [account, setAccount] = useState("");
   // Which book the trade belongs to. Mutable after the fact on purpose: a
   // trade often turns out to belong to a different style than the one that
@@ -238,6 +240,9 @@ export function TradeEditor({
     const use = stored && draftDiffers(stored.draft, base) ? stored.draft : base;
     setRestored(stored && draftDiffers(stored.draft, base) ? stored.savedAt : null);
     applyDraft(use);
+    // Not part of the draft: it is one tap, and a verdict restored from a
+    // half-finished edit would be a claim nobody made.
+    setWellTraded(trade.wellTraded === true);
   }, [trade?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /** Put a draft into the form's state. Used by both load and discard. */
@@ -539,6 +544,7 @@ export function TradeEditor({
         styleId,
         fees: numOrNull(f.fees ?? ""),
         highlights: serializeHighlights(highlights),
+        wellTraded,
         entryGrade: grades.entry as any,
         stopGrade: grades.stop as any,
         exitGrade: grades.exit as any,
@@ -1149,6 +1155,10 @@ export function TradeEditor({
               setNote={(v: string) => setF((p) => ({ ...p, notes: v }))}
               autoPath={!trade.contract}
               onReading={setReadingClose}
+              wellTraded={wellTraded}
+              setWellTraded={setWellTraded}
+              tilt={trade.tilt === true}
+              entryTime={f.entryTime}
               /* A running position still has a high and a low, and they are
                  the numbers most easily lost by tomorrow. Without this the
                  only place to type them was a section gated behind an exit

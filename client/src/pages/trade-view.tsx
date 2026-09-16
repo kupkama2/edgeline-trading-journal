@@ -36,6 +36,7 @@ import {
   Sparkles,
   Trash2,
   Skull,
+  Star,
 } from "lucide-react";
 import {
   useCheckTrade,
@@ -49,7 +50,7 @@ import { parseExtraTargets, parsePlaybook, type TradeWithTags } from "@shared/sc
 import { computeMetrics, fmtFees, fmtMoney, fmtR, EXIT_REASON_LABELS } from "@shared/metrics";
 import { positionLedger } from "@shared/fills";
 import { parseHighlights } from "@shared/highlights";
-import { couldLearnMore, pathIncomplete } from "@shared/aftermath";
+import { aftermathPending, aftermathWindowMs, couldLearnMore, pathIncomplete } from "@shared/aftermath";
 import {
   alreadyDismissed,
   MarketSuggestion,
@@ -108,6 +109,13 @@ export interface Editable {
  * number to it is indistinguishable from the edit never having worked.
  */
 export type EditOutcome = { save: false } | { save: true; value: number | null };
+
+/** "2 hours", "3 days" — how long a trade's aftermath window runs. */
+function fmtWindow(ms: number): string {
+  const hours = Math.round(ms / (60 * 60 * 1000));
+  if (hours < 48) return `${hours} hour${hours === 1 ? "" : "s"}`;
+  return `${Math.round(hours / 24)} days`;
+}
 
 export function readEdit(
   raw: string,
@@ -680,6 +688,28 @@ function TradeBody({
           <Skull className="h-3 w-3" />
           {trade.tilt ? "tilt" : "mark tilt"}
         </button>
+        {/* The other verdict, on the execution rather than the idea. */}
+        {!trade.tilt && (
+          <button
+            type="button"
+            onClick={() => updateTrade.mutate({ id: trade.id, trade: { wellTraded: !trade.wellTraded } })}
+            aria-pressed={trade.wellTraded === true}
+            title={
+              trade.wellTraded
+                ? "Traded well — click to take it back"
+                : "Mark as traded well: waited for it, sized it, left it alone. Whatever it paid."
+            }
+            className={`flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] transition-colors ${
+              trade.wellTraded
+                ? "border-amber-500/50 bg-amber-500/10 text-amber-400"
+                : "border-border text-muted-foreground hover:border-amber-500/50 hover:text-amber-400"
+            }`}
+            data-testid="button-view-well"
+          >
+            <Star className={`h-3 w-3 ${trade.wellTraded ? "fill-current" : ""}`} />
+            {trade.wellTraded ? "well traded" : "mark well traded"}
+          </button>
+        )}
         {trade.account && (
           <Badge variant="outline" className="text-[10px] font-normal text-muted-foreground">
             {trade.account}
@@ -1120,6 +1150,20 @@ function TradeBody({
                 edit={editable("postExitAdverse", trade.postExitAdverse)}
               />
             </div>
+          )}
+
+          {/* Blank because it is early, not because it is missing. The two
+              after-exit prices are read once the window has run, so the
+              first number written is one that means something. */}
+          {aftermathPending(trade) && (
+            <p
+              className="mt-2 text-[11px] leading-snug text-muted-foreground"
+              data-testid="text-aftermath-pending"
+            >
+              What price did once you were out is read about{" "}
+              {fmtWindow(aftermathWindowMs(trade))} after the exit — long enough for the move that
+              followed to have happened. Type the prices yourself to settle it now.
+            </p>
           )}
 
           {/*

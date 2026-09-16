@@ -395,6 +395,13 @@ export const AFTERMATH_HORIZON_MS = 30 * 24 * 60 * 60 * 1000;
 export function pathExtremes(
   candles: Candle[],
   t: { direction: string; entryMs: number; exitMs: number | null; stop: number | null },
+  /**
+   * How long after the exit still belongs to this trade. Bounds BOTH legs of
+   * the aftermath, so "it ran on to X" is a figure over a defined window
+   * rather than over however long it happened to be when somebody last
+   * opened the app. See aftermathWindowMs in shared/aftermath.ts.
+   */
+  aftermathMs: number = AFTERMATH_HORIZON_MS,
 ): PathExtremes {
   const long = t.direction !== "short";
   const best = (bars: Candle[]) =>
@@ -409,19 +416,18 @@ export function pathExtremes(
   // The favourable aftermath stops at the bar BEFORE the stop level breaks:
   // once it breaks, a position left alone would not have been there for what
   // came next.
+  const window = exitMs == null ? [] : after.filter((c) => c.t - exitMs <= aftermathMs);
   const alive: Candle[] = [];
-  for (const c of after) {
+  for (const c of window) {
     if (t.stop != null && (long ? c.l <= t.stop : c.h >= t.stop)) break;
     alive.push(c);
   }
-  const withinHorizon =
-    exitMs == null ? [] : after.filter((c) => c.t - exitMs <= AFTERMATH_HORIZON_MS);
 
   return {
     mae: worst(held),
     mfe: best(held),
     postExitPeak: best(alive),
-    postExitAdverse: worst(withinHorizon),
+    postExitAdverse: worst(window),
   };
 }
 

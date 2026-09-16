@@ -162,6 +162,13 @@ export const trades = pgTable("trades", {
    * without them unless the tilt book is asked for. See shared/tilt.ts.
    */
   tilt: boolean("tilt").notNull().default(false),
+  /**
+   * The opposite verdict, about the execution rather than the idea: you
+   * waited for it, sized it, and left it alone. Nothing to do with whether
+   * it paid — a trade can be executed perfectly and lose. The two flags are
+   * exclusive; see exclusiveVerdict in shared/well-traded.ts.
+   */
+  wellTraded: boolean("well_traded").notNull().default(false),
   exitReason: text("exit_reason"), // see exitReasonEnum — the fact, not the verdict
   /**
    * Why a trade ended without ever becoming a real position. Distinct from
