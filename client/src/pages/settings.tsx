@@ -594,6 +594,25 @@ function StylesCard() {
                       />
                     </div>
 
+                    {/* How many entries a day this book allows. Past it, the
+                        next entry is tilt unless argued in. Blank: no number. */}
+                    <input
+                      type="number"
+                      min={1}
+                      step={1}
+                      defaultValue={s.maxTradesPerDay ?? ""}
+                      onBlur={(e) =>
+                        updateStyle.mutate({
+                          id: s.id,
+                          maxTradesPerDay: e.target.value ? Number(e.target.value) : null,
+                        })
+                      }
+                      className="h-7 w-16 shrink-0 rounded border border-border bg-transparent px-1 font-mono text-[10px] text-muted-foreground"
+                      title="Max trades a day — past this, the next entry logs as tilt unless you argue it in"
+                      placeholder="max/day"
+                      data-testid={`input-max-trades-${s.id}`}
+                    />
+
                     <span className="w-16 shrink-0 text-right font-mono text-[11px] text-muted-foreground">
                       {used} {used === 1 ? "trade" : "trades"}
                     </span>

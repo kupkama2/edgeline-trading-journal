@@ -30,6 +30,7 @@ import { setJumpDay } from "@/lib/jump";
 import { useLocation } from "wouter";
 import { DemonFinderPanel, WeeklyReviewCard } from "@/components/demon-finder";
 import { WeeklyInsightsCard } from "@/components/weekly-insights";
+import { TiltCostCard } from "@/components/tilt-card";
 import { StyleSwitcher } from "@/components/style-switcher";
 import { ProgressionCard } from "@/components/xp";
 import { ExecutionCard } from "@/components/execution-card";
@@ -248,6 +249,11 @@ export default function Dashboard({ embedded = false }: { embedded?: boolean } =
   // one day — both are doors into the log rather than pictures of it.
   const [, navigate] = useLocation();
   const all = useMemo(() => filterByScope(trades ?? [], scope), [trades, scope]);
+  // Tilt included: the guard is about the day as it happened.
+  const dayTrades = useMemo(
+    () => filterByScope(trades ?? [], { ...scope, book: "both" }),
+    [trades, scope],
+  );
   const closed = useMemo(
     () =>
       all
@@ -411,7 +417,7 @@ export default function Dashboard({ embedded = false }: { embedded?: boolean } =
           switch books, so this card ignores the style filter. */}
       <ProgressionCard />
 
-      <DailyGuardCard trades={all} tags={tags} styleId={activeStyleId} />
+      <DailyGuardCard trades={dayTrades} tags={tags} styleId={activeStyleId} />
 
       {/* Scoped to the selected book: "am I late on my scalps" and "am I late
           on my swings" are different questions with different answers. */}
@@ -420,6 +426,9 @@ export default function Dashboard({ embedded = false }: { embedded?: boolean } =
       <WeeklyReviewCard trades={all} tags={tags} />
 
       <WeeklyInsightsCard trades={all} tags={tags} />
+
+      {/* Both books, so the split is the card's to make. */}
+      <TiltCostCard trades={dayTrades} />
 
       {/* stat strip */}
       <Card className="border-card-border bg-card p-4" data-testid="card-stat-strip">

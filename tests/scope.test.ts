@@ -209,3 +209,31 @@ describe("whether the page is narrowed at all", () => {
     expect(scopeActive({ styleIds: [], accounts: [], sources: [OWN_IDEA] })).toBe(true);
   });
 });
+
+describe("the book: plan, tilt, or both", () => {
+  // A tilt trade is a verdict on the entry. The default view is the plan —
+  // every headline number runs without them — and the tilt book is one
+  // toggle away, never hidden, never averaged in by accident.
+  const mixed = [
+    { id: 1, styleId: 1, account: null, tilt: false },
+    { id: 2, styleId: 1, account: null, tilt: true },
+    { id: 3, styleId: 1, account: null }, // older rows carry no flag at all
+  ] as any[];
+  const ids = (xs: any[]) => xs.map((t) => t.id);
+
+  it("shows the plan by default, which is every trade not marked tilt", () => {
+    expect(ids(filterByScope(mixed, EMPTY_SCOPE))).toEqual([1, 3]);
+    expect(ids(filterByScope(mixed, { ...EMPTY_SCOPE, book: "plan" }))).toEqual([1, 3]);
+  });
+
+  it("shows only the tilt book, or both, when asked", () => {
+    expect(ids(filterByScope(mixed, { ...EMPTY_SCOPE, book: "tilt" }))).toEqual([2]);
+    expect(ids(filterByScope(mixed, { ...EMPTY_SCOPE, book: "both" }))).toEqual([1, 2, 3]);
+  });
+
+  it("counts as narrowed only when looking at the tilt book alone", () => {
+    expect(scopeActive({ ...EMPTY_SCOPE, book: "tilt" })).toBe(true);
+    expect(scopeActive({ ...EMPTY_SCOPE, book: "both" })).toBe(false);
+    expect(scopeActive({ ...EMPTY_SCOPE, book: "plan" })).toBe(false);
+  });
+});

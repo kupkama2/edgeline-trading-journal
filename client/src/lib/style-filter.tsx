@@ -22,9 +22,18 @@ import type { TradeWithTags, TradingStyle } from "@shared/schema";
 const STYLE_KEY = "edgeline.activeStyleIds";
 const ACCOUNT_KEY = "edgeline.activeAccounts";
 const SOURCE_KEY = "edgeline.activeSources";
+const BOOK_KEY = "edgeline.book";
 /** The single-value keys this replaced; read once, then retired. */
 const LEGACY_STYLE_KEY = "edgeline.activeStyleId";
 const LEGACY_ACCOUNT_KEY = "edgeline.activeAccount";
+
+/**
+ * Which trades a page is about. The plan is the default: every headline
+ * number runs on the trades that were the plan, and the tilt book — the
+ * trades that should not have been taken — is one toggle away, never
+ * averaged in by accident. See shared/tilt.ts.
+ */
+export type Book = "plan" | "tilt" | "both";
 
 export interface Scope {
   /** Empty means every style — a selection of none is not a filter of none. */
@@ -40,13 +49,24 @@ export interface Scope {
    * a prop eval is still showing the log, not a subset of it.
    */
   evaluationAccounts?: string[];
+  /** Absent means the plan. */
+  book?: Book;
 }
 
 export const EMPTY_SCOPE: Scope = { styleIds: [], accounts: [], sources: [] };
 
-/** Any axis narrowed at all — the page is showing a subset, not the log. */
+/**
+ * Any axis narrowed at all — the page is showing a subset, not the log.
+ * The plan is what the log means by default, so only the tilt book alone
+ * counts as narrowed; "both" is the whole record.
+ */
 export function scopeActive(scope: Scope): boolean {
-  return scope.styleIds.length > 0 || scope.accounts.length > 0 || scope.sources.length > 0;
+  return (
+    scope.styleIds.length > 0 ||
+    scope.accounts.length > 0 ||
+    scope.sources.length > 0 ||
+    scope.book === "tilt"
+  );
 }
 
 /**
@@ -81,6 +101,8 @@ const StyleCtx = createContext<{
   activeSource: string | null;
   /** Accounts held out of the default view, for surfaces that want to say so. */
   evaluationAccounts: string[];
+  book: Book;
+  setBook: (b: Book) => void;
 }>({
   scope: EMPTY_SCOPE,
   toggleStyle: () => {},
@@ -93,7 +115,14 @@ const StyleCtx = createContext<{
   clearSources: () => {},
   activeSource: null,
   evaluationAccounts: [],
+  book: "plan",
+  setBook: () => {},
 });
+
+function readBook(): Book {
+  const raw = store.get(BOOK_KEY);
+  return raw === "tilt" || raw === "both" ? raw : "plan";
+}
 
 function readList<T>(key: string, parse: (raw: string) => T | null): T[] {
   try {
@@ -149,6 +178,7 @@ export function StyleFilterProvider({ children }: { children: React.ReactNode })
   const [sources, setSources] = useState<string[]>(() =>
     readList(SOURCE_KEY, (r) => r.trim() || null),
   );
+  const [book, setBook] = useState<Book>(readBook);
 
   useEffect(() => {
     if (styleIds.length === 0) store.remove(STYLE_KEY);
@@ -165,15 +195,20 @@ export function StyleFilterProvider({ children }: { children: React.ReactNode })
     else store.set(SOURCE_KEY, JSON.stringify(sources));
   }, [sources]);
 
+  useEffect(() => {
+    if (book === "plan") store.remove(BOOK_KEY);
+    else store.set(BOOK_KEY, book);
+  }, [book]);
+
   // The whole-viewport "you are filtered" glow (see index.css). On the root
   // element rather than any component, because the signal is about every page
   // at once and must survive navigation between them.
   useEffect(() => {
     document.documentElement.toggleAttribute(
       "data-scoped",
-      scopeActive({ styleIds, accounts, sources }),
+      scopeActive({ styleIds, accounts, sources, book }),
     );
-  }, [styleIds, accounts, sources]);
+  }, [styleIds, accounts, sources, book]);
 
   /*
    * Which accounts are evaluations, read from their settings rather than
@@ -188,7 +223,7 @@ export function StyleFilterProvider({ children }: { children: React.ReactNode })
   );
 
   const value = useMemo(() => {
-    const scope: Scope = { styleIds, accounts, sources, evaluationAccounts };
+    const scope: Scope = { styleIds, accounts, sources, evaluationAccounts, book };
     return {
       scope,
       toggleStyle: (id: number) => setStyleIds((cur) => toggleStyleIn(cur, id)),
@@ -201,8 +236,10 @@ export function StyleFilterProvider({ children }: { children: React.ReactNode })
       activeAccount: accounts.length === 1 ? accounts[0] : null,
       activeSource: sources.length === 1 ? sources[0] : null,
       evaluationAccounts,
+      book,
+      setBook,
     };
-  }, [styleIds, accounts, sources, evaluationAccounts]);
+  }, [styleIds, accounts, sources, evaluationAccounts, book]);
 
   return <StyleCtx.Provider value={value}>{children}</StyleCtx.Provider>;
 }
@@ -228,9 +265,19 @@ export function filterByStyle<T extends { styleId: number | null }>(
  * "none of them" is the whole log rather than an empty page.
  */
 export function filterByScope<
-  T extends { styleId: number | null; account?: string | null; source?: string | null },
+  T extends {
+    styleId: number | null;
+    account?: string | null;
+    source?: string | null;
+    tilt?: boolean | null;
+  },
 >(trades: T[], scope: Scope): T[] {
   let out = trades;
+  // The plan by default. A row from before the flag existed carries none,
+  // and was never tilt.
+  const book = scope.book ?? "plan";
+  if (book === "plan") out = out.filter((t) => t.tilt !== true);
+  else if (book === "tilt") out = out.filter((t) => t.tilt === true);
   if (scope.styleIds.length) {
     out = out.filter((t) => t.styleId != null && scope.styleIds.includes(t.styleId));
   }

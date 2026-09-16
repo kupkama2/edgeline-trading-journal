@@ -56,10 +56,13 @@ import {
   upsertAccountSettingsSchema,
   parseScreenshotSchema,
   analyzeRationaleSchema,
+  readCloseSchema,
   directionEnum,
   sizeUnitEnum,
   insertAccountBalanceSchema,
 } from "@shared/schema";
+import { normalizeCloseRead } from "@shared/close-read";
+import { HIGHLIGHT_TAXONOMY } from "@shared/highlights";
 import {
   contractFor,
   lastPointValueFor,
@@ -166,6 +169,54 @@ function splitDataUrl(image: string): { mediaType: string; data: string } {
   const m = /^data:([^;]+);base64,([\s\S]*)$/.exec(image.trim());
   if (m) return { mediaType: m[1], data: m[2] };
   return { mediaType: "image/png", data: image.trim() };
+}
+
+/**
+ * The prompt for reading a close note. Every value is defined in the
+ * trader's terms, and the note is the only source: the numbers are context
+ * for understanding the words, never a substitute for them.
+ */
+function closeNotePrompt(
+  text: string,
+  ctx: {
+    direction: "long" | "short";
+    entryPrice?: number | null;
+    initialStop?: number | null;
+    initialTarget?: number | null;
+    exitPrice?: number | null;
+  },
+  demons: string[],
+  highlights: string[],
+): string {
+  const n = (v: number | null | undefined) => (v == null ? "unknown" : String(v));
+  return `You are reading a trader's own note about how a trade ended, and turning it into their journal's fields.
+
+The trade: ${ctx.direction} from ${n(ctx.entryPrice)}, stop ${n(ctx.initialStop)}, target ${n(ctx.initialTarget)}, exited at ${n(ctx.exitPrice)}.
+
+Return ONLY a JSON object with exactly these keys: exitReason, entryGrade, stopGrade, exitGrade, demons, highlights, noManagementOutcome. Use null (or [] for the lists) for anything the note does not say. The note is the source; never infer a value from the numbers alone.
+
+exitReason, one of:
+- "target": the planned target was hit.
+- "stop": the original stop was hit.
+- "trailed": a stop that had been moved into profit was hit.
+- "breakeven": a stop that had been moved to the entry was hit.
+- "discretion": closed by hand — took profit early, did not like it, felt wrong, wanted out.
+- "invalidated": the reason for the trade disappeared, so it was closed.
+- "time": closed because time ran out — end of session, a time stop.
+- "other": ended some other way the note explains.
+
+entryGrade: "early" (in before the setup confirmed), "perfect", or "late" (chased it).
+stopGrade: "tight" (taken out by noise, too close), "good", or "wide" (more room than it needed).
+exitGrade: "early" (left money on the table), "perfect", or "late" (gave back a lot). Never for a trade stopped at its original stop.
+
+demons: mistakes the trader admits to, from this list only, exact spelling: ${JSON.stringify(demons)}
+highlights: things done right that the note says, from this list only, exact spelling: ${JSON.stringify(highlights)}
+noManagementOutcome: only if the note says what price did afterwards with the plan left untouched — "target_first", "stop_first", or "undetermined".
+
+The note:
+"""
+${text.slice(0, 2000)}
+"""`;
 }
 
 function extractJson(text: string): any {
@@ -1489,6 +1540,37 @@ export async function registerRoutes(
     } catch (err: any) {
       console.error("analyze-rationale failed:", err?.message || err);
       res.status(502).json({ ok: false, tags: [], message: "Could not analyze that comment." });
+    }
+  });
+
+  /**
+   * "What happened", read into the fields.
+   *
+   * The close form is a sentence or two now; the fields it used to be are
+   * still what every breakdown runs on. The model reads the sentence, and
+   * normalizeCloseRead keeps only what the journal actually has — the
+   * trader's own demon list, the real grades, the real exit reasons.
+   */
+  app.post("/api/read-close", async (req, res) => {
+    if (costly(req, res)) return;
+    const parsed = readCloseSchema.safeParse(req.body);
+    if (!parsed.success)
+      return res.status(400).json({ message: "Invalid request", issues: parsed.error.issues });
+    const { text, context } = parsed.data;
+    try {
+      const demons = await store(req).listMistakeTags();
+      const extra = context.highlights ?? [];
+      const prompt = closeNotePrompt(
+        text,
+        context,
+        demons.map((d) => d.name),
+        Array.from(new Set([...HIGHLIGHT_TAXONOMY, ...extra])),
+      );
+      const json = extractJson(await callLLM(prompt));
+      res.json({ ok: true, read: normalizeCloseRead(json, demons, extra) });
+    } catch (err: any) {
+      console.error("read-close failed:", err?.message || err);
+      res.status(502).json({ ok: false, message: "Could not read that note." });
     }
   });
 

@@ -1,6 +1,7 @@
 import { useMemo } from "react";
-import { Layers, Users, Wallet } from "lucide-react";
+import { Layers, Skull, Users, Wallet } from "lucide-react";
 import { useStyles, useTrades } from "@/lib/data";
+import { tiltBook } from "@shared/tilt";
 import {
   OWN_IDEA,
   knownAccounts,
@@ -71,11 +72,17 @@ export function StyleSwitcher() {
     clearStyles,
     clearAccounts,
     clearSources,
+    book,
+    setBook,
   } = useStyleFilter();
 
   const accounts = useMemo(() => knownAccounts(trades), [trades]);
   const sources = useMemo(() => knownSources(trades), [trades]);
-  if (styles.length === 0 && accounts.length < 2 && sources.length === 0) return null;
+  const tiltCount = useMemo(() => tiltBook(trades).length, [trades]);
+  // The book row appears once there is a tilt trade to hold out — and stays
+  // while the view is anything but the plan, so a filter is never invisible.
+  const showBook = tiltCount > 0 || book !== "plan";
+  if (styles.length === 0 && accounts.length < 2 && sources.length === 0 && !showBook) return null;
 
   const allStyles = scope.styleIds.length === 0;
   const allAccounts = scope.accounts.length === 0;
@@ -187,6 +194,49 @@ export function StyleSwitcher() {
               </button>
             );
           })}
+        </div>
+      )}
+
+      {/* Which book. The plan is what every number means by default; the
+          tilt book is the trades that should not have been taken, held out
+          so they cannot poison the sample, and shown on their own when asked. */}
+      {showBook && (
+        <div className="flex flex-wrap items-center gap-2" data-testid="book-switcher">
+          <Skull className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          <button
+            type="button"
+            onClick={() => setBook("plan")}
+            aria-pressed={book === "plan"}
+            data-testid="button-book-plan"
+            className={pill(book === "plan")}
+          >
+            Plan
+          </button>
+          <button
+            type="button"
+            onClick={() => setBook("tilt")}
+            aria-pressed={book === "tilt"}
+            data-testid="button-book-tilt"
+            className={pill(book === "tilt", "border-primary/50 bg-primary/10 text-primary")}
+          >
+            Tilt · {tiltCount}
+          </button>
+          <button
+            type="button"
+            onClick={() => setBook("both")}
+            aria-pressed={book === "both"}
+            data-testid="button-book-both"
+            className={pill(book === "both")}
+          >
+            Both
+          </button>
+          <span className="text-[10px] text-muted-foreground" data-testid="text-book-hint">
+            {book === "plan"
+              ? "tilt trades are out of every number on this page"
+              : book === "tilt"
+                ? "only the trades that should not have been taken"
+                : "everything, tilt included"}
+          </span>
         </div>
       )}
     </div>

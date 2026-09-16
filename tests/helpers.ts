@@ -22,6 +22,7 @@ export function trade(over: Partial<TradeWithTags> = {}): TradeWithTags {
     exitPrice: 120,
     exitTime: "2026-08-03T10:00:00.000Z",
     status: "closed",
+    tilt: false,
     exitReason: "target",
     cancelReason: null,
     wouldHaveHitTarget: null,

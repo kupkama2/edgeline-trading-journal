@@ -35,6 +35,7 @@ import {
   Plus,
   Sparkles,
   Trash2,
+  Skull,
 } from "lucide-react";
 import {
   useCheckTrade,
@@ -658,6 +659,27 @@ function TradeBody({
           {trade.status}
         </Badge>
         <StyleChip styleId={trade.styleId} />
+        {/* The verdict on the entry, flippable here because this is where a
+            trade gets looked at properly. */}
+        <button
+          type="button"
+          onClick={() => updateTrade.mutate({ id: trade.id, trade: { tilt: !trade.tilt } })}
+          aria-pressed={trade.tilt}
+          title={
+            trade.tilt
+              ? "In the tilt book — click to put it back in the plan"
+              : "Mark as tilt: it should not have been taken"
+          }
+          className={`flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] transition-colors ${
+            trade.tilt
+              ? "border-primary/50 bg-primary/10 text-primary"
+              : "border-border text-muted-foreground hover:border-primary/50 hover:text-primary"
+          }`}
+          data-testid="button-view-tilt"
+        >
+          <Skull className="h-3 w-3" />
+          {trade.tilt ? "tilt" : "mark tilt"}
+        </button>
         {trade.account && (
           <Badge variant="outline" className="text-[10px] font-normal text-muted-foreground">
             {trade.account}

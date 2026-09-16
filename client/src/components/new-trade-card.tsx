@@ -15,12 +15,14 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowDownRight, ArrowUpRight, Ban, CheckCircle2, ChevronDown, ClipboardList, Clock3, Loader2, Sparkles } from "lucide-react";
+import { ArrowDownRight, ArrowUpRight, Ban, CheckCircle2, ChevronDown, ClipboardList, Clock3, Loader2, Skull, Sparkles } from "lucide-react";
 import { useTrades, useMistakeTags, useStyles, useCreateTrade, useAddTradeImage, archiveDataUrl, parseScreenshot, fileToDownscaledDataUrl, analyzeRationale } from "@/lib/data";
 import { styleColor, styleName, useStyleFilter } from "@/lib/style-filter";
 import { parsePlaybook } from "@shared/schema";
 import { EXIT_REASON_LABELS } from "@shared/metrics";
-import { useDemonGuard } from "@/components/daily-guard";
+import { useDemonGuard, useTiltGuard } from "@/components/daily-guard";
+import { fmtCountdown } from "@/components/tilt-meter";
+import { signalSentence, tiltSignals } from "@shared/tilt";
 import {
   contractFor,
   exposureOf,
@@ -40,7 +42,7 @@ import { conflictWarning, directionWarning, readDirection } from "@shared/direct
 import { SymbolPicker } from "@/components/symbol-picker";
 import { venueOfAccount } from "@shared/hyperliquid";
 import { knownHighlights, serializeHighlights } from "@shared/highlights";
-import { suggestSize } from "@shared/sizing";
+import { suggestSize, notionalReadout } from "@shared/sizing";
 import { inSessionWindow, windowLabel } from "@shared/session";
 import { LevelLabel, LevelLadder, type LevelKind } from "@/components/levels";
 
@@ -60,6 +62,8 @@ const setupFormSchema = z.object({
 type SetupForm = z.input<typeof setupFormSchema>;
 
 const RISK_BUDGET_KEY = "edgeline.riskBudget";
+/** Typed, in full, to log a plan trade through a strict form. */
+const PLAN_WORD = "IN PLAN";
 const ACCOUNT_KEY = "edgeline.lastAccount";
 
 /**
@@ -143,6 +147,11 @@ export function NewTradeCard({
   const [postExitAdverse, setPostExitAdverse] = useState("");
   const [nmo, setNmo] = useState<string | null>(null);
   const [fees, setFees] = useState("");
+  /** How it ended, in the trader's words — the closed trade's post-mortem. */
+  const [closeNote, setCloseNote] = useState("");
+  const [readingClose, setReadingClose] = useState(false);
+  /** Whose call it was is usually in the rationale; the picker is there for when it is not. */
+  const [showSource, setShowSource] = useState(false);
   const { data: demons = [] } = useMistakeTags();
 
   /* Optional playbook / edge checklist — never required. */
@@ -177,6 +186,20 @@ export function NewTradeCard({
   // Same lock the R-loss guardrail produces — a repeated demon blocks new
   // entries, but only for the style that produced the streak.
   const guard = useDemonGuard(styleId);
+  /*
+   * The tilt fail-safe.
+   *
+   * Tilt is decided at the door, not in next week's stats. The meter reads
+   * the day (shared/tilt.ts); the signals read this entry against it. One
+   * sign is a question on the form. Two signs, or a meter already at
+   * strict, and the entry logs as tilt unless the words IN PLAN are typed —
+   * a deliberate act, not a checkbox. Locked, and it logs as tilt only: the
+   * trade is still recorded, because it happened, but the numbers never
+   * take it. The toggle in the header is the same verdict given freely.
+   */
+  const tiltGuard = useTiltGuard(allTrades);
+  const [tiltMode, setTiltMode] = useState(false);
+  const [planWord, setPlanWord] = useState("");
 
   // Futures are decided in contracts, crypto in USD notional. Defaulted per
   // symbol so the common case needs no click, but always overridable — the
@@ -250,6 +273,26 @@ export function NewTradeCard({
     [v.symbol, v.size, v.entryPrice, v.initialStop, v.initialTarget, v.rationale, v.notes].some(
       (x) => String(x ?? "").trim() !== "",
     );
+
+  const tiltSigns = useMemo(() => {
+    const typed = v.entryTime ? new Date(v.entryTime) : new Date();
+    return tiltSignals(
+      {
+        symbol: v.symbol ?? "",
+        styleId,
+        entryTime: Number.isNaN(typed.getTime()) ? new Date() : typed,
+      },
+      allTrades,
+      styles.find((s) => s.id === styleId) ?? null,
+    );
+  }, [v.symbol, v.entryTime, styleId, allTrades, styles]);
+  const tiltStrict =
+    tiltGuard.meter.state === "strict" ||
+    (tiltGuard.meter.state === "locked" && !tiltGuard.locked) ||
+    tiltSigns.length >= 2;
+  const arguedIn = planWord.trim().toUpperCase() === PLAN_WORD;
+  /** What this entry will be saved as. */
+  const asTilt = tiltMode || tiltGuard.locked || (tiltStrict && !arguedIn);
 
   /*
    * Long or short, read off the levels.
@@ -408,6 +451,14 @@ export function NewTradeCard({
       exposure: fmtExposure(exposureOf(v.symbol, qty, perContract)),
     };
   }, [v.entryPrice, v.initialStop, v.initialTarget, v.size, v.symbol, sizeUnit, perContract]);
+
+  // The size in the unit you did not type, at the entry price.
+  const sizeReadout = notionalReadout({
+    size: Number(v.size),
+    sizeUnit,
+    entryPrice: Number(v.entryPrice),
+    symbol: v.symbol,
+  });
 
   async function handleFile(file: File) {
     const dataUrl = await fileToDownscaledDataUrl(file);
@@ -606,8 +657,10 @@ export function NewTradeCard({
           ? { pointValue: typedMult }
           : {}),
         entryPrice: data.entryPrice,
-        initialStop: data.initialStop,
-        initialTarget: data.initialTarget,
+        // A tilt trade owes no levels; an empty box is not a stop at zero.
+        initialStop: asTilt ? priceOrNull(values.initialStop) : data.initialStop,
+        initialTarget: asTilt ? priceOrNull(values.initialTarget) : data.initialTarget,
+        tilt: asTilt,
         extraTargets: extras.length ? JSON.stringify(extras) : null,
         account: account.trim() || null,
         source: finalSource,
@@ -617,7 +670,8 @@ export function NewTradeCard({
         // the trade record it produces, and chart replay lives in Tradesly /
         // Edgewonk. The column stays nullable so this can be revisited.
         setupScreenshot: null,
-        notes: data.notes || null,
+        // The close note is the post-mortem: same column, written at the close.
+        notes: loggingClosed && closeNote.trim() ? closeNote.trim() : data.notes || null,
         rationale: rationale || null,
         rationaleTags: rationaleTags.length ? JSON.stringify(rationaleTags) : null,
         playbook: playbookJson,
@@ -651,7 +705,12 @@ export function NewTradeCard({
         .catch(() => {});
     }
     toast(
-      loggingClosed
+      asTilt
+        ? {
+            title: "Logged as tilt",
+            description: `${data.symbol.toUpperCase()} is in the tilt book — counted, not measured.`,
+          }
+        : loggingClosed
         ? {
             title: "Closed trade logged",
             description: `${data.symbol.toUpperCase()} recorded end-to-end.`,
@@ -684,6 +743,9 @@ export function NewTradeCard({
     // A new trade is a new blank. Left set, one manual pick would switch the
     // inference off for every trade logged afterwards in the same session.
     setDirectionPicked(false);
+    setTiltMode(false);
+    setPlanWord("");
+    setCloseNote("");
     form.reset({
       symbol: "",
       direction: "long",
@@ -823,6 +885,22 @@ export function NewTradeCard({
               {label}
             </Button>
           ))}
+          {/* Tilt: this one should not be taken, or should not have been.
+              Logged to be counted, never measured — stop, target and
+              playbook stop being asked for, and it goes to the tilt book. */}
+          <Button
+            type="button"
+            size="sm"
+            variant={tiltMode ? "destructive" : "outline"}
+            className="h-7 gap-1.5 px-2 text-[11px]"
+            onClick={() => setTiltMode((t) => !t)}
+            data-testid="button-tilt-mode"
+            aria-pressed={tiltMode}
+            title="A tilt trade: counted in the tilt book, out of every number"
+          >
+            <Skull className="h-3.5 w-3.5" />
+            Tilt
+          </Button>
         </div>
       </div>
 
@@ -884,7 +962,8 @@ export function NewTradeCard({
                   />
                 </FormControl>
                 <p className="text-[10px] leading-snug text-muted-foreground">
-                  Type it however you'd say it — tags get pulled out automatically on save.
+                  Type it however you'd say it — the setup, the why, whose call it was. Tags and
+                  the source get pulled out on save.
                 </p>
                 <SetupTagPicker
                   selected={setupTags}
@@ -899,110 +978,6 @@ export function NewTradeCard({
             )}
           />
 
-          {/* Optional playbook / edge checklist — collapsed by default so a
-              trade can still be logged in seconds. */}
-          <div>
-            <button
-              type="button"
-              onClick={() => setShowPlaybook((s) => !s)}
-              className="flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
-              data-testid="button-toggle-playbook"
-              aria-expanded={showPlaybook}
-            >
-              <ClipboardList className="h-3.5 w-3.5" />
-              Playbook · optional
-              <ChevronDown
-                className={`h-3.5 w-3.5 transition-transform ${showPlaybook ? "rotate-180" : ""}`}
-              />
-            </button>
-
-            {showPlaybook && (
-              <div
-                className="mt-2 space-y-3 rounded-lg border border-border/60 bg-secondary/20 p-3"
-                data-testid="section-playbook"
-              >
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <div className="space-y-1">
-                    <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                      Trigger / setup name
-                    </label>
-                    <Input
-                      list="playbook-setups"
-                      value={pb.setupName}
-                      onChange={(e) => setPb((p) => ({ ...p, setupName: e.target.value }))}
-                      placeholder="e.g. VAH rejection"
-                      className="h-9 text-sm"
-                      data-testid="input-playbook-setup"
-                    />
-                    <datalist id="playbook-setups">
-                      {knownSetups.map((s) => (
-                        <option key={s} value={s} />
-                      ))}
-                    </datalist>
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                      Stop-placement logic
-                    </label>
-                    <Input
-                      value={pb.stopLogic}
-                      onChange={(e) => setPb((p) => ({ ...p, stopLogic: e.target.value }))}
-                      placeholder="e.g. above the swing high"
-                      className="h-9 text-sm"
-                      data-testid="input-playbook-stop"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                      Target logic
-                    </label>
-                    <Input
-                      value={pb.targetLogic}
-                      onChange={(e) => setPb((p) => ({ ...p, targetLogic: e.target.value }))}
-                      placeholder="e.g. prior day VAL"
-                      className="h-9 text-sm"
-                      data-testid="input-playbook-target"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                      Stand-aside condition
-                    </label>
-                    <Input
-                      value={pb.standAside}
-                      onChange={(e) => setPb((p) => ({ ...p, standAside: e.target.value }))}
-                      placeholder="e.g. skip if CPI within 15m"
-                      className="h-9 text-sm"
-                      data-testid="input-playbook-stand-aside"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <p className="mb-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
-                    Confidence
-                  </p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {[1, 2, 3, 4, 5].map((n) => (
-                      <Button
-                        key={n}
-                        type="button"
-                        size="sm"
-                        variant={pb.confidence === n ? "default" : "outline"}
-                        className="h-8 w-9 p-0 font-mono text-[11px]"
-                        onClick={() =>
-                          setPb((p) => ({ ...p, confidence: p.confidence === n ? null : n }))
-                        }
-                        data-testid={`button-playbook-confidence-${n}`}
-                      >
-                        {n}
-                      </Button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
 
           {styles.length > 0 && (
             <div className="space-y-1" data-testid="section-style-picker">
@@ -1042,20 +1017,34 @@ export function NewTradeCard({
               </p>
               <AccountPicker value={account} onChange={setAccount} known={knownAccounts} />
             </div>
-            <div className="space-y-1" data-testid="section-source-picker">
-              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                Source
-              </p>
-              <AccountPicker
-                value={source}
-                onChange={setSource}
-                known={knownSources}
-                testIdPrefix="source"
-                placeholder="e.g. Daniel, Severin, CBS, UB"
-                emptyLabel="My own idea"
-                newLabel="+ New source…"
-              />
-            </div>
+            {/* Whose call it was. Usually said in the rationale and pulled
+                out from there; the picker is one click away for when the
+                name is not one the journal knows yet. */}
+            {showSource || source.trim() ? (
+              <div className="space-y-1" data-testid="section-source-picker">
+                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  Source
+                </p>
+                <AccountPicker
+                  value={source}
+                  onChange={setSource}
+                  known={knownSources}
+                  testIdPrefix="source"
+                  placeholder="e.g. Daniel, Severin, CBS, UB"
+                  emptyLabel="My own idea"
+                  newLabel="+ New source…"
+                />
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setShowSource(true)}
+                className="self-end pb-2 text-[10px] text-muted-foreground underline decoration-dotted underline-offset-2 hover:text-foreground"
+                data-testid="button-show-source"
+              >
+                + whose call
+              </button>
+            )}
           </div>
 
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -1189,7 +1178,7 @@ export function NewTradeCard({
                                   : "text-muted-foreground hover:text-foreground"
                             }`}
                           >
-                            {u === "base" ? "contracts" : "usd"}
+                            {u === "base" ? (isFutures ? "contracts" : "units") : "usd"}
                           </button>
                         );
                       })}
@@ -1213,6 +1202,11 @@ export function NewTradeCard({
                     />
                   </FormControl>
                   <FormMessage className="text-[10px]" />
+                  {sizeReadout && (
+                    <p className="font-mono text-[10px] text-muted-foreground" data-testid="text-size-readout">
+                      {sizeReadout}
+                    </p>
+                  )}
                 </FormItem>
               )}
             />
@@ -1518,10 +1512,15 @@ export function NewTradeCard({
                 setHighlights={setHighlights}
                 extraHighlights={knownHighlights(allTrades)}
                 testPrefix="new"
+                note={closeNote}
+                setNote={setCloseNote}
+                autoPath={!isFutures}
+                onReading={setReadingClose}
                 timing={{
                   direction: v.direction === "short" ? "short" : "long",
                   entryPrice: isFinite(Number(v.entryPrice)) ? Number(v.entryPrice) : null,
                   initialStop: isFinite(Number(v.initialStop)) ? Number(v.initialStop) : null,
+                  initialTarget: isFinite(Number(v.initialTarget)) ? Number(v.initialTarget) : null,
                 }}
               />
             </div>
@@ -1549,6 +1548,14 @@ export function NewTradeCard({
                 : []),
             ];
             const earned = parts.filter((p) => p.on).reduce((a, p) => a + p.pts, 0);
+            if (asTilt) {
+              return (
+                <span className="font-mono text-[10px] text-muted-foreground" data-testid="meter-entry-xp">
+                  This entry: <span className="font-semibold text-foreground">+0 XP</span> — a tilt
+                  trade is outside the score.
+                </span>
+              );
+            }
             return (
               <div
                 className="flex flex-wrap items-center gap-1.5"
@@ -1575,11 +1582,66 @@ export function NewTradeCard({
             );
           })()}
 
+          {/* The fail-safe, where the decision is made. Amber is a question,
+              red is a verdict: the entry will be saved as tilt unless the
+              plan word is typed — and under a lock, whatever is typed. */}
+          {(tiltSigns.length > 0 || tiltStrict || tiltGuard.locked || tiltMode) && (
+            <div
+              className={`space-y-2 rounded-md border px-3 py-2.5 text-[11px] leading-snug ${
+                tiltGuard.locked
+                  ? "border-destructive/60 bg-destructive/10 text-destructive"
+                  : asTilt
+                    ? "border-primary/50 bg-primary/10 text-primary"
+                    : "border-amber-500/40 bg-amber-500/5 text-amber-500"
+              }`}
+              data-testid="banner-tilt"
+              data-as-tilt={asTilt}
+            >
+              <p className="flex items-start gap-1.5 text-sm font-bold tracking-tight">
+                <Skull className="mt-px h-4 w-4 shrink-0" />
+                <span>
+                  {tiltGuard.locked
+                    ? `Locked. Go take a walk — ${fmtCountdown(tiltGuard.remainingMs)} left. This logs as tilt, or not at all.`
+                    : tiltMode
+                      ? "Logging as tilt: counted, never measured."
+                      : tiltStrict
+                        ? "Strict. This logs as tilt unless you say it is in the plan."
+                        : "Are you sure about this one?"}
+                </span>
+              </p>
+              {tiltSigns.length > 0 && (
+                <ul className="list-disc space-y-0.5 pl-5" data-testid="list-tilt-signals">
+                  {tiltSigns.map((sig) => (
+                    <li key={sig.kind}>{signalSentence(sig)}</li>
+                  ))}
+                </ul>
+              )}
+              {tiltMode && (
+                <p>No stop, target or playbook needed. It goes to the tilt book and stays out of every number.</p>
+              )}
+              {tiltStrict && !tiltGuard.locked && !tiltMode && (
+                <label className="flex flex-wrap items-center gap-2">
+                  <span>
+                    Type <span className="font-mono font-semibold">{PLAN_WORD}</span> to log it as a plan
+                    trade anyway:
+                  </span>
+                  <Input
+                    value={planWord}
+                    onChange={(e) => setPlanWord(e.target.value)}
+                    className="h-7 w-28 font-mono text-[11px] uppercase"
+                    placeholder={PLAN_WORD}
+                    data-testid="input-plan-word"
+                  />
+                </label>
+              )}
+            </div>
+          )}
+
           <div className="flex flex-wrap items-center gap-3">
             <Button
               type="submit"
               className="h-9 flex-1 min-w-[9rem] text-xs font-semibold"
-              disabled={createTrade.isPending || analyzingRationale || guard.locked}
+              disabled={createTrade.isPending || analyzingRationale || readingClose || guard.locked}
               data-testid="button-save-trade"
             >
               {(createTrade.isPending || analyzingRationale) && (
@@ -1589,7 +1651,9 @@ export function NewTradeCard({
                   lifecycles produce three different records. */}
               {guard.locked
                 ? "Locked — acknowledge the demon"
-                : lifecycle === "closed"
+                : asTilt
+                  ? "Log as tilt"
+                  : lifecycle === "closed"
                   ? "Log closed trade"
                   : lifecycle === "pending"
                     ? "Place order"

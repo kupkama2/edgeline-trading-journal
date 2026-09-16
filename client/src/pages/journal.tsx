@@ -168,6 +168,12 @@ export default function Journal() {
   );
 
   const scoped = useMemo(() => filterByScope(trades ?? [], scope), [trades, scope]);
+  // The day is the day: the guard and the tilt meter read every trade taken
+  // today, tilt included, whichever book the rest of the page is showing.
+  const dayTrades = useMemo(
+    () => filterByScope(trades ?? [], { ...scope, book: "both" }),
+    [trades, scope],
+  );
   const pending = sortTrades(scoped.filter((t) => t.status === "pending"), sortBy);
   const open = sortTrades(scoped.filter((t) => t.status === "open"), sortBy);
   /**
@@ -229,7 +235,7 @@ export default function Journal() {
           for anything. The guard is the day; the scorecard is the record. */}
       <ScorecardCard trades={scoped} />
 
-      <DailyGuardCard trades={scoped} tags={tags} styleId={activeStyleId} />
+      <DailyGuardCard trades={dayTrades} tags={tags} styleId={activeStyleId} />
 
       <CoachCard />
 

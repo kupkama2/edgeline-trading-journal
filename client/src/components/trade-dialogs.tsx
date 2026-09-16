@@ -103,6 +103,8 @@ export function TradeEditor({
   const [extraTps, setExtraTps] = useState<string[]>([]);
   const [highlights, setHighlights] = useState<string[]>([]);
   const [grades, setGrades] = useState<GradeState>(EMPTY_GRADES);
+  /** The close note is being read; the save waits for it. */
+  const [readingClose, setReadingClose] = useState(false);
   const [account, setAccount] = useState("");
   // Which book the trade belongs to. Mutable after the fact on purpose: a
   // trade often turns out to belong to a different style than the one that
@@ -1123,6 +1125,12 @@ export function TradeEditor({
               setHighlights={setHighlights}
               extraHighlights={knownHighlights(allTrades)}
               testPrefix="edit"
+              /* The note IS the trade's notes: one box, written at the close,
+                 read into the fields. */
+              note={f.notes ?? ""}
+              setNote={(v: string) => setF((p) => ({ ...p, notes: v }))}
+              autoPath={!trade.contract}
+              onReading={setReadingClose}
               /* A running position still has a high and a low, and they are
                  the numbers most easily lost by tomorrow. Without this the
                  only place to type them was a section gated behind an exit
@@ -1368,13 +1376,17 @@ export function TradeEditor({
               />
             </div>
 
-            <Textarea
-              value={f.notes ?? ""}
-              onChange={set("notes")}
-              placeholder="Notes"
-              className="min-h-[60px] text-xs"
-              data-testid="input-edit-notes"
-            />
+            {/* Once there is an exit, the notes box lives in the close
+                section as "what happened"; before that it is just notes. */}
+            {!(f.exitPrice ?? "").trim() && (
+              <Textarea
+                value={f.notes ?? ""}
+                onChange={set("notes")}
+                placeholder="Notes"
+                className="min-h-[60px] text-xs"
+                data-testid="input-edit-notes"
+              />
+            )}
             </FormSection>
 
             {/* The price path, here as well as on the trade's own page.
@@ -1515,7 +1527,7 @@ export function TradeEditor({
               <Button
                 className="h-10 flex-1 text-xs font-semibold"
                 onClick={save}
-                disabled={updateTrade.isPending}
+                disabled={updateTrade.isPending || readingClose}
                 data-testid="button-edit-save"
               >
                 {updateTrade.isPending && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}

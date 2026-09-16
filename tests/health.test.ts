@@ -130,3 +130,13 @@ describe("a closed trade carrying no fee, on an account that charges them", () =
     expect(kinds(issues)).toEqual(["no-exit-reason", "no-fee"]);
   });
 });
+
+describe("a tilt trade", () => {
+  it("owes no stop and no target — it is counted, not measured", () => {
+    const issues = journalHealth(
+      [closed({ id: 1, tilt: true, initialStop: null, initialTarget: null }), open({ id: 2, tilt: true, initialStop: null })],
+      NOW,
+    );
+    expect(kinds(issues)).toEqual([]);
+  });
+});

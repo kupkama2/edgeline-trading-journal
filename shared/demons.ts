@@ -28,7 +28,6 @@ import type { MistakeTag, TradeWithTags } from "./schema";
  */
 export const DEMON_TAXONOMY: string[] = [
   "Poor Risk/Reward",
-  "Trade Not In Plan",
   "Bet Too Large",
   "Bet Too Small",
   "Didn't Take Planned Trade",
@@ -38,8 +37,17 @@ export const DEMON_TAXONOMY: string[] = [
 /** Earlier free-form tag names that map onto a canonical demon. */
 export const DEMON_LEGACY_ALIASES: Record<string, string> = {
   "Poor Risk/Reward Trade": "Poor Risk/Reward",
-  "Trade Not In Trading Plan": "Trade Not In Plan",
 };
+
+/**
+ * The one demon that was a verdict on the entry rather than on the
+ * management: "this trade should not have been taken". As a tag it was
+ * picked on close, counted in streaks, and left in every statistic — the
+ * opposite of what the claim asks for. It is now the tilt flag on the trade
+ * (shared/tilt.ts), which takes the trade out of the plan book. Storage
+ * copies every tick onto the flag and removes the tag on boot.
+ */
+export const DEMON_RETIRED_TO_TILT = "Trade Not In Plan";
 
 /**
  * Four demons that the grade axes say better, and where each one moves to.

@@ -13,7 +13,9 @@ import {
   COOLDOWN_SECONDS,
 } from "@shared/metrics";
 import { DEMON_GUARDRAIL_STREAK, demonStats, type DemonStat } from "@shared/demons";
+import { closesOn, tiltCost, tiltLocked, tiltMeter, type TiltCost, type TiltMeter } from "@shared/tilt";
 import { filterByStyle, styleName } from "@/lib/style-filter";
+import { TiltMeterBar } from "@/components/tilt-meter";
 
 /* ------------------------- demon guardrail state ------------------------ */
 
@@ -103,6 +105,54 @@ export function useDemonGuard(
   };
 }
 
+/* ------------------------------ tilt guard ------------------------------ */
+
+export interface TiltGuard {
+  meter: TiltMeter;
+  /** The form refuses plan trades: the walk is not over, or not acknowledged. */
+  locked: boolean;
+  /** Milliseconds of walk left; 0 once it is over. */
+  remainingMs: number;
+  /** The current lock has been acknowledged (the walk was taken). */
+  acked: boolean;
+  acknowledge: () => void;
+  /** Today's plan and tilt books side by side. Null with nothing closed today. */
+  today: TiltCost | null;
+}
+
+/**
+ * The day read as a gauge, live. Shares the acknowledgement store with the
+ * demon lock: a walk taken is a fact remembered for the visit, keyed so a
+ * later sign needs a later walk.
+ *
+ * Give it the trades unfiltered by book — the meter is about what was
+ * done today, and the tilt trades are the point.
+ */
+export function useTiltGuard(trades: TradeWithTags[]): TiltGuard {
+  const { acked, acknowledge } = useContext(AckCtx);
+  const [now, setNow] = useState(() => Date.now());
+  const meter = useMemo(() => tiltMeter(trades, new Date(now)), [trades, now]);
+  // Seconds while a walk is being counted down, minutes otherwise (the day rolls over).
+  useEffect(() => {
+    const every = meter.state === "locked" ? 1000 : 60_000;
+    const id = setInterval(() => setNow(Date.now()), every);
+    return () => clearInterval(id);
+  }, [meter.state]);
+  const locked = tiltLocked(meter, acked, new Date(now));
+  const today = useMemo(() => {
+    const closes = closesOn(trades, new Date(now));
+    return closes.length ? tiltCost(closes) : null;
+  }, [trades, now]);
+  return {
+    meter,
+    locked,
+    remainingMs: meter.walkEndsAt != null ? Math.max(0, meter.walkEndsAt - now) : 0,
+    acked: meter.lockKey != null && acked.has(meter.lockKey),
+    acknowledge: () => meter.lockKey && acknowledge(meter.lockKey),
+    today,
+  };
+}
+
 function isToday(iso: string | null) {
   if (!iso) return false;
   const d = new Date(iso);
@@ -170,6 +220,7 @@ export function DailyGuardCard({
 }) {
   const s = useDailyStats(trades);
   const guard = useDemonGuard(styleId, trades, tags);
+  const tilt = useTiltGuard(trades);
   const { data: styles = [] } = useStyles();
   const [remaining, setRemaining] = useState(0);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -189,11 +240,11 @@ export function DailyGuardCard({
   }, [s.isLossStreakHalt, s.lastExit]);
 
   const cooling = s.isLossStreakHalt && remaining > 0;
-  const tone = s.isDailyStopHit || guard.locked
+  const tone = s.isDailyStopHit || guard.locked || tilt.locked
     ? "border-destructive/60 bg-destructive/10"
-    : cooling || s.isLossStreakHalt
+    : cooling || s.isLossStreakHalt || tilt.meter.state === "strict"
       ? "border-primary/40 bg-primary/5"
-      : s.isDailyWarning
+      : s.isDailyWarning || tilt.meter.state === "warm"
         ? "border-amber-500/40 bg-amber-500/5"
         : "border-card-border bg-card";
 
@@ -230,6 +281,10 @@ export function DailyGuardCard({
           tone={s.isDailyStopHit ? "down" : undefined}
         />
       </div>
+
+      {/* The gauge, under the numbers and above every other warning: it is
+          the one that takes the day away. */}
+      <TiltMeterBar guard={tilt} book={styleId != null ? styleName(styles, styleId) : ""} />
 
       {guard.locked && guard.demon && (
         <div

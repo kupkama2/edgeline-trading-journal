@@ -99,6 +99,7 @@ CREATE TABLE IF NOT EXISTS trading_styles (
 -- The hours each book is supposed to trade; NULL means "no window set".
 ALTER TABLE trading_styles ADD COLUMN IF NOT EXISTS session_start TEXT;
 ALTER TABLE trading_styles ADD COLUMN IF NOT EXISTS session_end TEXT;
+ALTER TABLE trading_styles ADD COLUMN IF NOT EXISTS max_trades_per_day INTEGER;
 CREATE TABLE IF NOT EXISTS trades (
   id SERIAL PRIMARY KEY,
   style_id INTEGER,
@@ -144,6 +145,9 @@ ALTER TABLE trades ADD COLUMN IF NOT EXISTS cancel_reason TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS funding DOUBLE PRECISION;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS funding_checked_at TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS external_id TEXT;
+-- A verdict on the entry, off by default: nothing recorded before it existed
+-- was tilt until somebody says so (or the migration below does).
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS tilt BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS would_have_hit_target BOOLEAN;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS rationale TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS rationale_tags TEXT;
@@ -254,6 +258,19 @@ DELETE FROM trade_mistakes WHERE mistake_tag_id IN (
 );
 DELETE FROM mistake_tags
  WHERE name IN ('Entered Too Soon', 'Entered Too Late', 'Exited Too Soon', 'Exited Too Late');
+-- "Trade Not In Plan" was the tilt verdict recorded as a demon: a tag picked
+-- on close, counted in streaks, and left in every statistic. The verdict is
+-- now a column that takes the trade OUT of the statistics, which is what the
+-- claim meant all along. Same shape as the grade retirement above: copy the
+-- tick onto the column, then remove the demon. Both spellings the tag ever
+-- had are covered. A no-op once the tag is gone.
+UPDATE trades t SET tilt = TRUE
+  FROM trade_mistakes tm JOIN mistake_tags mt ON mt.id = tm.mistake_tag_id
+  WHERE tm.trade_id = t.id AND mt.name IN ('Trade Not In Plan', 'Trade Not In Trading Plan');
+DELETE FROM trade_mistakes WHERE mistake_tag_id IN (
+  SELECT id FROM mistake_tags WHERE name IN ('Trade Not In Plan', 'Trade Not In Trading Plan')
+);
+DELETE FROM mistake_tags WHERE name IN ('Trade Not In Plan', 'Trade Not In Trading Plan');
 CREATE TABLE IF NOT EXISTS weekly_reviews (
   id SERIAL PRIMARY KEY,
   week_start TEXT NOT NULL,
