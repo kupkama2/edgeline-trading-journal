@@ -32,13 +32,21 @@ import { HighlightPicker } from "@/components/trade-pickers";
 import type { MistakeTag } from "@shared/schema";
 
 import { LevelLabel, PathBands } from "@/components/levels";
-import { Activity, Gavel, Loader2, LogOut } from "lucide-react";
+import { Activity, Gavel, Loader2, LogOut, Star } from "lucide-react";
+import { aftermathWindowMs } from "@shared/aftermath";
 import { useState } from "react";
 import { Textarea } from "@/components/ui/textarea";
 import { readCloseNote } from "@/lib/data";
 import { closeReadSummary } from "@shared/close-read";
 
 const LABEL = "text-[10px] uppercase tracking-wider text-muted-foreground";
+
+/** "2 hours", "3 days" — how long a trade's aftermath window runs. */
+function fmtWindow(ms: number): string {
+  const hours = Math.round(ms / (60 * 60 * 1000));
+  if (hours < 48) return `${hours} hour${hours === 1 ? "" : "s"}`;
+  return `${Math.round(hours / 24)} days`;
+}
 
 /** An empty box is not a price of zero. */
 const numOrNull = (v: string) => {
@@ -123,6 +131,13 @@ export interface OutcomeFieldsProps {
   autoPath?: boolean;
   /** A read is in flight — parents hold the save until it lands. */
   onReading?: (busy: boolean) => void;
+  /** The execution verdict: waited for it, sized it, left it alone. */
+  wellTraded?: boolean;
+  setWellTraded?: (v: boolean) => void;
+  /** Set on a tilt trade, which can never also be traded well. */
+  tilt?: boolean;
+  /** For the line saying when the archive will have the aftermath. */
+  entryTime?: string;
 }
 
 /**
@@ -308,11 +323,14 @@ export function TradeOutcomeFields(p: OutcomeFieldsProps) {
   const [readLine, setReadLine] = useState<string | null>(null);
   const [readFailed, setReadFailed] = useState(false);
   const [adjust, setAdjust] = useState(false);
-  const [typePath, setTypePath] = useState(false);
-  // The path boxes fold away when the market will measure them — for a
-  // finished trade on an instrument the archive covers. A running trade
-  // still asks for "so far", and futures have no archive to ask.
-  const pathFolded = p.autoPath === true && !typePath && p.live !== true;
+  /*
+   * The four prices are named by direction. "Highest" is the best a long
+   * saw and the worst a short did; a form that says "fell to" on a short
+   * has the sign backwards, and the sign is the whole question.
+   */
+  const short = p.timing?.direction === "short";
+  const hi = short ? "highest" : "lowest";
+  const lo = short ? "lowest" : "highest";
 
   async function readNote() {
     const text = (p.note ?? "").trim();
@@ -424,6 +442,31 @@ export function TradeOutcomeFields(p: OutcomeFieldsProps) {
           tone="read"
         >
         <>
+          {/* The verdict on the execution, next to the words that justify
+              it. Never about the result — a trade can be executed perfectly
+              and lose, and that is the one most worth marking. */}
+          {p.setWellTraded && !p.tilt && (
+            <button
+              type="button"
+              onClick={() => p.setWellTraded?.(!p.wellTraded)}
+              aria-pressed={p.wellTraded === true}
+              className={`flex w-full items-center gap-2 rounded-md border px-2.5 py-2 text-left transition-colors ${
+                p.wellTraded
+                  ? "border-amber-500/50 bg-amber-500/10 text-amber-400"
+                  : "border-border text-muted-foreground hover:border-amber-500/40 hover:text-foreground"
+              }`}
+              data-testid={`button-${p.testPrefix}-well-traded`}
+            >
+              <Star className={`h-4 w-4 shrink-0 ${p.wellTraded ? "fill-current" : ""}`} />
+              <span className="min-w-0 text-[11px] leading-snug">
+                <span className="font-semibold">
+                  {p.wellTraded ? "Traded it well" : "Was it traded well?"}
+                </span>{" "}
+                — waited for it, sized it, left it alone. Nothing to do with whether it paid.
+              </span>
+            </button>
+          )}
+
           {hasNote && (
             <div className="space-y-1.5">
               <Textarea
@@ -582,26 +625,7 @@ export function TradeOutcomeFields(p: OutcomeFieldsProps) {
         </FormSection>
       )}
 
-      {/* The path, measured rather than typed wherever the archive can. */}
-      {path.held && pathFolded && (
-        <p
-          className="text-[11px] leading-snug text-muted-foreground"
-          data-testid={`text-${p.testPrefix}-auto-path`}
-        >
-          <span className="font-medium text-foreground">What price did</span> — measured from the market
-          after you save: the worst and best while you were in, and what it did once you were out.{" "}
-          <button
-            type="button"
-            onClick={() => setTypePath(true)}
-            className="underline decoration-dotted underline-offset-2 hover:text-foreground"
-            data-testid={`button-${p.testPrefix}-type-path`}
-          >
-            Type them instead
-          </button>
-        </p>
-      )}
-
-      {path.held && !pathFolded && (
+      {path.held && (
         <FormSection
           icon={Activity}
           title={priced ? "What price did" : "What price has done"}
@@ -628,6 +652,17 @@ export function TradeOutcomeFields(p: OutcomeFieldsProps) {
             Adverse left, favourable right, in both boxes — the same way round
             as the bands below and as every R in the app.
           */}
+          {p.autoPath && priced && (
+            <p className="text-[10px] leading-snug text-muted-foreground" data-testid={`text-${p.testPrefix}-auto-path`}>
+              Left blank, the archive fills these in. The two on the left as soon as it has the
+              day; the two on the right{" "}
+              {p.entryTime
+                ? `about ${fmtWindow(aftermathWindowMs({ entryTime: p.entryTime, exitTime: p.exitTime }))} after the exit`
+                : "once the move after your exit has had time to happen"}
+              , because a number written minutes after you left would be this trade's final answer
+              about the next two days. Type them to say it yourself.
+            </p>
+          )}
           <div className={`grid gap-2.5 ${path.after ? "sm:grid-cols-2" : ""}`}>
             {[
               {
@@ -638,14 +673,14 @@ export function TradeOutcomeFields(p: OutcomeFieldsProps) {
                 title: priced ? "While you were in" : "So far, in the trade",
                 left: {
                   kind: "mae" as const,
-                  text: priced ? "Worst held" : "Worst so far",
+                  text: `${priced ? "Worst while in" : "Worst so far"} · ${hi}`,
                   value: p.mae,
                   set: p.setMae,
                   id: "mae",
                 },
                 right: {
                   kind: "mfe" as const,
-                  text: priced ? "Best held" : "Best so far",
+                  text: `${priced ? "Best while in" : "Best so far"} · ${lo}`,
                   value: p.mfe,
                   set: p.setMfe,
                   id: "mfe",
@@ -657,16 +692,21 @@ export function TradeOutcomeFields(p: OutcomeFieldsProps) {
                     {
                       key: "after" as const,
                       title: "Once you were out",
+                      // Two questions about the trade you were no longer in:
+                      // did it turn (the exit saved you), and did it keep
+                      // going your way (the exit cost you). Both, always —
+                      // a form that only asks one can only ever conclude
+                      // one thing.
                       left: {
                         kind: "fellAfter" as const,
-                        text: "Fell to",
+                        text: `Turned against you · ${hi}`,
                         value: p.postExitAdverse,
                         set: p.setPostExitAdverse,
                         id: "post-exit-adverse",
                       },
                       right: {
                         kind: "ranAfter" as const,
-                        text: "Ran on to",
+                        text: `Kept going your way · ${lo}`,
                         value: p.postExitPeak,
                         set: p.setPostExitPeak,
                         id: "post-exit-peak",
@@ -710,7 +750,7 @@ export function TradeOutcomeFields(p: OutcomeFieldsProps) {
             {priced ? (
               <>
                 After you were out, both ways — one prices what leaving cost you, the other what
-                it saved you. On a stop-out, "fell to" is what the stop was worth.
+                it saved you. On a stop-out, "turned against you" is what the stop was worth.
               </>
             ) : (
               <>

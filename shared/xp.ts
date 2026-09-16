@@ -21,6 +21,8 @@
 import type { DailyNote, TradeWithTags, WeeklyReview } from "./schema";
 import { dayKey, dayKeyOfIso } from "./daily";
 import { isMissed } from "./missed";
+import { CONFLUENCE_MIN, confluencesOf } from "./confluence";
+import { isWellTraded, wellTradedStreak, type WellTradedStreak } from "./well-traded";
 
 /* ------------------------------ XP events ------------------------------ */
 
@@ -51,6 +53,10 @@ export function tradeXp(t: TradeWithTags): XpEvent[] {
   if (t.tilt) return ev;
 
   if (t.rationale?.trim()) add("rationale", "Wrote the why before the result", 10);
+  // Two reasons lining up is a setup; one is a hunch. Paid on the count, not
+  // the outcome, like everything else here.
+  if (confluencesOf(t).length >= CONFLUENCE_MIN)
+    add("confluence", "Named two or more reasons", 5);
   if (t.initialStop != null && t.initialTarget != null)
     add("levels", "Entered with stop and target", 5);
   if (t.setupScreenshot || t.imageCount > 0) add("chart", "Attached the chart", 5);
@@ -63,6 +69,9 @@ export function tradeXp(t: TradeWithTags): XpEvent[] {
     // Demons carry no penalty — hiding them must never be the winning move —
     // and a clean, fully-scored trade earns a nod.
     if (t.mistakeTagIds.length === 0 && t.exitReason) add("clean", "No demons on it", 5);
+    // The execution verdict, paid like every other process mark and never
+    // for the result: a well-executed loser earns exactly what a winner does.
+    if (isWellTraded(t)) add("well-traded", "Traded it well", 5);
   }
   return ev;
 }
@@ -213,6 +222,8 @@ export interface Achievement {
 export interface Progression {
   level: LevelInfo;
   streak: Streak;
+  /** The run of trades executed well — the other streak. */
+  wellTraded: WellTradedStreak;
   events: XpEvent[];
   achievements: Achievement[];
 }
@@ -230,6 +241,7 @@ export function computeProgression(
   ];
   const total = events.reduce((a, e) => a + e.points, 0);
   const streak = disciplineStreak(trades, notes, today);
+  const wellRun = wellTradedStreak(trades);
 
   const fullEntries = trades.filter(
     (t) => t.status !== "cancelled" && t.rationale?.trim() && t.initialStop != null,
@@ -273,6 +285,18 @@ export function computeProgression(
       earned: demonFreeCleanCloses >= 10,
     },
     {
+      id: "well-three",
+      name: "Three in a Row",
+      desc: "Three written-up trades running, each one traded well",
+      earned: wellRun.best >= 3,
+    },
+    {
+      id: "well-ten",
+      name: "Ten Straight",
+      desc: "Ten written-up trades running, each one traded well",
+      earned: wellRun.best >= 10,
+    },
+    {
       id: "diarist",
       name: "Diarist",
       desc: "Write 20 daily reviews",
@@ -286,5 +310,5 @@ export function computeProgression(
     },
   ];
 
-  return { level: levelInfo(total), streak, events, achievements };
+  return { level: levelInfo(total), streak, wellTraded: wellRun, events, achievements };
 }

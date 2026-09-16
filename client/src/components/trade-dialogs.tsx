@@ -105,6 +105,8 @@ export function TradeEditor({
   const [grades, setGrades] = useState<GradeState>(EMPTY_GRADES);
   /** The close note is being read; the save waits for it. */
   const [readingClose, setReadingClose] = useState(false);
+  /** The execution verdict, edited here like any other field on the trade. */
+  const [wellTraded, setWellTraded] = useState(false);
   const [account, setAccount] = useState("");
   // Which book the trade belongs to. Mutable after the fact on purpose: a
   // trade often turns out to belong to a different style than the one that
@@ -238,6 +240,9 @@ export function TradeEditor({
     const use = stored && draftDiffers(stored.draft, base) ? stored.draft : base;
     setRestored(stored && draftDiffers(stored.draft, base) ? stored.savedAt : null);
     applyDraft(use);
+    // Not part of the draft: it is one tap, and a verdict restored from a
+    // half-finished edit would be a claim nobody made.
+    setWellTraded(trade.wellTraded === true);
   }, [trade?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /** Put a draft into the form's state. Used by both load and discard. */
@@ -539,6 +544,7 @@ export function TradeEditor({
         styleId,
         fees: numOrNull(f.fees ?? ""),
         highlights: serializeHighlights(highlights),
+        wellTraded,
         entryGrade: grades.entry as any,
         stopGrade: grades.stop as any,
         exitGrade: grades.exit as any,
@@ -839,6 +845,24 @@ export function TradeEditor({
 
         {trade && (
           <div className="space-y-5">
+            {/* The chart first, open, exactly as the trade's own page shows
+                it. Editing is where the levels get corrected, and correcting
+                a stop against a chart you cannot see is guesswork. It draws
+                for a RUNNING trade too — the window simply ends at now —
+                which is the case that matters most. Renders nothing for
+                anything the venues cannot price. */}
+            <FormSection
+              icon={LineChart}
+              title="Price chart"
+              hint="the candles behind these numbers"
+              testId="section-edit-chart"
+              tone="extra"
+            >
+              <Suspense fallback={<div className="h-40 animate-pulse rounded-md bg-secondary/30" />}>
+                <TradeChart trade={trade} />
+              </Suspense>
+            </FormSection>
+
             <FormSection
               icon={ClipboardList}
               title="The setup"
@@ -1131,6 +1155,10 @@ export function TradeEditor({
               setNote={(v: string) => setF((p) => ({ ...p, notes: v }))}
               autoPath={!trade.contract}
               onReading={setReadingClose}
+              wellTraded={wellTraded}
+              setWellTraded={setWellTraded}
+              tilt={trade.tilt === true}
+              entryTime={f.entryTime}
               /* A running position still has a high and a low, and they are
                  the numbers most easily lost by tomorrow. Without this the
                  only place to type them was a section gated behind an exit
@@ -1387,35 +1415,6 @@ export function TradeEditor({
                 data-testid="input-edit-notes"
               />
             )}
-            </FormSection>
-
-            {/* The price path, here as well as on the trade's own page.
-                Editing is where the levels get corrected, and correcting a
-                stop against a chart you cannot see is guesswork. It draws for
-                a RUNNING trade too — the window simply ends at now — which is
-                the case that matters most, because that is the trade you can
-                still do something about. Renders nothing for anything Binance
-                cannot price.
-
-                Folded by default, and it is the single biggest thing folding
-                buys: three hundred pixels of picture between the fields and
-                the save button, on a surface whose whole complaint was its
-                height. The trade's own page shows it open — this is the form,
-                and here it is a reference you reach for rather than the thing
-                you came to look at. */}
-            <FormSection
-              icon={LineChart}
-              title="Price chart"
-              hint="the candles behind these numbers"
-              testId="section-edit-chart"
-              tone="extra"
-              collapsible
-              defaultOpen={false}
-              summary="open it to check a level against the candles"
-            >
-              <Suspense fallback={<div className="h-40 animate-pulse rounded-md bg-secondary/30" />}>
-                <TradeChart trade={trade} />
-              </Suspense>
             </FormSection>
 
             {/* Attach here too, not only from the read-only detail view: Edit

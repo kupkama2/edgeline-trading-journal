@@ -24,6 +24,7 @@ import {
   byHour,
   byMistake,
   bySetup,
+  byConfluence,
   bySymbol,
   byWeekday,
   closedTrades,
@@ -56,6 +57,7 @@ const TABS = [
   { id: "account", label: "Account" },
   { id: "source", label: "Source" },
   { id: "setup", label: "Setup" },
+  { id: "confluence", label: "Reasons" },
   { id: "mistake", label: "Demon" },
   { id: "highlight", label: "Green flag" },
 ] as const;
@@ -233,6 +235,8 @@ export default function Analysis({ embedded = false }: { embedded?: boolean } = 
         return bySource(scoped);
       case "setup":
         return bySetup(scoped);
+      case "confluence":
+        return byConfluence(scoped);
       case "mistake":
         return byMistake(scoped, tags);
       case "highlight":
@@ -613,6 +617,8 @@ export default function Analysis({ embedded = false }: { embedded?: boolean } = 
           empty={
             tab === "setup"
               ? "No setups tagged yet — write a rationale when logging and they appear here."
+              : tab === "confluence"
+                ? "No closed trades yet — once there are, this says whether trades with more reasons behind them do better."
               : tab === "mistake"
                 ? "No demons tagged on closed trades yet."
                 : tab === "highlight"

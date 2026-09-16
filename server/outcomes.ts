@@ -29,7 +29,7 @@ import {
   type BinanceSymbol,
   type PairRef,
 } from "@shared/binance";
-import { outcomeUnknown, pathIncomplete } from "@shared/aftermath";
+import { aftermathReadyAt, aftermathWindowMs, outcomeUnknown, pathIncomplete } from "@shared/aftermath";
 import type { TradeWithTags } from "@shared/schema";
 import { fetchCatalogue, intervalFor, lastListed } from "./binance";
 import { fetchCandlesAt, pairForTradeAt, readCandlesAt } from "./candles";
@@ -466,12 +466,11 @@ async function readTrade(
   const bars = read.candles;
 
   const exitMs = t.exitTime ? new Date(t.exitTime).getTime() : null;
-  const path = pathExtremes(bars, {
-    direction: t.direction,
-    entryMs: from,
-    exitMs,
-    stop: t.initialStop,
-  });
+  const path = pathExtremes(
+    bars,
+    { direction: t.direction, entryMs: from, exitMs, stop: t.initialStop },
+    aftermathWindowMs(t),
+  );
 
   /*
    * An excursion read off a window that stops early is not a small error, it
@@ -500,7 +499,18 @@ async function readTrade(
     path.mae = null;
     path.mfe = null;
   }
-  if (running || read.coveredTo < to - grace) {
+  /*
+   * The aftermath waits for its own window.
+   *
+   * These two fields are filled only where they are blank, so the first
+   * number written is the trade's final answer — and read ten minutes after
+   * an exit, that answer is ten minutes of data to a question about the next
+   * two days. So nothing is written until the window has actually run
+   * (aftermathReadyAt) AND the candles reach the end of it. Withheld means
+   * blank, and blank is asked again on the next visit.
+   */
+  const readyAt = aftermathReadyAt(t);
+  if (running || readyAt == null || to < readyAt || read.coveredTo < readyAt - grace) {
     path.postExitPeak = null;
     path.postExitAdverse = null;
   }

@@ -23,6 +23,7 @@ import { EXIT_REASON_LABELS } from "@shared/metrics";
 import { useDemonGuard, useTiltGuard } from "@/components/daily-guard";
 import { fmtCountdown } from "@/components/tilt-meter";
 import { signalSentence, tiltSignals } from "@shared/tilt";
+import { CONFLUENCE_MIN, confluenceNudge } from "@shared/confluence";
 import {
   contractFor,
   exposureOf,
@@ -149,6 +150,8 @@ export function NewTradeCard({
   const [fees, setFees] = useState("");
   /** How it ended, in the trader's words — the closed trade's post-mortem. */
   const [closeNote, setCloseNote] = useState("");
+  /** The execution verdict on a trade being logged complete. */
+  const [wellTraded, setWellTraded] = useState(false);
   const [readingClose, setReadingClose] = useState(false);
   /** Whose call it was is usually in the rationale; the picker is there for when it is not. */
   const [showSource, setShowSource] = useState(false);
@@ -661,6 +664,7 @@ export function NewTradeCard({
         initialStop: asTilt ? priceOrNull(values.initialStop) : data.initialStop,
         initialTarget: asTilt ? priceOrNull(values.initialTarget) : data.initialTarget,
         tilt: asTilt,
+        wellTraded: loggingClosed && !asTilt && wellTraded,
         extraTargets: extras.length ? JSON.stringify(extras) : null,
         account: account.trim() || null,
         source: finalSource,
@@ -746,6 +750,7 @@ export function NewTradeCard({
     setTiltMode(false);
     setPlanWord("");
     setCloseNote("");
+    setWellTraded(false);
     form.reset({
       symbol: "",
       direction: "long",
@@ -974,6 +979,14 @@ export function NewTradeCard({
                   }
                   testIdPrefix="new-setup"
                 />
+                {/* One reason is a hunch, two is a setup. Counted off the
+                    chips here; the words get their tags on save. */}
+                <p
+                  className={`text-[10px] ${setupTags.length >= CONFLUENCE_MIN ? "text-emerald-500" : "text-amber-500"}`}
+                  data-testid="text-confluence"
+                >
+                  {confluenceNudge(setupTags.length)}
+                </p>
               </FormItem>
             )}
           />
@@ -1516,6 +1529,10 @@ export function NewTradeCard({
                 setNote={setCloseNote}
                 autoPath={!isFutures}
                 onReading={setReadingClose}
+                wellTraded={wellTraded}
+                setWellTraded={setWellTraded}
+                tilt={asTilt}
+                entryTime={v.entryTime}
                 timing={{
                   direction: v.direction === "short" ? "short" : "long",
                   entryPrice: isFinite(Number(v.entryPrice)) ? Number(v.entryPrice) : null,
