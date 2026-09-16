@@ -11,6 +11,7 @@
  * breakdown is a new key function rather than new plumbing. Pure and shared:
  * the client renders it without a round trip, and an export can reuse it.
  */
+import { CONFLUENCE_LABELS, confluenceBucket, confluencesOf, type ConfluenceBucket } from "./confluence";
 import type { MistakeTag, TradeWithTags } from "./schema";
 import { closedTrades, computeMetrics } from "./metrics";
 import { summarizeDays } from "./daily";
@@ -195,6 +196,21 @@ export function bySetup(trades: TradeWithTags[]): Slice[] {
       return null;
     }
   }).sort((a, b) => b.count - a.count);
+}
+
+/**
+ * By how many reasons the trade had — the tags on it, tapped or pulled
+ * out of the rationale. One reason is a hunch, two is a setup; this is
+ * where the journal shows whether that rule holds for you. Rows in that
+ * order, empty buckets left out.
+ */
+export function byConfluence(trades: TradeWithTags[]): Slice[] {
+  const order: ConfluenceBucket[] = ["none", "one", "two", "three-plus"];
+  const rows = sliceBy(trades, (t) => {
+    const b = confluenceBucket(confluencesOf(t).length);
+    return { key: b, label: CONFLUENCE_LABELS[b] };
+  });
+  return rows.sort((a, b) => order.indexOf(a.key as ConfluenceBucket) - order.indexOf(b.key as ConfluenceBucket));
 }
 
 /**

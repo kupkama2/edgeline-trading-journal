@@ -23,6 +23,7 @@ import { EXIT_REASON_LABELS } from "@shared/metrics";
 import { useDemonGuard, useTiltGuard } from "@/components/daily-guard";
 import { fmtCountdown } from "@/components/tilt-meter";
 import { signalSentence, tiltSignals } from "@shared/tilt";
+import { CONFLUENCE_MIN, confluenceNudge } from "@shared/confluence";
 import {
   contractFor,
   exposureOf,
@@ -974,6 +975,14 @@ export function NewTradeCard({
                   }
                   testIdPrefix="new-setup"
                 />
+                {/* One reason is a hunch, two is a setup. Counted off the
+                    chips here; the words get their tags on save. */}
+                <p
+                  className={`text-[10px] ${setupTags.length >= CONFLUENCE_MIN ? "text-emerald-500" : "text-amber-500"}`}
+                  data-testid="text-confluence"
+                >
+                  {confluenceNudge(setupTags.length)}
+                </p>
               </FormItem>
             )}
           />

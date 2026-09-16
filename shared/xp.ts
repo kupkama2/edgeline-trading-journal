@@ -21,6 +21,7 @@
 import type { DailyNote, TradeWithTags, WeeklyReview } from "./schema";
 import { dayKey, dayKeyOfIso } from "./daily";
 import { isMissed } from "./missed";
+import { CONFLUENCE_MIN, confluencesOf } from "./confluence";
 
 /* ------------------------------ XP events ------------------------------ */
 
@@ -51,6 +52,10 @@ export function tradeXp(t: TradeWithTags): XpEvent[] {
   if (t.tilt) return ev;
 
   if (t.rationale?.trim()) add("rationale", "Wrote the why before the result", 10);
+  // Two reasons lining up is a setup; one is a hunch. Paid on the count, not
+  // the outcome, like everything else here.
+  if (confluencesOf(t).length >= CONFLUENCE_MIN)
+    add("confluence", "Named two or more reasons", 5);
   if (t.initialStop != null && t.initialTarget != null)
     add("levels", "Entered with stop and target", 5);
   if (t.setupScreenshot || t.imageCount > 0) add("chart", "Attached the chart", 5);

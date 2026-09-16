@@ -1088,34 +1088,34 @@ function TradeBody({
               data-testid="view-path"
             >
               <Fig
-                label="Best held"
+                label="Best while in"
                 icon="mfe"
                 value={trade.mfe != null ? num(trade.mfe) : "—"}
-                hint="while you were in"
+                hint={trade.direction === "short" ? "lowest it got" : "highest it got"}
                 testId="view-mfe-price"
                 edit={editable("mfe", trade.mfe)}
               />
               <Fig
-                label="Worst held"
+                label="Worst while in"
                 icon="mae"
                 value={trade.mae != null ? num(trade.mae) : "—"}
-                hint="while you were in"
+                hint={trade.direction === "short" ? "highest it got" : "lowest it got"}
                 testId="view-mae-price"
                 edit={editable("mae", trade.mae)}
               />
               <Fig
-                label="Ran on to"
+                label="Kept going your way"
                 icon="ranAfter"
                 value={trade.postExitPeak != null ? num(trade.postExitPeak) : "—"}
-                hint="after you left"
+                hint={trade.direction === "short" ? "lowest after you left" : "highest after you left"}
                 testId="view-peak-price"
                 edit={editable("postExitPeak", trade.postExitPeak)}
               />
               <Fig
-                label="Fell to"
+                label="Turned against you"
                 icon="fellAfter"
                 value={trade.postExitAdverse != null ? num(trade.postExitAdverse) : "—"}
-                hint="after you left"
+                hint={trade.direction === "short" ? "highest after you left" : "lowest after you left"}
                 testId="view-adverse-price"
                 edit={editable("postExitAdverse", trade.postExitAdverse)}
               />
