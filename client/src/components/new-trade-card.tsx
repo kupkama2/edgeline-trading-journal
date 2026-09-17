@@ -88,6 +88,7 @@ export function NewTradeCard({
   onExpandedChange,
   defaultExpanded = false,
   onCreated,
+  narrow = false,
 }: {
   onOrdersDetected: (rows: ImportCandidate[]) => void;
   /** So the page can give the column back when the form is closed. */
@@ -96,6 +97,14 @@ export function NewTradeCard({
   defaultExpanded?: boolean;
   /** Fired after a successful save, so the overlay can step out of the way. */
   onCreated?: (id: number) => void;
+  /**
+   * The card is sharing the page with another column, so it has about half
+   * the room. Viewport breakpoints cannot see this — the window is wide, the
+   * CARD is not — and four fields to a row in a 600px column is what the form
+   * looked like when it looked broken. Told rather than guessed, because the
+   * page is the only thing that knows how much room it gave.
+   */
+  narrow?: boolean;
 }) {
   const { toast } = useToast();
   const createTrade = useCreateTrade();
@@ -602,6 +611,9 @@ export function NewTradeCard({
 
   useIdleCollapse({
     active: expanded,
+    // Half a trade typed in is a form in use, however long you spend on the
+    // chart between two of its fields.
+    draft: hasDraft,
     busy: parsing || analyzingRationale || createTrade.isPending,
     card: cardRef,
     body: bodyRef,
@@ -1060,7 +1072,7 @@ export function NewTradeCard({
             )}
           </div>
 
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <div className={`grid gap-3 ${narrow ? "grid-cols-2" : "grid-cols-2 sm:grid-cols-4"}`}>
             <FormField
               control={form.control}
               name="symbol"

@@ -35,7 +35,15 @@ describe("the entry form's idle clock", () => {
 });
 
 describe("what holds the form open without touching it", () => {
-  const free = { busy: false, focusInside: false, windowFocused: true, menuOpen: false };
+  const free = { draft: false, busy: false, focusInside: false, windowFocused: true, menuOpen: false };
+
+  it("anything typed into it, for as long as it is typed in", () => {
+    // The fold is for a form left holding nothing. Half a trade in it and
+    // thirty seconds on the chart is a form being used, not an abandoned one
+    // — and folding it reads as the app throwing the work away.
+    expect(shouldHold({ ...free, draft: true })).toBe(true);
+    expect(shouldHold({ ...free, draft: true, focusInside: false, windowFocused: false })).toBe(true);
+  });
 
   it("nothing, by default", () => {
     expect(shouldHold(free)).toBe(false);

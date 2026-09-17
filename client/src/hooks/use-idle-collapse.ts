@@ -12,6 +12,7 @@ import { IDLE_MS, TOUCH_EVENTS, idleStep, shouldHold } from "@/lib/idle";
  */
 export function useIdleCollapse({
   active,
+  draft,
   busy,
   card,
   body,
@@ -20,6 +21,8 @@ export function useIdleCollapse({
 }: {
   /** The form is open; there is something to fold. */
   active: boolean;
+  /** Something is typed in it — then it never folds. A change restarts the clock. */
+  draft: boolean;
   /** Work in flight on the form's behalf. A change restarts the clock. */
   busy: boolean;
   card: RefObject<HTMLElement | null>;
@@ -46,6 +49,7 @@ export function useIdleCollapse({
     const holding = () => {
       const focused = document.activeElement;
       return shouldHold({
+        draft,
         busy,
         focusInside: Boolean(focused && body.current?.contains(focused)),
         windowFocused: document.hasFocus(),
@@ -72,5 +76,5 @@ export function useIdleCollapse({
       el.removeEventListener("focusout", touch);
       window.removeEventListener("blur", touch);
     };
-  }, [active, busy, card, body, idleMs]);
+  }, [active, draft, busy, card, body, idleMs]);
 }
