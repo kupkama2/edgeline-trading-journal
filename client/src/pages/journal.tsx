@@ -21,6 +21,7 @@ import { NewTradeCard } from "@/components/new-trade-card";
 import { useLocation } from "wouter";
 import { ClosedTradeRow, OpenTradeRow, PendingTradeRow } from "@/components/trade-rows";
 import { OwedCard } from "@/components/owed-card";
+import { useSideBySide } from "@/hooks/use-mobile";
 import { HealthCard } from "@/components/health-card";
 import { useAccountSettings, useMarks } from "@/lib/data";
 import { openRisk, type SideRisk } from "@shared/exposure";
@@ -140,6 +141,8 @@ export default function Journal() {
   );
   const { data: tags = [] } = useMistakeTags();
   const { activeStyleId, scope } = useStyleFilter();
+  // Two columns only where there is genuinely room for two.
+  const sideBySide = useSideBySide();
   const [, navigate] = useLocation();
   /* Editing a trade from a row opens the trade, not a window over the row.
      One address, one editor: the journal is a list of links into it. */
@@ -254,7 +257,9 @@ export default function Journal() {
           so the open trades take the whole width instead. */}
       <div
         className={`grid items-start gap-6 ${
-          entryOpen ? "lg:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]" : "grid-cols-1"
+          entryOpen && sideBySide
+            ? "grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]"
+            : "grid-cols-1"
         }`}
       >
         <NewTradeCard
@@ -263,6 +268,7 @@ export default function Journal() {
             setImporting(true);
           }}
           onExpandedChange={setEntryOpen}
+          narrow={sideBySide}
         />
 
         <div className="space-y-3">

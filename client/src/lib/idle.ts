@@ -10,13 +10,13 @@
  * click away, and the folded header says so.
  *
  * A hand on it is any pointer, key, paste, drop or scroll inside the card.
- * Two things hold it open past the deadline without being a touch: work in
- * flight on its behalf (a screenshot being read, a save on the wire), and a
- * caret parked in one of its fields while the window is in front — someone
- * thinking mid-sentence is still using the form. A menu opened from the
- * card (the account picker, say) holds it the same way: the keystrokes that
- * browse a menu land outside the card, and an open menu is nothing to fold
- * a form under.
+ * Anything typed into it holds it open indefinitely: the fold is for a form
+ * left holding nothing, and a form holding half a trade is one you are in
+ * the middle of using. Work in flight on its behalf holds it too (a
+ * screenshot being read, a save on the wire), as does a caret parked in one
+ * of its fields while the window is in front, and a menu opened from the
+ * card — the keystrokes that browse a menu land outside it, and an open
+ * menu is nothing to fold a form under.
  */
 
 /** Thirty seconds without a touch, then the form folds. */
@@ -58,6 +58,18 @@ export function idleStep(
 }
 
 export interface HoldState {
+  /**
+   * Something is typed in it.
+   *
+   * The fold exists for a form left open holding NOTHING — that was the
+   * whole complaint it answered. A form holding half a trade is a form
+   * being used: you are looking at the chart for the stop, or copying the
+   * fill off the exchange, and thirty seconds of that is normal. Folding
+   * it then loses nothing (the draft survives) but it looks exactly like
+   * the app throwing your work away, which is worse than the wasted
+   * column it was trying to save.
+   */
+  draft: boolean;
   /** Work in flight on the form's behalf: a read, a save. */
   busy: boolean;
   /** An element inside the form's body has focus. */
@@ -70,5 +82,5 @@ export interface HoldState {
 
 /** Whether the form is spoken for at the deadline, touch or no touch. */
 export function shouldHold(s: HoldState): boolean {
-  return s.busy || s.menuOpen || (s.focusInside && s.windowFocused);
+  return s.draft || s.busy || s.menuOpen || (s.focusInside && s.windowFocused);
 }
