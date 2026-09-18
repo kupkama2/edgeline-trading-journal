@@ -53,6 +53,7 @@ import { parseExtraTargets, parsePlaybook, type TradeWithTags } from "@shared/sc
 import { computeMetrics, fmtFees, fmtMoney, fmtR, EXIT_REASON_LABELS } from "@shared/metrics";
 import { positionLedger } from "@shared/fills";
 import { markNote, standingOf } from "@shared/marks";
+import type { LevelDraft } from "@/components/trade-chart";
 import { parseHighlights } from "@shared/highlights";
 import { aftermathPending, aftermathWindowMs, couldLearnMore, pathIncomplete } from "@shared/aftermath";
 import {
@@ -289,6 +290,7 @@ function Fig({
   testId,
   edit,
   icon,
+  onPreview,
 }: {
   label: string;
   value: React.ReactNode;
@@ -298,6 +300,15 @@ function Fig({
   edit?: Editable;
   /** Draws the label in the level vocabulary the rest of the app uses. */
   icon?: keyof typeof LEVEL;
+  /**
+   * What is in the box right now, before anything is written.
+   *
+   * Called on each keystroke while the field is open, and with `undefined`
+   * the moment it closes — meaning the trade speaks for this figure again.
+   * The chart draws whatever it is handed, so a stop being typed moves on
+   * screen while it is still being typed, which is when you want to see it.
+   */
+  onPreview?: (v: number | null | undefined) => void;
 }) {
   const [typing, setTyping] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -308,6 +319,7 @@ function Fig({
     if (typing == null || !edit) return;
     const outcome = readEdit(typing, via, edit);
     setTyping(null);
+    onPreview?.(undefined);
     if (!outcome.save) return;
     setSaving(true);
     try {
@@ -342,12 +354,19 @@ function Fig({
           step="any"
           inputMode="decimal"
           value={typing}
-          onChange={(e) => setTyping(e.target.value)}
+          onChange={(e) => {
+            setTyping(e.target.value);
+            const text = e.target.value.trim();
+            onPreview?.(text === "" ? null : isFinite(Number(text)) ? Number(text) : undefined);
+          }}
           onKeyDown={(e) => {
             if (e.key === "Enter") void commit("enter");
             // Escape gets out with the old value intact. Without it the only
             // way out of a mis-click is to save something.
-            if (e.key === "Escape") setTyping(null);
+            if (e.key === "Escape") {
+              setTyping(null);
+              onPreview?.(undefined);
+            }
             // The overlay closes on Escape from anywhere; not while a field is
             // open, or leaving one would throw the trade away too.
             e.stopPropagation();
@@ -741,6 +760,24 @@ export function TradeBody({
    */
   const inDollars = (r: number | null | undefined) =>
     r != null && isFinite(r) && m.riskDollars > 0 ? `${fmtMoney(r * m.riskDollars)} of it` : null;
+
+  /*
+   * Levels being typed, before anything is written.
+   *
+   * A key is here only while its field is open, which is what lets the chart
+   * tell "the box is empty" (draw no line) from "nobody is editing this one"
+   * (draw the trade's). Dragging does not go through here: the chart moves its
+   * own line under the pointer and the write lands on release, which keeps a
+   * gesture from re-rendering this whole page at sixty frames a second.
+   */
+  const [preview, setPreview] = useState<LevelDraft>({});
+  const previewing = (field: string) => (v: number | null | undefined) =>
+    setPreview((p) => {
+      const next = { ...p };
+      if (v === undefined) delete (next as any)[field];
+      else (next as any)[field] = v;
+      return next;
+    });
 
   const editable = (field: string, current: number | null, required = false): Editable => ({
     field,
@@ -1344,7 +1381,34 @@ export function TradeBody({
       <PairPicker trade={trade} />
 
       <Suspense fallback={null}>
-        <TradeChart trade={trade} />
+        <TradeChart
+          trade={trade}
+          draft={preview}
+          /*
+           * Drag a level, and it is written when you let go.
+           *
+           * Only on release: every figure on this page is derived from these
+           * four numbers, and writing on each pixel of the drag would be a
+           * hundred saves for one decision. The line follows the pointer
+           * regardless — the chart moves it locally — so the gesture looks
+           * live while only its outcome is recorded.
+           */
+          onLevel={(field, price, done) => {
+            if (!done) return;
+            updateTrade
+              .mutateAsync({ id: trade.id, trade: { [field]: price } as any })
+              .catch((err: any) =>
+                /* Said out loud, for the same reason an inline edit says it:
+                   the line springs back on the next read and a silent snap is
+                   indistinguishable from the drag never having worked. */
+                toast({
+                  title: "That didn't save",
+                  description: String(err?.message ?? err).slice(0, 160),
+                  variant: "destructive",
+                }),
+              );
+          }}
+        />
       </Suspense>
 
       {/* ------------------------------ the plan ---------------------------- */}
@@ -1394,6 +1458,7 @@ export function TradeBody({
               value={num(trade.entryPrice)}
               testId="view-entry"
               edit={editable("entryPrice", trade.entryPrice, true)}
+              onPreview={previewing("entryPrice")}
             />
             <Fig
               label="Stop"
@@ -1401,6 +1466,7 @@ export function TradeBody({
               value={<span className="text-red-400">{num(trade.initialStop)}</span>}
               testId="view-stop"
               edit={editable("initialStop", trade.initialStop, true)}
+              onPreview={previewing("initialStop")}
             />
             <Fig
               label={tps.length > 1 ? "Targets" : "Target"}
@@ -1415,6 +1481,7 @@ export function TradeBody({
                  price would silently drop the rest of the plan. Those go
                  through the editor, which has a field per target. */
               edit={tps.length > 1 ? undefined : editable("initialTarget", trade.initialTarget)}
+              onPreview={tps.length > 1 ? undefined : previewing("initialTarget")}
             />
             {trade.exitPrice != null ? (
               <Fig
@@ -1423,6 +1490,7 @@ export function TradeBody({
                 value={<span className="text-sky-400">{num(trade.exitPrice)}</span>}
                 testId="view-exit"
                 edit={editable("exitPrice", trade.exitPrice)}
+                onPreview={previewing("exitPrice")}
               />
             ) : (
               <Fig

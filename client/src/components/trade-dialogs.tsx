@@ -859,7 +859,30 @@ export function TradeEditor({
               tone="extra"
             >
               <Suspense fallback={<div className="h-40 animate-pulse rounded-md bg-secondary/30" />}>
-                <TradeChart trade={trade} />
+                <TradeChart
+                  /* The form's numbers, not the saved ones. Correcting a stop
+                     against a chart still drawing the old one is the guesswork
+                     this section exists to remove, and the levels are the only
+                     part of the chart an edit can change — the candles are the
+                     market's and stay as they are. */
+                  trade={trade}
+                  draft={{
+                    entryPrice: numOrNull(f.entryPrice ?? ""),
+                    initialStop: numOrNull(f.initialStop ?? ""),
+                    initialTarget: numOrNull(f.initialTarget ?? ""),
+                    exitPrice: numOrNull(f.exitPrice ?? ""),
+                    extraTargets: extraTps
+                      .map((v) => numOrNull(v))
+                      .filter((v): v is number => v != null),
+                  }}
+                  /* And the other direction: drag the line, the field follows.
+                     Nothing is saved until Save is — a dragged level is an
+                     edit like any typed one, and the trade is not rewritten
+                     out from under a dialog somebody may still cancel. */
+                  onLevel={(field, price) =>
+                    setF((prev) => ({ ...prev, [field]: String(price) }))
+                  }
+                />
               </Suspense>
             </FormSection>
 
