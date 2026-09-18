@@ -206,6 +206,9 @@ ALTER TABLE trades ADD COLUMN IF NOT EXISTS outcome_source TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS outcome_checked_at TEXT;
 -- Which book to read a trade's prices from, when the ticker could not say.
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS price_pair TEXT;
+-- Every time the stop was moved, as a JSON StopMove[]. The initial stop never
+-- changes — it is the R denominator — so this is where management is kept.
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS stop_moves TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS outcome_hit_at TEXT;
 -- Commission paid on the trade, both sides, in dollars. Deducted in metrics.
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS fees DOUBLE PRECISION;
@@ -451,6 +454,19 @@ ALTER TABLE hyperliquid_symbols ADD COLUMN IF NOT EXISTS dex TEXT NOT NULL DEFAU
 ALTER TABLE hyperliquid_symbols DROP CONSTRAINT IF EXISTS hyperliquid_symbols_pkey;
 ALTER TABLE hyperliquid_symbols ADD CONSTRAINT hyperliquid_symbols_pkey
   PRIMARY KEY (name, dex);
+-- Drop a catalogue fetched before this column existed, once.
+--
+-- The universe refreshes only when the cache is a day old, so code that
+-- suddenly knows how to fetch MORE of it does not get to run: it is handed
+-- yesterday's rows and reports, honestly and uselessly, that there are no
+-- builder books. The counts then read 178 perps / 0 books / no error, which
+-- is exactly what a venue with no builder books looks like — the one failure
+-- shape that cannot be told apart from success.
+--
+-- So the shape change invalidates the cache. Bump the date whenever what is
+-- stored here changes again. Idempotent: the refetch writes a newer
+-- fetched_at, and the next boot matches nothing.
+DELETE FROM hyperliquid_symbols WHERE fetched_at < '2026-09-18T16:00:00.000Z';
 CREATE TABLE IF NOT EXISTS invites (
   id SERIAL PRIMARY KEY,
   email TEXT NOT NULL UNIQUE,

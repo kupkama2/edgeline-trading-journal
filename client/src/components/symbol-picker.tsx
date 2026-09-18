@@ -142,14 +142,25 @@ export function SymbolPicker({
      * itself, which typing "WTIOIL" does not even prefix-match, and picking
      * it would have written the book into the ticker.
      */
-    const onHl = new Map<string, { name: string; maxLeverage: number | null; dex: string | null }>();
+    const onHl = new Map<
+      string,
+      { name: string; maxLeverage: number | null; dex: string | null; books: number }
+    >();
     for (const h of hl) {
       const { dex, coin } = splitHlAsset(h.name);
       const key = coin.toUpperCase();
+      const had = onHl.get(key);
       // The venue's own universe wins the row when both list the ticker; a
       // builder book only fills a coin nothing else offers.
-      if (!onHl.has(key) || (onHl.get(key)!.dex && !dex)) {
-        onHl.set(key, { name: coin, maxLeverage: h.maxLeverage ?? null, dex });
+      if (!had || (had.dex && !dex)) {
+        onHl.set(key, {
+          name: coin,
+          maxLeverage: h.maxLeverage ?? null,
+          dex,
+          books: (had?.books ?? 0) + 1,
+        });
+      } else {
+        had.books += 1;
       }
     }
 
@@ -166,9 +177,16 @@ export function SymbolPicker({
           ? [
               h!.name !== coin ? h!.name : null,
               `HL perp${h!.maxLeverage ? ` ${h!.maxLeverage}×` : ""}`,
-              // Which book, when it is not the venue's own — an equity or a
-              // commodity perp is worth telling apart from a coin.
-              h!.dex,
+              /*
+                Which book, when it is not the venue's own — an equity or a
+                commodity perp is worth telling apart from a coin.
+
+                Named only when there is one of them. Two books listing the
+                same ticker is exactly the case the journal refuses to resolve
+                on its own, so printing one book's name here would promise an
+                answer the pair picker is about to ask you for.
+              */
+              h!.books > 1 ? `${h!.books} books` : h!.dex,
               b ? "Binance too" : null,
             ]
               .filter(Boolean)

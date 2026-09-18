@@ -80,6 +80,7 @@ import type { CloseCard } from "@shared/close-card";
 import { RationaleTags, num, parseTags } from "@/components/trade-shared";
 import { TradeEditor } from "@/components/trade-dialogs";
 import { PairPicker } from "@/components/pair-picker";
+import { StopMover } from "@/components/stop-mover";
 import { NewTradeCard } from "@/components/new-trade-card";
 import { FillDialog } from "@/components/fill-dialog";
 import { ResolveTradeDialog } from "@/components/resolve-trade";
@@ -1290,6 +1291,11 @@ export function TradeBody({
           onClose={() => setSuggestion(null)}
         />
       )}
+
+      {/* Managing the stop is a thing you do WHILE a trade is on, so it sits
+          with the live figures rather than in the editor. Closed, the moves
+          are history and the list below still shows them. */}
+      {trade.status === "open" && <StopMover trade={trade} />}
 
       {/* Above the chart, because it is the reason there is no chart. A trade
           nothing can be read for says so once, here, with the fix attached. */}

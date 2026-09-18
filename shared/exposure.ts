@@ -23,6 +23,7 @@
  */
 import type { Trade, TradeFill } from "./schema";
 import { positionLedger } from "./fills";
+import { currentStop } from "./stops";
 
 export interface SideRisk {
   /** Live positions. Resting orders are not exposure; nothing is filled yet. */
@@ -74,18 +75,27 @@ export interface OpenRisk extends SideRisk {
  * is the honest reading even though the trade's R denominator deliberately
  * does not move.
  *
- * The stop is the ORIGINAL stop, because that is the only one the journal
- * stores. A stop moved to breakeven in your platform is not known here, so
- * this is a ceiling on what is at risk rather than a live wire — which is the
- * right direction to be wrong in.
+ * The stop is the CURRENT one — the last move logged on the trade, or the
+ * original when it has not been moved. This used to be the original always,
+ * and said so: "a stop moved to breakeven in your platform is not known
+ * here". It is now, when you tell the journal, and a trade whose stop is
+ * through its entry correctly contributes nothing to what is at risk instead
+ * of going on reporting the risk it was opened with for three more weeks.
+ *
+ * Still a ceiling rather than a live wire: a stop moved in your platform and
+ * not logged here is invisible, which is the right direction to be wrong in.
  */
 export function riskOnTrade(t: Trade & { fills?: TradeFill[] }): number | null {
-  if (t.initialStop == null) return null;
+  const stop = currentStop(t);
+  if (stop == null) return null;
   const led = positionLedger(t);
   const perPoint = led.openQty * (t.pointValue ?? 1);
-  const distance = Math.abs(led.avgEntry - t.initialStop);
-  if (!(distance > 0) || !(perPoint > 0)) return null;
-  return distance * perPoint;
+  if (!(perPoint > 0)) return null;
+  const sign = t.direction === "short" ? -1 : 1;
+  // Signed towards a loss, so a stop through the entry is zero at risk
+  // rather than a distance that counts the wrong way.
+  const points = sign * (led.avgEntry - stop);
+  return points > 0 ? points * perPoint : 0;
 }
 
 /** What the trade risked when it was opened — the denominator of its R. */

@@ -28,6 +28,7 @@ import {
 import { useUpdateTrade, useTrades } from "@/lib/data";
 import { tiltFromHere } from "@shared/tilt";
 import { standingOf, type Mark } from "@shared/marks";
+import { lockedIn, riskLeft, stopWasMoved } from "@shared/stops";
 import type { TradeWithTags } from "@shared/schema";
 import { computeMetrics, fmtAmount, fmtFees, fmtMoney, fmtR } from "@shared/metrics";
 import { tradeVerdict, isWin, type Verdict } from "@shared/verdict";
@@ -352,17 +353,19 @@ export function OpenTradeRowV2({
   const tone = standing == null ? "text-muted-foreground" : up ? "text-emerald-400" : "text-primary";
   const toneDim =
     standing == null ? "text-muted-foreground" : up ? "text-emerald-400/80" : "text-primary/80";
-  // What the stop costs from where price is now. Falls back to the risk the
-  // trade was taken with when nothing is quoting it, which is the only honest
-  // answer without a price.
+  /*
+   * What is still at risk, against the stop as it stands TODAY.
+   *
+   * riskLeft measures from the average entry to the current stop, so pulling
+   * the stop up is visible here immediately and a stop through the entry
+   * reads as nothing at risk. That is a different question from "how far is
+   * price from my stop", and it is the one worth carrying on a row: it does
+   * not move when the market breathes, only when you decide something.
+   */
   const m = computeMetrics(t);
-  const riskNow =
-    standing?.toStopR != null && m.riskDollars > 0
-      ? standing.toStopR * m.riskDollars
-      : m.riskDollars > 0
-        ? m.riskDollars
-        : null;
-  const live = standing?.toStopR != null;
+  const left = riskLeft(t);
+  const locked = lockedIn(t);
+  const moved = stopWasMoved(t);
 
   return (
     <div
@@ -399,23 +402,27 @@ export function OpenTradeRowV2({
         {t.sizeUnit === "quote" ? " USD" : ""}
       </span>
       <span
-        className="font-mono text-[11px] text-muted-foreground"
+        className={`font-mono text-[11px] ${
+          locked != null ? "text-emerald-400/90" : "text-muted-foreground"
+        }`}
         title={
-          riskNow == null
+          left == null
             ? "No stop recorded, so nothing here knows what this is risking"
-            : standing?.crossedStop
-              ? "Price is through the stop — there is nothing left to risk"
-              : live
-                ? `What the stop costs from here. At entry it was ${fmtAmount(m.riskDollars)}.`
-                : "The risk it was taken with — nothing is quoting this one"
+            : locked != null
+              ? `The stop is through the entry — this much cannot be given back. Taken with ${fmtAmount(m.riskDollars)} at risk.`
+              : moved
+                ? `Against the stop as it stands now. Taken with ${fmtAmount(m.riskDollars)} at risk.`
+                : "What the stop would cost from the average entry"
         }
         data-testid={`row-v2-risk-${t.id}`}
       >
-        {standing?.crossedStop
-          ? "risk —"
-          : riskNow == null
-            ? "no stop"
-            : `risk ${fmtAmount(riskNow)}`}
+        {left == null
+          ? "no stop"
+          : locked != null
+            ? `locked ${fmtMoney(locked)}`
+            : left === 0
+              ? "risk nothing"
+              : `risk ${fmtAmount(left)}`}
       </span>
 
       {standing?.crossedStop && (

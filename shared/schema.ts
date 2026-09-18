@@ -151,6 +151,16 @@ export const trades = pgTable("trades", {
   // entry and nothing else yet. Both become required the moment it fills; see
   // insertTradeSchema's refinement.
   initialStop: doublePrecision("initial_stop"),
+  /**
+   * Every time the stop was moved, as a JSON StopMove[] (same text-column
+   * convention as extraTargets). NULL means it never was.
+   *
+   * initialStop above stays exactly where it was set: it is the denominator
+   * of every R on this trade, and rebasing it each time a stop is pulled up
+   * would make the same trade a different number every time you managed it.
+   * See shared/stops.ts.
+   */
+  stopMoves: text("stop_moves"),
   initialTarget: doublePrecision("initial_target"),
   /**
    * Planned scale-out levels beyond the first target, stored as a JSON

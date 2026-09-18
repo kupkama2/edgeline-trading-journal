@@ -11,8 +11,12 @@
  * numbers that decide whether a symbol can be found, and the venue's own words
  * when one of them refused.
  */
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Loader2, RefreshCw } from "lucide-react";
+import { apiRequest } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 
 interface MarketStatus {
   pairs: number;
@@ -27,6 +31,7 @@ interface MarketStatus {
     builderPerps: number;
     lastOkAt: string | null;
     lastError: string | null;
+    dexError: string | null;
   };
 }
 
@@ -45,10 +50,56 @@ export function MarketsCard() {
     staleTime: 60_000,
   });
   const hl = data?.hyperliquid;
+  const qc = useQueryClient();
+  const { toast } = useToast();
+
+  /*
+   * Re-reading by hand, because the lists refresh once a day.
+   *
+   * That cadence is right for a venue that lists a coin every few weeks and
+   * wrong for the moment somebody is looking at an empty picker. It is also
+   * what makes a deploy that teaches the journal to fetch MORE look broken:
+   * the new code is handed yesterday's rows and reports, honestly, that it
+   * found nothing new.
+   */
+  const refresh = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/markets/refresh"),
+    onSuccess: async () => {
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ["/api/binance/status"] }),
+        qc.invalidateQueries({ queryKey: ["/api/binance/symbols"] }),
+        qc.invalidateQueries({ queryKey: ["/api/hyperliquid/symbols"] }),
+      ]);
+      toast({ title: "Read both venues again" });
+    },
+    onError: (err: any) =>
+      toast({
+        title: "Could not re-read the venues",
+        description: String(err?.message ?? err).slice(0, 160),
+        variant: "destructive",
+      }),
+  });
 
   return (
     <Card className="border-card-border bg-card p-4 sm:p-5" data-testid="card-markets">
-      <h2 className="text-sm font-semibold tracking-tight">Markets the journal can read</h2>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold tracking-tight">Markets the journal can read</h2>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 px-2 text-[11px]"
+          onClick={() => refresh.mutate()}
+          disabled={refresh.isPending}
+          data-testid="button-markets-refresh"
+        >
+          {refresh.isPending ? (
+            <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+          ) : (
+            <RefreshCw className="mr-1 h-3 w-3" />
+          )}
+          Read them again
+        </Button>
+      </div>
       <p className="mt-1 text-[11px] leading-snug text-muted-foreground">
         Fetched from each venue once a day and cached. A symbol missing from these lists cannot be
         found in the picker, charted, or settled — so if something is not turning up, this is the
@@ -83,21 +134,38 @@ export function MarketsCard() {
           <Row
             label="builder books"
             value={hl ? String(hl.dexes) : "—"}
-            tone={hl && hl.dexes === 0 ? "text-amber-500" : ""}
+            tone={hl && hl.dexes === 0 && hl.dexError ? "text-amber-500" : ""}
           />
           <Row
             label="perps from them"
             value={hl ? String(hl.builderPerps) : "—"}
-            tone={hl && hl.builderPerps === 0 ? "text-amber-500" : ""}
+            tone={hl && hl.builderPerps === 0 && hl.dexError ? "text-amber-500" : ""}
           />
           {hl?.lastError && (
             <p className="font-mono text-[10px] leading-snug text-amber-500" data-testid="markets-hl-error">
               {hl.lastError}
             </p>
           )}
-          {hl && hl.dexes === 0 && !hl.lastError && (
-            <p className="text-[10px] leading-snug text-amber-500">
-              No builder books came back, so equity and commodity perps are not in the picker.
+          {/* The venue's own words about the books specifically, which is a
+              different failure from the universe not loading at all. */}
+          {hl?.dexError && (
+            <p className="font-mono text-[10px] leading-snug text-amber-500" data-testid="markets-dex-error">
+              {hl.dexError}
+            </p>
+          )}
+          {hl && hl.dexes === 0 && !hl.lastError && !hl.dexError && (
+            <p className="text-[10px] leading-snug text-muted-foreground">
+              This venue lists no builder-deployed books, so there are no equity or commodity
+              perps to offer.
+            </p>
+          )}
+          {/* A catalogue nothing has refreshed since the journal learned to
+              read builder books reports zero of them perfectly honestly and
+              perfectly uselessly. The date it was last fetched is what tells
+              the two apart. */}
+          {hl?.lastOkAt && (
+            <p className="text-[10px] leading-snug text-muted-foreground" data-testid="markets-hl-fetched">
+              last read {new Date(hl.lastOkAt).toLocaleString()}
             </p>
           )}
         </div>
