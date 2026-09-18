@@ -27,6 +27,7 @@ import TradeView from "@/pages/trade-view";
 const Daily = lazy(() => import("@/pages/daily"));
 const Settings = lazy(() => import("@/pages/settings"));
 const Stats = lazy(() => import("@/pages/stats"));
+const Review = lazy(() => import("@/pages/review"));
 
 /** A page arriving over the network is a beat, not a blank screen. */
 function PageFallback() {
@@ -71,6 +72,10 @@ function AppRouter() {
         <Route path="/stats" component={Stats} />
         <Route path="/dashboard" component={Stats} />
         <Route path="/analysis" component={Stats} />
+        {/* The Sunday pass. Both addresses: the bare one opens the week you
+            are in, the dated one a week you were sent to. */}
+        <Route path="/review" component={Review} />
+        <Route path="/review/:week" component={Review} />
         <Route path="/settings" component={Settings} />
         <Route component={NotFound} />
       </Switch>

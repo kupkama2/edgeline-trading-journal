@@ -29,6 +29,8 @@ export function trade(over: Partial<TradeWithTags> = {}): TradeWithTags {
     riskAmount: null,
     netMfe: null,
     netMae: null,
+    reviewedAt: null,
+    reviewNote: null,
     exitReason: "target",
     cancelReason: null,
     wouldHaveHitTarget: null,

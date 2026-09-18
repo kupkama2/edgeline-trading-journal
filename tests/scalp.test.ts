@@ -3,7 +3,8 @@ import { describeScalp, parseScalpLine, scalpR } from "../shared/scalp";
 import { computeMetrics } from "../shared/metrics";
 import { journalHealth } from "../shared/health";
 import { tradeXp } from "../shared/xp";
-import { lifecycleConflict, missingRisk } from "../shared/schema";
+import { lifecycleConflict, missingRisk, promoteScalp } from "../shared/schema";
+import { couldLearnMore, pathIncomplete } from "../shared/aftermath";
 import { trade } from "./helpers";
 
 /**
@@ -186,5 +187,68 @@ describe("two lines run together", () => {
     expect(ok("sol 40").symbol).toBe("SOL");
     expect(ok("40 sol").symbol).toBe("SOL");
     expect(ok("btc.p 40").symbol).toBe("BTC.P");
+  });
+});
+
+describe("a scalp given real prices", () => {
+  // The trade page has always offered this in as many words. Until it was
+  // implemented the prices were stored and then ignored: every figure still
+  // came from the typed result, so a trade showed one P&L in the form and
+  // another on the page, and "best it showed" read a leftover column.
+  const scalp = {
+    scalp: true,
+    netPnl: -2,
+    riskAmount: 80,
+    netMfe: 1421.89,
+    netMae: null,
+    entryPrice: 0,
+    size: 0,
+    initialStop: null,
+    initialTarget: null,
+    exitPrice: null,
+  };
+
+  it("is promoted once it has an entry, a stop, a target and an exit", () => {
+    expect(
+      promoteScalp({ ...scalp, entryPrice: 1458.88, initialStop: 1447.98, initialTarget: 1525.63, exitPrice: 1460 }),
+    ).toEqual({ scalp: false, netPnl: null, riskAmount: null, netMfe: null, netMae: null });
+  });
+
+  it("stays a scalp while any of them is missing", () => {
+    expect(promoteScalp(scalp)).toBeNull();
+    expect(promoteScalp({ ...scalp, entryPrice: 1458.88, exitPrice: 1460 })).toBeNull();
+    expect(promoteScalp({ ...scalp, entryPrice: 1458.88, initialStop: 1447.98, initialTarget: 1525.63 })).toBeNull();
+    // An entry of zero is the absence of one, not a price.
+    expect(promoteScalp({ ...scalp, entryPrice: 0, initialStop: 1447.98, initialTarget: 1525.63, exitPrice: 1460 })).toBeNull();
+  });
+
+  it("leaves an ordinary trade alone", () => {
+    expect(promoteScalp({ scalp: false, entryPrice: 100, initialStop: 90, initialTarget: 130, exitPrice: 120 })).toBeNull();
+  });
+
+  it("measures the promoted trade from its prices, not the columns it used to have", () => {
+    // 1458.88 in, stop 1447.98, so 1R is 10.90 of price; the high at 1485.69
+    // is 2.46R — which is what the page should say instead of the 17.77R a
+    // leftover result column was producing.
+    const promoted = trade({
+      ...scalp,
+      ...promoteScalp({ ...scalp, entryPrice: 1458.88, initialStop: 1447.98, initialTarget: 1525.63, exitPrice: 1460 })!,
+      entryPrice: 1458.88,
+      initialStop: 1447.98,
+      initialTarget: 1525.63,
+      exitPrice: 1460,
+      size: 6.845,
+      mfe: 1485.69,
+    });
+    const m = computeMetrics(promoted);
+    expect(m.mfeR).toBeCloseTo(2.46, 2);
+    expect(m.actualR).toBeCloseTo(0.103, 2);
+    expect(m.actualPnL).toBeCloseTo(7.67, 2);
+  });
+
+  it("asks the archive for nothing while it is still a scalp", () => {
+    const s = trade({ ...scalp, status: "closed", exitTime: new Date().toISOString() });
+    expect(pathIncomplete(s)).toBe(false);
+    expect(couldLearnMore(s)).toBe(false);
   });
 });

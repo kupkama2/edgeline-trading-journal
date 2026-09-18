@@ -206,6 +206,21 @@ export const trades = pgTable("trades", {
    */
   netMfe: doublePrecision("net_mfe"),
   netMae: doublePrecision("net_mae"),
+  /*
+   * Gone back over, on purpose, after the fact.
+   *
+   * Logging a trade and reviewing it are different acts at different
+   * moments: one is done in the ninety seconds after the exit, with the
+   * screen still in front of you, and the other is done cold on a Sunday
+   * with the week laid out. A journal that never separates them is a
+   * journal nobody re-reads, which is most of what a journal is for.
+   *
+   * reviewNote is what the second pass has to say — kept apart from notes,
+   * which is what the close had to say, because overwriting one with the
+   * other loses the half that was written while it was fresh.
+   */
+  reviewedAt: text("reviewed_at"),
+  reviewNote: text("review_note"),
   exitReason: text("exit_reason"), // see exitReasonEnum — the fact, not the verdict
   /**
    * Why a trade ended without ever becoming a real position. Distinct from
@@ -572,6 +587,40 @@ function requireRiskOnceLive(
   for (const { field, message } of lifecycleConflict(v)) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: [field], message });
   }
+}
+
+/**
+ * A scalp that has been given real prices is a scalp no longer.
+ *
+ * The trade page offers it in as many words — fill in an entry and a stop
+ * and it becomes an ordinary trade — and until this existed the offer did
+ * nothing: the prices were stored and then ignored, because every figure
+ * still came from the typed result. One row claiming both a typed P&L and a
+ * set of prices has two answers to every question, so the promotion clears
+ * the result columns and hands the trade to the price arithmetic that the
+ * rest of the journal runs on.
+ *
+ * It takes the full set, because a trade with prices but no stop would be
+ * refused by the rule above the moment it stopped being a scalp.
+ */
+export function promoteScalp<
+  T extends {
+    scalp?: boolean | null;
+    entryPrice?: number | null;
+    exitPrice?: number | null;
+    initialStop?: number | null;
+    initialTarget?: number | null;
+  },
+>(merged: T): { scalp: false; netPnl: null; riskAmount: null; netMfe: null; netMae: null } | null {
+  if (!merged.scalp) return null;
+  const priced =
+    merged.entryPrice != null &&
+    merged.entryPrice > 0 &&
+    merged.exitPrice != null &&
+    merged.initialStop != null &&
+    merged.initialTarget != null;
+  if (!priced) return null;
+  return { scalp: false, netPnl: null, riskAmount: null, netMfe: null, netMae: null };
 }
 
 export const insertTradeSchema = tradeFields.superRefine(requireRiskOnceLive);

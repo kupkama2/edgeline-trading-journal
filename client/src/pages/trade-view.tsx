@@ -890,14 +890,14 @@ function TradeBody({
                 hint={m.riskDollars > 0 ? "risked" : "no risk recorded"}
               />
               <Fig
-                label="Best it showed"
+                label="Best it showed ($)"
                 value={m.mfeR != null ? fmtR(m.mfeR) : "—"}
                 hint={trade.netMfe != null ? fmtMoney(trade.netMfe) : "double-click to log it"}
                 edit={editable("netMfe", trade.netMfe)}
                 testId="view-mfe"
               />
               <Fig
-                label="Worst it showed"
+                label="Worst it showed ($)"
                 value={m.maeR != null ? fmtR(m.maeR) : "—"}
                 hint={trade.netMae != null ? fmtMoney(trade.netMae) : "double-click to log it"}
                 edit={editable("netMae", trade.netMae)}
@@ -979,7 +979,10 @@ function TradeBody({
             agrees with the arithmetic. The delta only exists when the trade
             records what the untouched plan would have done, so its absence is
             stated rather than papered over with an assumption. */}
+        {/* A scalp has no plan to have departed from, so "your call, not the
+            plan's" is a verdict on a decision it never recorded. */}
         {trade.status === "closed" &&
+          !trade.scalp &&
           (trade.entryGrade || trade.stopGrade || trade.exitGrade || overrode) && (
             <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-border/60 pt-3">
               <GradeBadges
