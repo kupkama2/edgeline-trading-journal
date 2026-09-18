@@ -20,6 +20,7 @@ import {
   parseHyperliquidMeta,
   parsePerpDexs,
   parseUserFills,
+  perpsFromMids,
   hlAsset,
   type HlFill,
   type HlOrder,
@@ -51,6 +52,8 @@ export interface HyperliquidStatus {
   dexes: number;
   /** How many of `perps` came from those books rather than the coin universe. */
   builderPerps: number;
+  /** How many the per-book listings missed and the price feed supplied. */
+  fromMids: number;
   /**
    * Why there are no builder books, when there are none for a reason. Null
    * both when they loaded and when the venue simply has none — those two are
@@ -66,6 +69,7 @@ const status: HyperliquidStatus = {
   perps: 0,
   dexes: 0,
   builderPerps: 0,
+  fromMids: 0,
   dexError: null,
 };
 export const hyperliquidStatus = (): HyperliquidStatus => ({ ...status });
@@ -173,9 +177,41 @@ export async function fetchHyperliquidPerps(): Promise<HyperliquidPerp[]> {
     if (refused.length && !dexError) {
       dexError = `${refused.length} of ${dexes.length} builder books did not answer (${refused.slice(0, 3).join(", ")})`;
     }
-    if (empty.length === dexes.length && dexes.length > 0 && !dexError) {
-      dexError = `all ${dexes.length} builder books answered with no perps this journal could read (${empty.slice(0, 3).join(", ")})`;
+
+    /*
+     * And the same question asked a completely different way.
+     *
+     * Every market the venue quotes shows up in allMids, and one in a builder
+     * book is keyed with its book on the front. That is an independent census
+     * of what exists: one request rather than ten, it cannot half-fail, and a
+     * market that is being quoted is real whatever a catalogue says.
+     *
+     * It runs every time rather than only as a rescue, because the two
+     * disagree in both directions — a book can list an asset the feed does
+     * not quote, and the feed has repeatedly known about assets the per-book
+     * listings did not hand over. Anything already found keeps its listing,
+     * which is where the leverage comes from; the rest arrive with what the
+     * feed knows, which is that they exist.
+     */
+    let fromMids = 0;
+    try {
+      const have = new Set(perps.map((p) => `${p.dex ?? ""}:${p.name.toUpperCase()}`));
+      for (const p of perpsFromMids(await fetchAllMids())) {
+        const key = `${p.dex ?? ""}:${p.name.toUpperCase()}`;
+        if (have.has(key)) continue;
+        have.add(key);
+        perps.push(p);
+        extra++;
+        fromMids++;
+      }
+    } catch {
+      // The listings, or nothing. Whatever they found still stands.
     }
+
+    if (empty.length === dexes.length && dexes.length > 0 && extra === 0 && !dexError) {
+      dexError = `all ${dexes.length} builder books answered with no perps, and none are quoted either (${empty.slice(0, 3).join(", ")})`;
+    }
+    status.fromMids = fromMids;
     status.dexError = dexError;
 
     status.lastOkAt = new Date().toISOString();
@@ -202,6 +238,18 @@ export async function hyperliquidNames(): Promise<string[]> {
 /** The full rows, for callers that need to know which book a coin is in. */
 export async function hyperliquidPerps(): Promise<HyperliquidPerp[]> {
   return ensureHyperliquid();
+}
+
+/**
+ * When the stored catalogue was written.
+ *
+ * Distinct from `status.lastOkAt`, which is this process's memory of its own
+ * fetches and reads null on every restart. What a reader wants to know is how
+ * old the list they are searching actually is, and that is a property of the
+ * rows rather than of the server that happens to be serving them.
+ */
+export async function hyperliquidFetchedAt(): Promise<string | null> {
+  return universe.lastFetchedAt();
 }
 
 /* ------------------------------ a wallet ------------------------------ */

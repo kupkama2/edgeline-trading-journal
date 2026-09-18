@@ -466,7 +466,10 @@ ALTER TABLE hyperliquid_symbols ADD CONSTRAINT hyperliquid_symbols_pkey
 -- So the shape change invalidates the cache. Bump the date whenever what is
 -- stored here changes again. Idempotent: the refetch writes a newer
 -- fetched_at, and the next boot matches nothing.
-DELETE FROM hyperliquid_symbols WHERE fetched_at < '2026-09-18T16:00:00.000Z';
+-- Bumped: the parser that reads a book's universe changed after the previous
+-- cutoff, so a catalogue fetched in between is one the old reader wrote and
+-- contains none of the builder perps the new one would have kept.
+DELETE FROM hyperliquid_symbols WHERE fetched_at < '2026-09-18T17:30:00.000Z';
 CREATE TABLE IF NOT EXISTS invites (
   id SERIAL PRIMARY KEY,
   email TEXT NOT NULL UNIQUE,
