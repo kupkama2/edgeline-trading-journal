@@ -9,6 +9,7 @@ import { Shell, ThemeProvider } from "@/components/shell";
 import { GuardrailProvider } from "@/components/daily-guard";
 import { StyleFilterProvider } from "@/lib/style-filter";
 import { DenomProvider } from "@/lib/denom";
+import { LayoutProvider } from "@/lib/layout";
 import { LoginGate } from "@/components/login-gate";
 import NotFound from "@/pages/not-found";
 import Journal from "@/pages/journal";
@@ -96,6 +97,9 @@ function App() {
               {/* Inside the gate, because the unit is remembered per account
                   the same way the filters are. */}
               <DenomProvider>
+              {/* Which layout the journal wears — remembered per account, so
+                  it rides inside the gate with the filters. */}
+              <LayoutProvider>
               <GuardrailProvider>
                 <Router hook={useHashLocation}>
                   <Shell>
@@ -103,6 +107,7 @@ function App() {
                   </Shell>
                 </Router>
               </GuardrailProvider>
+              </LayoutProvider>
               </DenomProvider>
             </StyleFilterProvider>
           </LoginGate>
