@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   addStopMove,
-  atBreakeven,
   currentStop,
   formatStopMoves,
   lockedIn,
@@ -100,7 +99,6 @@ describe("what a moved stop takes off the table", () => {
   it("is nothing at breakeven, and says so rather than going negative", () => {
     expect(riskLeft(to(100))).toBe(0);
     expect(lockedIn(to(100))).toBeNull();
-    expect(atBreakeven(to(100))).toBe(true);
   });
 
   it("locks money in once the stop is through the entry", () => {

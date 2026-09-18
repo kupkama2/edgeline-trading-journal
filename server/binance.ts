@@ -129,11 +129,18 @@ export const lastListed = (): string[] => listed.slice();
  * `forgetRefusals` is for the status endpoint's ?refresh=1 — the moment
  * somebody has changed something and wants the question asked again.
  */
+const PERP_TICKER_TTL_MS = 10_000;
+let perpTickers: { at: number; prices: Record<string, number> } | null = null;
+
 const REFUSAL_TTL_MS = 6 * 60 * 60 * 1000;
 const refusals = new Map<string, { at: number; error: string }>();
 const bookOf = (path: string) => (path.startsWith("/fapi") ? "/fapi" : "/api");
 export function forgetRefusals(): void {
   refusals.clear();
+  // The held ticker book too: "ask again" has to mean everything, or a
+  // refresh pressed because prices looked wrong would hand back the same
+  // wrong prices.
+  perpTickers = null;
 }
 
 /** Try each host in turn; the last failure is what gets reported. */
@@ -409,6 +416,44 @@ export function intervalFor(spanMs: number): Interval {
  * is shown, because within basis is not the same as the price the position
  * is marked at.
  */
+/**
+ * Last traded price for perpetuals, from the futures book.
+ *
+ * The book a perp trade was actually resting in. Marks used to come from spot
+ * for every Binance trade, which is close and wrong in the way this journal
+ * least tolerates — and, for a coin listed as a perp and not as a spot pair,
+ * simply absent: the trade showed no live P&L at all while its own book was
+ * quoting it happily.
+ */
+/**
+ * Held briefly, because this path returns the WHOLE futures book.
+ *
+ * fapi takes no symbols[] filter here, so every request is a few hundred
+ * kilobytes of every pair Binance runs — and marks are asked for once a
+ * minute by every open tab. Ten seconds of reuse turns a room full of tabs
+ * into one request without ever showing a price old enough to matter for a
+ * figure that is already labelled as a live snapshot.
+ */
+export async function fetchPerpPrices(symbols: string[]): Promise<Record<string, number>> {
+  const out: Record<string, number> = {};
+  if (symbols.length === 0) return out;
+
+  let all = perpTickers && Date.now() - perpTickers.at < PERP_TICKER_TTL_MS ? perpTickers.prices : null;
+  if (!all) {
+    const rows: any = await getAny(FUTURES_HOSTS, "/fapi/v1/ticker/price");
+    all = {};
+    for (const r of Array.isArray(rows) ? rows : []) {
+      const p = Number(r?.price);
+      if (typeof r?.symbol === "string" && Number.isFinite(p) && p > 0) all[r.symbol] = p;
+    }
+    // Only a real book is worth holding; an empty answer must not be cached
+    // as if the venue had said there are no perps.
+    if (Object.keys(all).length > 0) perpTickers = { at: Date.now(), prices: all };
+  }
+  for (const sym of symbols) if (all[sym]) out[sym] = all[sym];
+  return out;
+}
+
 export async function fetchSpotPrices(symbols: string[]): Promise<Record<string, number>> {
   const out: Record<string, number> = {};
   if (symbols.length === 0) return out;

@@ -22,6 +22,7 @@ import { useTheme } from "@/components/shell";
 import { fetchCandlePage, useTradeCandles } from "@/lib/data";
 import { num } from "@/components/trade-shared";
 import type { TradeWithTags } from "@shared/schema";
+import { currentStop } from "@shared/stops";
 import { parseExtraTargets } from "@shared/schema";
 
 /**
@@ -98,7 +99,14 @@ const toBar = (k: Candle) => ({
   low: k.l,
   close: k.c,
 });
-type Level = { price: number; label: string; color: string; dashed: boolean };
+type Level = {
+  price: number;
+  label: string;
+  color: string;
+  dashed: boolean;
+  /** Drawn quietly — a level that is history rather than a live one. */
+  faint?: boolean;
+};
 
 /**
  * The chart is a canvas, so it cannot inherit a single CSS class the way the
@@ -153,10 +161,23 @@ export function TradeChart({ trade }: { trade: TradeWithTags }) {
     // stripe at the top.
     if (trade.scalp) return [];
     const tps = parseExtraTargets(trade.extraTargets);
+    /*
+     * Where the stop is NOW, and where it started when those differ.
+     *
+     * The chart is where you look to see where your stop is, and it was
+     * drawing the one the trade was opened with — so a position pulled up to
+     * breakeven still showed its line down at the original level, contradicting
+     * the stop card directly above it. The original stays on the chart when it
+     * has moved, faintly, because seeing the distance travelled is most of why
+     * you would look.
+     */
+    const stop = currentStop(trade);
+    const moved = stop != null && trade.initialStop != null && stop !== trade.initialStop;
     return [
       { price: trade.entryPrice, label: "entry", color: "entry", dashed: false },
-      ...(trade.initialStop != null
-        ? [{ price: trade.initialStop, label: "stop", color: "stop", dashed: true }]
+      ...(stop != null ? [{ price: stop, label: "stop", color: "stop", dashed: true }] : []),
+      ...(moved
+        ? [{ price: trade.initialStop!, label: "was", color: "stop", dashed: true, faint: true }]
         : []),
       ...(trade.initialTarget != null
         ? [{ price: trade.initialTarget, label: "target", color: "target", dashed: true }]
@@ -512,9 +533,12 @@ function Candles({
         price: l.price,
         color: (colors as any)[l.color] ?? colors.entry,
         lineWidth: 1,
-        lineStyle: l.dashed ? LineStyle.Dashed : LineStyle.Solid,
+        // A level kept for context rather than one in force — the stop a
+        // trade started with, once it has been moved. Dotted and unlabelled
+        // on the axis so it never competes with the live one.
+        lineStyle: l.faint ? LineStyle.Dotted : l.dashed ? LineStyle.Dashed : LineStyle.Solid,
         lineVisible: true,
-        axisLabelVisible: true,
+        axisLabelVisible: !l.faint,
         title: l.label,
       }),
     );

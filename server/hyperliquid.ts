@@ -235,11 +235,6 @@ export async function hyperliquidNames(): Promise<string[]> {
   return (await ensureHyperliquid()).map(hlAsset);
 }
 
-/** The full rows, for callers that need to know which book a coin is in. */
-export async function hyperliquidPerps(): Promise<HyperliquidPerp[]> {
-  return ensureHyperliquid();
-}
-
 /**
  * When the stored catalogue was written.
  *

@@ -112,13 +112,6 @@ export function lockedIn(t: Trade & { fills?: TradeFill[] }): number | null {
   return points > 0 ? points * perPoint : null;
 }
 
-/** At entry exactly: nothing at risk, nothing locked in. */
-export function atBreakeven(t: Trade & { fills?: TradeFill[] }): boolean {
-  const stop = currentStop(t);
-  if (stop == null) return false;
-  return stop === positionLedger(t).avgEntry;
-}
-
 /**
  * Append a move, ignoring one that changes nothing.
  *

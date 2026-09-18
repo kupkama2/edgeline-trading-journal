@@ -25,6 +25,7 @@ import { checkOutcomes, ensureCatalogue } from "./outcomes";
 import {
   feedStatus,
   fetchCandles,
+  fetchPerpPrices,
   fetchSpotPrices,
   forgetRefusals,
   intervalFor,
@@ -816,17 +817,42 @@ export async function registerRoutes(
         if (p) out[t.id] = { price: p, at, venue: "hyperliquid", book: "perp" };
       }
     }
+    /*
+     * The book the order was actually resting in, first.
+     *
+     * Every Binance trade used to be marked from SPOT, whatever it was. For
+     * most coins that is close enough to be misleading and for some it is
+     * nothing at all: a coin Binance lists as a perpetual and not as a spot
+     * pair had no mark, so an open position showed no live P&L while its own
+     * book was quoting it happily. Spot is still the fallback — within basis,
+     * and labelled, which is better than a dash — but it is no longer the
+     * only thing asked.
+     */
+    const perpOf = new Map<number, string>();
     const spotOf = new Map<number, string>();
     for (const { t, pair } of wanted) {
       if (!pair || pair.venue === "hyperliquid") continue;
+      if (pair.market === "futures") perpOf.set(t.id, pair.symbol);
       const spot = binanceSymbolForTrade(t, cat.filter((s) => s.market === "spot"));
       if (spot) spotOf.set(t.id, spot.symbol);
+    }
+    if (perpOf.size > 0) {
+      const prices = await fetchPerpPrices(Array.from(new Set(perpOf.values()))).catch(
+        () => ({}) as Record<string, number>,
+      );
+      for (const [id, sym] of Array.from(perpOf.entries())) {
+        const p = prices[sym];
+        if (p) out[id] = { price: p, at, venue: "binance", book: "perp" };
+      }
     }
     if (spotOf.size > 0) {
       const prices = await fetchSpotPrices(Array.from(new Set(spotOf.values()))).catch(
         () => ({}) as Record<string, number>,
       );
       for (const [id, sym] of Array.from(spotOf.entries())) {
+        // Only where the perp could not answer: a mark from the wrong book is
+        // a last resort, not a preference.
+        if (out[id]) continue;
         const p = prices[sym];
         if (p) out[id] = { price: p, at, venue: "binance", book: "spot" };
       }
