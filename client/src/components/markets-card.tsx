@@ -14,7 +14,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Loader2, RefreshCw } from "lucide-react";
+import { Loader2, RefreshCw, Stethoscope } from "lucide-react";
+import { useState } from "react";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 
@@ -63,6 +64,16 @@ export function MarketsCard() {
    * the new code is handed yesterday's rows and reports, honestly, that it
    * found nothing new.
    */
+  const [probe, setProbe] = useState<string | null>(null);
+  const ask = useMutation({
+    mutationFn: async () => {
+      const r = await apiRequest("GET", "/api/hyperliquid/probe");
+      return r.json();
+    },
+    onSuccess: (data) => setProbe(JSON.stringify(data, null, 2)),
+    onError: (err: any) => setProbe(String(err?.message ?? err)),
+  });
+
   const refresh = useMutation({
     mutationFn: () => apiRequest("POST", "/api/markets/refresh"),
     onSuccess: async () => {
@@ -85,6 +96,23 @@ export function MarketsCard() {
     <Card className="border-card-border bg-card p-4 sm:p-5" data-testid="card-markets">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-sm font-semibold tracking-tight">Markets the journal can read</h2>
+        <div className="flex flex-wrap items-center gap-1">
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-7 px-2 text-[11px] text-muted-foreground"
+          onClick={() => ask.mutate()}
+          disabled={ask.isPending}
+          title="Ask Hyperliquid each question and show the raw answer"
+          data-testid="button-markets-probe"
+        >
+          {ask.isPending ? (
+            <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+          ) : (
+            <Stethoscope className="mr-1 h-3 w-3" />
+          )}
+          What did the venue say?
+        </Button>
         <Button
           size="sm"
           variant="outline"
@@ -100,12 +128,24 @@ export function MarketsCard() {
           )}
           Read them again
         </Button>
+        </div>
       </div>
       <p className="mt-1 text-[11px] leading-snug text-muted-foreground">
         Fetched from each venue once a day and cached. A symbol missing from these lists cannot be
         found in the picker, charted, or settled — so if something is not turning up, this is the
         first place to look.
       </p>
+
+      {/* The venue's own answers, when a count reads zero and the question
+          stops being "is it broken" and becomes "in which way". */}
+      {probe != null && (
+        <pre
+          className="mt-3 max-h-64 overflow-auto rounded border border-border/60 bg-secondary/20 p-2 font-mono text-[10px] leading-snug"
+          data-testid="markets-probe"
+        >
+          {probe}
+        </pre>
+      )}
 
       <div className="mt-3 grid gap-4 sm:grid-cols-2">
         <div className="space-y-1.5">

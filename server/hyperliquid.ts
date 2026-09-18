@@ -194,16 +194,27 @@ export async function fetchHyperliquidPerps(): Promise<HyperliquidPerp[]> {
      * feed knows, which is that they exist.
      */
     let fromMids = 0;
-    try {
-      const have = new Set(perps.map((p) => `${p.dex ?? ""}:${p.name.toUpperCase()}`));
-      for (const p of perpsFromMids(await fetchAllMids())) {
-        const key = `${p.dex ?? ""}:${p.name.toUpperCase()}`;
-        if (have.has(key)) continue;
-        have.add(key);
-        perps.push(p);
-        extra++;
-        fromMids++;
+    const have = new Set(perps.map((p) => `${p.dex ?? ""}:${p.name.toUpperCase()}`));
+    const take = (p: HyperliquidPerp) => {
+      const key = `${p.dex ?? ""}:${p.name.toUpperCase()}`;
+      if (have.has(key)) return;
+      have.add(key);
+      perps.push(p);
+      extra++;
+      fromMids++;
+    };
+    // Each book's own feed, named. This is the request that was missing: the
+    // unnamed one answers for the coin universe alone.
+    for (const dex of dexes) {
+      try {
+        for (const p of perpsFromMids(await fetchAllMids(dex), dex)) take(p);
+      } catch {
+        // One book's feed refusing says nothing about the others.
       }
+    }
+    // And the unnamed one, in case a venue ever does qualify keys in it.
+    try {
+      for (const p of perpsFromMids(await fetchAllMids())) take(p);
     } catch {
       // The listings, or nothing. Whatever they found still stands.
     }
@@ -324,9 +335,68 @@ export async function fetchHlFunding(
   return out;
 }
 
-/** Every book's mid, now. One request for every open trade at once. */
-export async function fetchAllMids(): Promise<Record<string, number>> {
-  return parseAllMids(await info({ type: "allMids" }, 8_000));
+/**
+ * Every mid in a book, now. One request for every open trade at once.
+ *
+ * `dex` is the whole story for builder-deployed books. Every info endpoint
+ * here is scoped to ONE perp DEX, and asking without naming one answers for
+ * the venue's own universe — the coin perps — and nothing else. So the
+ * fallback that was meant to find equity and commodity markets in the price
+ * feed was reading a feed those markets are not in, found no qualified keys,
+ * and added nothing. Twice.
+ */
+export async function fetchAllMids(dex?: string): Promise<Record<string, number>> {
+  return parseAllMids(await info(dex ? { type: "allMids", dex } : { type: "allMids" }, 8_000));
+}
+
+/**
+ * What the venue literally answers, for a human to read.
+ *
+ * Three rounds of this feature were spent guessing at request shapes that
+ * could not be tried from where the code was being written, each guess
+ * looking identical to the last from the outside: a zero. This asks each
+ * question and hands back the raw beginning of each answer, so the next
+ * wrong guess costs one look instead of a deploy.
+ *
+ * Truncated hard — a universe is hundreds of entries and nobody needs them
+ * all to see whether the shape is right.
+ */
+export async function probeHyperliquid(): Promise<Record<string, unknown>> {
+  const head = (v: unknown, n = 8): unknown => {
+    if (Array.isArray(v)) return v.slice(0, n);
+    if (v && typeof v === "object") {
+      const keys = Object.keys(v as object);
+      const out: Record<string, unknown> = {};
+      for (const k of keys.slice(0, n)) out[k] = (v as any)[k];
+      return { __keys: keys.length, ...out };
+    }
+    return v;
+  };
+  const ask = async (label: string, body: Record<string, unknown>) => {
+    try {
+      return { [label]: head(await info(body, 10_000)) };
+    } catch (err: any) {
+      return { [label]: `ERROR ${String(err?.message ?? err)}` };
+    }
+  };
+
+  const out: Record<string, unknown> = { host: host() };
+  Object.assign(out, await ask("perpDexs", { type: "perpDexs" }));
+  Object.assign(out, await ask("allMids (no dex)", { type: "allMids" }));
+
+  // And the same two questions aimed at the first book the venue named.
+  let first: string | null = null;
+  try {
+    first = parsePerpDexs(await info({ type: "perpDexs" }, 10_000))[0] ?? null;
+  } catch {
+    /* already reported above */
+  }
+  out.firstBook = first;
+  if (first) {
+    Object.assign(out, await ask(`meta dex=${first}`, { type: "meta", dex: first }));
+    Object.assign(out, await ask(`allMids dex=${first}`, { type: "allMids", dex: first }));
+  }
+  return out;
 }
 
 /** The cached universe, refreshed when missing or a day old. Never throws. */

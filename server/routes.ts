@@ -37,6 +37,7 @@ import {
   hyperliquidFetchedAt,
   hyperliquidNames,
   hyperliquidStatus,
+  probeHyperliquid,
 } from "./hyperliquid";
 import { fetchCandlesAt, pairForTradeAt, readCandlesAt } from "./candles";
 import { syncHyperliquid } from "./hl-sync";
@@ -879,6 +880,17 @@ export async function registerRoutes(
       hyperliquid: hl.length,
       ...hyperliquidStatus(),
     });
+  });
+
+  /**
+   * What Hyperliquid actually says, verbatim and truncated.
+   *
+   * For when a count reads zero and the question is no longer "is it broken"
+   * but "in which of five ways". Costs four requests and is only asked for by
+   * hand.
+   */
+  app.get("/api/hyperliquid/probe", async (_req, res) => {
+    res.json(await probeHyperliquid());
   });
 
   /** Hyperliquid's perps, for the picker. Cached in the database. */
