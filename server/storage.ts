@@ -159,6 +159,20 @@ ALTER TABLE trades ADD COLUMN IF NOT EXISTS net_pnl DOUBLE PRECISION;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS risk_amount DOUBLE PRECISION;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS net_mfe DOUBLE PRECISION;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS net_mae DOUBLE PRECISION;
+-- A scalp that has already been given real prices is a scalp no longer.
+--
+-- The trade page always offered the promotion in as many words, but until it
+-- was implemented the offer did nothing: the prices were stored and then
+-- ignored, and every figure still came from the typed result. Those rows
+-- exist, and they read wrong until somebody saves them again — so they are
+-- promoted here, on the same terms the route now applies. Idempotent, and a
+-- no-op for a scalp that is still only a result.
+UPDATE trades SET scalp = FALSE, net_pnl = NULL, risk_amount = NULL, net_mfe = NULL, net_mae = NULL
+ WHERE scalp = TRUE
+   AND entry_price > 0
+   AND exit_price IS NOT NULL
+   AND initial_stop IS NOT NULL
+   AND initial_target IS NOT NULL;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS would_have_hit_target BOOLEAN;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS rationale TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS rationale_tags TEXT;

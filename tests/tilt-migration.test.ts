@@ -67,3 +67,29 @@ describe.skipIf(!DB)("the tilt verdict leaves the demon list", () => {
     expect(names).not.toContain("Trade Not In Trading Plan");
   });
 });
+
+describe.skipIf(!DB)("a scalp that already carries prices", () => {
+  it("is promoted on boot, so it stops reading off a leftover result column", async () => {
+    const { initSchema, accounts, db, storageFor } = await import("../server/storage");
+    const { trades } = await import("../shared/schema");
+    await initSchema();
+    const user = await accounts.create({ googleSub: `promo-${stamp}`, email: `promo-${stamp}@x.test` });
+
+    const row = async (over: Record<string, unknown>) =>
+      (
+        await db
+          .insert(trades)
+          .values({ ...baseTrade, userId: user.id, scalp: true, netPnl: -2, riskAmount: 80, netMfe: 1421.89, ...over } as any)
+          .returning()
+      )[0];
+    // One with the full set of prices, one still only a result.
+    const priced = await row({ entryPrice: 1458.88, initialStop: 1447.98, initialTarget: 1525.63, exitPrice: 1460 });
+    const bare = await row({ entryPrice: 0, initialStop: null, initialTarget: null, exitPrice: null, exitTime: null });
+
+    await initSchema();
+
+    const byId = new Map((await storageFor(user.id).listTrades()).map((t) => [t.id, t]));
+    expect(byId.get(priced.id)).toMatchObject({ scalp: false, netPnl: null, riskAmount: null, netMfe: null });
+    expect(byId.get(bare.id)).toMatchObject({ scalp: true, netPnl: -2, riskAmount: 80 });
+  });
+});

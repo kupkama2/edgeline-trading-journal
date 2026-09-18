@@ -45,6 +45,7 @@ import {
   insertTradeSchema,
   updateTradeSchema,
   missingRisk,
+  promoteScalp,
   lifecycleConflict,
   insertMistakeTagSchema,
   insertTradingStyleSchema,
@@ -579,7 +580,15 @@ export async function registerRoutes(
      * impossible: every reason on the "didn't become a position" dialog came
      * back 400.
      */
-    const merged = { ...existing, ...trade };
+    /*
+     * A scalp given an entry, a stop, a target and an exit stops being one.
+     * Applied BEFORE the rules below so the promoted row is checked as the
+     * ordinary trade it has just become, and so nothing downstream ever sees
+     * a row carrying both a typed result and a set of prices.
+     */
+    const promotion = promoteScalp({ ...existing, ...trade });
+    const trade2 = promotion ? { ...trade, ...promotion } : trade;
+    const merged = { ...existing, ...trade2 };
     const missing = missingRisk(merged);
     if (missing.length) {
       return res.status(400).json({
@@ -606,7 +615,7 @@ export async function registerRoutes(
     const updated = await store(req).updateTrade(
       Number(req.params.id),
       // Tilt and well-traded are opposite verdicts; setting one clears the other.
-      exclusiveVerdict(trade),
+      exclusiveVerdict(trade2),
       parsed.data.mistakeTagIds,
     );
     if (!updated) return res.status(404).json({ message: "Trade not found" });

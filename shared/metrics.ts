@@ -122,7 +122,11 @@ function resultMetrics(t: Trade): TradeMetrics {
 }
 
 export function computeMetrics(t: Trade & { fills?: TradeFill[] }): TradeMetrics {
-  if (t.netPnl != null) return resultMetrics(t);
+  // The flag decides, not the columns: a scalp given real prices is promoted
+  // to an ordinary trade (see promoteScalp), and from that moment the prices
+  // are what it is measured by. Reading a leftover result column instead is
+  // how a trade can show one P&L in the form and another on the page.
+  if (t.scalp) return resultMetrics(t);
   const sign = t.direction === "long" ? 1 : -1;
   const perPoint = dollarsPerPoint(t);
   // A pending trade has no stop yet, so it has no 1R. Guard explicitly: without

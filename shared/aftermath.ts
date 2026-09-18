@@ -98,6 +98,9 @@ export function outcomeUnknown(t: TradeWithTags): boolean {
  * never be completed while newer ones queued behind them.
  */
 export function pathIncomplete(t: TradeWithTags, now = Date.now()): boolean {
+  // A scalp is a result, not a set of prices: there is no window to read and
+  // nothing for the archive to fill in.
+  if (t.scalp) return false;
   if (t.status !== "closed" || t.exitPrice == null) return false;
   const exit = exitMs(t);
   if (exit == null) return false;
@@ -189,6 +192,7 @@ export function aftermathPending(t: TradeWithTags, now = Date.now()): boolean {
  * nobody asked; this is the one a trader asks by pressing a button.
  */
 export function couldLearnMore(t: TradeWithTags, now = Date.now()): boolean {
+  if (t.scalp) return false;
   if (t.status !== "closed" || t.exitPrice == null) return false;
   const exit = t.exitTime ? new Date(t.exitTime).getTime() : null;
   if (exit == null || !Number.isFinite(exit)) return false;
