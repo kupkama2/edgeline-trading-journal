@@ -1453,16 +1453,31 @@ export function TradeEditor({
                   Opaque, because form fields sliding under a translucent strip is
                   how a wrong number gets read as a right one.
                 */}
+            {/*
+              ONE footer, pinned once.
+
+              The figures and the buttons were two separate sticky elements
+              both claiming bottom-0, so they landed on top of each other and
+              the one with a z-index won: the preview strip covered Save
+              completely, and an editor with no visible way to finish it looks
+              exactly like an editor that failed to load its buttons.
+
+              Opaque, because form fields sliding under a translucent strip is
+              how a wrong number gets read as a right one. The negative margins
+              let it span the full width of a padded parent.
+            */}
+            <div
+              className="sticky bottom-0 z-20 -mx-4 border-t border-border/70 bg-card/95 px-4 pb-3 pt-2 backdrop-blur sm:-mx-5 sm:px-5"
+              data-testid="bar-edit-footer"
+            >
             {previewMetrics && (
-              /* An opaque shell does the pinning so the strip itself can keep
-                 its tint. The offset is negative on purpose: the dialog scrolls
-                 inside 24px of padding, so a plain top-0 would pin the bar 24px
-                 down and leave a band above it where form rows slide past in
-                 full view. -top-6 pins it 24px higher — flush with the visible
-                 edge — and the shell's matching pt-6 fills that band, which the
+              /* The strip keeps its own tint inside the footer that pins them
+                 both; it no longer does any pinning of its own. The comment
+                 that used to live here described an offset that is gone with
+                 the second sticky context — kept only as far as it still
                  scroll container clips away rather than painting over the
                  heading. */
-              <div className="sticky bottom-0 z-20 -mb-1 bg-background pb-2 pt-1">
+              <div className="mb-2">
               <div
                 className="grid grid-cols-2 gap-2 rounded-md border border-border/60 bg-secondary/30 p-2.5 text-center font-mono text-xs shadow-sm sm:grid-cols-4"
                 data-testid="edit-preview-metrics"
@@ -1514,23 +1529,11 @@ export function TradeEditor({
               </div>
               </div>
             )}
-            {/*
-              Stuck to the bottom of the scroller, not to the end of the form.
-              This editor is long enough that the fields you correct most often
-              — the exit, the reason, the note — leave Save somewhere below the
-              fold, and an edit you cannot finish without hunting for the
-              button is an edit that gets abandoned half-made.
-
-              A background and a top border rather than a transparent strip:
-              floating over a form, unpainted, the buttons had form rows
-              sliding visibly underneath them. The negative margins let it span
-              the full width of a padded parent without being inset from the
-              content it sits over.
-            */}
-            <div
-              className="sticky bottom-0 -mx-4 flex gap-2 border-t border-border/70 bg-card/95 px-4 py-3 backdrop-blur sm:-mx-5 sm:px-5"
-              data-testid="bar-edit-save"
-            >
+            {/* The editor is long enough that the fields you correct most
+                often — the exit, the reason, the note — leave Save below the
+                fold, and an edit you cannot finish without hunting for the
+                button is an edit that gets abandoned half-made. */}
+            <div className="flex gap-2" data-testid="bar-edit-save">
               <Button
                 variant="outline"
                 className="h-10 text-xs font-semibold"
@@ -1548,6 +1551,7 @@ export function TradeEditor({
                 {updateTrade.isPending && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
                 Save changes
               </Button>
+            </div>
             </div>
           </div>
         )}

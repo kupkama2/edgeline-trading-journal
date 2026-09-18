@@ -154,9 +154,15 @@ export async function fetchHyperliquidPerps(): Promise<HyperliquidPerp[]> {
 
     let extra = 0;
     const refused: string[] = [];
+    // A book that answers and yields nothing is its own failure, and the one
+    // that actually happened: ten books, no perps, nothing thrown, nothing
+    // said. Counted separately from a refusal because they are different
+    // problems — one is the venue, one is us reading it wrong.
+    const empty: string[] = [];
     for (const dex of dexes) {
       try {
         const listed = parseHyperliquidMeta(await info({ type: "meta", dex }, 10_000), dex);
+        if (listed.length === 0) empty.push(dex);
         perps.push(...listed);
         extra += listed.length;
       } catch {
@@ -166,6 +172,9 @@ export async function fetchHyperliquidPerps(): Promise<HyperliquidPerp[]> {
     }
     if (refused.length && !dexError) {
       dexError = `${refused.length} of ${dexes.length} builder books did not answer (${refused.slice(0, 3).join(", ")})`;
+    }
+    if (empty.length === dexes.length && dexes.length > 0 && !dexError) {
+      dexError = `all ${dexes.length} builder books answered with no perps this journal could read (${empty.slice(0, 3).join(", ")})`;
     }
     status.dexError = dexError;
 
