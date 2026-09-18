@@ -67,6 +67,20 @@ export const num = (v: number | null | undefined, d?: number) => {
   return Math.abs(v) >= 100 ? s : s.replace(/(\.\d*?[1-9])0+$/, "$1").replace(/\.0+$/, ".00");
 };
 
+/**
+ * The instant a mark is FOR, short enough to sit beside a price.
+ *
+ * Day and time both, because the two cases it has to tell apart are "eleven
+ * minutes ago" and "yesterday afternoon", and an hour alone cannot.
+ */
+export const markWhen = (at: number) =>
+  new Date(at).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
 export function localNow() {
   const d = new Date();
   d.setMinutes(d.getMinutes() - d.getTimezoneOffset());

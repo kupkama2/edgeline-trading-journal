@@ -695,7 +695,7 @@ export function useDeleteAccountBalance() {
  * glance and gentle on two public venues.
  */
 export function useMarks(enabled: boolean) {
-  return useQuery<Record<number, Mark & { book: "perp" | "spot" }>>({
+  return useQuery<Record<number, Mark>>({
     queryKey: ["/api/marks"],
     enabled,
     staleTime: 30_000,

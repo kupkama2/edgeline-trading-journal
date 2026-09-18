@@ -166,6 +166,58 @@ const ALLOWED_INTERVALS = ["1m", "15m", "1h", "4h", "1d"] as const;
 const RECENT_AFTERMATH_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
+ * How far back a rescue mark may reach, and how many trades may ask for one.
+ *
+ * When a venue will not quote a host at all, the last close the journal can
+ * read is better than a dash — but only while it is recent enough to mean
+ * something, and only as a rescue. Five days is the outer edge of useful for
+ * a perpetual; past that the number says less than the silence would. The
+ * count is a cap on round trips, not a policy: a book that answers prices
+ * never gets here, so anything more than a handful is a venue that is down,
+ * and hammering it eight more times will not change that.
+ */
+const STALE_MARK_WINDOW_MS = 5 * 24 * 60 * 60 * 1000;
+const MAX_STALE_MARKS = 8;
+
+/**
+ * The last close each stranded pair could be read at, held for a few minutes.
+ *
+ * Without this the rescue is far more expensive than the thing it rescues. A
+ * live quote is one call for every symbol at once; a rescue is a window of
+ * candles PER pair, and on the host that needs it those candles come from the
+ * archive — zip files, fetched and unzipped, several per pair. The journal
+ * asks for marks every minute while it is open, so eight stranded positions
+ * would mean a few dozen archive files a minute, for ever, against a venue
+ * that has already refused to talk.
+ *
+ * What is cached is the bar, not the verdict on it: whether that bar is still
+ * forming is worked out fresh each time, so a cached read never claims to be
+ * live for longer than it is. A miss is remembered too — a pair with no live
+ * quote AND no readable history will still have neither in four minutes, and
+ * retrying it every minute is the same waste with nothing to show.
+ *
+ * Module-level and shared across accounts on purpose, and safe to be: the key
+ * is a public market and the value is its public price. Nothing here came
+ * from anybody's journal, so there is nothing here to leak between them.
+ */
+const STALE_MARK_TTL_MS = 4 * 60 * 1000;
+/** Every distinct market anybody has open at once, with room to spare. */
+const STALE_MARK_KEYS = 256;
+const lastReadable = new Map<string, { at: number; bar: { t: number; c: number } | null }>();
+
+/**
+ * Re-inserted rather than overwritten, so a Map's insertion order is recency
+ * order and the first key really is the stalest one to drop.
+ */
+function holdReadable(key: string, held: { at: number; bar: { t: number; c: number } | null }) {
+  lastReadable.delete(key);
+  if (lastReadable.size >= STALE_MARK_KEYS) {
+    lastReadable.delete(lastReadable.keys().next().value as string);
+  }
+  lastReadable.set(key, held);
+}
+
+/**
  * Perplexity Sonar — `sonar-pro` supports vision (image_url content blocks) and
  * is OpenAI-chat-completions compatible.
  */
@@ -807,7 +859,16 @@ export async function registerRoutes(
       ? await hyperliquidAssets().catch(() => [])
       : [];
     const at = Date.now();
-    const out: Record<number, { price: number; at: number; venue: "binance" | "hyperliquid"; book: "perp" | "spot" }> = {};
+    const out: Record<
+      number,
+      {
+        price: number;
+        at: number;
+        venue: "binance" | "hyperliquid";
+        book: "perp" | "spot";
+        stale?: boolean;
+      }
+    > = {};
 
     const wanted = open.map((t) => ({ t, pair: pairForTradeAt(t, cat, hlNames) }));
     if (wanted.some((w) => w.pair?.venue === "hyperliquid")) {
@@ -886,6 +947,54 @@ export async function registerRoutes(
         if (p) out[id] = { price: p, at, venue: "binance", book: "spot" };
       }
     }
+    /*
+     * And for anything still unpriced: the last close the journal can read.
+     *
+     * Binance's perpetual API refuses some hosts outright and, unlike spot,
+     * has no open mirror — so a perp trade on such a host has no live quote
+     * at all while its candle ARCHIVE answers happily, which is why the chart
+     * draws and the P&L does not. Reading the last bar from the same source
+     * the chart uses turns two dashes into a number with a date on it.
+     *
+     * Bounded: only trades still without a mark, and only a few. They come in
+     * the order the journal lists them — newest entry first — so what falls
+     * off the end is the oldest position, not an arbitrary one. It is a
+     * rescue, not a second pricing strategy.
+     */
+    const stranded = wanted.filter((w) => w.pair && !out[w.t.id]).slice(0, MAX_STALE_MARKS);
+    for (const { t, pair } of stranded) {
+      const key = `${pair!.venue}:${pair!.market}:${pair!.symbol}`;
+      let held = lastReadable.get(key);
+      if (!held || at - held.at >= STALE_MARK_TTL_MS) {
+        try {
+          const read = await readCandlesAt(pair!, "1h", at - STALE_MARK_WINDOW_MS, at, 200);
+          const last = read.candles[read.candles.length - 1];
+          held = { at, bar: last && last.c > 0 ? { t: last.t, c: last.c } : null };
+        } catch {
+          // No live price and no readable history. The dash is honest here.
+          held = { at, bar: null };
+        }
+        holdReadable(key, held);
+      }
+      if (!held.bar) continue;
+      /*
+       * A bar that has not closed yet is not history: its close IS the last
+       * trade, which is what the ticker would have said. So the mark only
+       * carries the stale flag once the bar it came from is over — and then
+       * it is timed to that bar's close rather than to now, because that is
+       * the last moment anybody can say the price was true.
+       */
+      const over = held.bar.t + BAR_MS["1h"];
+      const forming = over > at;
+      out[t.id] = {
+        price: held.bar.c,
+        at: forming ? at : over,
+        venue: pair!.venue === "hyperliquid" ? "hyperliquid" : "binance",
+        book: pair!.market === "futures" ? "perp" : "spot",
+        stale: !forming,
+      };
+    }
+
     res.json(out);
   });
 
@@ -899,6 +1008,10 @@ export async function registerRoutes(
    * cannot show what it learned until tomorrow.
    */
   app.post("/api/markets/refresh", async (_req, res) => {
+    // "Ask again" has to mean everything, or a refresh pressed because the
+    // prices looked wrong hands back the same held prices.
+    forgetRefusals();
+    lastReadable.clear();
     const [cat, hl] = await Promise.all([
       ensureCatalogue(true).catch(() => []),
       ensureHyperliquid(true).catch(() => []),
@@ -1186,7 +1299,10 @@ export async function registerRoutes(
     const force = req.query.refresh === "1" || req.query.refresh === "true";
     // A forced refresh asks even the hosts that answered 451 last time —
     // that they might not any more is the whole reason someone is here.
-    if (force) forgetRefusals();
+    if (force) {
+      forgetRefusals();
+      lastReadable.clear();
+    }
     const cat = await ensureCatalogue(force).catch(() => []);
     const hl = await ensureHyperliquid(force).catch(() => []);
     const status = feedStatus();

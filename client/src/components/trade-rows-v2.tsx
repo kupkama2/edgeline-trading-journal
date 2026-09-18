@@ -27,12 +27,12 @@ import {
 } from "lucide-react";
 import { useUpdateTrade, useTrades } from "@/lib/data";
 import { tiltFromHere } from "@shared/tilt";
-import { standingOf, type Mark } from "@shared/marks";
+import { markNote, standingOf, type Mark } from "@shared/marks";
 import { lockedIn, riskLeft, stopWasMoved } from "@shared/stops";
 import type { TradeWithTags } from "@shared/schema";
 import { computeMetrics, fmtAmount, fmtFees, fmtMoney, fmtR } from "@shared/metrics";
 import { tradeVerdict, isWin, type Verdict } from "@shared/verdict";
-import { num } from "@/components/trade-shared";
+import { markWhen, num } from "@/components/trade-shared";
 
 /* ============================== the word ============================== */
 
@@ -335,7 +335,7 @@ export function OpenTradeRowV2({
   onTake,
 }: {
   t: TradeWithTags;
-  mark?: (Mark & { book: "perp" | "spot" }) | null;
+  mark?: Mark | null;
   /** The trade is open underneath this row, so the row is its header. */
   expanded?: boolean;
   onSelect: () => void;
@@ -345,6 +345,7 @@ export function OpenTradeRowV2({
   onTake: () => void;
 }) {
   const standing = mark ? standingOf(t, mark.price) : null;
+  const note = mark ? markNote(mark, markWhen(mark.at)) : null;
   const long = t.direction === "long";
   // Green and red follow the money, and both are absent until a venue says
   // what the thing is worth — a position with no live price shows a dash
@@ -436,6 +437,18 @@ export function OpenTradeRowV2({
         </span>
       )}
 
+      {/* Only when there is something to warn about: a perp priced off spot,
+          or off the archive. A live quote from its own book says nothing. */}
+      {note?.badge && (
+        <span
+          className="shrink-0 text-[10px] text-muted-foreground"
+          title={note.title}
+          data-testid={`v2-open-mark-note-${t.id}`}
+        >
+          {note.badge}
+        </span>
+      )}
+
       <span className="min-w-0 flex-1" />
 
       {/* Nothing while the trade is open below: its own header carries Take,
@@ -514,11 +527,9 @@ export function OpenTradeRowV2({
       <span
         className={`w-20 shrink-0 text-right font-mono text-xs tabular-nums ${toneDim}`}
         title={
-          standing == null
+          standing == null || note == null
             ? "No live price for this one — nothing is quoting it here"
-            : mark?.book === "spot"
-              ? "The perp's own book refuses this host; spot sits within basis of it."
-              : undefined
+            : note.title
         }
         /* Not "row-v2-open-pnl": that prefix collides with the row's own
            "row-v2-open-<id>", so a selector for open rows picked up their
