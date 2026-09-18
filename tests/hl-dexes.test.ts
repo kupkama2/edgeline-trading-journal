@@ -162,7 +162,7 @@ describe("storing and showing a builder-book pair", () => {
     // The bug this guards: splitting on every colon handed back "vntls" as
     // the symbol and would have charted a market that does not exist.
     expect(parsePricePair("hyperliquid:vntls:NVDA")).toEqual({
-      symbol: "VNTLS:NVDA",
+      symbol: "vntls:NVDA",
       market: "futures",
       venue: "hyperliquid",
     });
@@ -186,7 +186,7 @@ describe("storing and showing a builder-book pair", () => {
   it("points a trade at a builder book once it has been chosen", () => {
     const t = trade({ symbol: "GOLD", pricePair: "hyperliquid:vntls:GOLD" });
     expect(pairForTradeAt(t as any, [], [])).toEqual({
-      symbol: "VNTLS:GOLD",
+      symbol: "vntls:GOLD",
       market: "futures",
       venue: "hyperliquid",
     });

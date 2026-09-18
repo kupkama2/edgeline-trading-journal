@@ -60,7 +60,20 @@ export function parsePricePair(raw: string | null | undefined): PairRef | null {
      * The venue lists perpetuals and nothing else, so there is no market
      * segment competing for that position.
      */
-    const asset = text.slice(text.indexOf(":") + 1).trim().toUpperCase();
+    /*
+     * Kept in the venue's own spelling, NOT upper-cased.
+     *
+     * Two things here are case-sensitive to Hyperliquid and both were being
+     * destroyed. A builder book's name is written as its deployer wrote it —
+     * "xyz", not "XYZ" — and it goes back to the venue as the `dex` on every
+     * request, so upper-casing it asked about a book that does not exist and
+     * the trade silently got no price. And the venue writes a thousand-lot
+     * with a small k: "kPEPE" upper-cased is a coin it has never heard of.
+     *
+     * This file's header says the venue's spelling is kept on purpose. It is
+     * kept here too.
+     */
+    const asset = text.slice(text.indexOf(":") + 1).trim();
     return asset ? { symbol: asset, market: "futures", venue: "hyperliquid" } : null;
   }
   if (venue === "binance") {
