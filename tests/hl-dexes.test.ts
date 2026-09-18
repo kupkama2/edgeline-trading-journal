@@ -4,6 +4,7 @@ import {
   hlAssetFor,
   parseHyperliquidMeta,
   parsePerpDexs,
+  perpsFromMids,
   splitHlAsset,
 } from "../shared/hyperliquid";
 import { describePair, pairCandidates, parsePricePair } from "../shared/price-pair";
@@ -161,5 +162,45 @@ describe("storing and showing a builder-book pair", () => {
       market: "futures",
       venue: "hyperliquid",
     });
+  });
+});
+
+
+/**
+ * The price feed as a second census of what exists.
+ *
+ * Asking each book for its universe is ten requests that can half-fail in
+ * nine ways, and did. Every market the venue quotes appears in allMids, and
+ * one in a builder book is keyed with its book on the front — so a market
+ * being quoted is proof it is real, whatever a catalogue says.
+ */
+describe("what the price feed knows about", () => {
+  it("finds a builder book's assets among the mids", () => {
+    const out = perpsFromMids({
+      BTC: 110000,
+      "xyz:GOLD": 4317,
+      "eqs:MU": 210.5,
+      "eqs:HOOD": 98.2,
+    });
+    expect(out.map(hlAsset)).toEqual(["xyz:GOLD", "eqs:MU", "eqs:HOOD"]);
+    expect(out.every((p) => p.maxLeverage === null)).toBe(true);
+  });
+
+  it("leaves the venue's own coins alone — they are already known", () => {
+    expect(perpsFromMids({ BTC: 1, ETH: 2, kPEPE: 3 })).toEqual([]);
+  });
+
+  it("ignores spot markets, which are keyed with an @ and no colon", () => {
+    expect(perpsFromMids({ "@1": 5, "@107": 6 })).toEqual([]);
+  });
+
+  it("refuses a key it cannot split back apart", () => {
+    expect(perpsFromMids({ "a:b:c": 1, ":GOLD": 2, "xyz:": 3 })).toEqual([]);
+  });
+
+  it("carries equities, which is the whole point of the fallback", () => {
+    const out = perpsFromMids({ "eqs:MU": 1, "eqs:SNDK": 2, "eqs:MRNA": 3, "eqs:HOOD": 4 });
+    expect(out.map((p) => p.name)).toEqual(["MU", "SNDK", "MRNA", "HOOD"]);
+    expect(out.every((p) => p.dex === "eqs")).toBe(true);
   });
 });

@@ -130,6 +130,40 @@ export function parseHyperliquidMeta(json: unknown, dex: string | null = null): 
 }
 
 /**
+ * Builder-book assets read out of the venue's price feed.
+ *
+ * `allMids` quotes every market the venue runs, and a market in a builder-
+ * deployed book is keyed with its book on the front — "xyz:GOLD". That makes
+ * the price feed a second, independent census of what exists, and a far more
+ * robust one than asking each book for its universe: it is one request, it
+ * cannot half-fail across ten books, and a market that is quoted is a market
+ * that is real whatever any catalogue says about it.
+ *
+ * Used to fill in what the per-book listings missed. No leverage comes back
+ * this way — that is what the listings are for — but a ticker you can find
+ * and chart beats a ticker that does not exist as far as the journal is
+ * concerned.
+ *
+ * Keys without a colon are the venue's own coin perps, already known. Spot
+ * markets are keyed "@1" and have no colon either, so they never arrive here.
+ */
+export function perpsFromMids(mids: Record<string, number>): HyperliquidPerp[] {
+  const out: HyperliquidPerp[] = [];
+  const seen = new Set<string>();
+  for (const key of Object.keys(mids)) {
+    const i = key.indexOf(":");
+    if (i <= 0) continue;
+    const dex = key.slice(0, i).trim();
+    const coin = key.slice(i + 1).trim();
+    // One colon only: anything else cannot be split back apart with confidence.
+    if (!dex || !coin || coin.includes(":") || seen.has(key)) continue;
+    seen.add(key);
+    out.push({ name: coin, maxLeverage: null, delisted: false, dex });
+  }
+  return out;
+}
+
+/**
  * The coin to read candles for, given a ticker and everything the venue
  * lists — and null rather than a guess whenever the answer is not unique.
  *

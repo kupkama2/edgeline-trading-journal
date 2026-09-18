@@ -32,6 +32,7 @@ interface MarketStatus {
     lastOkAt: string | null;
     lastError: string | null;
     dexError: string | null;
+    catalogueAt: string | null;
   };
 }
 
@@ -134,12 +135,12 @@ export function MarketsCard() {
           <Row
             label="builder books"
             value={hl ? String(hl.dexes) : "—"}
-            tone={hl && hl.dexes === 0 && hl.dexError ? "text-amber-500" : ""}
+            tone={hl && hl.dexes === 0 ? "text-amber-500" : ""}
           />
           <Row
             label="perps from them"
             value={hl ? String(hl.builderPerps) : "—"}
-            tone={hl && hl.builderPerps === 0 && hl.dexError ? "text-amber-500" : ""}
+            tone={hl && hl.builderPerps === 0 ? "text-amber-500" : ""}
           />
           {hl?.lastError && (
             <p className="font-mono text-[10px] leading-snug text-amber-500" data-testid="markets-hl-error">
@@ -153,19 +154,23 @@ export function MarketsCard() {
               {hl.dexError}
             </p>
           )}
-          {hl && hl.dexes === 0 && !hl.lastError && !hl.dexError && (
-            <p className="text-[10px] leading-snug text-muted-foreground">
-              This venue lists no builder-deployed books, so there are no equity or commodity
-              perps to offer.
+          {/*
+            Said only when the stored list is the evidence.
+            This line used to claim the venue had no builder books whenever a
+            counter read zero — and that counter lived in the server's memory,
+            so it read zero after every restart whether or not anybody had
+            asked. A sentence about the venue has to come from the catalogue,
+            which is the thing that survives a deploy.
+          */}
+          {hl && hl.catalogueAt && hl.dexes === 0 && !hl.lastError && !hl.dexError && (
+            <p className="text-[10px] leading-snug text-amber-500" data-testid="markets-no-books">
+              The list this journal holds has no builder-deployed books in it, so there are no
+              equity or commodity perps to offer. Read them again to check.
             </p>
           )}
-          {/* A catalogue nothing has refreshed since the journal learned to
-              read builder books reports zero of them perfectly honestly and
-              perfectly uselessly. The date it was last fetched is what tells
-              the two apart. */}
-          {hl?.lastOkAt && (
+          {hl?.catalogueAt && (
             <p className="text-[10px] leading-snug text-muted-foreground" data-testid="markets-hl-fetched">
-              last read {new Date(hl.lastOkAt).toLocaleString()}
+              list written {new Date(hl.catalogueAt).toLocaleString()}
             </p>
           )}
         </div>

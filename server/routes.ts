@@ -30,7 +30,13 @@ import {
   intervalFor,
   type Interval,
 } from "./binance";
-import { ensureHyperliquid, fetchAllMids, hyperliquidNames, hyperliquidStatus } from "./hyperliquid";
+import {
+  ensureHyperliquid,
+  fetchAllMids,
+  hyperliquidFetchedAt,
+  hyperliquidNames,
+  hyperliquidStatus,
+} from "./hyperliquid";
 import { fetchCandlesAt, pairForTradeAt, readCandlesAt } from "./candles";
 import { syncHyperliquid } from "./hl-sync";
 import { hlAsset, venueOfAccount } from "@shared/hyperliquid";
@@ -1133,6 +1139,22 @@ export async function registerRoutes(
         // What the picker can offer right now, from the cache, delisted left out.
         listed: hl.filter((p) => !p.delisted).length,
         delisted: hl.filter((p) => p.delisted).length,
+        /*
+         * Counted from the STORED catalogue, overriding the fetch counters
+         * above — which live in this process's memory and are therefore zero
+         * on every restart until something happens to refetch.
+         *
+         * That is how this card came to say "this venue lists no builder-
+         * deployed books" about a venue that had listed ten of them an hour
+         * earlier: a deploy restarted the process, the day-old cache was not
+         * stale, no fetch ran, and two zeroes got read as an answer. The
+         * catalogue survives restarts and is the thing the picker actually
+         * searches, so it is what the card should be describing.
+         */
+        dexes: new Set(hl.filter((p) => p.dex).map((p) => p.dex)).size,
+        builderPerps: hl.filter((p) => p.dex).length,
+        /** When the stored list was written — also not per-process. */
+        catalogueAt: await hyperliquidFetchedAt(),
       },
     });
   });
