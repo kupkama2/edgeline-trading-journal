@@ -1514,7 +1514,23 @@ export function TradeEditor({
               </div>
               </div>
             )}
-            <div className="flex gap-2">
+            {/*
+              Stuck to the bottom of the scroller, not to the end of the form.
+              This editor is long enough that the fields you correct most often
+              — the exit, the reason, the note — leave Save somewhere below the
+              fold, and an edit you cannot finish without hunting for the
+              button is an edit that gets abandoned half-made.
+
+              A background and a top border rather than a transparent strip:
+              floating over a form, unpainted, the buttons had form rows
+              sliding visibly underneath them. The negative margins let it span
+              the full width of a padded parent without being inset from the
+              content it sits over.
+            */}
+            <div
+              className="sticky bottom-0 -mx-4 -mb-4 flex gap-2 border-t border-border/70 bg-card/95 px-4 py-3 backdrop-blur sm:-mx-5 sm:-mb-5 sm:px-5"
+              data-testid="bar-edit-save"
+            >
               <Button
                 variant="outline"
                 className="h-10 text-xs font-semibold"

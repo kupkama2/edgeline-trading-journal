@@ -74,13 +74,13 @@ export interface DayGroup {
   /** Midnight local on that day, for formatting in the caller's locale. */
   date: Date;
   trades: TradeWithTags[];
-  /** Net of fees, over every trade in the group that counts. */
+  /** Net of fees, over every trade in the group. */
   pnl: number;
   /** Summed R over the trades that have one; null when none of them do. */
   r: number | null;
   wins: number;
   losses: number;
-  /** Trades in the group marked tilt — out of pnl and r, counted here. */
+  /** How many of them were tilt — a note on the day, not a deduction. */
   tilt: number;
 }
 
@@ -99,9 +99,21 @@ export function dayKey(iso: string): string {
  * carries what the day came to and the rows underneath can drop their
  * timestamps entirely — which is most of what made the old list noisy.
  *
- * Tilt trades sit in their group but stay out of its totals, exactly as they
- * stay out of every other number in the journal. They are counted separately
- * so a day that looks flat can still say why.
+ * Every trade handed over counts towards the total, tilt included. This
+ * function does not get a second opinion about which book is being shown: the
+ * scope already decided that before the list got here, and a trade on screen
+ * that is silently missing from the sum above it is the header lying about the
+ * rows underneath it.
+ *
+ * Holding tilt out here was wrong in exactly the case it was written for. The
+ * plan book — the default — has already dropped tilt trades entirely, so the
+ * exclusion could only ever fire once you had switched the filter to Tilt or
+ * Both, which is to say once you had explicitly asked to see them. Six rows
+ * summing to −$266 under a header reading −$59 is not "tilt kept out of the
+ * numbers", it is a subtraction nobody asked for.
+ *
+ * The tilt count stays on the group, because "6 trades, 2 of them tilt" is
+ * worth saying. It is a note about the day, not a deduction from it.
  */
 export function groupByDay(trades: TradeWithTags[]): DayGroup[] {
   const by = new Map<string, TradeWithTags[]>();
@@ -126,10 +138,7 @@ export function groupByDay(trades: TradeWithTags[]): DayGroup[] {
     let losses = 0;
     let tilt = 0;
     for (const t of list) {
-      if (t.tilt) {
-        tilt++;
-        continue;
-      }
+      if (t.tilt) tilt++;
       const m = computeMetrics(t);
       pnl += m.actualPnL ?? 0;
       if (m.actualR != null) {

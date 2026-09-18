@@ -22,15 +22,30 @@ import {
   type PairRef,
 } from "@shared/binance";
 import { hlCoinFor, venueOfAccount } from "@shared/hyperliquid";
+import { parsePricePair } from "@shared/price-pair";
 import { fetchCandles, readCandles, type CandleRead, type Interval } from "./binance";
 import { readHlCandles } from "./hyperliquid";
 
 /** The pair a trade is read against, on the venue its account names. */
 export function pairForTradeAt(
-  trade: { symbol: string; contract?: string | null; account?: string | null },
+  trade: {
+    symbol: string;
+    contract?: string | null;
+    account?: string | null;
+    pricePair?: string | null;
+  },
   cat: BinanceSymbol[],
   hlNames: string[],
 ): PairRef | null {
+  /*
+   * A pair chosen by hand wins everything below, including the contract check.
+   * The rules under here are inference — from a ticker, from an account name —
+   * and somebody who went and picked a book knows something none of them do.
+   * That includes overriding "this has a contract code, so it is not crypto":
+   * the point of the override is the case the inference got wrong.
+   */
+  const said = parsePricePair(trade.pricePair);
+  if (said) return said;
   if (trade.contract?.trim()) return null;
   if (venueOfAccount(trade.account) === "hyperliquid") {
     const coin = hlCoinFor(trade.symbol, hlNames);

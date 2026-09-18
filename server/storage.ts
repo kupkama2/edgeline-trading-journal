@@ -203,6 +203,8 @@ ALTER TABLE trades ADD COLUMN IF NOT EXISTS post_exit_adverse DOUBLE PRECISION;
 -- judgement, and a manual answer is never overwritten by an automatic one.
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS outcome_source TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS outcome_checked_at TEXT;
+-- Which book to read a trade's prices from, when the ticker could not say.
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS price_pair TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS outcome_hit_at TEXT;
 -- Commission paid on the trade, both sides, in dollars. Deducted in metrics.
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS fees DOUBLE PRECISION;

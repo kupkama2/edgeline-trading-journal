@@ -843,11 +843,15 @@ export function NewTradeCard({
        three state pills in one unwrappable row were 371px of min-content,
        which widened the whole dialog past a 390px phone and dragged every
        field in it off the right edge. */
+    /* Shut, the whole card opens it — see the note in scalp-log.tsx. Only
+       ever opens, so a click that also hits the header button is idempotent,
+       and there is no handler at all once the form is showing. */
     <Card
       ref={cardRef}
+      onClick={expanded ? undefined : () => setExpanded(true)}
       className={`min-w-0 border-card-border bg-card ${
         compact && !expanded ? "p-3" : "p-4 sm:p-5"
-      }`}
+      } ${expanded ? "" : "cursor-pointer transition-colors hover:border-primary/40"}`}
     >
       <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1.5">
         <button
@@ -1682,7 +1686,14 @@ export function NewTradeCard({
             </div>
           )}
 
-          <div className="flex flex-wrap items-center gap-3">
+          {/* Same reason as the editor's: this form is long, and the button
+              that finishes it should not be a thing you scroll to find. It
+              sticks to the bottom of whatever is scrolling — the page, or the
+              overlay when the form is opened inside one. */}
+          <div
+            className="sticky bottom-0 -mx-4 -mb-4 flex flex-wrap items-center gap-3 border-t border-border/70 bg-card/95 px-4 py-3 backdrop-blur sm:-mx-5 sm:-mb-5 sm:px-5"
+            data-testid="bar-entry-save"
+          >
             <Button
               type="submit"
               className="h-9 flex-1 min-w-[9rem] text-xs font-semibold"

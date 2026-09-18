@@ -97,7 +97,13 @@ describe("the day a trade closed", () => {
     expect(groups[0].losses).toBe(1);
   });
 
-  it("keeps tilt trades out of the day's totals but counts them", () => {
+  it("counts every row it is handed, tilt included — the scope already chose", () => {
+    /*
+     * A tilt trade only reaches here once the book filter is Tilt or Both,
+     * because the plan book drops them before the list is built. So a row on
+     * screen missing from the sum above it was the header contradicting its
+     * own rows, never "tilt kept out of the numbers".
+     */
     const groups = groupByDay([
       trade({ id: 1, entryPrice: 100, initialStop: 90, size: 100, exitPrice: 120,
               exitTime: localIso(2026, 9, 9, 10) }),
@@ -105,9 +111,30 @@ describe("the day a trade closed", () => {
               tilt: true, exitTime: localIso(2026, 9, 9, 15) }),
     ]);
     expect(groups[0].trades).toHaveLength(2);
+    // +$2000 on the plan trade, −$5000 on the tilt one.
+    expect(groups[0].pnl).toBe(-3000);
+    expect(groups[0].wins).toBe(1);
+    expect(groups[0].losses).toBe(1);
+  });
+
+  it("still says how many of the day were tilt, as a note rather than a deduction", () => {
+    const groups = groupByDay([
+      trade({ id: 1, exitTime: localIso(2026, 9, 9, 10) }),
+      trade({ id: 2, tilt: true, exitTime: localIso(2026, 9, 9, 15) }),
+      trade({ id: 3, tilt: true, exitTime: localIso(2026, 9, 9, 16) }),
+    ]);
+    expect(groups[0].tilt).toBe(2);
+    expect(groups[0].trades).toHaveLength(3);
+  });
+
+  it("totals the plan alone when the plan is all it was given", () => {
+    // The default book, where the filter has already removed the tilt trades.
+    const groups = groupByDay([
+      trade({ id: 1, entryPrice: 100, initialStop: 90, size: 100, exitPrice: 120,
+              exitTime: localIso(2026, 9, 9, 10) }),
+    ]);
     expect(groups[0].pnl).toBe(2000);
-    expect(groups[0].tilt).toBe(1);
-    expect(groups[0].losses).toBe(0);
+    expect(groups[0].tilt).toBe(0);
   });
 
   it("says null rather than zero R when nothing in the day was measured", () => {
