@@ -260,13 +260,23 @@ export function ClosedTradeRowV2({
 /* ============================= open trade ============================= */
 
 /**
- * A live position on one line.
+ * A live position on one line: what you are holding, and what it is doing.
  *
- * What is still decidable, and nothing that is not: where it gets out, where
- * it is trying to get to, and where it stands right now. The scaling controls
- * stay — they are the one thing on this row you press mid-trade — but they
- * wait for a hover rather than sitting there as two permanent buttons on every
- * open position.
+ * Size, money, R. The prices are deliberately gone. Entry, stop and target are
+ * a plan you already made and cannot read anything new from — you know where
+ * your stop is — and printing four numbers that never change next to the two
+ * that move every minute buries the moving ones. They are all still inside the
+ * trade, one click down, where changing them is the point.
+ *
+ * The same two columns as a closed row, at the same widths, so open and closed
+ * positions form one column of figures down the page rather than two ragged
+ * ones.
+ *
+ * Two things survive the cut. The scaling controls, because they are the one
+ * thing on this row you press mid-trade — on hover, not as two permanent
+ * buttons on every position. And the crossed-level warning: "price is through
+ * your stop, is this still open?" is not a figure, it is the journal noticing
+ * something about your record that you would want to know.
  */
 export function OpenTradeRowV2({
   t,
@@ -290,6 +300,13 @@ export function OpenTradeRowV2({
 }) {
   const standing = mark ? standingOf(t, mark.price) : null;
   const long = t.direction === "long";
+  // Green and red follow the money, and both are absent until a venue says
+  // what the thing is worth — a position with no live price shows a dash
+  // rather than a zero, because flat and unknown are not the same news.
+  const up = (standing?.pnl ?? 0) >= 0;
+  const tone = standing == null ? "text-muted-foreground" : up ? "text-emerald-400" : "text-primary";
+  const toneDim =
+    standing == null ? "text-muted-foreground" : up ? "text-emerald-400/80" : "text-primary/80";
 
   return (
     <div
@@ -317,29 +334,15 @@ export function OpenTradeRowV2({
       >
         {long ? <ArrowUpRight className="h-3 w-3" /> : <ArrowDownRight className="h-3 w-3" />}
       </span>
-      <span className="font-mono text-sm font-semibold">{t.symbol}</span>
-      <span className="font-mono text-[11px] text-muted-foreground">
-        {t.size}
-        {t.sizeUnit === "quote" ? " USD" : ""} @ {num(t.entryPrice)}
-      </span>
-      <span className="font-mono text-[11px] text-muted-foreground">
-        <span className="text-primary">{num(t.initialStop)}</span>
-        {" → "}
-        <span className="text-emerald-400">{num(t.initialTarget)}</span>
+      <span className="min-w-[3.25rem] shrink-0 font-mono text-sm font-semibold">{t.symbol}</span>
+      <span
+        className="font-mono text-[11px] text-muted-foreground"
+        data-testid={`row-v2-size-${t.id}`}
+      >
+        {num(t.size)}
+        {t.sizeUnit === "quote" ? " USD" : ""}
       </span>
 
-      {/* Where it stands, when a venue could say. The only number on an open
-          row that changes without you, so it is the only one in full weight. */}
-      {standing?.currentR != null && (
-        <span
-          className={`font-mono text-xs font-semibold ${
-            standing.currentR >= 0 ? "text-emerald-400" : "text-primary"
-          }`}
-          data-testid={`row-v2-standing-${t.id}`}
-        >
-          {fmtR(standing.currentR)}
-        </span>
-      )}
       {standing?.crossedStop && (
         <span className="text-[10px] text-primary" data-testid={`row-v2-crossed-${t.id}`}>
           through the stop — still open?
@@ -351,7 +354,9 @@ export function OpenTradeRowV2({
         </span>
       )}
 
-      <span className="ml-auto flex shrink-0 items-center gap-1 sm:opacity-0 sm:transition-opacity sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
+      <span className="min-w-0 flex-1" />
+
+      <span className="flex shrink-0 items-center gap-1 sm:opacity-0 sm:transition-opacity sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
         <Button
           type="button"
           variant="outline"
@@ -406,6 +411,30 @@ export function OpenTradeRowV2({
         >
           <X className="h-3 w-3" />
         </Button>
+      </span>
+
+      {/* The two that move. Same widths as a closed row's. */}
+      <span
+        className={`w-16 shrink-0 text-right font-mono text-sm font-bold tabular-nums ${tone}`}
+        data-testid={`row-v2-standing-${t.id}`}
+      >
+        {fmtR(standing?.currentR)}
+      </span>
+      <span
+        className={`w-20 shrink-0 text-right font-mono text-xs tabular-nums ${toneDim}`}
+        title={
+          standing == null
+            ? "No live price for this one — nothing is quoting it here"
+            : mark?.book === "spot"
+              ? "The perp's own book refuses this host; spot sits within basis of it."
+              : undefined
+        }
+        /* Not "row-v2-open-pnl": that prefix collides with the row's own
+           "row-v2-open-<id>", so a selector for open rows picked up their
+           money cells too. */
+        data-testid={`v2-open-pnl-${t.id}`}
+      >
+        {fmtMoney(standing?.pnl)}
       </span>
     </div>
   );
