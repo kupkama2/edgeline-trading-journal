@@ -22,6 +22,7 @@ import { useLocation } from "wouter";
 import { ClosedTradeRow, OpenTradeRow, PendingTradeRow } from "@/components/trade-rows";
 import { OwedCard } from "@/components/owed-card";
 import { useSideBySide } from "@/hooks/use-mobile";
+import { ScalpLog } from "@/components/scalp-log";
 import { HealthCard } from "@/components/health-card";
 import { useAccountSettings, useMarks } from "@/lib/data";
 import { openRisk, type SideRisk } from "@shared/exposure";
@@ -250,6 +251,10 @@ export default function Journal() {
           reasons — the blanks that drop a trade out of the numbers without
           a word. */}
       <HealthCard trades={scoped} onOpen={openTrade} feeAccounts={feeAccounts} />
+
+      {/* Three words and Enter, for the trades too small and too fast to be
+          worth the entry form. It stays open while you are using it. */}
+      <ScalpLog />
 
       {/* The entry form gets its own column only while it is open. Closed, it
           is one line, and holding a half-empty column beside it just to keep

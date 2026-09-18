@@ -79,6 +79,13 @@ export const tradingStyles = pgTable("trading_styles", {
    * other signs.
    */
   maxTradesPerDay: integer("max_trades_per_day"),
+  /**
+   * Dollars this book normally risks. A scalper's risk is the same most of
+   * the time, and typing it on every line is the friction that stops the
+   * logging — so it is set once here and overridden on the line when a
+   * trade was different.
+   */
+  defaultRisk: doublePrecision("default_risk"),
 });
 
 const hhmm = z
@@ -94,6 +101,7 @@ export const insertTradingStyleSchema = createInsertSchema(tradingStyles)
     sessionStart: hhmm,
     sessionEnd: hhmm,
     maxTradesPerDay: z.number().int().positive().nullable().optional(),
+    defaultRisk: z.number().positive().nullable().optional(),
   });
 
 export type InsertTradingStyle = z.infer<typeof insertTradingStyleSchema>;
@@ -169,6 +177,35 @@ export const trades = pgTable("trades", {
    * exclusive; see exclusiveVerdict in shared/well-traded.ts.
    */
   wellTraded: boolean("well_traded").notNull().default(false),
+  /*
+   * Recorded as a RESULT rather than as prices.
+   *
+   * A scalp is in and out inside a minute, and made to be logged in three
+   * words: the ticker, what it made, and what it risked. There are no
+   * levels to record and no chart to read it against — asking for entry,
+   * stop, target and exit is what stops these being logged at all, and a
+   * day of unlogged trades is the day you most need on the record.
+   *
+   * So the two numbers are stored as themselves. netPnl is the result as
+   * it hit the account, already net of fees. riskAmount is what was at
+   * risk, typed or taken from the style's default, and it is what makes R
+   * possible on a trade with no stop: R is simply one over the other.
+   * Both null on every ordinary trade, where prices say it better.
+   */
+  scalp: boolean("scalp").notNull().default(false),
+  netPnl: doublePrecision("net_pnl"),
+  riskAmount: doublePrecision("risk_amount"),
+  /*
+   * How far it went with you and against you, in the same money as the
+   * result — the best and the worst it was ever showing. Optional, added
+   * afterwards when a scalp turns out to be worth a second look: quick to
+   * log is the whole point, and a form that asks for these up front is the
+   * form the scalp log exists to avoid. In dollars rather than prices
+   * because a scalp has no entry price to measure a price against; over the
+   * risk they give exactly the MFE and MAE in R that every other trade has.
+   */
+  netMfe: doublePrecision("net_mfe"),
+  netMae: doublePrecision("net_mae"),
   exitReason: text("exit_reason"), // see exitReasonEnum — the fact, not the verdict
   /**
    * Why a trade ended without ever becoming a real position. Distinct from
@@ -470,8 +507,10 @@ export const missingRisk = (v: {
   initialTarget?: number | null;
   /** A tilt trade owes nothing: it is logged to be counted, not measured. */
   tilt?: boolean | null;
+  /** Nor does a scalp: its risk is a figure, not a level. */
+  scalp?: boolean | null;
 }) =>
-  needsRisk(v.status) && !v.tilt
+  needsRisk(v.status) && !v.tilt && !v.scalp
     ? (["initialStop", "initialTarget"] as const).filter((f) => v[f] == null)
     : [];
 
@@ -494,9 +533,12 @@ export const missingRisk = (v: {
 export const lifecycleConflict = (v: {
   status?: string | null;
   exitPrice?: number | null;
+  /** A scalp closes on a result, so it has no exit price to be missing. */
+  scalp?: boolean | null;
 }): { field: "exitPrice"; message: string }[] => {
   const status = v.status ?? "open";
   const priced = v.exitPrice != null;
+  if (v.scalp) return [];
   if (status === "closed" && !priced) {
     return [{ field: "exitPrice", message: "A closed trade needs an exit price" }];
   }

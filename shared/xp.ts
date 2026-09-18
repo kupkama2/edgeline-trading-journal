@@ -51,6 +51,9 @@ export function tradeXp(t: TradeWithTags): XpEvent[] {
   // must never cost points either — the honest verdict is the whole game —
   // so it is simply a trade outside the score, not a penalty inside it.
   if (t.tilt) return ev;
+  // A scalp is logged in three words. Paying process points for it would
+  // price a day of in-and-out trading above a day of planned ones.
+  if (t.scalp) return ev;
 
   if (t.rationale?.trim()) add("rationale", "Wrote the why before the result", 10);
   // Two reasons lining up is a setup; one is a hunch. Paid on the count, not
