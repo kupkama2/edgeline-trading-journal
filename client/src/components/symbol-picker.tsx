@@ -53,10 +53,7 @@ interface Option {
  * choosing it. A futures contract is exempt — NQ has no crypto pair and is
  * not missing one.
  */
-function fromHistory(
-  trades: TradeWithTags[],
-  canPrice: (symbol: string) => boolean,
-): Option[] {
+function fromHistory(trades: TradeWithTags[]): (Option & { contract: boolean })[] {
   const seen = new Map<string, { n: number; last: string; contract: boolean }>();
   for (const t of trades) {
     const contract = Boolean(t.contract?.trim());
@@ -73,13 +70,9 @@ function fromHistory(
     .sort((a, b) => b[1].last.localeCompare(a[1].last))
     .map(([value, { n, contract }]) => ({
       value,
-      detail: [
-        `${n} ${n === 1 ? "trade" : "trades"}`,
-        !contract && !canPrice(value) ? "no price feed" : null,
-      ]
-        .filter(Boolean)
-        .join(" · "),
+      detail: `${n} ${n === 1 ? "trade" : "trades"}`,
       group: "yours" as const,
+      contract,
     }));
 }
 
@@ -142,10 +135,10 @@ export function SymbolPicker({
       const { dex, coin } = splitHlAsset(h.name);
       return { name: coin, dex };
     });
-    const canPrice = (symbol: string) =>
+    const resolves = (symbol: string) =>
       hlAssetFor(symbol, hlCoins) != null ||
       pairForTradeWithFallback({ symbol, contract: null }, pairs as any) != null;
-    const mine = fromHistory(trades, canPrice);
+    const mine = fromHistory(trades);
     const owned = new Set(mine.map((m) => m.value));
     const table = CONTRACTS
       // A contract already in your log is listed above under "yours"; showing
@@ -199,12 +192,21 @@ export function SymbolPicker({
       }
     }
 
-    const listed: Option[] = [];
-    const coins = Array.from(new Set(Array.from(onBinance.keys()).concat(Array.from(onHl.keys()))));
-    for (const coin of coins) {
-      if (owned.has(coin)) continue;
+    /**
+     * Where a ticker is listed, as one line — the same line whether the row
+     * is one of yours or one the venue offers.
+     *
+     * It used to be built only inside the listed group, and an instrument in
+     * your history was skipped there entirely to avoid a duplicate row. The
+     * effect was that the instruments you actually trade were the ONLY ones
+     * that never said where they live: GOLD read "1 trade" and nothing else,
+     * which is indistinguishable from a string you once typed and the app has
+     * never heard of. It is on a book; it just had no way to say so.
+     */
+    const venueDetail = (coin: string): { detail: string; group: Venue } | null => {
       const b = onBinance.get(coin);
       const h = onHl.get(coin);
+      if (!b && !h) return null;
       const group: Venue =
         home === "hyperliquid" ? (h ? "hyperliquid" : "binance") : b ? "binance" : "hyperliquid";
       const detail =
@@ -229,9 +231,46 @@ export function SymbolPicker({
           : [`${b!.symbol}${b!.market === "futures" ? " perp" : ""}`, h ? "HL too" : null]
               .filter(Boolean)
               .join(" · ");
-      listed.push({ value: coin, detail, group });
+      return { detail, group };
+    };
+
+    const listed: Option[] = [];
+    const coins = Array.from(new Set(Array.from(onBinance.keys()).concat(Array.from(onHl.keys()))));
+    for (const coin of coins) {
+      // Still only once: yours carries the same detail now, so a second row
+      // would say nothing new and push the rest off the bottom.
+      if (owned.has(coin)) continue;
+      const v = venueDetail(coin);
+      if (!v) continue;
+      listed.push({ value: coin, detail: v.detail, group: v.group });
     }
-    return [...mine, ...table, ...listed];
+    return [
+      /*
+       * Your own rows, now saying where each one is listed — and, where it
+       * matters, that it is not.
+       *
+       * Three states, and they are genuinely different: listed and resolvable
+       * needs no comment; listed on more than one book cannot be resolved by
+       * the journal and wants YOU to say which, which is a different thing
+       * from unsupported; and listed nowhere means nothing will ever chart or
+       * settle. Calling the middle one "no price feed" would be a lie about a
+       * market that is quoted and tradeable.
+       *
+       * A futures contract is exempt throughout: NQ has no crypto pair and is
+       * not missing one.
+       */
+      ...mine.map(({ contract, ...o }) => {
+        if (contract) return o;
+        const v = venueDetail(o.value);
+        if (!v) return { ...o, detail: `${o.detail} · no price feed` };
+        const detail = resolves(o.value)
+          ? `${o.detail} · ${v.detail}`
+          : `${o.detail} · ${v.detail} · pick a book`;
+        return { ...o, detail };
+      }),
+      ...table,
+      ...listed,
+    ];
   }, [trades, pairs, hl, home]);
 
   const q = value.trim().toUpperCase();
