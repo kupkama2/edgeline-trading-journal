@@ -35,7 +35,17 @@ import { setJumpSection, type JumpSection } from "@/lib/jump";
  * the line stays the thing you read, and the last point marked because "where
  * am I now" is the question the curve is usually being asked.
  */
-function Spark({ curve, up }: { curve: number[]; up: boolean }) {
+export function Spark({
+  curve,
+  up,
+  className = "h-16 w-full",
+}: {
+  curve: number[];
+  up: boolean;
+  /** The drawn height. preserveAspectRatio="none" scales the viewBox to it,
+      so a shorter band is a class rather than a second set of geometry. */
+  className?: string;
+}) {
   const W = 300;
   const H = 64;
   const geom = useMemo(() => {
@@ -68,7 +78,7 @@ function Spark({ curve, up }: { curve: number[]; up: boolean }) {
   return (
     <svg
       viewBox={`0 0 ${W} ${H}`}
-      className="h-16 w-full overflow-visible"
+      className={`${className} overflow-visible`}
       preserveAspectRatio="none"
       data-testid="score-spark"
       aria-hidden="true"
