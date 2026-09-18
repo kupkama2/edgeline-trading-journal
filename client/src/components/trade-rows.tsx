@@ -1,4 +1,4 @@
-import { standingOf, type Mark } from "@shared/marks";
+import { markNote, standingOf, type Mark } from "@shared/marks";
 /**
  * One row per trade, in each of its three lives: open, waiting to fill, closed.
  */
@@ -16,7 +16,7 @@ import { computeMetrics, fmtFees, fmtMoney, fmtR, EXIT_REASON_LABELS } from "@sh
 import { positionLedger } from "@shared/fills";
 import { outcomeParked, outcomeUnknown } from "@shared/aftermath";
 import { StyleChip } from "@/components/style-switcher";
-import { num, parseTags, RationaleTags } from "@/components/trade-shared";
+import { markWhen, num, parseTags, RationaleTags } from "@/components/trade-shared";
 
 /* ============================== trade rows ============================ */
 
@@ -39,12 +39,13 @@ export function OpenTradeRow({
   onAdd: () => void;
   onTake: () => void;
   /** Where the market is now, when a venue could say. */
-  mark?: (Mark & { book: "perp" | "spot" }) | null;
+  mark?: Mark | null;
 }) {
   const led = positionLedger(t);
   // The plan against one price: the current R, and whether price is already
   // through a level on a trade still marked open.
   const standing = mark ? standingOf(t, mark.price) : null;
+  const note = mark ? markNote(mark, markWhen(mark.at)) : null;
   const scaled = t.fills.length > 0;
   // Pending trades have no stop or target yet, so there is no R:R to show.
   const risk = t.initialStop == null ? 0 : Math.abs(t.entryPrice - t.initialStop);
@@ -133,8 +134,12 @@ export function OpenTradeRow({
           </span>
           <span>R:R {num(rr, 1)}</span>
           {mark && standing && (
-            <span data-testid={`text-mark-${t.id}`}>
-              now <span className="text-foreground">{num(mark.price)}</span>
+            <span data-testid={`text-mark-${t.id}`} title={note?.title}>
+              {/* "now" only when it is: a price off spot, or off the archive,
+                  replaces the word rather than sitting next to it — "now 5.11
+                  last read" says both things and means neither. */}
+              {note?.badge ?? "now"}{" "}
+              <span className="text-foreground">{num(mark.price)}</span>
               {standing.currentR != null && (
                 <>
                   {" · "}
@@ -142,11 +147,6 @@ export function OpenTradeRow({
                     {fmtR(standing.currentR)}
                   </span>
                 </>
-              )}
-              {mark.book === "spot" && (
-                <span title="The perp's own book refuses this host; spot sits within basis of it.">
-                  {" "}spot
-                </span>
               )}
             </span>
           )}

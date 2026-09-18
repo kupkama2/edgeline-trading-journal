@@ -52,7 +52,7 @@ import {
 import { parseExtraTargets, parsePlaybook, type TradeWithTags } from "@shared/schema";
 import { computeMetrics, fmtFees, fmtMoney, fmtR, EXIT_REASON_LABELS } from "@shared/metrics";
 import { positionLedger } from "@shared/fills";
-import { standingOf } from "@shared/marks";
+import { markNote, standingOf } from "@shared/marks";
 import { parseHighlights } from "@shared/highlights";
 import { aftermathPending, aftermathWindowMs, couldLearnMore, pathIncomplete } from "@shared/aftermath";
 import {
@@ -78,7 +78,7 @@ import { useCloseCardPaste } from "@/lib/close-paste";
 import { useToast } from "@/hooks/use-toast";
 import { saysAnythingAboutClose } from "@shared/close-card";
 import type { CloseCard } from "@shared/close-card";
-import { RationaleTags, num, parseTags } from "@/components/trade-shared";
+import { RationaleTags, markWhen, num, parseTags } from "@/components/trade-shared";
 import { TradeEditor } from "@/components/trade-dialogs";
 import { PairPicker } from "@/components/pair-picker";
 import { StopMover } from "@/components/stop-mover";
@@ -682,6 +682,7 @@ export function TradeBody({
   const { data: marks } = useMarks(trade.status === "open" && !trade.contract?.trim());
   const mark = trade.status === "open" ? (marks?.[trade.id] ?? null) : null;
   const standing = mark ? standingOf(trade, mark.price) : null;
+  const note = mark ? markNote(mark, markWhen(mark.at)) : null;
   const liveUp = (standing?.pnl ?? 0) >= 0;
 
   /** One line, always — the two-line wrap in a narrow column read as a bug. */
@@ -1077,18 +1078,19 @@ export function TradeBody({
                   ? fmtR(standing.currentR)
                   : "—"}
             </p>
-            <p className="mt-1 text-[10px] text-muted-foreground">
+            <p className="mt-1 text-[10px] text-muted-foreground" title={note?.title}>
               {/* A scalp was never asked how it ended, so "Other" here is an
                   answer nobody gave. */}
               {trade.scalp
                 ? "scalp"
                 : trade.status === "closed"
                   ? EXIT_REASON_LABELS[trade.exitReason ?? "other"]
-                  : mark
-                    ? /* Said to be live, and priced, because an open trade's
-                         figures are a snapshot rather than a result — and
-                         which book quoted it changes what they mean. */
-                      `open · ${num(mark.price)}${mark.book === "spot" ? " spot" : ""}`
+                  : mark && note
+                    ? /* Priced, because an open trade's figures are a snapshot
+                         rather than a result — and said to be live only when
+                         they are. A perp read off spot, or off the archive,
+                         carries the word for it instead. */
+                      `${note.badge ?? "open"} · ${num(mark.price)}`
                     : "still running"}
             </p>
           </div>

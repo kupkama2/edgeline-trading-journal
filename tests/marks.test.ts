@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { standingOf } from "../shared/marks";
+import { markNote, standingOf } from "../shared/marks";
 
 /**
  * An open trade against one price.
@@ -72,5 +72,37 @@ describe("what it will not say", () => {
     expect(s.pnl).toBeCloseTo(103.08, 1);
     expect(s.currentR).toBeCloseTo(1);
     expect(standingOf({ ...long, pointValue: 2 }, 110).pnl).toBeCloseTo(20);
+  });
+});
+
+/**
+ * What the journal says about a price it is not sure of.
+ *
+ * Three surfaces show an open trade's mark and all three used to say "open"
+ * with a number beside it, whatever the number was. Two of them are not the
+ * price right now: a perp quoted off spot is within basis, and a perp read
+ * off the candle archive is yesterday. Both beat a dash — and both said
+ * silently are the one thing this journal must not do.
+ */
+describe("how a mark is labelled", () => {
+  it("says nothing when the price came live from the trade's own book", () => {
+    // A badge on every row is a badge nobody reads.
+    expect(markNote({ book: "perp" }, "Sep 18, 14:00").badge).toBeNull();
+  });
+
+  it("marks a perp priced off spot", () => {
+    const note = markNote({ book: "spot" }, "Sep 18, 14:00");
+    expect(note.badge).toBe("spot");
+    expect(note.title).toMatch(/basis/);
+  });
+
+  it("marks a price read from the archive, and dates it", () => {
+    const note = markNote({ book: "perp", stale: true }, "Sep 17, 23:00");
+    expect(note.badge).toBe("last read");
+    expect(note.title).toContain("Sep 17, 23:00");
+  });
+
+  it("puts stale ahead of which book it was: the age is the bigger caveat", () => {
+    expect(markNote({ book: "spot", stale: true }, "x").badge).toBe("last read");
   });
 });
