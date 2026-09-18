@@ -22,8 +22,9 @@ import { useTheme } from "@/components/shell";
 import { fetchCandlePage, useTradeCandles } from "@/lib/data";
 import { num } from "@/components/trade-shared";
 import type { TradeWithTags } from "@shared/schema";
-import { currentStop } from "@shared/stops";
-import { parseExtraTargets } from "@shared/schema";
+import { chartLevels, type Level, type LevelDraft, type LevelField } from "@/components/chart-levels";
+
+export type { LevelDraft, LevelField } from "@/components/chart-levels";
 
 /**
  * The trade, on its own chart.
@@ -99,14 +100,6 @@ const toBar = (k: Candle) => ({
   low: k.l,
   close: k.c,
 });
-type Level = {
-  price: number;
-  label: string;
-  color: string;
-  dashed: boolean;
-  /** Drawn quietly — a level that is history rather than a live one. */
-  faint?: boolean;
-};
 
 /**
  * The chart is a canvas, so it cannot inherit a single CSS class the way the
@@ -147,52 +140,40 @@ function palette(host: HTMLElement) {
 const digitsFor = (p: number) =>
   p >= 1000 ? 2 : p >= 100 ? 3 : p >= 1 ? 4 : p >= 0.01 ? 6 : 8;
 
-export function TradeChart({ trade }: { trade: TradeWithTags }) {
+export function TradeChart({
+  trade,
+  draft,
+  onLevel,
+}: {
+  trade: TradeWithTags;
+  /** Unsaved levels to draw in the trade's place, while a form holds them. */
+  draft?: LevelDraft;
+  /**
+   * A line was dragged. Called continuously with `done: false` as it moves and
+   * once with `done: true` on release, so a caller can preview cheaply and
+   * write once. Omit it and the lines are drawings rather than handles.
+   */
+  onLevel?: (field: LevelField, price: number, done: boolean) => void;
+}) {
   const [tf, setTf] = useState<Timeframe>("auto");
   const { data, isLoading, isFetching } = useTradeCandles(
     trade.id,
     tf === "auto" ? undefined : tf,
   );
 
-  const levels = useMemo<Level[]>(() => {
-    // A scalp was recorded as a result, so it has no levels to draw — and an
-    // entry of zero is not a level, it is the absence of one. Drawing it put
-    // a line at the bottom of the axis and squashed every candle into a
-    // stripe at the top.
-    if (trade.scalp) return [];
-    const tps = parseExtraTargets(trade.extraTargets);
-    /*
-     * Where the stop is NOW, and where it started when those differ.
-     *
-     * The chart is where you look to see where your stop is, and it was
-     * drawing the one the trade was opened with — so a position pulled up to
-     * breakeven still showed its line down at the original level, contradicting
-     * the stop card directly above it. The original stays on the chart when it
-     * has moved, faintly, because seeing the distance travelled is most of why
-     * you would look.
-     */
-    const stop = currentStop(trade);
-    const moved = stop != null && trade.initialStop != null && stop !== trade.initialStop;
-    return [
-      { price: trade.entryPrice, label: "entry", color: "entry", dashed: false },
-      ...(stop != null ? [{ price: stop, label: "stop", color: "stop", dashed: true }] : []),
-      ...(moved
-        ? [{ price: trade.initialStop!, label: "was", color: "stop", dashed: true, faint: true }]
-        : []),
-      ...(trade.initialTarget != null
-        ? [{ price: trade.initialTarget, label: "target", color: "target", dashed: true }]
-        : []),
-      ...tps.map((p, i) => ({
-        price: p,
-        label: `tp${i + 2}`,
-        color: "target",
-        dashed: true,
-      })),
-      ...(trade.exitPrice != null
-        ? [{ price: trade.exitPrice, label: "exit", color: "exit", dashed: false }]
-        : []),
-    ];
-  }, [trade]);
+  /* Spread into the deps rather than the object itself: a caller that builds
+     its draft inline hands us a new object on every keystroke, and a memo
+     keyed on the object would be no memo at all. */
+  const dTps = draft?.extraTargets;
+  const dTpsKey = dTps ? dTps.join(",") : "";
+  const levels = useMemo<Level[]>(() => chartLevels(trade, draft), [
+    trade,
+    draft?.entryPrice,
+    draft?.initialStop,
+    draft?.initialTarget,
+    draft?.exitPrice,
+    dTpsKey,
+  ]);
 
   if (isLoading) {
     return (
@@ -341,6 +322,7 @@ export function TradeChart({ trade }: { trade: TradeWithTags }) {
           interval={data.interval ?? "1h"}
           candles={candles}
           levels={levels}
+          onLevel={onLevel}
           direction={trade.direction}
           entryMs={new Date(trade.entryTime).getTime()}
           exitMs={trade.exitTime ? new Date(trade.exitTime).getTime() : null}
@@ -361,6 +343,7 @@ function Candles({
   interval,
   candles,
   levels,
+  onLevel,
   direction,
   entryMs,
   exitMs,
@@ -369,6 +352,7 @@ function Candles({
   interval: string;
   candles: Candle[];
   levels: Level[];
+  onLevel?: (field: LevelField, price: number, done: boolean) => void;
   direction: string;
   entryMs: number;
   exitMs: number | null;
@@ -396,6 +380,20 @@ function Candles({
      see the current levels rather than the ones that existed at mount. */
   const levelsRef = useRef(levels);
   levelsRef.current = levels;
+  /* Same reason: the pointer handlers are attached to a div that outlives any
+     one render, and a stale handler would drag the level the trade had when
+     the chart mounted. */
+  const onLevelRef = useRef(onLevel);
+  onLevelRef.current = onLevel;
+  /** Which line is under the pointer, while a drag is in flight. */
+  const dragRef = useRef<{
+    field: LevelField;
+    line: IPriceLine | null;
+    /** Set by the first move, so a press-and-release writes nothing. */
+    moved: boolean;
+  } | null>(null);
+  /** Whether panning is currently given up in favour of a handle. */
+  const armedRef = useRef(false);
   const readoutRef = useRef<HTMLSpanElement>(null);
   /*
    * History fetched by scrolling, kept out of React state on purpose: it is
@@ -535,6 +533,7 @@ function Candles({
       colors,
       shape: "",
     };
+    armedRef.current = false;
     setEpoch((n) => n + 1);
     return () => {
       chart.remove();
@@ -542,21 +541,23 @@ function Candles({
     };
   }, [theme]);
 
+  /*
+   * Levels on their own clock, apart from the bars.
+   *
+   * These used to be redrawn in the same pass as the candles, which was fine
+   * while a level only changed when the trade was saved. Dragging one changes
+   * it on every pixel of pointer movement, and calling setData over a
+   * thousand-bar window that often turns a gesture into a slideshow. The bars
+   * have not changed; only five lines have.
+   */
   useEffect(() => {
     const a = api.current;
-    if (!a || candles.length === 0) return;
+    if (!a) return;
     const { series, colors } = a;
-
-    const digits = digitsFor(candles[candles.length - 1].c);
-    series.applyOptions({
-      priceFormat: { type: "price", precision: digits, minMove: 10 ** -digits },
-    });
-    series.setData(bars().map(toBar));
-
+    for (const line of a.lines) series.removePriceLine(line);
     /* Levels as price lines: they get an axis label too, so a target sitting
        off the top of the visible range still says what it is and how far away
        it was rather than silently vanishing. */
-    for (const line of a.lines) series.removePriceLine(line);
     a.lines = levels.map((l) =>
       series.createPriceLine({
         price: l.price,
@@ -571,6 +572,18 @@ function Candles({
         title: l.label,
       }),
     );
+  }, [levels, epoch]);
+
+  useEffect(() => {
+    const a = api.current;
+    if (!a || candles.length === 0) return;
+    const { series, colors } = a;
+
+    const digits = digitsFor(candles[candles.length - 1].c);
+    series.applyOptions({
+      priceFormat: { type: "price", precision: digits, minMove: 10 ** -digits },
+    });
+    series.setData(bars().map(toBar));
 
     /* And the two instants, because a level line says at what price and these
        say when — the difference between "the stop was there" and "the stop was
@@ -617,7 +630,7 @@ function Candles({
       a.shape = shape;
       a.chart.timeScale().fitContent();
     }
-  }, [candles, levels, direction, entryMs, exitMs, epoch]);
+  }, [candles, direction, entryMs, exitMs, epoch]);
 
   useEffect(() => {
     const a = api.current;
@@ -633,12 +646,151 @@ function Candles({
     return () => ts.unsubscribeVisibleLogicalRangeChange(onRange);
   }, [epoch, tradeId, interval, candles]);
 
+  /** How close the pointer has to be to a line to mean it. */
+  const GRAB_PX = 7;
+
+  /** The y of a pointer event within the canvas, or null if we cannot say. */
+  const yOf = (e: { clientY: number }) => {
+    const host = hostRef.current;
+    return host ? e.clientY - host.getBoundingClientRect().top : null;
+  };
+
+  /**
+   * The draggable level nearest the pointer, if one is within reach.
+   *
+   * Nearest rather than first, because entry and stop sit on top of each other
+   * on a tight setup and grabbing whichever happened to be drawn first is how
+   * you rewrite the wrong number.
+   */
+  function grabAt(y: number): { field: LevelField; index: number } | null {
+    const a = api.current;
+    if (!a || !onLevelRef.current) return null;
+    let field: LevelField | null = null;
+    let index = -1;
+    let near = GRAB_PX;
+    const all = levelsRef.current;
+    for (let i = 0; i < all.length; i++) {
+      const l = all[i];
+      if (!l.field) continue;
+      const ly = a.series.priceToCoordinate(l.price);
+      if (ly == null) continue;
+      const d = Math.abs(ly - y);
+      if (d <= near) {
+        near = d;
+        field = l.field;
+        index = i;
+      }
+    }
+    return field ? { field, index } : null;
+  }
+
+  /**
+   * The price at a pointer position, rounded the way the instrument is quoted.
+   *
+   * Without the rounding a dragged stop lands on 4.1234567890123 — a number
+   * that is not wrong so much as unsayable, and that reads in the field as
+   * though the journal had invented precision nobody has.
+   */
+  function priceAt(y: number): number | null {
+    const a = api.current;
+    const raw = a?.series.coordinateToPrice(y);
+    if (raw == null || !isFinite(raw as number)) return null;
+    const v = Number(raw);
+    return Number(v.toFixed(digitsFor(Math.abs(v))));
+  }
+
+  /*
+   * Panning is turned OFF while the pointer is over a handle, not while a drag
+   * is running.
+   *
+   * The engine listens on its own canvas, so by the time a React handler sees
+   * the mousedown the chart has already decided it is being panned — there is
+   * nothing left to prevent. Disabling it on approach means the press that
+   * starts a drag never reaches a live pan in the first place. It comes
+   * straight back on as soon as the pointer leaves the line.
+   */
+  function armFor(y: number | null) {
+    const a = api.current;
+    const host = hostRef.current;
+    if (!a || !host) return;
+    const on = y != null && grabAt(y) != null;
+    // Every pointer move comes through here, including on a chart with no
+    // handles at all. Reconfiguring the engine sixty times a second to tell it
+    // the same thing it already knows is the kind of cost that only shows up
+    // on somebody else's laptop.
+    if (on === armedRef.current) return;
+    armedRef.current = on;
+    host.style.cursor = on ? "ns-resize" : "";
+    a.chart.applyOptions({ handleScroll: !on, handleScale: !on });
+  }
+
   return (
     <div className="relative">
       <div
         ref={hostRef}
         style={{ height: HEIGHT }}
         data-testid="chart-canvas"
+        /*
+         * Drag a level to where it belongs.
+         *
+         * Reading a price off the chart and typing it into a field is most of
+         * what filling a trade in after the fact actually is, and the chart is
+         * where the answer is. Pointer events rather than mouse: the same
+         * handful of lines then works under a finger on a phone, where typing
+         * a price to four decimals is worst.
+         */
+        onPointerDown={(e) => {
+          if (!onLevelRef.current || e.button !== 0) return;
+          const y = yOf(e);
+          const hit = y == null ? null : grabAt(y);
+          if (!hit || y == null) return;
+          e.preventDefault();
+          const a = api.current;
+          dragRef.current = { field: hit.field, line: a?.lines[hit.index] ?? null, moved: false };
+          e.currentTarget.setPointerCapture(e.pointerId);
+          /* Nothing is reported yet. The price under a pointer NEAR a line is
+             not that line's price, so emitting here would let a stray click
+             nudge a stop from 4.2 to 4.1993 without anybody moving anything.
+             The first actual move says what it means. */
+        }}
+        onPointerMove={(e) => {
+          const y = yOf(e);
+          const drag = dragRef.current;
+          if (!drag) return armFor(y);
+          if (y == null) return;
+          const price = priceAt(y);
+          if (price == null) return;
+          /* Moved here as well as through the caller: a parent that only
+             writes on release would otherwise leave the line pinned where it
+             started while the pointer walked away from it. */
+          drag.moved = true;
+          drag.line?.applyOptions({ price });
+          onLevelRef.current?.(drag.field, price, false);
+        }}
+        onPointerUp={(e) => {
+          const drag = dragRef.current;
+          if (!drag) return;
+          dragRef.current = null;
+          if (e.currentTarget.hasPointerCapture(e.pointerId))
+            e.currentTarget.releasePointerCapture(e.pointerId);
+          const y = yOf(e);
+          const price = y == null ? null : priceAt(y);
+          // Only where the pointer actually went somewhere. A press and a
+          // release on the same pixel is a click, and a click is not an edit.
+          if (price != null && drag.moved) onLevelRef.current?.(drag.field, price, true);
+          armFor(y);
+        }}
+        /* A cancelled gesture — the browser took the pointer, or the window
+           lost focus mid-drag. Whatever the last preview said stands; there is
+           no release price to commit, and inventing one from a pointer that is
+           gone is worse than leaving the form holding it. */
+        onPointerCancel={() => {
+          dragRef.current = null;
+          armFor(null);
+        }}
+        onPointerLeave={() => {
+          if (!dragRef.current) armFor(null);
+        }}
         /*
          * Right-click copies the price under the cursor.
          *
