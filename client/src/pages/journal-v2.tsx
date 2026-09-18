@@ -100,8 +100,19 @@ function Fig({
  * thing you read once a week, not every time you open the page — so here it is
  * six numbers and a link to the page where the working lives.
  */
-function FiguresStrip({ trades, dayTrades }: { trades: TradeWithTags[]; dayTrades: TradeWithTags[] }) {
-  const s = useDailyStats(dayTrades);
+function FiguresStrip({ trades }: { trades: TradeWithTags[] }) {
+  /*
+   * Today reads the SCOPED list, the same one the day groups below are built
+   * from, so the figure at the top of the page and the "Today" header further
+   * down can never disagree about what today came to.
+   *
+   * It used to read the day list the guard uses, which forces the book to
+   * "both" — so today's money always counted tilt while the day header never
+   * did, and the same page showed two different answers. The guard still gets
+   * the forced list, because a tilt meter that cannot see tilt trades is not a
+   * meter; but that is the guard's business, not this strip's.
+   */
+  const s = useDailyStats(trades);
   const card = useMemo(() => scorecard(trades), [trades]);
 
   return (
@@ -431,7 +442,7 @@ export default function JournalV2() {
 
       {filtersOpen && <StyleSwitcher />}
 
-      <FiguresStrip trades={scoped} dayTrades={dayTrades} />
+      <FiguresStrip trades={scoped} />
 
       {guardLoud && <DailyGuardCard trades={dayTrades} tags={tags} styleId={activeStyleId} />}
 
