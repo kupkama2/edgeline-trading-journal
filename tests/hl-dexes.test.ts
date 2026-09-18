@@ -109,6 +109,43 @@ describe("which asset a ticker means", () => {
     expect(hlAssetFor("NVDA", listed)).toBeNull();
   });
 
+  it("does not let a DELISTED market make a live one ambiguous", () => {
+    /*
+     * The bug that cost a GOLD trade its chart with nothing said.
+     * The picker filters delisted out, so the client resolved the symbol and
+     * saw no problem; the server counted the dead listing, called the ticker
+     * ambiguous and returned no pair at all — and the chart rendered nothing
+     * rather than explaining itself.
+     */
+    const withDead = [
+      { name: "GOLD", dex: "xyz", delisted: false },
+      { name: "GOLD", dex: "old", delisted: true },
+    ];
+    expect(hlAssetFor("GOLD", withDead)).toBe("xyz:GOLD");
+  });
+
+  it("still refuses when both live books list it", () => {
+    expect(
+      hlAssetFor("GOLD", [
+        { name: "GOLD", dex: "xyz", delisted: false },
+        { name: "GOLD", dex: "eqs", delisted: false },
+      ]),
+    ).toBeNull();
+  });
+
+  it("resolves a delisted market when it is all there is, for an old trade", () => {
+    expect(hlAssetFor("GONE", [{ name: "GONE", dex: "old", delisted: true }])).toBe("old:GONE");
+  });
+
+  it("refuses when only delisted ones remain and they disagree", () => {
+    expect(
+      hlAssetFor("GONE", [
+        { name: "GONE", dex: "a", delisted: true },
+        { name: "GONE", dex: "b", delisted: true },
+      ]),
+    ).toBeNull();
+  });
+
   it("prefers the coin universe over a builder book of the same name", () => {
     const both = [...listed, { name: "BTC", dex: "vntls" }];
     expect(hlAssetFor("BTC", both)).toBe("BTC");
