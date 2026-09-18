@@ -289,6 +289,15 @@ export const trades = pgTable("trades", {
   outcomeSource: text("outcome_source"),
   /** When the feed last looked, so a re-check knows what to skip. */
   outcomeCheckedAt: text("outcome_checked_at"),
+  /**
+   * Which book to read this trade's prices from, said by hand.
+   *
+   * "binance:BTCUSDT:futures" / "hyperliquid:BTC". Set only when the ticker
+   * could not be matched — or was matched to the wrong thing — and it beats
+   * every automatic rule, because somebody choosing a pair knows something
+   * the parser does not. See shared/price-pair.ts.
+   */
+  pricePair: text("price_pair"),
   /** When the level was actually reached, for the notification and the chart. */
   outcomeHitAt: text("outcome_hit_at"), // 'target_first' | 'stop_first' | 'undetermined'
   setupScreenshot: text("setup_screenshot"),

@@ -76,6 +76,7 @@ import { saysAnythingAboutClose } from "@shared/close-card";
 import type { CloseCard } from "@shared/close-card";
 import { RationaleTags, num, parseTags } from "@/components/trade-shared";
 import { TradeEditor } from "@/components/trade-dialogs";
+import { PairPicker } from "@/components/pair-picker";
 import { NewTradeCard } from "@/components/new-trade-card";
 import { FillDialog } from "@/components/fill-dialog";
 import { ResolveTradeDialog } from "@/components/resolve-trade";
@@ -1193,6 +1194,10 @@ export function TradeBody({
           onClose={() => setSuggestion(null)}
         />
       )}
+
+      {/* Above the chart, because it is the reason there is no chart. A trade
+          nothing can be read for says so once, here, with the fix attached. */}
+      <PairPicker trade={trade} />
 
       <Suspense fallback={null}>
         <TradeChart trade={trade} />
