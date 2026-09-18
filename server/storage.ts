@@ -159,6 +159,8 @@ ALTER TABLE trades ADD COLUMN IF NOT EXISTS net_pnl DOUBLE PRECISION;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS risk_amount DOUBLE PRECISION;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS net_mfe DOUBLE PRECISION;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS net_mae DOUBLE PRECISION;
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS reviewed_at TEXT;
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS review_note TEXT;
 -- A scalp that has already been given real prices is a scalp no longer.
 --
 -- The trade page always offered the promotion in as many words, but until it

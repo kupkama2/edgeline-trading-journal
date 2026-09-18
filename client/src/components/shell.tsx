@@ -3,7 +3,7 @@ import { Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import {
   BarChart3,
-  CalendarDays,
+  CalendarDays, CalendarRange,
   Check,
   LineChart,
   NotebookPen,
@@ -108,6 +108,7 @@ export function Logo({ className = "" }: { className?: string }) {
 const NAV = [
   { href: "/", label: "Journal", icon: NotebookPen },
   { href: "/calendar", label: "Calendar", icon: CalendarDays },
+  { href: "/review", label: "Review", icon: CalendarRange },
   { href: "/stats", label: "Stats", icon: BarChart3 },
   { href: "/settings", label: "Settings", icon: Settings2 },
 ];

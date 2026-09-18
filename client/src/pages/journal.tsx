@@ -23,6 +23,7 @@ import { ClosedTradeRow, OpenTradeRow, PendingTradeRow } from "@/components/trad
 import { OwedCard } from "@/components/owed-card";
 import { useSideBySide } from "@/hooks/use-mobile";
 import { ScalpLog } from "@/components/scalp-log";
+import { ReviewDueCard } from "@/components/review-due";
 import { HealthCard } from "@/components/health-card";
 import { useAccountSettings, useMarks } from "@/lib/data";
 import { openRisk, type SideRisk } from "@shared/exposure";
@@ -238,6 +239,9 @@ export default function Journal() {
       {/* Opening the journal should answer "is this working?" before it asks
           for anything. The guard is the day; the scorecard is the record. */}
       <ScorecardCard trades={scoped} />
+
+      {/* The week you owe, from the Sunday it ends until it is gone over. */}
+      <ReviewDueCard />
 
       <DailyGuardCard trades={dayTrades} tags={tags} styleId={activeStyleId} />
 

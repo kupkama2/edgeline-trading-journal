@@ -75,6 +75,9 @@ export function tradeXp(t: TradeWithTags): XpEvent[] {
     // The execution verdict, paid like every other process mark and never
     // for the result: a well-executed loser earns exactly what a winner does.
     if (isWellTraded(t)) add("well-traded", "Traded it well", 5);
+    // Going back over it cold, days later, is the hardest part of keeping a
+    // journal and the only part that changes the next week.
+    if (t.reviewedAt) add("reviewed", "Went over it again afterwards", 5);
   }
   return ev;
 }
