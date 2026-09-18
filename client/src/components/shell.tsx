@@ -11,6 +11,7 @@ import {
   Settings2,
 } from "lucide-react";
 import { XpChip, XpToaster } from "@/components/xp";
+import { useLayout, type LayoutVersion } from "@/lib/layout";
 import { AccountMenu } from "@/components/account-menu";
 import {
   DropdownMenu,
@@ -148,6 +149,48 @@ function ThemePicker() {
   );
 }
 
+/**
+ * Which design the journal wears, in the one place that is on every page.
+ *
+ * Two words, no menu: a preference you are meant to flip back and forth while
+ * you decide which one you actually read is a preference that has to cost one
+ * click, not three. It sits beside the theme because it is the same kind of
+ * choice — how the record looks, never what it says.
+ */
+function LayoutSwitch() {
+  const { version, setVersion } = useLayout();
+  const options: { id: LayoutVersion; title: string }[] = [
+    { id: "v1", title: "The original layout: every figure on the row" },
+    { id: "v2", title: "The quiet layout: ticker, verdict, R and money" },
+  ];
+  return (
+    <div
+      className="flex items-center rounded-md border border-border/70 p-0.5"
+      role="group"
+      aria-label="Layout"
+      data-testid="layout-switch"
+    >
+      {options.map((o) => (
+        <button
+          key={o.id}
+          type="button"
+          onClick={() => setVersion(o.id)}
+          aria-pressed={version === o.id}
+          title={o.title}
+          data-testid={`button-layout-${o.id}`}
+          className={`rounded px-1.5 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wide transition-colors ${
+            version === o.id
+              ? "bg-secondary text-foreground"
+              : "text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          {o.id}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function Shell({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
 
@@ -189,6 +232,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
 
           <div className="ml-auto flex items-center gap-2">
             <XpChip />
+            <LayoutSwitch />
             <ThemePicker />
             <AccountMenu />
           </div>
