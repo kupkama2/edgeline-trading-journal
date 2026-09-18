@@ -828,6 +828,27 @@ export async function registerRoutes(
     res.json(out);
   });
 
+  /**
+   * Re-read both catalogues now, rather than when the day's cache expires.
+   *
+   * The lists refresh once a day, which is right for a venue that lists a coin
+   * every few weeks and wrong for every moment somebody is looking at an empty
+   * picker wondering why. It also means a deploy that teaches the journal to
+   * fetch MORE — another venue, another book — is handed yesterday's rows and
+   * cannot show what it learned until tomorrow.
+   */
+  app.post("/api/markets/refresh", async (_req, res) => {
+    const [cat, hl] = await Promise.all([
+      ensureCatalogue(true).catch(() => []),
+      ensureHyperliquid(true).catch(() => []),
+    ]);
+    res.json({
+      pairs: cat.length,
+      hyperliquid: hl.length,
+      ...hyperliquidStatus(),
+    });
+  });
+
   /** Hyperliquid's perps, for the picker. Cached in the database. */
   app.get("/api/hyperliquid/symbols", async (_req, res) => {
     try {

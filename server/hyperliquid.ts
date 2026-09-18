@@ -51,6 +51,12 @@ export interface HyperliquidStatus {
   dexes: number;
   /** How many of `perps` came from those books rather than the coin universe. */
   builderPerps: number;
+  /**
+   * Why there are no builder books, when there are none for a reason. Null
+   * both when they loaded and when the venue simply has none — those two are
+   * fine, and only a refusal is worth printing.
+   */
+  dexError: string | null;
 }
 
 const status: HyperliquidStatus = {
@@ -60,6 +66,7 @@ const status: HyperliquidStatus = {
   perps: 0,
   dexes: 0,
   builderPerps: 0,
+  dexError: null,
 };
 export const hyperliquidStatus = (): HyperliquidStatus => ({ ...status });
 
@@ -118,13 +125,35 @@ export async function fetchHyperliquidPerps(): Promise<HyperliquidPerp[]> {
     const perps = parseHyperliquidMeta(await info({ type: "meta" }));
     if (perps.length === 0) throw new Error(`${host()} answered /info without a universe`);
 
+    /*
+     * The builder books, and WHY when there are none.
+     *
+     * Swallowing this made two very different situations identical from the
+     * outside: a venue that genuinely has no builder-deployed books, and a
+     * request that was refused. Both read "0 books, no error", and only one
+     * of them is something to fix.
+     */
     let dexes: string[] = [];
+    let dexError: string | null = null;
     try {
-      dexes = parsePerpDexs(await info({ type: "perpDexs" }, 10_000)).slice(0, MAX_DEXES);
-    } catch {
-      // No builder books this time. The coin perps are already in hand.
+      const answer = await info({ type: "perpDexs" }, 10_000);
+      dexes = parsePerpDexs(answer).slice(0, MAX_DEXES);
+      if (dexes.length === 0) {
+        // Answered, but with nothing this could use. Say which, because a
+        // list of one null is the venue saying "only my own book" while an
+        // object is the shape having moved under us.
+        dexError = Array.isArray(answer)
+          ? answer.length <= 1
+            ? null // just the venue's own universe — nothing wrong
+            : `${host()} listed ${answer.length} perp dexes, none of them usable`
+          : `${host()} answered /info (perpDexs) with ${typeof answer}, not a list`;
+      }
+    } catch (err: any) {
+      dexError = String(err?.message ?? err);
     }
+
     let extra = 0;
+    const refused: string[] = [];
     for (const dex of dexes) {
       try {
         const listed = parseHyperliquidMeta(await info({ type: "meta", dex }, 10_000), dex);
@@ -132,8 +161,13 @@ export async function fetchHyperliquidPerps(): Promise<HyperliquidPerp[]> {
         extra += listed.length;
       } catch {
         // One book refusing says nothing about the others.
+        refused.push(dex);
       }
     }
+    if (refused.length && !dexError) {
+      dexError = `${refused.length} of ${dexes.length} builder books did not answer (${refused.slice(0, 3).join(", ")})`;
+    }
+    status.dexError = dexError;
 
     status.lastOkAt = new Date().toISOString();
     status.lastError = null;
