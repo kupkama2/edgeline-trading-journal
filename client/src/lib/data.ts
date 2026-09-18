@@ -390,6 +390,7 @@ export function useUpdateStyle() {
       sessionStart?: string | null;
       sessionEnd?: string | null;
       maxTradesPerDay?: number | null;
+      defaultRisk?: number | null;
     }) =>
       (
         await apiRequest("PATCH", `/api/styles/${v.id}`, {
@@ -398,6 +399,7 @@ export function useUpdateStyle() {
           sessionStart: v.sessionStart,
           sessionEnd: v.sessionEnd,
           maxTradesPerDay: v.maxTradesPerDay,
+          defaultRisk: v.defaultRisk,
         })
       ).json(),
     onSuccess: invalidateStyles,

@@ -113,6 +113,9 @@ export function journalHealth(
 
   for (const t of trades) {
     if (t.status === "cancelled") continue;
+    // A scalp is a result, not a plan: it has no levels to be missing, no
+    // exit reason beyond the number, and no price path to measure.
+    if (t.scalp) continue;
     // A tilt trade owes no levels: it is logged to be counted, not measured.
     if (live(t) && !t.tilt && t.initialStop == null) byKind["no-stop"].push(t);
     if (live(t) && !t.tilt && t.initialTarget == null) byKind["no-target"].push(t);

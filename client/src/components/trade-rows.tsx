@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowDownRight, ArrowUpRight, Camera, CheckCircle2,  HelpCircle, Minus, Pencil, Plus, Skull, Star, Trash2, X } from "lucide-react";
+import { ArrowDownRight, ArrowUpRight, Camera, CheckCircle2,  HelpCircle, Minus, Pencil, Plus, Skull, Star, Trash2, X, Zap } from "lucide-react";
 import { useUpdateTrade, useDeleteTrade, useTrades } from "@/lib/data";
 import { tiltFromHere } from "@shared/tilt";
 import { isWellTraded } from "@shared/well-traded";
@@ -421,9 +421,21 @@ export function ClosedTradeRow({
           </Badge>
         )}
         {shots}
-        <Badge variant="outline" className="shrink-0 text-[10px] capitalize">
-          {t.exitReason ? EXIT_REASON_LABELS[t.exitReason] : "—"}
-        </Badge>
+        {t.scalp ? (
+          <Badge
+            variant="outline"
+            className="shrink-0 border-amber-500/40 text-[10px] text-amber-400"
+            title="Logged as a scalp: a result rather than a set of prices"
+            data-testid={`badge-scalp-${t.id}`}
+          >
+            <Zap className="mr-1 h-3 w-3" />
+            scalp
+          </Badge>
+        ) : (
+          <Badge variant="outline" className="shrink-0 text-[10px] capitalize">
+            {t.exitReason ? EXIT_REASON_LABELS[t.exitReason] : "—"}
+          </Badge>
+        )}
         {t.tilt && (
           <Badge
             variant="outline"
@@ -591,6 +603,17 @@ export function ClosedTradeRow({
         </Button>
         </div>
       </div>
+      {/* A scalp has none of these, and a row of dashes reads as data that
+          failed to load rather than questions it was never asked. Its own
+          line says what it does have. */}
+      {t.scalp ? (
+        <div className="mt-1.5 font-mono text-[11px] text-muted-foreground">
+          {t.riskAmount != null ? `risked $${t.riskAmount}` : "no risk recorded"}
+          {t.netMfe != null || t.netMae != null
+            ? ` · showed ${fmtMoney(t.netMae ?? 0)} to ${fmtMoney(t.netMfe ?? 0)}`
+            : ""}
+        </div>
+      ) : (
       <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 font-mono text-[11px] text-muted-foreground">
         <span>No-mgmt {fmtR(m.potentialR)}</span>
         <span
@@ -609,6 +632,7 @@ export function ClosedTradeRow({
         <span>MFE {fmtR(m.mfeR)}</span>
         <span>MAE {fmtR(m.maeR)}</span>
       </div>
+      )}
       {t.mistakeTagIds.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-1">
           {t.mistakeTagIds.map((id) => (

@@ -613,6 +613,26 @@ function StylesCard() {
                       data-testid={`input-max-trades-${s.id}`}
                     />
 
+                    {/* What this book normally risks. The scalp log assumes
+                        it, so a scalp can be logged as a ticker and a
+                        result and still carry an R. */}
+                    <input
+                      type="number"
+                      min={0}
+                      step="any"
+                      defaultValue={s.defaultRisk ?? ""}
+                      onBlur={(e) =>
+                        updateStyle.mutate({
+                          id: s.id,
+                          defaultRisk: e.target.value ? Number(e.target.value) : null,
+                        })
+                      }
+                      className="h-7 w-16 shrink-0 rounded border border-border bg-transparent px-1 font-mono text-[10px] text-muted-foreground"
+                      title="Usual risk in dollars — the scalp log assumes this when you don't type one"
+                      placeholder="risk $"
+                      data-testid={`input-default-risk-${s.id}`}
+                    />
+
                     <span className="w-16 shrink-0 text-right font-mono text-[11px] text-muted-foreground">
                       {used} {used === 1 ? "trade" : "trades"}
                     </span>

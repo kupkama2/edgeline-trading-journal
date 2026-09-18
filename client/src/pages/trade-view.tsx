@@ -110,6 +110,21 @@ export interface Editable {
  */
 export type EditOutcome = { save: false } | { save: true; value: number | null };
 
+/**
+ * What a scalp's excursion was worth, in R, for the line under the figure.
+ * Money on its own says nothing without the risk beside it.
+ */
+function excursionHint(
+  dollars: number | null,
+  risk: number | null,
+  direction: string,
+): string {
+  if (dollars == null) return `${direction} · not recorded`;
+  if (risk == null || risk <= 0) return direction;
+  const r = dollars / risk;
+  return `${direction} · ${r > 0 ? "+" : ""}${r.toFixed(2)}R`;
+}
+
 /** "2 hours", "3 days" — how long a trade's aftermath window runs. */
 function fmtWindow(ms: number): string {
   const hours = Math.round(ms / (60 * 60 * 1000));
@@ -1038,7 +1053,71 @@ function TradeBody({
         }`}
       >
         <Card className="border-card-border bg-card p-4">
-          <h2 className="mb-3 text-sm font-semibold tracking-tight">The plan</h2>
+          <h2 className="mb-3 text-sm font-semibold tracking-tight">
+            {trade.scalp ? "The result" : "The plan"}
+          </h2>
+
+          {/* A scalp was recorded as a result, so there are no levels to draw
+              and the four price boxes below would be four zeroes. What it
+              made and what it risked is the whole record; everything else on
+              this page — notes, screenshots, the verdicts — still applies. */}
+          {trade.scalp ? (
+            <div className="flex flex-wrap items-baseline gap-x-6 gap-y-2" data-testid="view-scalp-result">
+              <div>
+                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Net</p>
+                <p
+                  className={`font-mono text-xl font-bold ${
+                    (computeMetrics(trade).actualPnL ?? 0) >= 0 ? "text-emerald-400" : "text-primary"
+                  }`}
+                >
+                  {fmtMoney(computeMetrics(trade).actualPnL)}
+                </p>
+              </div>
+              <div>
+                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Risked</p>
+                <p className="font-mono text-sm">
+                  {trade.riskAmount != null ? `$${trade.riskAmount}` : "not recorded"}
+                </p>
+              </div>
+              <div>
+                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">R</p>
+                <p className="font-mono text-sm">{fmtR(computeMetrics(trade).actualR)}</p>
+              </div>
+              {/* Quick to log is the whole point, so these are asked for
+                  here and never on the way in: how far it went with you and
+                  against you, in the same money as the result. Over the risk
+                  they are the MFE and MAE in R that every other trade has. */}
+              <div className="basis-full border-t border-border/50 pt-3">
+                <p className="mb-2 text-[10px] uppercase tracking-wider text-muted-foreground">
+                  How far it went · optional
+                </p>
+                <div className="grid grid-cols-2 gap-3 font-mono text-sm sm:w-2/3">
+                  <Fig
+                    label="Best it showed"
+                    icon="mfe"
+                    value={trade.netMfe != null ? fmtMoney(trade.netMfe) : "—"}
+                    hint={excursionHint(trade.netMfe, trade.riskAmount, "with you")}
+                    testId="view-scalp-mfe"
+                    edit={editable("netMfe", trade.netMfe)}
+                  />
+                  <Fig
+                    label="Worst it showed"
+                    icon="mae"
+                    value={trade.netMae != null ? fmtMoney(trade.netMae) : "—"}
+                    hint={excursionHint(trade.netMae, trade.riskAmount, "against you")}
+                    testId="view-scalp-mae"
+                    edit={editable("netMae", trade.netMae)}
+                  />
+                </div>
+              </div>
+
+              <p className="basis-full text-[11px] leading-snug text-muted-foreground">
+                Logged as a scalp: a result rather than a set of prices. Fill in an entry and a
+                stop here and it becomes an ordinary trade.
+              </p>
+            </div>
+          ) : (
+          <>
 
           {/*
             The four decisions, in the vocabulary the editor already speaks.
@@ -1232,6 +1311,8 @@ function TradeBody({
                 ))}
               </dl>
             </div>
+          )}
+          </>
           )}
         </Card>
 

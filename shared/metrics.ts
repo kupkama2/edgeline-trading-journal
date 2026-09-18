@@ -75,7 +75,54 @@ function dollarsPerPoint(t: Trade): number {
   return positionQty(t) * (t.pointValue ?? 1);
 }
 
+/**
+ * A trade recorded as a result rather than as prices.
+ *
+ * Everything below this line is arithmetic on entry, stop, exit and size. A
+ * scalp has none of those: it has what it made and what it risked, typed in
+ * as two numbers. So it is answered here, in full, rather than threaded
+ * through sixty lines of price arithmetic as a special case at every step.
+ *
+ * R is the one figure that survives, and it is the reason the risk is worth
+ * typing: result over risk, exactly what R means everywhere else in this
+ * file. Without a risk there is no R, and the scalp counts for money only —
+ * which every R figure in the app already knows how to leave out.
+ *
+ * Fees are not deducted: the number typed is what hit the account.
+ */
+function resultMetrics(t: Trade): TradeMetrics {
+  const pnl = t.netPnl ?? 0;
+  const riskDollars = t.riskAmount != null && t.riskAmount > 0 ? t.riskAmount : 0;
+  return {
+    risk: 0,
+    riskDollars,
+    actualR: riskDollars > 0 ? pnl / riskDollars : null,
+    actualPnL: pnl,
+    grossPnL: pnl,
+    fees: 0,
+    funding: 0,
+    // The excursions, when they were bothered with: the best and the worst
+    // it was showing, over what it risked. Same R as every other trade, so
+    // a scalp lands in the excursion stats rather than beside them.
+    mfeR: riskDollars > 0 && t.netMfe != null ? t.netMfe / riskDollars : null,
+    maeR: riskDollars > 0 && t.netMae != null ? t.netMae / riskDollars : null,
+    potentialR: null,
+    potentialPnL: null,
+    managementDeltaR: null,
+    managementDeltaDollars: null,
+    captureRatio: null,
+    captureRatioClipped: null,
+    rLeftOnTable: null,
+    dollarsLeftOnTable: null,
+    leftBehindR: null,
+    dollarsLeftBehind: null,
+    avoidedR: null,
+    dollarsAvoided: null,
+  };
+}
+
 export function computeMetrics(t: Trade & { fills?: TradeFill[] }): TradeMetrics {
+  if (t.netPnl != null) return resultMetrics(t);
   const sign = t.direction === "long" ? 1 : -1;
   const perPoint = dollarsPerPoint(t);
   // A pending trade has no stop yet, so it has no 1R. Guard explicitly: without
