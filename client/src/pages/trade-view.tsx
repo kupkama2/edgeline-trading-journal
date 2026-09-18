@@ -148,6 +148,120 @@ export function readEdit(
 }
 
 /**
+ * The written fields, under the same gesture as the figures.
+ *
+ * Numbers were the only thing a double-click could correct, which made the
+ * rationale and the note the two things you had to open a form for — and they
+ * are precisely the fields you come back to, because what you thought at the
+ * time is the part you get more honest about afterwards.
+ *
+ * Three differences from Fig, all forced by text. Enter inserts a newline
+ * rather than committing, so there is an explicit Save; blur does NOT commit,
+ * because clicking away from a paragraph you are mid-sentence on is not the
+ * same promise as clicking away from a number; and empty is a legitimate
+ * value, so clearing one clears it.
+ */
+function Words({
+  label,
+  value,
+  field,
+  trade,
+  placeholder,
+  children,
+}: {
+  label: string;
+  value: string | null;
+  field: "rationale" | "notes";
+  trade: TradeWithTags;
+  placeholder: string;
+  /** Anything that belongs under the text when it is not being edited. */
+  children?: React.ReactNode;
+}) {
+  const [typing, setTyping] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const update = useUpdateTrade();
+  const { toast } = useToast();
+
+  async function commit() {
+    if (typing == null) return;
+    const next = typing.trim();
+    const now = (value ?? "").trim();
+    setTyping(null);
+    if (next === now) return;
+    setSaving(true);
+    try {
+      await update.mutateAsync({ id: trade.id, trade: { [field]: next || null } as any });
+    } catch (err: any) {
+      toast({
+        title: "That didn't save",
+        description: String(err?.message ?? err).slice(0, 160),
+        variant: "destructive",
+      });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div>
+      <p className="mb-1 text-[10px] uppercase tracking-wider text-muted-foreground">{label}</p>
+      {typing != null ? (
+        <div className="space-y-1.5">
+          <textarea
+            autoFocus
+            rows={4}
+            value={typing}
+            onChange={(e) => setTyping(e.target.value)}
+            onKeyDown={(e) => {
+              // Escape abandons; the overlay's own Escape handler already
+              // stands down while a textarea has focus.
+              if (e.key === "Escape") setTyping(null);
+              e.stopPropagation();
+            }}
+            placeholder={placeholder}
+            className="w-full resize-y rounded border border-primary/50 bg-transparent px-2 py-1.5 text-xs outline-none"
+            data-testid={`inline-${field}`}
+          />
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              className="h-6 px-2 text-[10px]"
+              onClick={() => void commit()}
+              data-testid={`inline-save-${field}`}
+            >
+              Save
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-6 px-2 text-[10px] text-muted-foreground"
+              onClick={() => setTyping(null)}
+            >
+              Cancel
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <>
+          <p
+            className={`-mx-1 cursor-text whitespace-pre-wrap rounded px-1 text-xs decoration-dotted underline-offset-4 hover:bg-secondary/40 hover:underline ${
+              value ? "" : "text-muted-foreground"
+            } ${saving ? "opacity-50" : ""}`}
+            title="Double-click to edit"
+            data-testid={`view-${field}`}
+            onMouseDown={(e) => e.detail > 1 && e.preventDefault()}
+            onDoubleClick={() => setTyping(value ?? "")}
+          >
+            {value || placeholder}
+          </p>
+          {children}
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
  * Small labelled figure; the page is mostly these.
  *
  * Given an `edit`, a double-click turns it into the number behind it and
@@ -502,7 +616,15 @@ export default function TradeView({ under = "/" }: { under?: string }) {
 }
 
 /** The trade itself. Split out so the overlay shell above never remounts. */
-function TradeBody({
+/**
+ * One trade's contents, with no window around them.
+ *
+ * Exported because the overlay is no longer the only place a trade is shown:
+ * the journal expands a row into this same body in place, the way the log card
+ * expands. Same component either way — a trade that looked different depending
+ * on how you opened it was the thing this file's header promised not to do.
+ */
+export function TradeBody({
   trade,
   onEdit,
   onCloseTrade,
@@ -1139,6 +1261,11 @@ function TradeBody({
                   {tps.map((x) => num(x)).join(" → ") || "—"}
                 </span>
               }
+              /* Only when there is one. With several the figure is a JOINED
+                 list, and a box that shows "120 → 140" but writes a single
+                 price would silently drop the rest of the plan. Those go
+                 through the editor, which has a field per target. */
+              edit={tps.length > 1 ? undefined : editable("initialTarget", trade.initialTarget)}
             />
             {trade.exitPrice != null ? (
               <Fig
@@ -1149,7 +1276,13 @@ function TradeBody({
                 edit={editable("exitPrice", trade.exitPrice)}
               />
             ) : (
-              <Fig label="Size" value={sizeText} hint={sizeHint} />
+              <Fig
+                label="Size"
+                value={sizeText}
+                hint={sizeHint}
+                testId="view-size"
+                edit={editable("size", trade.size, true)}
+              />
             )}
           </div>
 
@@ -1419,27 +1552,29 @@ function TradeBody({
       </div>
 
       {/* ---------------------------- the words ----------------------------- */}
-      {(trade.rationale || trade.notes) && (
-        <Card className="border-card-border bg-card p-4">
-          {trade.rationale && (
-            <div>
-              <p className="mb-1 text-[10px] uppercase tracking-wider text-muted-foreground">
-                Rationale
-              </p>
-              <p className="text-xs">{trade.rationale}</p>
-              <RationaleTags tags={parseTags(trade.rationaleTags)} />
-            </div>
-          )}
-          {trade.notes && (
-            <div className={trade.rationale ? "mt-3" : ""}>
-              <p className="mb-1 text-[10px] uppercase tracking-wider text-muted-foreground">
-                Notes
-              </p>
-              <p className="whitespace-pre-wrap text-xs">{trade.notes}</p>
-            </div>
-          )}
-        </Card>
-      )}
+      {/* Always drawn, empty or not. Hiding the card when there were no words
+          meant the trade with nothing written on it — the one worth writing on
+          — was the one with nowhere to write. */}
+      <Card className="border-card-border bg-card p-4">
+        <Words
+          label="Rationale"
+          value={trade.rationale}
+          field="rationale"
+          trade={trade}
+          placeholder="Why you took it. Double-click to write it."
+        >
+          <RationaleTags tags={parseTags(trade.rationaleTags)} />
+        </Words>
+        <div className="mt-3">
+          <Words
+            label="Notes"
+            value={trade.notes}
+            field="notes"
+            trade={trade}
+            placeholder="What you want to remember. Double-click to write it."
+          />
+        </div>
+      </Card>
 
       {/* ---------------------------- the charts ---------------------------- */}
       {/* The gallery labels itself, so this card carries no heading of its own. */}

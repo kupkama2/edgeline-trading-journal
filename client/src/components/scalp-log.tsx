@@ -155,8 +155,20 @@ export function ScalpLog({
   }
 
   return (
+    /*
+      Shut, the whole card opens it — not just the two words.
+      A collapsed card is a button that happens to be the width of the page,
+      and making only the label live meant aiming at a small target inside a
+      large obvious one. The handler only ever OPENS, so a click that also
+      lands on the header button below is idempotent rather than a double
+      toggle, and there is nothing to disarm while the form is showing.
+      The button stays for the keyboard.
+    */
     <Card
-      className={`border-card-border bg-card ${compact && !open ? "p-3" : "p-3 sm:p-4"}`}
+      onClick={open ? undefined : () => setOpen(true)}
+      className={`border-card-border bg-card ${compact && !open ? "p-3" : "p-3 sm:p-4"} ${
+        open ? "" : "cursor-pointer transition-colors hover:border-primary/40"
+      }`}
       data-testid="card-scalp-log"
     >
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">

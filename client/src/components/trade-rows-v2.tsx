@@ -72,10 +72,13 @@ export function VerdictBadge({ verdict }: { verdict: Verdict }) {
 
 export function ClosedTradeRowV2({
   t,
+  expanded = false,
   onSelect,
   onEdit,
 }: {
   t: TradeWithTags;
+  /** The trade is open underneath this row, so the row is its header. */
+  expanded?: boolean;
   onSelect: () => void;
   onEdit: () => void;
 }) {
@@ -106,9 +109,11 @@ export function ClosedTradeRowV2({
       }}
       className={`group flex cursor-pointer items-center gap-3 rounded-md border-l-2 px-3 py-2 transition-colors hover:bg-secondary/40 ${
         t.tilt ? "border-l-primary/60 opacity-70" : won ? "border-l-emerald-500/50" : "border-l-primary/50"
-      }`}
+      } ${expanded ? "bg-secondary/40" : ""}`}
       data-testid={`row-v2-closed-${t.id}`}
       data-verdict={verdict}
+      data-expanded={expanded ? "true" : undefined}
+      aria-expanded={expanded}
     >
       {/* The ticker and the word for what it was, together — they are one
           sentence, and putting them at opposite ends of a wide row makes you
@@ -266,6 +271,7 @@ export function ClosedTradeRowV2({
 export function OpenTradeRowV2({
   t,
   mark = null,
+  expanded = false,
   onSelect,
   onEdit,
   onResolve,
@@ -274,6 +280,8 @@ export function OpenTradeRowV2({
 }: {
   t: TradeWithTags;
   mark?: (Mark & { book: "perp" | "spot" }) | null;
+  /** The trade is open underneath this row, so the row is its header. */
+  expanded?: boolean;
   onSelect: () => void;
   onEdit: () => void;
   onResolve: () => void;
@@ -294,8 +302,12 @@ export function OpenTradeRowV2({
           onSelect();
         }
       }}
-      className="group flex cursor-pointer flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-card-border bg-card px-3 py-2 transition-colors hover:border-primary/40"
+      className={`group flex cursor-pointer flex-wrap items-center gap-x-3 gap-y-1 rounded-md border bg-card px-3 py-2 transition-colors hover:border-primary/40 ${
+        expanded ? "border-primary/40 bg-secondary/30" : "border-card-border"
+      }`}
       data-testid={`row-v2-open-${t.id}`}
+      data-expanded={expanded ? "true" : undefined}
+      aria-expanded={expanded}
     >
       <span
         className={`flex h-5 w-5 shrink-0 items-center justify-center rounded ${

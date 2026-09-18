@@ -37,6 +37,8 @@ import { ResolveTradeDialog } from "@/components/resolve-trade";
 import type { ImportCandidate } from "@shared/import-parse";
 import { NewTradeCard } from "@/components/new-trade-card";
 import { ClosedTradeRowV2, OpenTradeRowV2 } from "@/components/trade-rows-v2";
+import { TradeBody } from "@/pages/trade-view";
+import { TradeEditor } from "@/components/trade-dialogs";
 import { PendingTradeRow } from "@/components/trade-rows";
 import { OwedCard } from "@/components/owed-card";
 import { HealthCard } from "@/components/health-card";
@@ -299,6 +301,27 @@ export default function JournalV2() {
   // sight would silently change every number on the page, so the control says
   // when one is.
   const [filtersOpen, setFiltersOpen] = useState(false);
+  /*
+   * A trade opens IN the list rather than over it.
+   *
+   * The overlay is still there for a link arriving from somewhere else, but
+   * clicking a row in the journal expands it in place the way the log card
+   * expands: the page keeps its scroll, the rows around it stay where they
+   * are, and closing it does not re-run the page you were already on. One at
+   * a time — two expanded trades is a page you scroll rather than read.
+   */
+  const [openId, setOpenId] = useState<number | null>(null);
+  /*
+   * And the full editor is a state of the expanded trade, not a second place.
+   * Most corrections never reach it: the figures inside answer to a
+   * double-click. It is here for the fields a number box cannot hold — the
+   * exit reason, the tags, a second target, the written note.
+   */
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const toggleTrade = (t: TradeWithTags) => {
+    setEditingId(null);
+    setOpenId((cur) => (cur === t.id ? null : t.id));
+  };
   const [showClosed, setShowClosed] = useState(true);
   const [allDays, setAllDays] = useState(false);
 
@@ -330,6 +353,38 @@ export default function JournalV2() {
   useOutcomeWatch(closed.length > 0);
 
   const shown = allDays ? days : days.slice(0, DAY_PREVIEW);
+
+  /**
+   * The expanded trade, under the row it belongs to.
+   *
+   * Indented and railed so it reads as belonging to the row above rather than
+   * as the next item in the list — the same gesture the log card makes when it
+   * opens.
+   */
+  const panel = (t: TradeWithTags) =>
+    openId !== t.id ? null : (
+      <div
+        className="ml-2 mt-1 rounded-md border border-primary/30 bg-card/60 p-3 sm:p-4"
+        data-testid={`panel-trade-${t.id}`}
+        /* A click inside the trade is not a click on the row, and the rows
+           above and below both open on click. Without this, correcting a
+           figure would collapse the thing being corrected. */
+        onClick={(e) => e.stopPropagation()}
+      >
+        {editingId === t.id ? (
+          <TradeEditor trade={t} card={null} onClose={() => setEditingId(null)} />
+        ) : (
+          <TradeBody
+            trade={t}
+            onEdit={() => setEditingId(t.id)}
+            onCloseTrade={() => setEditingId(t.id)}
+            onResolve={() => setResolving(t)}
+            onFill={(kind) => setFilling({ trade: t, kind })}
+            onDeleted={() => setOpenId(null)}
+          />
+        )}
+      </div>
+    );
 
   return (
     <div className="space-y-5">
@@ -451,16 +506,22 @@ export default function JournalV2() {
           ) : (
             <div className="space-y-1.5">
               {open.map((t) => (
-                <OpenTradeRowV2
-                  key={t.id}
-                  t={t}
-                  mark={marks?.[t.id] ?? null}
-                  onSelect={() => viewTrade(t)}
-                  onEdit={() => openTrade(t)}
-                  onResolve={() => setResolving(t)}
-                  onAdd={() => setFilling({ trade: t, kind: "add" })}
-                  onTake={() => setFilling({ trade: t, kind: "partial" })}
-                />
+                <div key={t.id}>
+                  <OpenTradeRowV2
+                    t={t}
+                    mark={marks?.[t.id] ?? null}
+                    expanded={openId === t.id}
+                    onSelect={() => toggleTrade(t)}
+                    onEdit={() => {
+                      setOpenId(t.id);
+                      setEditingId(t.id);
+                    }}
+                    onResolve={() => setResolving(t)}
+                    onAdd={() => setFilling({ trade: t, kind: "add" })}
+                    onTake={() => setFilling({ trade: t, kind: "partial" })}
+                  />
+                  {panel(t)}
+                </div>
               ))}
             </div>
           )}
@@ -539,12 +600,18 @@ export default function JournalV2() {
                     </div>
                     <div className="mt-1 space-y-0.5">
                       {g.trades.map((t) => (
-                        <ClosedTradeRowV2
-                          key={t.id}
-                          t={t}
-                          onSelect={() => viewTrade(t)}
-                          onEdit={() => openTrade(t)}
-                        />
+                        <div key={t.id}>
+                          <ClosedTradeRowV2
+                            t={t}
+                            expanded={openId === t.id}
+                            onSelect={() => toggleTrade(t)}
+                            onEdit={() => {
+                              setOpenId(t.id);
+                              setEditingId(t.id);
+                            }}
+                          />
+                          {panel(t)}
+                        </div>
                       ))}
                     </div>
                   </div>
