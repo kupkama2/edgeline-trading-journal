@@ -11,6 +11,7 @@ import {
   EyeOff,
   HelpCircle,
   SlidersHorizontal,
+  X,
 } from "lucide-react";
 import {
   useTrades,
@@ -382,6 +383,36 @@ export default function JournalV2() {
            figure would collapse the thing being corrected. */
         onClick={(e) => e.stopPropagation()}
       >
+        {/*
+          The way back out, always in reach.
+          A trade is a long panel and the row that opened it scrolls away
+          within a screen, so closing one meant scrolling back up to find the
+          thing you were done with. This rides the top of the panel instead,
+          just under the app's own header — the same idea as the save bar at
+          the other end.
+
+          It sits ABOVE the editor as well as the body, so there is one way
+          out whichever state the trade is in, and it never covers the last
+          line of the panel because it is the first child rather than an
+          overlay.
+        */}
+        <button
+          type="button"
+          onClick={() => {
+            setEditingId(null);
+            setOpenId(null);
+          }}
+          className="sticky top-14 z-20 -mx-3 mb-2 flex w-[calc(100%+1.5rem)] items-center gap-2 border-b border-border/70 bg-card/95 px-3 py-2 text-left backdrop-blur transition-colors hover:text-primary sm:-mx-4 sm:w-[calc(100%+2rem)] sm:px-4"
+          title="Close this trade"
+          data-testid={`button-collapse-${t.id}`}
+        >
+          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          <span className="font-mono text-sm font-semibold">{t.symbol}</span>
+          <span className="text-[11px] text-muted-foreground">
+            {editingId === t.id ? "editing" : "click to close"}
+          </span>
+          <X className="ml-auto h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        </button>
         {editingId === t.id ? (
           <TradeEditor trade={t} card={null} onClose={() => setEditingId(null)} />
         ) : (

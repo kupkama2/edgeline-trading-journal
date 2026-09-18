@@ -1691,7 +1691,7 @@ export function NewTradeCard({
               sticks to the bottom of whatever is scrolling — the page, or the
               overlay when the form is opened inside one. */}
           <div
-            className="sticky bottom-0 -mx-4 -mb-4 flex flex-wrap items-center gap-3 border-t border-border/70 bg-card/95 px-4 py-3 backdrop-blur sm:-mx-5 sm:-mb-5 sm:px-5"
+            className="sticky bottom-0 -mx-4 flex flex-wrap items-center gap-3 border-t border-border/70 bg-card/95 px-4 py-3 backdrop-blur sm:-mx-5 sm:px-5"
             data-testid="bar-entry-save"
           >
             <Button

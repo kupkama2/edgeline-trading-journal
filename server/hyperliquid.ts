@@ -18,7 +18,9 @@ import {
   parseFundingHistory,
   parseHistoricalOrders,
   parseHyperliquidMeta,
+  parsePerpDexs,
   parseUserFills,
+  hlAsset,
   type HlFill,
   type HlOrder,
   type HyperliquidPerp,
@@ -45,9 +47,20 @@ export interface HyperliquidStatus {
   lastError: string | null;
   /** Perps the last successful fetch returned, delisted ones included. */
   perps: number;
+  /** Builder-deployed perp DEXs the last refresh found beyond the main one. */
+  dexes: number;
+  /** How many of `perps` came from those books rather than the coin universe. */
+  builderPerps: number;
 }
 
-const status: HyperliquidStatus = { lastTriedAt: null, lastOkAt: null, lastError: null, perps: 0 };
+const status: HyperliquidStatus = {
+  lastTriedAt: null,
+  lastOkAt: null,
+  lastError: null,
+  perps: 0,
+  dexes: 0,
+  builderPerps: 0,
+};
 export const hyperliquidStatus = (): HyperliquidStatus => ({ ...status });
 
 const host = () => new URL(BASE).hostname;
@@ -76,14 +89,57 @@ async function info(body: Record<string, unknown>, timeoutMs = 12_000): Promise<
   }
 }
 
+/**
+ * How many builder-deployed DEXs are worth asking about in one refresh.
+ *
+ * Each is its own round trip and the list is open-ended — anybody can deploy
+ * one. The universe is fetched once a day, so this is a ceiling on a daily
+ * cost rather than a limit on anything a trader does, and a cap that is
+ * plainly too low is better than a refresh that takes a minute.
+ */
+const MAX_DEXES = 40;
+
+/**
+ * Every perp the venue lists, across every book it lists them in.
+ *
+ * Hyperliquid's own universe is the coin perps. The equity and commodity
+ * perps are deployed by builders (HIP-3) into SEPARATE perp DEXs, each with
+ * its own universe, and none of them appear in the default answer — which is
+ * why a trade on one used to match nothing, chart nothing, and settle never.
+ *
+ * The extra books are strictly a bonus. The main universe is fetched first
+ * and its failure is still the failure; everything after it is best-effort,
+ * so a builder DEX that is slow, renamed or gone leaves the journal exactly
+ * where it was rather than taking the coin perps down with it.
+ */
 export async function fetchHyperliquidPerps(): Promise<HyperliquidPerp[]> {
   status.lastTriedAt = new Date().toISOString();
   try {
     const perps = parseHyperliquidMeta(await info({ type: "meta" }));
     if (perps.length === 0) throw new Error(`${host()} answered /info without a universe`);
+
+    let dexes: string[] = [];
+    try {
+      dexes = parsePerpDexs(await info({ type: "perpDexs" }, 10_000)).slice(0, MAX_DEXES);
+    } catch {
+      // No builder books this time. The coin perps are already in hand.
+    }
+    let extra = 0;
+    for (const dex of dexes) {
+      try {
+        const listed = parseHyperliquidMeta(await info({ type: "meta", dex }, 10_000), dex);
+        perps.push(...listed);
+        extra += listed.length;
+      } catch {
+        // One book refusing says nothing about the others.
+      }
+    }
+
     status.lastOkAt = new Date().toISOString();
     status.lastError = null;
     status.perps = perps.length;
+    status.dexes = dexes.length;
+    status.builderPerps = extra;
     return perps;
   } catch (err: any) {
     status.lastError = String(err?.message ?? err);
@@ -91,9 +147,18 @@ export async function fetchHyperliquidPerps(): Promise<HyperliquidPerp[]> {
   }
 }
 
-/** The names the venue lists, delisted included, from the cache. */
+/**
+ * The assets the venue lists, delisted included, from the cache — qualified
+ * with their book where there is one, so "NVDA" on a builder DEX comes back
+ * as "vntls:NVDA" and can never be read as the main universe's NVDA.
+ */
 export async function hyperliquidNames(): Promise<string[]> {
-  return (await ensureHyperliquid()).map((p) => p.name);
+  return (await ensureHyperliquid()).map(hlAsset);
+}
+
+/** The full rows, for callers that need to know which book a coin is in. */
+export async function hyperliquidPerps(): Promise<HyperliquidPerp[]> {
+  return ensureHyperliquid();
 }
 
 /* ------------------------------ a wallet ------------------------------ */

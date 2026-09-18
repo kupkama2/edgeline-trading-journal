@@ -5,6 +5,7 @@ import {
   serial,
   boolean,
   doublePrecision,
+  primaryKey,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
@@ -620,7 +621,20 @@ export function promoteScalp<
     initialStop?: number | null;
     initialTarget?: number | null;
   },
->(merged: T): { scalp: false; netPnl: null; riskAmount: null; netMfe: null; netMae: null } | null {
+>(
+  merged: T,
+  /**
+   * The patch as it arrived, when there is one.
+   *
+   * A patch that says `scalp: true` in so many words is somebody deciding
+   * this row is a scalp, and promotion must not immediately undo it. Without
+   * this, marking a priced trade as a scalp was a button that appeared to do
+   * nothing: the write landed, the rule fired on the same request, and the
+   * flag came straight back off.
+   */
+  patch?: { scalp?: boolean | null } | null,
+): { scalp: false; netPnl: null; riskAmount: null; netMfe: null; netMae: null } | null {
+  if (patch?.scalp === true) return null;
   if (!merged.scalp) return null;
   const priced =
     merged.entryPrice != null &&
@@ -708,13 +722,27 @@ export type BinanceSymbolRow = typeof binanceSymbols.$inferSelect;
  * perp, so the coin IS the instrument. Delisted coins stay, flagged, because
  * an old trade on one still has to be recognised as a Hyperliquid perp.
  */
-export const hyperliquidSymbols = pgTable("hyperliquid_symbols", {
-  /** As the venue writes it: "BTC", "kPEPE". */
-  name: text("name").primaryKey(),
-  maxLeverage: integer("max_leverage"),
-  delisted: boolean("delisted").notNull().default(false),
-  fetchedAt: text("fetched_at").notNull(),
-});
+export const hyperliquidSymbols = pgTable(
+  "hyperliquid_symbols",
+  {
+    /** As the venue writes it: "BTC", "kPEPE". */
+    name: text("name").notNull(),
+    /**
+     * The perp DEX listing it. Empty string is the venue's own universe —
+     * the coin perps — and a name is a builder-deployed book, which is where
+     * the equity and commodity perps live.
+     *
+     * Empty rather than null because it is half the primary key, and two
+     * books really can list the same ticker: "NVDA" is not an asset until you
+     * say whose NVDA.
+     */
+    dex: text("dex").notNull().default(""),
+    maxLeverage: integer("max_leverage"),
+    delisted: boolean("delisted").notNull().default(false),
+    fetchedAt: text("fetched_at").notNull(),
+  },
+  (t) => ({ pk: primaryKey({ columns: [t.name, t.dex] }) }),
+);
 export type HyperliquidSymbolRow = typeof hyperliquidSymbols.$inferSelect;
 
 /* ========================== account settings ======================== */

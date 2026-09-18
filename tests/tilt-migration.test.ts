@@ -69,7 +69,17 @@ describe.skipIf(!DB)("the tilt verdict leaves the demon list", () => {
 });
 
 describe.skipIf(!DB)("a scalp that already carries prices", () => {
-  it("is promoted on boot, so it stops reading off a leftover result column", async () => {
+  /*
+   * Promotion used to run on boot as well as in the route. It no longer does,
+   * and that is the point of this test now: a trade can be marked a scalp BY
+   * HAND after it has prices, and a boot-time sweep cannot tell that row apart
+   * from the ones the sweep was written to repair. Left in, it would undo the
+   * mark on every restart — a button that works until the server bounces.
+   *
+   * The rule still runs where it can see whose doing the flag was: the PATCH
+   * route, via promoteScalp (shared/schema.ts).
+   */
+  it("is left exactly as stored, because the boot sweep has been retired", async () => {
     const { initSchema, accounts, db, storageFor } = await import("../server/storage");
     const { trades } = await import("../shared/schema");
     await initSchema();
@@ -89,7 +99,8 @@ describe.skipIf(!DB)("a scalp that already carries prices", () => {
     await initSchema();
 
     const byId = new Map((await storageFor(user.id).listTrades()).map((t) => [t.id, t]));
-    expect(byId.get(priced.id)).toMatchObject({ scalp: false, netPnl: null, riskAmount: null, netMfe: null });
+    // Untouched, both of them — a restart is not an opinion about a trade.
+    expect(byId.get(priced.id)).toMatchObject({ scalp: true, netPnl: -2, riskAmount: 80 });
     expect(byId.get(bare.id)).toMatchObject({ scalp: true, netPnl: -2, riskAmount: 80 });
   });
 });

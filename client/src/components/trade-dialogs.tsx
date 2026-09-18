@@ -1528,7 +1528,7 @@ export function TradeEditor({
               content it sits over.
             */}
             <div
-              className="sticky bottom-0 -mx-4 -mb-4 flex gap-2 border-t border-border/70 bg-card/95 px-4 py-3 backdrop-blur sm:-mx-5 sm:-mb-5 sm:px-5"
+              className="sticky bottom-0 -mx-4 flex gap-2 border-t border-border/70 bg-card/95 px-4 py-3 backdrop-blur sm:-mx-5 sm:px-5"
               data-testid="bar-edit-save"
             >
               <Button

@@ -161,20 +161,21 @@ ALTER TABLE trades ADD COLUMN IF NOT EXISTS net_mfe DOUBLE PRECISION;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS net_mae DOUBLE PRECISION;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS reviewed_at TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS review_note TEXT;
--- A scalp that has already been given real prices is a scalp no longer.
+-- Retired: a boot-time promotion of scalps that had been given real prices.
 --
--- The trade page always offered the promotion in as many words, but until it
--- was implemented the offer did nothing: the prices were stored and then
--- ignored, and every figure still came from the typed result. Those rows
--- exist, and they read wrong until somebody saves them again — so they are
--- promoted here, on the same terms the route now applies. Idempotent, and a
--- no-op for a scalp that is still only a result.
-UPDATE trades SET scalp = FALSE, net_pnl = NULL, risk_amount = NULL, net_mfe = NULL, net_mae = NULL
- WHERE scalp = TRUE
-   AND entry_price > 0
-   AND exit_price IS NOT NULL
-   AND initial_stop IS NOT NULL
-   AND initial_target IS NOT NULL;
+-- It repaired rows written before promotion was implemented, when the trade
+-- page offered it in as many words and nothing carried it out — the prices
+-- were stored and then ignored while every figure still came from the typed
+-- result. That repair has run on every boot since and there is nothing left
+-- for it to find.
+--
+-- It cannot stay, because a trade can now be marked a scalp BY HAND after the
+-- fact, and a priced row deliberately flagged as a scalp is indistinguishable
+-- from the rows this was written to fix. Left in, it would quietly undo that
+-- mark on every restart: a button that works until the server bounces is
+-- worse than one that never worked. The rule still runs where it belongs —
+-- in the PATCH route, where it can see whether the flag was the trader's
+-- doing (shared/schema.ts, promoteScalp).
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS would_have_hit_target BOOLEAN;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS rationale TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS rationale_tags TEXT;
@@ -441,6 +442,15 @@ CREATE TABLE IF NOT EXISTS hyperliquid_symbols (
   delisted BOOLEAN NOT NULL DEFAULT FALSE,
   fetched_at TEXT NOT NULL
 );
+-- Which perp DEX lists the coin. '' is the venue's own universe; a name is a
+-- builder-deployed book (HIP-3), which is where the equity and commodity
+-- perps live. Two books can list the same ticker, so the key has to carry it.
+ALTER TABLE hyperliquid_symbols ADD COLUMN IF NOT EXISTS dex TEXT NOT NULL DEFAULT '';
+-- The single-column key predates the second book. Dropping it by its own
+-- generated name and rebuilding on both columns; a no-op once rebuilt.
+ALTER TABLE hyperliquid_symbols DROP CONSTRAINT IF EXISTS hyperliquid_symbols_pkey;
+ALTER TABLE hyperliquid_symbols ADD CONSTRAINT hyperliquid_symbols_pkey
+  PRIMARY KEY (name, dex);
 CREATE TABLE IF NOT EXISTS invites (
   id SERIAL PRIMARY KEY,
   email TEXT NOT NULL UNIQUE,
@@ -806,9 +816,18 @@ export const catalogue = {
 
 /** Hyperliquid's perp universe, cached the same way. */
 export const hyperliquid = {
-  async list(): Promise<{ name: string; maxLeverage: number | null; delisted: boolean }[]> {
+  async list(): Promise<
+    { name: string; maxLeverage: number | null; delisted: boolean; dex: string | null }[]
+  > {
     const rows = await db.select().from(hyperliquidSymbols);
-    return rows.map((r) => ({ name: r.name, maxLeverage: r.maxLeverage, delisted: r.delisted }));
+    // Back to null at the door: '' is a storage detail forced by the key, and
+    // every reader above this asks "is there a dex" rather than "is it empty".
+    return rows.map((r) => ({
+      name: r.name,
+      maxLeverage: r.maxLeverage,
+      delisted: r.delisted,
+      dex: r.dex || null,
+    }));
   },
 
   async lastFetchedAt(): Promise<string | null> {
@@ -821,16 +840,22 @@ export const hyperliquid = {
   },
 
   async replace(
-    perps: { name: string; maxLeverage: number | null; delisted: boolean }[],
+    perps: { name: string; maxLeverage: number | null; delisted: boolean; dex?: string | null }[],
   ): Promise<number> {
     if (perps.length === 0) return 0;
     const fetchedAt = new Date().toISOString();
     await db.transaction(async (tx) => {
       await tx.delete(hyperliquidSymbols);
       for (let i = 0; i < perps.length; i += 500) {
-        await tx
-          .insert(hyperliquidSymbols)
-          .values(perps.slice(i, i + 500).map((p) => ({ ...p, fetchedAt })));
+        await tx.insert(hyperliquidSymbols).values(
+          perps.slice(i, i + 500).map((p) => ({
+            name: p.name,
+            maxLeverage: p.maxLeverage,
+            delisted: p.delisted,
+            dex: p.dex ?? "",
+            fetchedAt,
+          })),
+        );
       }
     });
     return perps.length;

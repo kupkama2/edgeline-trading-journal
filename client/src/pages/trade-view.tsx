@@ -37,6 +37,7 @@ import {
   Trash2,
   Skull,
   Star,
+  Zap,
 } from "lucide-react";
 import {
   useCheckTrade,
@@ -846,6 +847,53 @@ export function TradeBody({
           >
             <Star className={`h-3 w-3 ${trade.wellTraded ? "fill-current" : ""}`} />
             {trade.wellTraded ? "well traded" : "mark well traded"}
+          </button>
+        )}
+        {/*
+          Scalp, after the fact.
+          A scalp is a way of RECORDING a trade, not a kind of trade, so which
+          one a row is was only ever decidable at the moment it was logged —
+          and the one place it changed by itself was the promotion, which
+          quietly takes the flag off a scalp the moment you give it a full set
+          of prices. That is the right default and it is also why a trade you
+          think of as a scalp can end up without the mark.
+
+          Going the other way needs a result to go on, since a scalp's figures
+          come from a typed number rather than from prices: the P&L and the
+          risk the trade already computed are written into the row as it is
+          marked. Nothing is lost — the prices stay — so unmarking puts the
+          trade straight back to reading from them.
+        */}
+        {trade.status === "closed" && (
+          <button
+            type="button"
+            onClick={() =>
+              updateTrade.mutate({
+                id: trade.id,
+                trade: trade.scalp
+                  ? ({ scalp: false, netPnl: null, riskAmount: null } as any)
+                  : ({
+                      scalp: true,
+                      netPnl: m.actualPnL ?? 0,
+                      riskAmount: m.riskDollars > 0 ? m.riskDollars : null,
+                    } as any),
+              })
+            }
+            aria-pressed={trade.scalp === true}
+            title={
+              trade.scalp
+                ? "Logged as a scalp — click to read it from its prices instead"
+                : "Treat this as a scalp: a result rather than a set of prices"
+            }
+            className={`flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] transition-colors ${
+              trade.scalp
+                ? "border-amber-500/40 bg-amber-500/10 text-amber-400"
+                : "border-border text-muted-foreground hover:border-amber-500/40 hover:text-amber-400"
+            }`}
+            data-testid="button-view-scalp"
+          >
+            <Zap className="h-3 w-3" />
+            {trade.scalp ? "scalp" : "mark scalp"}
           </button>
         )}
         {trade.account && (
