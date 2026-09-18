@@ -835,9 +835,13 @@ function TradeBody({
               {trade.status === "closed" ? fmtR(m.actualR) : "—"}
             </p>
             <p className="mt-1 text-[10px] text-muted-foreground">
-              {trade.status === "closed"
-                ? EXIT_REASON_LABELS[trade.exitReason ?? "other"]
-                : "still running"}
+              {/* A scalp was never asked how it ended, so "Other" here is an
+                  answer nobody gave. */}
+              {trade.scalp
+                ? "scalp"
+                : trade.status === "closed"
+                  ? EXIT_REASON_LABELS[trade.exitReason ?? "other"]
+                  : "still running"}
             </p>
           </div>
           <div>
@@ -874,6 +878,34 @@ function TradeBody({
         </div>
 
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+          {trade.scalp ? (
+            /* A scalp's figures are the two it actually has. The price-based
+               pair below edits mfe and mae, which a trade with no entry
+               price cannot use — typing into them wrote a number nothing
+               would ever read. */
+            <>
+              <Fig
+                label="1R"
+                value={m.riskDollars > 0 ? `$${num(m.riskDollars, 0)}` : "—"}
+                hint={m.riskDollars > 0 ? "risked" : "no risk recorded"}
+              />
+              <Fig
+                label="Best it showed"
+                value={m.mfeR != null ? fmtR(m.mfeR) : "—"}
+                hint={trade.netMfe != null ? fmtMoney(trade.netMfe) : "double-click to log it"}
+                edit={editable("netMfe", trade.netMfe)}
+                testId="view-mfe"
+              />
+              <Fig
+                label="Worst it showed"
+                value={m.maeR != null ? fmtR(m.maeR) : "—"}
+                hint={trade.netMae != null ? fmtMoney(trade.netMae) : "double-click to log it"}
+                edit={editable("netMae", trade.netMae)}
+                testId="view-mae"
+              />
+            </>
+          ) : (
+          <>
           <Fig
             label="1R"
             value={`$${num(m.riskDollars, 0)}`}
@@ -938,6 +970,8 @@ function TradeBody({
               testId="view-left-behind"
               edit={editable("postExitPeak", trade.postExitPeak)}
             />
+          )}
+          </>
           )}
         </div>
 
@@ -1062,60 +1096,13 @@ function TradeBody({
               made and what it risked is the whole record; everything else on
               this page — notes, screenshots, the verdicts — still applies. */}
           {trade.scalp ? (
-            <div className="flex flex-wrap items-baseline gap-x-6 gap-y-2" data-testid="view-scalp-result">
-              <div>
-                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Net</p>
-                <p
-                  className={`font-mono text-xl font-bold ${
-                    (computeMetrics(trade).actualPnL ?? 0) >= 0 ? "text-emerald-400" : "text-primary"
-                  }`}
-                >
-                  {fmtMoney(computeMetrics(trade).actualPnL)}
-                </p>
-              </div>
-              <div>
-                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Risked</p>
-                <p className="font-mono text-sm">
-                  {trade.riskAmount != null ? `$${trade.riskAmount}` : "not recorded"}
-                </p>
-              </div>
-              <div>
-                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">R</p>
-                <p className="font-mono text-sm">{fmtR(computeMetrics(trade).actualR)}</p>
-              </div>
-              {/* Quick to log is the whole point, so these are asked for
-                  here and never on the way in: how far it went with you and
-                  against you, in the same money as the result. Over the risk
-                  they are the MFE and MAE in R that every other trade has. */}
-              <div className="basis-full border-t border-border/50 pt-3">
-                <p className="mb-2 text-[10px] uppercase tracking-wider text-muted-foreground">
-                  How far it went · optional
-                </p>
-                <div className="grid grid-cols-2 gap-3 font-mono text-sm sm:w-2/3">
-                  <Fig
-                    label="Best it showed"
-                    icon="mfe"
-                    value={trade.netMfe != null ? fmtMoney(trade.netMfe) : "—"}
-                    hint={excursionHint(trade.netMfe, trade.riskAmount, "with you")}
-                    testId="view-scalp-mfe"
-                    edit={editable("netMfe", trade.netMfe)}
-                  />
-                  <Fig
-                    label="Worst it showed"
-                    icon="mae"
-                    value={trade.netMae != null ? fmtMoney(trade.netMae) : "—"}
-                    hint={excursionHint(trade.netMae, trade.riskAmount, "against you")}
-                    testId="view-scalp-mae"
-                    edit={editable("netMae", trade.netMae)}
-                  />
-                </div>
-              </div>
-
-              <p className="basis-full text-[11px] leading-snug text-muted-foreground">
-                Logged as a scalp: a result rather than a set of prices. Fill in an entry and a
-                stop here and it becomes an ordinary trade.
-              </p>
-            </div>
+            /* The figures are all in the header now, where they can be
+               edited. What is left to say is what kind of record this is. */
+            <p className="text-[11px] leading-snug text-muted-foreground" data-testid="view-scalp-result">
+              Logged as a scalp: a result rather than a set of prices, so there are no levels to
+              show. What it made, what it risked and how far it went are at the top. Fill in an
+              entry and a stop here and it becomes an ordinary trade.
+            </p>
           ) : (
           <>
 
