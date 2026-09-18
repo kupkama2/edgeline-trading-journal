@@ -97,10 +97,25 @@ export function parseHyperliquidMeta(json: unknown, dex: string | null = null): 
   if (!Array.isArray(universe)) return [];
   const out: HyperliquidPerp[] = [];
   const seen = new Set<string>();
+  const prefix = dex ? `${dex}:`.toLowerCase() : null;
   for (const u of universe as Array<Record<string, unknown>>) {
-    const name = typeof u?.name === "string" ? u.name.trim() : "";
-    // A coin whose own name contains a colon could not be told apart from a
-    // DEX-qualified one, so it is dropped rather than stored ambiguously.
+    let name = typeof u?.name === "string" ? u.name.trim() : "";
+    /*
+     * A builder book may name its assets either way.
+     *
+     * Some answer a dex-scoped meta with bare coins ("GOLD"), some with the
+     * book already on the front ("xyz:GOLD"). Both mean the same asset, and
+     * this stores the bare coin with the book in its own field — so a name
+     * arriving qualified with the book we ASKED about has that prefix taken
+     * off rather than being treated as a stranger.
+     *
+     * Getting this wrong is silent and total: the guard below dropped every
+     * row of every builder book, and the journal reported ten books and no
+     * perps without a word, because nothing had failed.
+     */
+    if (prefix && name.toLowerCase().startsWith(prefix)) name = name.slice(prefix.length).trim();
+    // A colon that is NOT the book's own prefix leaves an asset that cannot
+    // be told apart from a qualified one, so it is still dropped.
     if (!name || name.includes(":") || seen.has(name)) continue;
     seen.add(name);
     const lev = Number(u.maxLeverage);

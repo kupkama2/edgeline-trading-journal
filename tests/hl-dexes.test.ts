@@ -57,7 +57,33 @@ describe("a coin and the book it is in", () => {
     expect(splitHlAsset("BTC")).toEqual({ dex: null, coin: "BTC" });
   });
 
-  it("drops a coin whose own name has a colon in it", () => {
+  it("takes the book's own prefix off a name that already carries it", () => {
+    /*
+     * The bug that made ten builder books yield nothing at all, silently.
+     * A book may answer with bare coins or with its own name on the front,
+     * and the guard against ambiguous colons dropped every row of the second
+     * kind — no throw, no empty response, nothing to see.
+     */
+    const out = parseHyperliquidMeta(meta(["xyz:GOLD", "xyz:WTIOIL"]), "xyz");
+    expect(out.map((p) => p.name)).toEqual(["GOLD", "WTIOIL"]);
+    expect(out.map(hlAsset)).toEqual(["xyz:GOLD", "xyz:WTIOIL"]);
+  });
+
+  it("takes it off whatever case the venue wrote it in", () => {
+    expect(parseHyperliquidMeta(meta(["XYZ:GOLD"]), "xyz")[0].name).toBe("GOLD");
+  });
+
+  it("reads a book that answers with bare coins, the other way round", () => {
+    expect(parseHyperliquidMeta(meta(["GOLD"]), "xyz").map(hlAsset)).toEqual(["xyz:GOLD"]);
+  });
+
+  it("carries equities through exactly like anything else — they are perps too", () => {
+    const out = parseHyperliquidMeta(meta(["xyz:MU", "xyz:HOOD", "MRNA"]), "xyz");
+    expect(out.map(hlAsset)).toEqual(["xyz:MU", "xyz:HOOD", "xyz:MRNA"]);
+  });
+
+  it("still drops a colon that is not the book's own prefix", () => {
+    expect(parseHyperliquidMeta(meta(["other:GOLD", "OK"]), "xyz").map((p) => p.name)).toEqual(["OK"]);
     expect(parseHyperliquidMeta(meta(["a:b", "OK"]), "d").map((p) => p.name)).toEqual(["OK"]);
   });
 });

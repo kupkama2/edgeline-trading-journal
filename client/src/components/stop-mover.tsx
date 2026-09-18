@@ -43,7 +43,24 @@ export function StopMover({ trade }: { trade: TradeWithTags }) {
   const locked = lockedIn(trade);
   const entry = positionLedger(trade).avgEntry;
 
-  if (trade.initialStop == null) return null;
+  /*
+   * A trade with no stop recorded still gets the card, saying so.
+   *
+   * Returning null here hid the one control that manages risk from exactly
+   * the trades whose risk is least known — and from the outside "this trade
+   * has no stop" is indistinguishable from "this app cannot move stops".
+   */
+  if (trade.initialStop == null) {
+    return (
+      <Card className="border-amber-500/40 bg-amber-500/5 p-3 sm:p-4" data-testid="card-stop-mover">
+        <p className="text-xs font-semibold text-amber-500">No stop on this trade.</p>
+        <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
+          Nothing here knows what it is risking, and it has no R. Double-click the stop under
+          “The plan” below to set one — then this is where you move it.
+        </p>
+      </Card>
+    );
+  }
 
   async function moveTo(price: number, why?: string) {
     const next = addStopMove(trade.stopMoves, price, new Date().toISOString(), why);
