@@ -201,6 +201,43 @@ export function ClosedTradeRowV2({
             <Star className={`h-3 w-3 ${t.wellTraded ? "fill-current" : ""}`} />
           </Button>
         )}
+        {/* The third verdict, on how the trade was RECORDED rather than on how
+            it was taken or run. It belongs beside the other two because it is
+            reached for in the same moment — going back over a day's rows and
+            saying what each one was — and because promotion takes the mark off
+            a scalp the moment it is given prices, so putting it back needs to
+            cost one click from the row. A scalp reads from a typed result, so
+            marking one writes the P&L and risk the trade already computed. */}
+        <Button
+          size="icon"
+          variant="ghost"
+          className={`h-6 w-6 ${
+            t.scalp ? "text-amber-500" : "text-muted-foreground hover:text-amber-500"
+          }`}
+          onClick={(e) => {
+            e.stopPropagation();
+            update.mutate({
+              id: t.id,
+              trade: t.scalp
+                ? ({ scalp: false, netPnl: null, riskAmount: null } as any)
+                : ({
+                    scalp: true,
+                    netPnl: m.actualPnL ?? 0,
+                    riskAmount: m.riskDollars > 0 ? m.riskDollars : null,
+                  } as any),
+            });
+          }}
+          aria-label={t.scalp ? "Not a scalp after all" : "Mark as a scalp"}
+          aria-pressed={t.scalp === true}
+          title={
+            t.scalp
+              ? "Logged as a scalp — click to read it from its prices instead"
+              : "Mark as a scalp: a result rather than a set of prices"
+          }
+          data-testid={`button-v2-scalp-${t.id}`}
+        >
+          <Zap className="h-3 w-3" />
+        </Button>
         {!t.tilt && (
           <button
             type="button"

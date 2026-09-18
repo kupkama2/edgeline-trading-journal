@@ -23,6 +23,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Input } from "@/components/ui/input";
 import { CONTRACTS, type ContractSpec } from "@shared/symbols";
 import { useBinanceSymbols, useHyperliquidSymbols } from "@/lib/data";
+import { splitHlAsset } from "@shared/hyperliquid";
 import type { TradeWithTags } from "@shared/schema";
 import type { Venue } from "@shared/hyperliquid";
 
@@ -131,8 +132,26 @@ export function SymbolPicker({
      */
     const onBinance = new Map<string, (typeof pairs)[number]>();
     for (const p of pairs) if (!onBinance.has(p.baseAsset)) onBinance.set(p.baseAsset, p);
-    const onHl = new Map<string, (typeof hl)[number]>();
-    for (const h of hl) onHl.set(h.name.toUpperCase(), h);
+    /*
+     * Hyperliquid's list arrives qualified where a builder book lists the
+     * coin — "vntls:WTIOIL" — because two books can list the same ticker and
+     * the pair has to say which. A TRADE still stores the plain ticker, so
+     * the row is keyed and valued by the coin and the book goes in the hint.
+     *
+     * Keyed the other way this picker offered "VNTLS:WTIOIL" as the symbol
+     * itself, which typing "WTIOIL" does not even prefix-match, and picking
+     * it would have written the book into the ticker.
+     */
+    const onHl = new Map<string, { name: string; maxLeverage: number | null; dex: string | null }>();
+    for (const h of hl) {
+      const { dex, coin } = splitHlAsset(h.name);
+      const key = coin.toUpperCase();
+      // The venue's own universe wins the row when both list the ticker; a
+      // builder book only fills a coin nothing else offers.
+      if (!onHl.has(key) || (onHl.get(key)!.dex && !dex)) {
+        onHl.set(key, { name: coin, maxLeverage: h.maxLeverage ?? null, dex });
+      }
+    }
 
     const listed: Option[] = [];
     const coins = Array.from(new Set(Array.from(onBinance.keys()).concat(Array.from(onHl.keys()))));
@@ -147,6 +166,9 @@ export function SymbolPicker({
           ? [
               h!.name !== coin ? h!.name : null,
               `HL perp${h!.maxLeverage ? ` ${h!.maxLeverage}×` : ""}`,
+              // Which book, when it is not the venue's own — an equity or a
+              // commodity perp is worth telling apart from a coin.
+              h!.dex,
               b ? "Binance too" : null,
             ]
               .filter(Boolean)
