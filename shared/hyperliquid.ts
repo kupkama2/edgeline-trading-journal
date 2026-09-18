@@ -147,18 +147,39 @@ export function parseHyperliquidMeta(json: unknown, dex: string | null = null): 
  * Keys without a colon are the venue's own coin perps, already known. Spot
  * markets are keyed "@1" and have no colon either, so they never arrive here.
  */
-export function perpsFromMids(mids: Record<string, number>): HyperliquidPerp[] {
+export function perpsFromMids(
+  mids: Record<string, number>,
+  /**
+   * The book this feed was asked about, when it was asked about one.
+   *
+   * A feed scoped to a book may key its markets bare — the book is implied by
+   * the question — or qualified. Given the book, both are readable; without
+   * it, only a qualified key says which market it is and a bare one is just
+   * one of the venue's own coins.
+   */
+  dex?: string,
+): HyperliquidPerp[] {
   const out: HyperliquidPerp[] = [];
   const seen = new Set<string>();
   for (const key of Object.keys(mids)) {
     const i = key.indexOf(":");
-    if (i <= 0) continue;
-    const dex = key.slice(0, i).trim();
-    const coin = key.slice(i + 1).trim();
-    // One colon only: anything else cannot be split back apart with confidence.
-    if (!dex || !coin || coin.includes(":") || seen.has(key)) continue;
-    seen.add(key);
-    out.push({ name: coin, maxLeverage: null, delisted: false, dex });
+    let book: string;
+    let coin: string;
+    if (i > 0) {
+      book = key.slice(0, i).trim();
+      coin = key.slice(i + 1).trim();
+    } else {
+      // Bare. Only meaningful when we know which book answered.
+      if (!dex) continue;
+      book = dex;
+      coin = key.trim();
+    }
+    // Spot markets are keyed "@1" and are not perps in any book.
+    if (!book || !coin || coin.includes(":") || coin.startsWith("@")) continue;
+    const id = `${book}:${coin}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push({ name: coin, maxLeverage: null, delisted: false, dex: book });
   }
   return out;
 }

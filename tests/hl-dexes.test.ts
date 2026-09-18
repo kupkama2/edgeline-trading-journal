@@ -186,12 +186,36 @@ describe("what the price feed knows about", () => {
     expect(out.every((p) => p.maxLeverage === null)).toBe(true);
   });
 
-  it("leaves the venue's own coins alone — they are already known", () => {
+  it("leaves the venue's own coins alone when no book was named", () => {
     expect(perpsFromMids({ BTC: 1, ETH: 2, kPEPE: 3 })).toEqual([]);
   });
 
-  it("ignores spot markets, which are keyed with an @ and no colon", () => {
+  it("reads a book's own feed, where the keys are bare because the book was the question", () => {
+    /*
+     * The request that was missing for three rounds. Every info endpoint is
+     * scoped to one perp DEX, so an unnamed allMids answers for the coin
+     * universe alone — and the fallback meant to find equities was reading a
+     * feed those markets are not in.
+     */
+    const out = perpsFromMids({ MU: 210.5, HOOD: 98.2, MRNA: 27.9 }, "eqs");
+    expect(out.map(hlAsset)).toEqual(["eqs:MU", "eqs:HOOD", "eqs:MRNA"]);
+  });
+
+  it("still reads qualified keys when a book was named, without doubling the book", () => {
+    expect(perpsFromMids({ "eqs:MU": 1, HOOD: 2 }, "eqs").map(hlAsset)).toEqual([
+      "eqs:MU",
+      "eqs:HOOD",
+    ]);
+  });
+
+  it("does not take a bare key for a market when it has no book to attribute it to", () => {
+    expect(perpsFromMids({ MU: 1 })).toEqual([]);
+  });
+
+  it("ignores spot markets, which are keyed with an @", () => {
     expect(perpsFromMids({ "@1": 5, "@107": 6 })).toEqual([]);
+    // Including inside a book's own feed, where they would otherwise be bare.
+    expect(perpsFromMids({ "@1": 5, GOLD: 6 }, "xyz").map(hlAsset)).toEqual(["xyz:GOLD"]);
   });
 
   it("refuses a key it cannot split back apart", () => {
