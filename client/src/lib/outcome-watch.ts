@@ -17,11 +17,25 @@ import { useToast } from "@/hooks/use-toast";
  * result with no infrastructure, and it means the moment you have the app
  * open is the moment the list is right.
  *
- * Throttled twice over: once here so navigating around the app does not
- * re-ask, and once on the server so an individual trade is not re-read more
- * than hourly however often this fires.
+ * Once a day, on the first open of the day. The question it answers changes
+ * at the pace the market closes candles, not at the pace you refresh a page —
+ * a trade parked on Monday is not settled any sooner by asking six times on
+ * Tuesday, and every ask is a round of calls against a venue that rate-limits.
+ *
+ * Throttled twice over: once here, and once on the server so an individual
+ * trade is not re-read more than hourly however often this fires.
  */
-const MIN_GAP_MS = 15 * 60 * 1000;
+const MIN_GAP_MS = 24 * 60 * 60 * 1000;
+/**
+ * How long to wait after a failed run, rather than the full day.
+ *
+ * The stamp is written BEFORE the request so two mounts cannot both fire. At
+ * a fifteen-minute gap that cost nothing when the venue was unreachable; at a
+ * daily one it would mean a single failure — a dropped connection on the way
+ * to the kitchen — quietly buys a whole day of not asking. So a failure winds
+ * the stamp back to leave a short retry instead.
+ */
+const RETRY_MS = 10 * 60 * 1000;
 const LAST_KEY = "edgeline.outcomes.lastCheck";
 
 export function useOutcomeWatch(enabled: boolean) {
@@ -85,7 +99,13 @@ export function useOutcomeWatch(enabled: boolean) {
       })
       .catch(() => {
         // A price feed being unreachable is not worth interrupting anyone
-        // over. The trades simply stay parked, which is where they were.
+        // over. The trades simply stay parked, which is where they were —
+        // but the next open should be allowed to try again before tomorrow.
+        try {
+          store.set(LAST_KEY, String(Date.now() - MIN_GAP_MS + RETRY_MS));
+        } catch {
+          /* nothing to do */
+        }
       });
   }, [enabled]); // eslint-disable-line react-hooks/exhaustive-deps
 }

@@ -87,12 +87,15 @@ export function NewTradeCard({
   onOrdersDetected,
   onExpandedChange,
   defaultExpanded = false,
+  compact = false,
   onCreated,
   narrow = false,
 }: {
   onOrdersDetected: (rows: ImportCandidate[]) => void;
   /** So the page can give the column back when the form is closed. */
   onExpandedChange?: (open: boolean) => void;
+  /** Shut, it is one short button in a row of two rather than a full card. */
+  compact?: boolean;
   /** Open from the start at /trade/new, where the form IS the page. */
   defaultExpanded?: boolean;
   /** Fired after a successful save, so the overlay can step out of the way. */
@@ -840,7 +843,12 @@ export function NewTradeCard({
        three state pills in one unwrappable row were 371px of min-content,
        which widened the whole dialog past a 390px phone and dragged every
        field in it off the right edge. */
-    <Card ref={cardRef} className="min-w-0 border-card-border bg-card p-4 sm:p-5">
+    <Card
+      ref={cardRef}
+      className={`min-w-0 border-card-border bg-card ${
+        compact && !expanded ? "p-3" : "p-4 sm:p-5"
+      }`}
+    >
       <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1.5">
         <button
           type="button"
@@ -850,10 +858,18 @@ export function NewTradeCard({
           data-testid="button-toggle-entry"
         >
           <Sparkles className="h-4 w-4 shrink-0 text-primary" />
-          <h2 className="text-sm font-semibold tracking-tight">Log a setup</h2>
-          {!expanded && (
+          <h2 className="text-sm font-semibold tracking-tight">
+            {compact && !expanded ? "Setup" : "Log a setup"}
+          </h2>
+          {/* A kept draft still says so however small the button is: it is the
+              one thing you would be sorry to walk past. */}
+          {!expanded && (!compact || hasDraft) && (
             <span className="truncate text-[11px] text-muted-foreground" data-testid="text-entry-hint">
-              {hasDraft ? "draft kept · click to continue" : "click, or paste a chart"}
+              {hasDraft
+                ? compact
+                  ? "draft kept"
+                  : "draft kept · click to continue"
+                : "click, or paste a chart"}
             </span>
           )}
           <ChevronDown

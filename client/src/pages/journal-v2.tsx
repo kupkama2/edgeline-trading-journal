@@ -10,6 +10,7 @@ import {
   ClipboardPaste,
   EyeOff,
   HelpCircle,
+  SlidersHorizontal,
 } from "lucide-react";
 import {
   useTrades,
@@ -17,7 +18,7 @@ import {
   useAccountSettings,
   useMarks,
 } from "@/lib/data";
-import { filterByScope, useStyleFilter } from "@/lib/style-filter";
+import { filterByScope, scopeActive, useStyleFilter } from "@/lib/style-filter";
 import type { TradeWithTags } from "@shared/schema";
 import { computeMetrics, fmtMoney, fmtR } from "@shared/metrics";
 import { scorecard } from "@shared/scorecard";
@@ -27,6 +28,7 @@ import { journalHealth } from "@shared/health";
 import { reviewDue, weekKey } from "@shared/review";
 import { openRisk } from "@shared/exposure";
 import { DailyGuardCard, useDailyStats, useTiltGuard } from "@/components/daily-guard";
+import { Spark } from "@/components/scorecard-card";
 import { StyleSwitcher } from "@/components/style-switcher";
 import { ImportTradesDialog } from "@/components/import-trades";
 import { MissedTradeDialog } from "@/components/missed-trade";
@@ -138,6 +140,16 @@ function FiguresStrip({ trades, dayTrades }: { trades: TradeWithTags[]; dayTrade
           testId="fig-expectancy"
         />
       </div>
+      {/* The curve stays, because it is the one thing here that is a SHAPE
+          rather than a number: six figures tell you where the record stands
+          and only the line tells you how it got there — a flat month and a
+          round trip through a drawdown come to the same totals. Shorter than
+          V1's and without its labels; the working is a click away. */}
+      {card.curve.length > 1 && (
+        <div className="mt-3" data-testid="v2-curve">
+          <Spark curve={card.curve} up={card.totalR >= 0} className="h-10 w-full" />
+        </div>
+      )}
       <div className="mt-3 flex items-center justify-between border-t border-border/50 pt-2">
         <span className="text-[10px] text-muted-foreground">
           {card.count} closed{card.unmeasured > 0 ? ` · ${card.unmeasured} without a stop, so no R` : ""}
@@ -281,6 +293,12 @@ export default function JournalV2() {
   const [filling, setFilling] = useState<{ trade: TradeWithTags; kind: "add" | "partial" } | null>(null);
   const [importSeed, setImportSeed] = useState<ImportCandidate[] | null>(null);
   const [entryOpen, setEntryOpen] = useState(false);
+  const [scalpOpen, setScalpOpen] = useState(false);
+  // Shut by default. The filters are how you ask the record a question, and
+  // most of the time you are not asking one — but a filter left on and out of
+  // sight would silently change every number on the page, so the control says
+  // when one is.
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [showClosed, setShowClosed] = useState(true);
   const [allDays, setAllDays] = useState(false);
 
@@ -302,6 +320,7 @@ export default function JournalV2() {
   const closed = useMemo(() => scoped.filter((t) => t.status === "closed"), [scoped]);
   const days = useMemo(() => groupByDay(closed), [closed]);
   const exposure = useMemo(() => openRisk(scoped), [scoped]);
+  const filtered = scopeActive(scope);
 
   // The fail-safe. Everything else on this page got quieter; this one gets
   // exactly as loud as it was, the moment there is anything to be loud about.
@@ -317,6 +336,21 @@ export default function JournalV2() {
       <div className="flex items-start justify-between gap-3">
         <h1 className="text-xl font-bold tracking-tight">Journal</h1>
         <div className="flex items-center gap-1">
+          <Button
+            variant="ghost"
+            size="sm"
+            className={`h-7 px-2 text-[11px] ${
+              filtered ? "text-primary" : "text-muted-foreground"
+            }`}
+            onClick={() => setFiltersOpen((v) => !v)}
+            aria-expanded={filtersOpen}
+            aria-label="Filters"
+            title={filtered ? "A filter is on — this page is a subset" : "Styles, accounts, sources, book"}
+            data-testid="button-toggle-filters"
+          >
+            <SlidersHorizontal className="mr-1 h-3 w-3" />
+            {filtered ? "Filtered" : "Filter"}
+          </Button>
           <Button
             variant="ghost"
             size="sm"
@@ -340,7 +374,7 @@ export default function JournalV2() {
         </div>
       </div>
 
-      <StyleSwitcher />
+      {filtersOpen && <StyleSwitcher />}
 
       <FiguresStrip trades={scoped} dayTrades={dayTrades} />
 
@@ -361,7 +395,16 @@ export default function JournalV2() {
             : "grid-cols-1"
         }`}
       >
-        <div className="space-y-3">
+        {/* Two ways in, two buttons. Shut, they are a pair of short labels on
+            one line — the page should not spend a third of its height on two
+            things you are not currently doing. Whichever you open takes the
+            row to itself, because a half-width form is a worse form. */}
+        <div
+          className={
+            entryOpen || scalpOpen ? "space-y-3" : "grid grid-cols-2 items-start gap-3"
+          }
+          data-testid="log-row"
+        >
           <NewTradeCard
             onOrdersDetected={(rows) => {
               setImportSeed(rows);
@@ -369,8 +412,11 @@ export default function JournalV2() {
             }}
             onExpandedChange={setEntryOpen}
             narrow={sideBySide}
+            compact
           />
-          <ScalpLog />
+          {/* Hidden while the setup form is open: it would sit under a tall
+              form as an orphan, and the two are alternatives anyway. */}
+          {!entryOpen && <ScalpLog compact onOpenChange={setScalpOpen} />}
         </div>
 
         <div className="space-y-2">

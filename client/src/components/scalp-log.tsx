@@ -32,7 +32,14 @@ const STYLE_KEY = "edgeline.scalpLog.style";
  * question a scalping day really asks is whether it is going anywhere, and
  * the answer needs to be visible without leaving the form.
  */
-export function ScalpLog() {
+export function ScalpLog({
+  compact = false,
+  onOpenChange,
+}: {
+  /** Shut, it is one short button in a row of two rather than a full card. */
+  compact?: boolean;
+  onOpenChange?: (open: boolean) => void;
+} = {}) {
   const { data: trades = [] } = useTrades();
   const { data: styles = [] } = useStyles();
   const create = useCreateTrade();
@@ -54,6 +61,7 @@ export function ScalpLog() {
   });
 
   useEffect(() => {
+    onOpenChange?.(open);
     if (open) store.set(OPEN_KEY, "1");
     else store.remove(OPEN_KEY);
   }, [open]);
@@ -147,7 +155,10 @@ export function ScalpLog() {
   }
 
   return (
-    <Card className="border-card-border bg-card p-3 sm:p-4" data-testid="card-scalp-log">
+    <Card
+      className={`border-card-border bg-card ${compact && !open ? "p-3" : "p-3 sm:p-4"}`}
+      data-testid="card-scalp-log"
+    >
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
         <button
           type="button"
@@ -160,8 +171,10 @@ export function ScalpLog() {
             className={`h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform ${open ? "" : "-rotate-90"}`}
           />
           <Zap className="h-3.5 w-3.5 shrink-0 text-amber-400" />
-          <span className="text-sm font-semibold tracking-tight">Log a scalp</span>
-          {!open && (
+          <span className="text-sm font-semibold tracking-tight">
+            {compact && !open ? "Scalp" : "Log a scalp"}
+          </span>
+          {!open && !compact && (
             <span className="truncate text-[11px] text-muted-foreground" data-testid="text-scalp-hint">
               ticker, result, Enter
             </span>

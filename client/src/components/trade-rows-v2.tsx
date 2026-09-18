@@ -23,6 +23,7 @@ import {
   Skull,
   Star,
   X,
+  Zap,
 } from "lucide-react";
 import { useUpdateTrade, useTrades } from "@/lib/data";
 import { tiltFromHere } from "@shared/tilt";
@@ -119,6 +120,22 @@ export function ClosedTradeRowV2({
       >
         {t.symbol}
       </span>
+
+      {/* A scalp is a result rather than a set of prices, so its R comes from
+          a risk you typed rather than a stop you placed. One mark says which
+          kind of row this is — without it a scalp and a fully priced trade
+          look identical and only one of them can answer "how far did it go
+          against me". */}
+      {t.scalp && (
+        <span
+          className="shrink-0 text-amber-500/70"
+          title="Logged as a scalp: a result rather than a set of prices"
+          aria-label="Scalp"
+          data-testid={`row-v2-scalp-${t.id}`}
+        >
+          <Zap className="h-3 w-3" />
+        </span>
+      )}
 
       <VerdictBadge verdict={verdict} />
 
