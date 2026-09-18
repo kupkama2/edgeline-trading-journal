@@ -147,6 +147,11 @@ export function TradeChart({ trade }: { trade: TradeWithTags }) {
   );
 
   const levels = useMemo<Level[]>(() => {
+    // A scalp was recorded as a result, so it has no levels to draw — and an
+    // entry of zero is not a level, it is the absence of one. Drawing it put
+    // a line at the bottom of the axis and squashed every candle into a
+    // stripe at the top.
+    if (trade.scalp) return [];
     const tps = parseExtraTargets(trade.extraTargets);
     return [
       { price: trade.entryPrice, label: "entry", color: "entry", dashed: false },
