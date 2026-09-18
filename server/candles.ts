@@ -35,7 +35,11 @@ export function pairForTradeAt(
     pricePair?: string | null;
   },
   cat: BinanceSymbol[],
-  hlNames: string[],
+  /**
+   * Qualified names, or the rows themselves. The rows carry the delisted
+   * flag, which decides an otherwise ambiguous ticker — see hlAssetFor.
+   */
+  hlNames: (string | { name: string; dex: string | null; delisted?: boolean })[],
 ): PairRef | null {
   /*
    * A pair chosen by hand wins everything below, including the contract check.
@@ -55,7 +59,11 @@ export function pairForTradeAt(
     // tie broken by sort order.
     const coin = hlAssetFor(
       trade.symbol,
-      hlNames.map((n) => splitHlAsset(n)).map(({ dex, coin }) => ({ name: coin, dex })),
+      hlNames.map((n) => {
+        if (typeof n !== "string") return n;
+        const { dex, coin } = splitHlAsset(n);
+        return { name: coin, dex };
+      }),
     );
     if (coin) return { symbol: coin, market: "futures", venue: "hyperliquid" };
     // The account says Hyperliquid but the venue does not list the coin.

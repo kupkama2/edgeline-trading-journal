@@ -35,7 +35,7 @@ import {
   ensureHyperliquid,
   fetchAllMids,
   hyperliquidFetchedAt,
-  hyperliquidNames,
+  hyperliquidAssets,
   hyperliquidStatus,
   probeHyperliquid,
 } from "./hyperliquid";
@@ -804,7 +804,7 @@ export async function registerRoutes(
     if (open.length === 0) return res.json({});
     const cat = await ensureCatalogue().catch(() => []);
     const hlNames = open.some((t) => venueOfAccount(t.account) === "hyperliquid")
-      ? await hyperliquidNames().catch(() => [] as string[])
+      ? await hyperliquidAssets().catch(() => [])
       : [];
     const at = Date.now();
     const out: Record<number, { price: number; at: number; venue: "binance" | "hyperliquid"; book: "perp" | "spot" }> = {};
@@ -941,7 +941,7 @@ export async function registerRoutes(
       // Hyperliquid cost a Binance trade a timeout.
       const hlNames =
         venueOfAccount(trade.account) === "hyperliquid"
-          ? await hyperliquidNames().catch(() => [] as string[])
+          ? await hyperliquidAssets().catch(() => [])
           : [];
       const pair = pairForTradeAt(trade, cat, hlNames);
       if (!pair) {

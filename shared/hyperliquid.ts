@@ -197,7 +197,7 @@ export function perpsFromMids(
  */
 export function hlAssetFor(
   symbol: string | null | undefined,
-  perps: { name: string; dex?: string | null }[],
+  perps: { name: string; dex?: string | null; delisted?: boolean }[],
 ): string | null {
   const main = hlCoinFor(symbol, perps.filter((p) => !p.dex).map((p) => p.name));
   if (main) return main;
@@ -205,7 +205,25 @@ export function hlAssetFor(
   const key = (symbol ?? "").trim().toUpperCase();
   if (!key) return null;
   const hits = perps.filter((p) => p.dex && p.name.toUpperCase() === key);
-  return hits.length === 1 ? hlAsset(hits[0]) : null;
+
+  /*
+   * A market nobody can trade does not get a vote.
+   *
+   * Ambiguity here means "two live books use this ticker and only you know
+   * which you traded". A book that has DELISTED its version is not a second
+   * answer — it is a market that no longer exists — and letting it compete
+   * turned a ticker with one obvious home into an unresolvable one.
+   *
+   * It cost a chart and said nothing: the picker filters delisted out, so the
+   * client resolved the symbol and saw no problem, while the server counted
+   * the dead listing, called it ambiguous, and returned no pair at all.
+   *
+   * Delisted ones still resolve when they are all there is, because an old
+   * trade on a coin the venue has since dropped still deserves its chart.
+   */
+  const live = hits.filter((p) => !p.delisted);
+  const pool = live.length > 0 ? live : hits;
+  return pool.length === 1 ? hlAsset(pool[0]) : null;
 }
 
 /** Where a trade happens. Read off the account, which is where people write it. */

@@ -216,6 +216,35 @@ export function TradeChart({ trade }: { trade: TradeWithTags }) {
    */
   const feedProblem = data?.feed?.lastError ?? data?.error ?? null;
   if (!data?.pair) {
+    /*
+     * No pair, and the trade looks like it should have one.
+     *
+     * Silence here was right while "no pair" meant a futures trade, which has
+     * nothing to draw and nothing to apologise for. It stopped being right the
+     * moment a crypto ticker could fail to resolve for reasons of its own — a
+     * name on two books, a name on none — because then the page simply had no
+     * chart section at all, which reads as a feature that does not exist
+     * rather than a question with an answer.
+     *
+     * The server is the authority on this: it either found a book or it did
+     * not, and it is the one that knows. Saying so, with the fix attached,
+     * costs a line and saves the alternative, which is asking somebody why
+     * their chart is missing.
+     */
+    if (!feedProblem && !trade.contract?.trim() && !trade.scalp) {
+      return (
+        <Card className="border-amber-500/40 bg-card p-4" data-testid="chart-no-pair">
+          <p className="text-[11px] leading-snug text-amber-500">
+            No chart: nothing here resolves “{trade.symbol}” to a market.
+          </p>
+          <p className="mt-1 text-[10px] leading-snug text-muted-foreground">
+            Either no venue lists it, or more than one book does and only you know which you
+            traded. Point it at a book above and the chart, the outcome and the price path all
+            follow.
+          </p>
+        </Card>
+      );
+    }
     if (!feedProblem) return null;
     return (
       <Card className="border-amber-500/40 bg-card p-4" data-testid="chart-feed-error">

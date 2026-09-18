@@ -247,6 +247,23 @@ export async function hyperliquidNames(): Promise<string[]> {
 }
 
 /**
+ * The same list with the delisted flag intact, for resolving a ticker.
+ *
+ * Names alone lose the one fact that decides an ambiguous ticker: whether a
+ * book's version of it still trades. See hlAssetFor — a dead listing must not
+ * make a live market unresolvable.
+ */
+export async function hyperliquidAssets(): Promise<
+  { name: string; dex: string | null; delisted: boolean }[]
+> {
+  return (await ensureHyperliquid()).map((p) => ({
+    name: p.name,
+    dex: p.dex ?? null,
+    delisted: p.delisted,
+  }));
+}
+
+/**
  * When the stored catalogue was written.
  *
  * Distinct from `status.lastOkAt`, which is this process's memory of its own
