@@ -21,7 +21,7 @@ import {
   type Candle,
   type PairRef,
 } from "@shared/binance";
-import { hlCoinFor, venueOfAccount } from "@shared/hyperliquid";
+import { hlAssetFor, splitHlAsset, venueOfAccount } from "@shared/hyperliquid";
 import { parsePricePair } from "@shared/price-pair";
 import { fetchCandles, readCandles, type CandleRead, type Interval } from "./binance";
 import { readHlCandles } from "./hyperliquid";
@@ -48,7 +48,15 @@ export function pairForTradeAt(
   if (said) return said;
   if (trade.contract?.trim()) return null;
   if (venueOfAccount(trade.account) === "hyperliquid") {
-    const coin = hlCoinFor(trade.symbol, hlNames);
+    // hlNames carries builder books qualified ("vntls:NVDA"), and resolving
+    // is deliberately strict: the coin universe wins outright, and a ticker
+    // only it does not list resolves to a builder book when exactly one of
+    // them has it. Two candidates is a question for the pair picker, never a
+    // tie broken by sort order.
+    const coin = hlAssetFor(
+      trade.symbol,
+      hlNames.map((n) => splitHlAsset(n)).map(({ dex, coin }) => ({ name: coin, dex })),
+    );
     if (coin) return { symbol: coin, market: "futures", venue: "hyperliquid" };
     // The account says Hyperliquid but the venue does not list the coin.
     // Binance's book is a wrong venue rather than no venue, and the chart

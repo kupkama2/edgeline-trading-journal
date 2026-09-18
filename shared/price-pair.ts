@@ -51,9 +51,17 @@ export function parsePricePair(raw: string | null | undefined): PairRef | null {
   if (!symbol) return null;
 
   if (venue === "hyperliquid") {
-    // The venue lists perpetuals and nothing else, so a market segment here
-    // would be a third thing to keep consistent and never a third answer.
-    return parts.length > 3 ? null : { symbol, market: "futures", venue: "hyperliquid" };
+    /*
+     * Everything after the first colon is the asset, colons and all.
+     *
+     * A builder-deployed book qualifies its coins — "vntls:NVDA" — so the
+     * stored value is "hyperliquid:vntls:NVDA" and splitting on every colon
+     * would hand back the DEX name as the symbol and chart the wrong thing.
+     * The venue lists perpetuals and nothing else, so there is no market
+     * segment competing for that position.
+     */
+    const asset = text.slice(text.indexOf(":") + 1).trim().toUpperCase();
+    return asset ? { symbol: asset, market: "futures", venue: "hyperliquid" } : null;
   }
   if (venue === "binance") {
     if (parts.length !== 3) return null;
@@ -66,7 +74,12 @@ export function parsePricePair(raw: string | null | undefined): PairRef | null {
 
 /** "Binance BTCUSDT perp", for a label that has to fit on one line. */
 export function describePair(ref: PairRef): string {
-  if ((ref.venue ?? "binance") === "hyperliquid") return `Hyperliquid ${ref.symbol} perp`;
+  if ((ref.venue ?? "binance") === "hyperliquid") {
+    // "vntls:NVDA" reads better as the book and the coin than as one token.
+    const i = ref.symbol.indexOf(":");
+    if (i > 0) return `Hyperliquid ${ref.symbol.slice(i + 1)} perp · ${ref.symbol.slice(0, i)}`;
+    return `Hyperliquid ${ref.symbol} perp`;
+  }
   return `Binance ${ref.symbol} ${ref.market === "futures" ? "perp" : "spot"}`;
 }
 
@@ -106,12 +119,18 @@ export function pairCandidates(
   };
 
   for (const p of hyperliquid) {
-    const rank = rankOf(p.name.toUpperCase());
+    // A builder book's asset arrives qualified ("vntls:NVDA"); the ticker the
+    // trader typed is the part after the colon, so that is what is ranked.
+    const i = p.name.indexOf(":");
+    const coin = (i > 0 ? p.name.slice(i + 1) : p.name).toUpperCase();
+    const rank = rankOf(coin);
     if (rank >= 0) {
       scored.push({
         ref: { symbol: p.name, market: "futures", venue: "hyperliquid" },
         rank,
-        quote: 0,
+        // The venue's own universe ahead of a builder book on an equal
+        // ticker: "BTC" means the coin perp unless you say otherwise.
+        quote: i > 0 ? 1 : 0,
       });
     }
   }

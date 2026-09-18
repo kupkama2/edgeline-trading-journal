@@ -30,6 +30,58 @@ export interface HyperliquidPerp {
   name: string;
   maxLeverage: number | null;
   delisted: boolean;
+  /**
+   * Which perp DEX lists it. Null is the venue's own universe — the coin
+   * perps — and a string is a builder-deployed one, which is where the
+   * equity and commodity perps live.
+   *
+   * It has to be carried rather than flattened away, because two DEXs can
+   * list the same ticker. A bare "GOLD" is not an asset; it is a ticker that
+   * some book somewhere uses, and reading candles for the wrong one would
+   * answer "did my stop get hit" against a market the order was never in.
+   */
+  dex?: string | null;
+}
+
+/**
+ * How a coin is addressed once the DEX matters: "BTC" on the main universe,
+ * "vntls:NVDA" on a builder-deployed one. This is the string that goes to the
+ * venue for candles and comes back as a key in the mids.
+ */
+export function hlAsset(p: { name: string; dex?: string | null }): string {
+  return p.dex ? `${p.dex}:${p.name}` : p.name;
+}
+
+/** The DEX and coin back out of a qualified name. */
+export function splitHlAsset(asset: string): { dex: string | null; coin: string } {
+  const i = asset.indexOf(":");
+  if (i < 0) return { dex: null, coin: asset };
+  return { dex: asset.slice(0, i), coin: asset.slice(i + 1) };
+}
+
+/**
+ * Read the venue's `perpDexs` answer: the deployed perp DEXs, of which the
+ * first entry is null — that is the venue's own universe, which is fetched
+ * without a name and must not be requested as if it had one.
+ *
+ * Anything not shaped like a list means no builder DEXs, which is exactly
+ * today's behaviour: the main universe alone. A guess here would be worse
+ * than nothing, because it would send meta requests naming a DEX that does
+ * not exist and the failures would look like the venue being down.
+ */
+export function parsePerpDexs(json: unknown): string[] {
+  if (!Array.isArray(json)) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const d of json) {
+    if (d == null) continue; // the venue's own universe
+    const name = typeof (d as any)?.name === "string" ? (d as any).name.trim() : "";
+    // A colon in a DEX name would make a qualified asset ambiguous to split.
+    if (!name || name.includes(":") || seen.has(name)) continue;
+    seen.add(name);
+    out.push(name);
+  }
+  return out;
 }
 
 /**
@@ -40,23 +92,50 @@ export interface HyperliquidPerp {
  * Within a well-shaped answer, an entry without a usable name is skipped and
  * the rest kept; one bad entry is not a reason to forget two hundred coins.
  */
-export function parseHyperliquidMeta(json: unknown): HyperliquidPerp[] {
+export function parseHyperliquidMeta(json: unknown, dex: string | null = null): HyperliquidPerp[] {
   const universe = (json as { universe?: unknown } | null)?.universe;
   if (!Array.isArray(universe)) return [];
   const out: HyperliquidPerp[] = [];
   const seen = new Set<string>();
   for (const u of universe as Array<Record<string, unknown>>) {
     const name = typeof u?.name === "string" ? u.name.trim() : "";
-    if (!name || seen.has(name)) continue;
+    // A coin whose own name contains a colon could not be told apart from a
+    // DEX-qualified one, so it is dropped rather than stored ambiguously.
+    if (!name || name.includes(":") || seen.has(name)) continue;
     seen.add(name);
     const lev = Number(u.maxLeverage);
     out.push({
       name,
       maxLeverage: Number.isFinite(lev) && lev > 0 ? lev : null,
       delisted: u.isDelisted === true,
+      dex,
     });
   }
   return out;
+}
+
+/**
+ * The coin to read candles for, given a ticker and everything the venue
+ * lists — and null rather than a guess whenever the answer is not unique.
+ *
+ * The main universe wins outright: a journal entry saying "BTC" means the
+ * coin perp, whatever some builder DEX has chosen to call its own market. A
+ * ticker the main universe does NOT list resolves to a builder DEX only when
+ * exactly one of them lists it. Two candidates is not a tie to be broken by
+ * sort order; it is a question only the trader can answer, and the pair
+ * picker is where they answer it.
+ */
+export function hlAssetFor(
+  symbol: string | null | undefined,
+  perps: { name: string; dex?: string | null }[],
+): string | null {
+  const main = hlCoinFor(symbol, perps.filter((p) => !p.dex).map((p) => p.name));
+  if (main) return main;
+
+  const key = (symbol ?? "").trim().toUpperCase();
+  if (!key) return null;
+  const hits = perps.filter((p) => p.dex && p.name.toUpperCase() === key);
+  return hits.length === 1 ? hlAsset(hits[0]) : null;
 }
 
 /** Where a trade happens. Read off the account, which is where people write it. */

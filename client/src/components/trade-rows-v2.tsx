@@ -29,7 +29,7 @@ import { useUpdateTrade, useTrades } from "@/lib/data";
 import { tiltFromHere } from "@shared/tilt";
 import { standingOf, type Mark } from "@shared/marks";
 import type { TradeWithTags } from "@shared/schema";
-import { computeMetrics, fmtFees, fmtMoney, fmtR } from "@shared/metrics";
+import { computeMetrics, fmtAmount, fmtFees, fmtMoney, fmtR } from "@shared/metrics";
 import { tradeVerdict, isWin, type Verdict } from "@shared/verdict";
 import { num } from "@/components/trade-shared";
 
@@ -262,11 +262,19 @@ export function ClosedTradeRowV2({
 /**
  * A live position on one line: what you are holding, and what it is doing.
  *
- * Size, money, R. The prices are deliberately gone. Entry, stop and target are
- * a plan you already made and cannot read anything new from — you know where
- * your stop is — and printing four numbers that never change next to the two
- * that move every minute buries the moving ones. They are all still inside the
- * trade, one click down, where changing them is the point.
+ * Size, what is at risk, and how it is doing. The prices are deliberately
+ * gone: entry, stop and target are a plan you already made and cannot read
+ * anything new from — you know where your stop is — and four numbers that
+ * never change next to the ones that move every minute buries the moving
+ * ones. They are all still inside the trade, one click down.
+ *
+ * Risk is what the stop would cost FROM HERE, not what it cost at entry. On a
+ * trade that has run, those are different questions and only one of them is
+ * still a decision: a position up two R with the stop still at the original
+ * level is risking the open profit, and "1R" would go on describing a
+ * yesterday that no longer exists. Once price is through the stop the figure
+ * would go negative — you are past the point it was measuring — so it stops
+ * and says so instead.
  *
  * The same two columns as a closed row, at the same widths, so open and closed
  * positions form one column of figures down the page rather than two ragged
@@ -307,6 +315,17 @@ export function OpenTradeRowV2({
   const tone = standing == null ? "text-muted-foreground" : up ? "text-emerald-400" : "text-primary";
   const toneDim =
     standing == null ? "text-muted-foreground" : up ? "text-emerald-400/80" : "text-primary/80";
+  // What the stop costs from where price is now. Falls back to the risk the
+  // trade was taken with when nothing is quoting it, which is the only honest
+  // answer without a price.
+  const m = computeMetrics(t);
+  const riskNow =
+    standing?.toStopR != null && m.riskDollars > 0
+      ? standing.toStopR * m.riskDollars
+      : m.riskDollars > 0
+        ? m.riskDollars
+        : null;
+  const live = standing?.toStopR != null;
 
   return (
     <div
@@ -341,6 +360,25 @@ export function OpenTradeRowV2({
       >
         {num(t.size)}
         {t.sizeUnit === "quote" ? " USD" : ""}
+      </span>
+      <span
+        className="font-mono text-[11px] text-muted-foreground"
+        title={
+          riskNow == null
+            ? "No stop recorded, so nothing here knows what this is risking"
+            : standing?.crossedStop
+              ? "Price is through the stop — there is nothing left to risk"
+              : live
+                ? `What the stop costs from here. At entry it was ${fmtAmount(m.riskDollars)}.`
+                : "The risk it was taken with — nothing is quoting this one"
+        }
+        data-testid={`row-v2-risk-${t.id}`}
+      >
+        {standing?.crossedStop
+          ? "risk —"
+          : riskNow == null
+            ? "no stop"
+            : `risk ${fmtAmount(riskNow)}`}
       </span>
 
       {standing?.crossedStop && (

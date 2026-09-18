@@ -33,7 +33,7 @@ import {
 import { ensureHyperliquid, fetchAllMids, hyperliquidNames, hyperliquidStatus } from "./hyperliquid";
 import { fetchCandlesAt, pairForTradeAt, readCandlesAt } from "./candles";
 import { syncHyperliquid } from "./hl-sync";
-import { venueOfAccount } from "@shared/hyperliquid";
+import { hlAsset, venueOfAccount } from "@shared/hyperliquid";
 
 import {
   binanceSymbolForTrade,
@@ -586,7 +586,7 @@ export async function registerRoutes(
      * ordinary trade it has just become, and so nothing downstream ever sees
      * a row carrying both a typed result and a set of prices.
      */
-    const promotion = promoteScalp({ ...existing, ...trade });
+    const promotion = promoteScalp({ ...existing, ...trade }, trade);
     const trade2 = promotion ? { ...trade, ...promotion } : trade;
     const merged = { ...existing, ...trade2 };
     const missing = missingRisk(merged);
@@ -832,8 +832,12 @@ export async function registerRoutes(
   app.get("/api/hyperliquid/symbols", async (_req, res) => {
     try {
       const perps = await ensureHyperliquid();
+      // Qualified where a builder book lists it, so the picker offers
+      // "vntls:NVDA" and stores something that can only mean one market.
       res.json(
-        perps.filter((p) => !p.delisted).map((p) => ({ name: p.name, maxLeverage: p.maxLeverage })),
+        perps
+          .filter((p) => !p.delisted)
+          .map((p) => ({ name: hlAsset(p), maxLeverage: p.maxLeverage, dex: p.dex ?? null })),
       );
     } catch {
       res.json([]);

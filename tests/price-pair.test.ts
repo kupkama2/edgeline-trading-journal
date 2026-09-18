@@ -61,10 +61,15 @@ describe("reading and writing a chosen pair", () => {
       "binance:BTCUSDT:perp",
       "binance::futures",
       "kraken:BTCUSD:futures",
-      "hyperliquid:BTC:futures:extra",
     ]) {
       expect(parsePricePair(bad as any)).toBeNull();
     }
+  });
+
+  it("keeps every colon after the first for Hyperliquid, where a book qualifies its coins", () => {
+    // "hyperliquid:vntls:NVDA" is a builder book's NVDA, not a malformed
+    // value: splitting on every colon would make the BOOK the symbol.
+    expect(parsePricePair("hyperliquid:vntls:NVDA")?.symbol).toBe("VNTLS:NVDA");
   });
 
   it("names a pair in one line", () => {

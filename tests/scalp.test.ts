@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { describeScalp, parseScalpLine, scalpR } from "../shared/scalp";
+import { promoteScalp } from "../shared/schema";
 import { computeMetrics } from "../shared/metrics";
 import { journalHealth } from "../shared/health";
 import { tradeXp } from "../shared/xp";
@@ -250,5 +251,52 @@ describe("a scalp given real prices", () => {
     const s = trade({ ...scalp, status: "closed", exitTime: new Date().toISOString() });
     expect(pathIncomplete(s)).toBe(false);
     expect(couldLearnMore(s)).toBe(false);
+  });
+});
+
+/**
+ * Marking a trade as a scalp after the fact. The flag decides where every
+ * figure on the row comes from, so a mark that does not survive the request
+ * that made it is worse than no button at all.
+ */
+describe("scalp, said by hand", () => {
+  const priced = {
+    scalp: false as boolean,
+    entryPrice: 100,
+    exitPrice: 120,
+    initialStop: 90,
+    initialTarget: 130,
+  };
+
+  it("promotes a scalp that has been given a full set of prices", () => {
+    expect(promoteScalp({ ...priced, scalp: true })).toEqual({
+      scalp: false,
+      netPnl: null,
+      riskAmount: null,
+      netMfe: null,
+      netMae: null,
+    });
+  });
+
+  it("leaves a scalp alone until it has all four prices", () => {
+    expect(promoteScalp({ ...priced, scalp: true, initialTarget: null })).toBeNull();
+    expect(promoteScalp({ ...priced, scalp: true, exitPrice: null })).toBeNull();
+  });
+
+  it("stands down when the patch itself says this row is a scalp", () => {
+    // Without this the mark was a button that appeared to do nothing: the
+    // write landed and the same request took the flag straight back off.
+    expect(promoteScalp({ ...priced, scalp: true }, { scalp: true })).toBeNull();
+  });
+
+  it("still promotes when the patch is about something else entirely", () => {
+    expect(promoteScalp({ ...priced, scalp: true }, { })).not.toBeNull();
+    expect(promoteScalp({ ...priced, scalp: true }, null)).not.toBeNull();
+  });
+
+  it("promotes when the patch is explicitly turning the flag OFF", () => {
+    // scalp:false is not a claim that the row is a scalp, so nothing is
+    // being overridden — and the result columns still need clearing.
+    expect(promoteScalp({ ...priced, scalp: true }, { scalp: false })).not.toBeNull();
   });
 });

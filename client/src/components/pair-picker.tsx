@@ -22,7 +22,7 @@ import { useToast } from "@/hooks/use-toast";
 import type { TradeWithTags } from "@shared/schema";
 import { describePair, formatPricePair, pairCandidates, parsePricePair } from "@shared/price-pair";
 import { pairForTradeWithFallback } from "@shared/binance";
-import { hlCoinFor, venueOfAccount } from "@shared/hyperliquid";
+import { hlAssetFor, splitHlAsset, venueOfAccount } from "@shared/hyperliquid";
 
 /**
  * Whether the journal can work out a book for this trade on its own — the
@@ -43,7 +43,14 @@ export function needsPair(
   // unknown that renders as a warning is a warning nobody can act on.
   if (binance.length === 0 && hyperliquid.length === 0) return false;
   if (venueOfAccount(trade.account) === "hyperliquid") {
-    if (hlCoinFor(trade.symbol, hyperliquid.map((h) => h.name))) return false;
+    // Same resolver the server matches with, so the two cannot disagree about
+    // which trades are stranded — including on a ticker two builder books
+    // both list, which resolves to neither and belongs in the picker.
+    const listed = hyperliquid.map((h) => {
+      const { dex, coin } = splitHlAsset(h.name);
+      return { name: coin, dex };
+    });
+    if (hlAssetFor(trade.symbol, listed)) return false;
   }
   return pairForTradeWithFallback(trade, binance as any) == null;
 }
