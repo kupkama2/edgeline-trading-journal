@@ -23,7 +23,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Input } from "@/components/ui/input";
 import { CONTRACTS, type ContractSpec } from "@shared/symbols";
 import { useBinanceSymbols, useHyperliquidSymbols } from "@/lib/data";
-import { splitHlAsset } from "@shared/hyperliquid";
+import { hlAssetFor, splitHlAsset } from "@shared/hyperliquid";
+import { pairForTradeWithFallback } from "@shared/binance";
 import type { TradeWithTags } from "@shared/schema";
 import type { Venue } from "@shared/hyperliquid";
 
@@ -37,10 +38,28 @@ interface Option {
   group: Group;
 }
 
-/** Instruments already in the log, most recently traded first. */
-function fromHistory(trades: TradeWithTags[]): Option[] {
-  const seen = new Map<string, { n: number; last: string }>();
+/**
+ * What you have traded, most recent first — and whether the journal can put a
+ * price on it.
+ *
+ * This group is your own history and nothing else: a ticker is here because
+ * you typed it once, not because any venue lists it. That is the right thing
+ * for the top of a picker and it is also a trap, because a name appearing in
+ * a list reads as a name the app knows about. It does not: pick one no venue
+ * quotes and the trade logs perfectly, then never charts, never settles, and
+ * never says why.
+ *
+ * So an instrument nothing can price says so, here, at the moment you are
+ * choosing it. A futures contract is exempt — NQ has no crypto pair and is
+ * not missing one.
+ */
+function fromHistory(
+  trades: TradeWithTags[],
+  canPrice: (symbol: string) => boolean,
+): Option[] {
+  const seen = new Map<string, { n: number; last: string; contract: boolean }>();
   for (const t of trades) {
+    const contract = Boolean(t.contract?.trim());
     const key = (t.contract || t.symbol || "").trim().toUpperCase();
     if (!key) continue;
     const prev = seen.get(key);
@@ -48,13 +67,18 @@ function fromHistory(trades: TradeWithTags[]): Option[] {
     if (prev) {
       prev.n += 1;
       if (last > prev.last) prev.last = last;
-    } else seen.set(key, { n: 1, last });
+    } else seen.set(key, { n: 1, last, contract });
   }
   return Array.from(seen.entries())
     .sort((a, b) => b[1].last.localeCompare(a[1].last))
-    .map(([value, { n }]) => ({
+    .map(([value, { n, contract }]) => ({
       value,
-      detail: `${n} ${n === 1 ? "trade" : "trades"}`,
+      detail: [
+        `${n} ${n === 1 ? "trade" : "trades"}`,
+        !contract && !canPrice(value) ? "no price feed" : null,
+      ]
+        .filter(Boolean)
+        .join(" · "),
       group: "yours" as const,
     }));
 }
@@ -110,7 +134,18 @@ export function SymbolPicker({
   const away: Venue = home === "binance" ? "hyperliquid" : "binance";
 
   const all = useMemo<Option[]>(() => {
-    const mine = fromHistory(trades);
+    /*
+     * The same two resolvers the server prices trades with, so the picker
+     * cannot promise a chart the settler will not deliver.
+     */
+    const hlCoins = hl.map((h) => {
+      const { dex, coin } = splitHlAsset(h.name);
+      return { name: coin, dex };
+    });
+    const canPrice = (symbol: string) =>
+      hlAssetFor(symbol, hlCoins) != null ||
+      pairForTradeWithFallback({ symbol, contract: null }, pairs as any) != null;
+    const mine = fromHistory(trades, canPrice);
     const owned = new Set(mine.map((m) => m.value));
     const table = CONTRACTS
       // A contract already in your log is listed above under "yours"; showing
