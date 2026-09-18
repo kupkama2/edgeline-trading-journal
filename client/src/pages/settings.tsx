@@ -4,6 +4,7 @@ import { fmtAmount } from "@shared/metrics";
 import { latestEquity } from "@shared/equity";
 import { useMemo, useState } from "react";
 import { MembersCard } from "@/components/members-card";
+import { MarketsCard } from "@/components/markets-card";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -903,6 +904,8 @@ export default function Settings() {
           </li>
         </ul>
       </Card>
+
+      <MarketsCard />
 
       <StorageCard />
 

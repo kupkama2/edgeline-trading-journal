@@ -43,6 +43,7 @@ import {
   useCheckTrade,
   useDeleteFill,
   useDeleteTrade,
+  useMarks,
   useMistakeTags,
   useTrades,
   useUpdateTrade,
@@ -50,6 +51,7 @@ import {
 import { parseExtraTargets, parsePlaybook, type TradeWithTags } from "@shared/schema";
 import { computeMetrics, fmtFees, fmtMoney, fmtR, EXIT_REASON_LABELS } from "@shared/metrics";
 import { positionLedger } from "@shared/fills";
+import { standingOf } from "@shared/marks";
 import { parseHighlights } from "@shared/highlights";
 import { aftermathPending, aftermathWindowMs, couldLearnMore, pathIncomplete } from "@shared/aftermath";
 import {
@@ -652,6 +654,23 @@ export function TradeBody({
   );
 
   const m = computeMetrics(trade);
+  /*
+   * Where an open trade stands right now.
+   *
+   * The journal's rows have shown this since marks existed, and the one place
+   * that did not was the page you open to LOOK at the trade — which read two
+   * em-dashes and "still running" beside a chart drawn from the very prices
+   * that would have answered it. The figures are not missing because they are
+   * unknowable; they were simply never asked for here.
+   *
+   * Asked for only while something is open, and only for a trade without a
+   * contract code, which is the same condition the journal uses.
+   */
+  const { data: marks } = useMarks(trade.status === "open" && !trade.contract?.trim());
+  const mark = trade.status === "open" ? (marks?.[trade.id] ?? null) : null;
+  const standing = mark ? standingOf(trade, mark.price) : null;
+  const liveUp = (standing?.pnl ?? 0) >= 0;
+
   /** One line, always — the two-line wrap in a narrow column read as a bug. */
   const when = (iso: string) =>
     new Date(iso).toLocaleString(undefined, {
@@ -999,11 +1018,23 @@ export function TradeBody({
             <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Result</p>
             <p
               className={`font-mono text-3xl font-semibold leading-none ${
-                trade.status !== "closed" ? "" : win ? "text-emerald-400" : "text-primary"
+                trade.status === "closed"
+                  ? win
+                    ? "text-emerald-400"
+                    : "text-primary"
+                  : standing?.currentR != null
+                    ? liveUp
+                      ? "text-emerald-400"
+                      : "text-primary"
+                    : ""
               }`}
               data-testid="view-actual-r"
             >
-              {trade.status === "closed" ? fmtR(m.actualR) : "—"}
+              {trade.status === "closed"
+                ? fmtR(m.actualR)
+                : standing?.currentR != null
+                  ? fmtR(standing.currentR)
+                  : "—"}
             </p>
             <p className="mt-1 text-[10px] text-muted-foreground">
               {/* A scalp was never asked how it ended, so "Other" here is an
@@ -1012,7 +1043,12 @@ export function TradeBody({
                 ? "scalp"
                 : trade.status === "closed"
                   ? EXIT_REASON_LABELS[trade.exitReason ?? "other"]
-                  : "still running"}
+                  : mark
+                    ? /* Said to be live, and priced, because an open trade's
+                         figures are a snapshot rather than a result — and
+                         which book quoted it changes what they mean. */
+                      `open · ${num(mark.price)}${mark.book === "spot" ? " spot" : ""}`
+                    : "still running"}
             </p>
           </div>
           <div>
@@ -1021,11 +1057,23 @@ export function TradeBody({
             </p>
             <p
               className={`font-mono text-xl font-semibold leading-none ${
-                trade.status !== "closed" ? "" : win ? "text-emerald-400" : "text-primary"
+                trade.status === "closed"
+                  ? win
+                    ? "text-emerald-400"
+                    : "text-primary"
+                  : standing?.pnl != null
+                    ? liveUp
+                      ? "text-emerald-400"
+                      : "text-primary"
+                    : ""
               }`}
               data-testid="view-pnl"
             >
-              {trade.status === "closed" ? fmtMoney(m.actualPnL) : "—"}
+              {trade.status === "closed"
+                ? fmtMoney(m.actualPnL)
+                : standing?.pnl != null
+                  ? fmtMoney(standing.pnl)
+                  : "—"}
             </p>
             {(m.fees > 0 || m.funding !== 0) && (
               <p className="mt-1 text-[10px] text-muted-foreground" data-testid="view-pnl-breakdown">
