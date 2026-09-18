@@ -206,6 +206,9 @@ ALTER TABLE trades ADD COLUMN IF NOT EXISTS outcome_source TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS outcome_checked_at TEXT;
 -- Which book to read a trade's prices from, when the ticker could not say.
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS price_pair TEXT;
+-- Every time the stop was moved, as a JSON StopMove[]. The initial stop never
+-- changes — it is the R denominator — so this is where management is kept.
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS stop_moves TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS outcome_hit_at TEXT;
 -- Commission paid on the trade, both sides, in dollars. Deducted in metrics.
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS fees DOUBLE PRECISION;
