@@ -37,6 +37,7 @@ import {
   Trash2,
   Skull,
   Star,
+  X,
   Zap,
 } from "lucide-react";
 import {
@@ -636,6 +637,7 @@ export function TradeBody({
   onResolve,
   onFill,
   onDeleted,
+  onDismiss,
 }: {
   trade: TradeWithTags;
   onEdit: () => void;
@@ -643,6 +645,16 @@ export function TradeBody({
   onResolve: () => void;
   onFill: (kind: "add" | "partial") => void;
   onDeleted: () => void;
+  /**
+   * How to put the trade away, when nothing around it offers that.
+   *
+   * The overlay has its own close button in the corner, so it passes
+   * nothing. Expanded inside the journal there is no corner — and the panel
+   * used to carry a second bar of its own, which left the ticker on screen
+   * three times over: once on the row, once on that bar, once here. Given
+   * this, the header below becomes the sticky one and carries the way out.
+   */
+  onDismiss?: () => void;
 }) {
   const { data: tags = [] } = useMistakeTags();
   const { toast } = useToast();
@@ -805,9 +817,20 @@ export function TradeBody({
   return (
     <div className="space-y-4" data-testid={`page-trade-${trade.id}`}>
       {/* ------------------------------ header ------------------------------ */}
-      {/* The overlay supplies its own close affordance top-right, so the
-          header carries identity and actions only. */}
-      <div className="flex flex-wrap items-center gap-2 pr-8">
+      {/*
+        One header, and where there is no window around it, the one that
+        sticks. A trade is a long panel: the identity and the actions are
+        wanted at the bottom of it as much as the top, and a second bar
+        stacked above this one only repeated the ticker.
+      */}
+      <div
+        className={`flex flex-wrap items-center gap-2 ${
+          onDismiss
+            ? "sticky top-14 z-20 -mx-3 -mt-3 border-b border-border/70 bg-card/95 px-3 py-2 backdrop-blur sm:-mx-4 sm:-mt-4 sm:px-4"
+            : "pr-8"
+        }`}
+        data-testid={`trade-header-${trade.id}`}
+      >
         <span
           className={`flex h-7 w-7 items-center justify-center rounded ${
             trade.direction === "long"
@@ -845,7 +868,10 @@ export function TradeBody({
           data-testid="button-view-tilt"
         >
           <Skull className="h-3 w-3" />
-          {trade.tilt ? "tilt" : "mark tilt"}
+          {/* A word only once there is a verdict. Unset, three chips reading
+              "mark tilt · mark well traded · mark scalp" is a sentence about
+              what you COULD say taking up more room than the trade. */}
+          {trade.tilt && "tilt"}
         </button>
         {/* The other verdict, on the execution rather than the idea. */}
         {!trade.tilt && (
@@ -866,7 +892,7 @@ export function TradeBody({
             data-testid="button-view-well"
           >
             <Star className={`h-3 w-3 ${trade.wellTraded ? "fill-current" : ""}`} />
-            {trade.wellTraded ? "well traded" : "mark well traded"}
+            {trade.wellTraded && "well traded"}
           </button>
         )}
         {/*
@@ -913,7 +939,7 @@ export function TradeBody({
             data-testid="button-view-scalp"
           >
             <Zap className="h-3 w-3" />
-            {trade.scalp ? "scalp" : "mark scalp"}
+            {trade.scalp && "scalp"}
           </button>
         )}
         {trade.account && (
@@ -1001,6 +1027,20 @@ export function TradeBody({
               data-testid="button-view-delete"
             >
               <Trash2 className="h-4 w-4" />
+            </Button>
+          )}
+          {/* The way out, last in the cluster, where a close button goes. */}
+          {onDismiss && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 text-muted-foreground hover:text-foreground"
+              onClick={onDismiss}
+              aria-label="Close this trade"
+              title="Close this trade"
+              data-testid={`button-dismiss-${trade.id}`}
+            >
+              <X className="h-4 w-4" />
             </Button>
           )}
         </div>

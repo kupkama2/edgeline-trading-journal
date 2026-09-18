@@ -41,7 +41,7 @@ import {
 } from "./hyperliquid";
 import { fetchCandlesAt, pairForTradeAt, readCandlesAt } from "./candles";
 import { syncHyperliquid } from "./hl-sync";
-import { hlAsset, venueOfAccount } from "@shared/hyperliquid";
+import { hlAsset, splitHlAsset, venueOfAccount } from "@shared/hyperliquid";
 
 import {
   binanceSymbolForTrade,
@@ -811,10 +811,38 @@ export async function registerRoutes(
 
     const wanted = open.map((t) => ({ t, pair: pairForTradeAt(t, cat, hlNames) }));
     if (wanted.some((w) => w.pair?.venue === "hyperliquid")) {
-      const mids = await fetchAllMids().catch(() => ({}) as Record<string, number>);
+      /*
+       * A price feed per book, because the feed is scoped to one.
+       *
+       * This asked allMids without naming a book and then looked up
+       * "xyz:GOLD" in the answer — a key the unnamed feed does not carry,
+       * because it quotes the coin universe and nothing else. So a trade on a
+       * builder book got no mark: no live P&L, no live R, two dashes beside a
+       * chart drawn from the very prices that would have filled them in.
+       *
+       * The books actually needed, and only those: an open trade on one book
+       * does not make the other nine worth a round trip.
+       */
+      const books = new Set<string>();
+      for (const { pair } of wanted) {
+        if (pair?.venue !== "hyperliquid") continue;
+        const { dex } = splitHlAsset(pair.symbol);
+        if (dex) books.add(dex);
+      }
+      const feeds = new Map<string, Record<string, number>>();
+      feeds.set("", await fetchAllMids().catch(() => ({}) as Record<string, number>));
+      for (const dex of Array.from(books)) {
+        feeds.set(dex, await fetchAllMids(dex).catch(() => ({}) as Record<string, number>));
+      }
+
       for (const { t, pair } of wanted) {
         if (pair?.venue !== "hyperliquid") continue;
-        const p = mids[pair.symbol];
+        const { dex, coin } = splitHlAsset(pair.symbol);
+        const feed = feeds.get(dex ?? "") ?? {};
+        // A scoped feed may key its markets bare or qualified; try both, and
+        // fall back to the unnamed feed for the venue's own coins.
+        const p =
+          feed[coin] ?? feed[pair.symbol] ?? (dex ? undefined : feeds.get("")?.[pair.symbol]);
         if (p) out[t.id] = { price: p, at, venue: "hyperliquid", book: "perp" };
       }
     }

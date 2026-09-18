@@ -69,7 +69,15 @@ describe("reading and writing a chosen pair", () => {
   it("keeps every colon after the first for Hyperliquid, where a book qualifies its coins", () => {
     // "hyperliquid:vntls:NVDA" is a builder book's NVDA, not a malformed
     // value: splitting on every colon would make the BOOK the symbol.
-    expect(parsePricePair("hyperliquid:vntls:NVDA")?.symbol).toBe("VNTLS:NVDA");
+    expect(parsePricePair("hyperliquid:vntls:NVDA")?.symbol).toBe("vntls:NVDA");
+  });
+
+  it("keeps Hyperliquid's own spelling, which the venue is case-sensitive about", () => {
+    // A book is named as its deployer wrote it and goes back as the `dex` on
+    // every request; the venue writes a thousand-lot with a small k. Upper-
+    // casing either asks about something that does not exist.
+    expect(parsePricePair("hyperliquid:kPEPE")?.symbol).toBe("kPEPE");
+    expect(parsePricePair("hyperliquid:xyz:GOLD")?.symbol).toBe("xyz:GOLD");
   });
 
   it("names a pair in one line", () => {

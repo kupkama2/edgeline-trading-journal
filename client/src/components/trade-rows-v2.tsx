@@ -438,7 +438,16 @@ export function OpenTradeRowV2({
 
       <span className="min-w-0 flex-1" />
 
-      <span className="flex shrink-0 items-center gap-1 sm:opacity-0 sm:transition-opacity sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
+      {/* Nothing while the trade is open below: its own header carries Take,
+          Add, Edit and the rest, and a second set on the row was the same
+          buttons twice with the ticker between them. */}
+      <span
+        className={`flex shrink-0 items-center gap-1 ${
+          expanded
+            ? "hidden"
+            : "sm:opacity-0 sm:transition-opacity sm:group-hover:opacity-100 sm:group-focus-within:opacity-100"
+        }`}
+      >
         <Button
           type="button"
           variant="outline"
