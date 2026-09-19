@@ -80,9 +80,16 @@ export async function readCandlesAt(
   startMs: number,
   endMs: number,
   maxBars = 5000,
+  /**
+   * Whether the run may BEGIN after the window does, when the archive has no
+   * files that far back — a newly listed coin. The chart says yes; the
+   * settler must not, and the default is its answer. See the prefix rule in
+   * binance-archive.ts.
+   */
+  allowLateStart = false,
 ): Promise<CandleRead> {
   if (pair.venue === "hyperliquid") return readHlCandles(pair.symbol, interval, startMs, endMs, maxBars);
-  return readCandles(pair, interval, startMs, endMs, maxBars);
+  return readCandles(pair, interval, startMs, endMs, maxBars, allowLateStart);
 }
 
 /** Just the bars, for callers that do not care where they came from. */
