@@ -2,6 +2,7 @@ import { createContext, useContext, useMemo, useState } from "react";
 import { DollarSign, Ruler } from "lucide-react";
 import { store } from "@/lib/scoped-storage";
 import { fmtMoney, fmtR } from "@shared/metrics";
+import { usePublicMode } from "@/lib/public-mode";
 
 /**
  * R or dollars — which unit the statistics are read in.
@@ -45,8 +46,20 @@ export function DenomProvider({ children }: { children: React.ReactNode }) {
   return <DenomCtx.Provider value={value}>{children}</DenomCtx.Provider>;
 }
 
+/**
+ * The unit in force — which is R, whatever the switch says, while the journal
+ * is being shown to somebody.
+ *
+ * Public mode masks amounts, so a statistics page left on USD would not read
+ * as private, it would read as broken: a column of identical dots where the
+ * numbers were. R is the unit that survives the mode intact, and it is the
+ * one the journal is kept in anyway, so the switch is overridden rather than
+ * obeyed and the button says why.
+ */
 export function useDenom() {
-  return useContext(DenomCtx);
+  const ctx = useContext(DenomCtx);
+  const { isPublic } = usePublicMode();
+  return isPublic ? { ...ctx, denom: "R" as const } : ctx;
 }
 
 /**
@@ -72,6 +85,7 @@ export function useFig() {
 /** The switch itself. */
 export function DenomToggle() {
   const { denom, setDenom } = useDenom();
+  const { isPublic } = usePublicMode();
   return (
     <div
       className="inline-flex shrink-0 rounded-lg border border-border bg-secondary/30 p-0.5"
@@ -88,7 +102,12 @@ export function DenomToggle() {
         <button
           key={id}
           type="button"
-          title={title}
+          title={
+            isPublic && id === "USD"
+              ? "Public mode is on — amounts are withheld, so the figures stay in R"
+              : title
+          }
+          disabled={isPublic && id === "USD"}
           onClick={() => setDenom(id)}
           aria-pressed={denom === id}
           data-testid={`button-denom-${id}`}
@@ -96,7 +115,7 @@ export function DenomToggle() {
             denom === id
               ? "bg-background text-foreground shadow-sm"
               : "text-muted-foreground hover:text-foreground"
-          }`}
+          } ${isPublic && id === "USD" ? "cursor-not-allowed opacity-40" : ""}`}
         >
           <Icon className="h-3.5 w-3.5" />
           {label}

@@ -22,6 +22,7 @@ import { fmtMoney } from "@shared/metrics";
 import { typedSymbol } from "@shared/symbols";
 import { useAddFill } from "@/lib/data";
 import { TimeField, localNow, num, toIso, toLocalInput } from "@/components/trade-shared";
+import { maskIfQuote } from "@shared/redact";
 
 /**
  * Log a scaling event: profit off, or size on.
@@ -272,7 +273,7 @@ export function FillForm({
 
           {fillUnit !== tradeUnit && effSize != null && (
             <p className="font-mono text-[10px] text-muted-foreground" data-testid="fill-converted">
-              = {num(effSize)} {tradeUnit === "quote" ? "USD" : "units"} at this price
+              = {maskIfQuote(tradeUnit, num(effSize))} {tradeUnit === "quote" ? "USD" : "units"} at this price
             </p>
           )}
           {problem && (

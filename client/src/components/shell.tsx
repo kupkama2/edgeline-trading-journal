@@ -5,6 +5,7 @@ import {
   BarChart3,
   CalendarDays, CalendarRange,
   Check,
+  EyeOff,
   LineChart,
   NotebookPen,
   Palette,
@@ -12,6 +13,7 @@ import {
 } from "lucide-react";
 import { XpChip, XpToaster } from "@/components/xp";
 import { useLayout, type LayoutVersion } from "@/lib/layout";
+import { usePublicMode } from "@/lib/public-mode";
 import { AccountMenu } from "@/components/account-menu";
 import {
   DropdownMenu,
@@ -191,6 +193,32 @@ function LayoutSwitch() {
   );
 }
 
+/**
+ * A reminder that the figures are being withheld.
+ *
+ * Only ever on screen when the mode is, and it earns its place twice over:
+ * it stops you reading your own masked P&L as a real one, and it stops the
+ * mode being left on for a week because you forgot you turned it on. One
+ * click puts it back — the same click that turned it on, from wherever you
+ * happen to be.
+ */
+function PublicChip() {
+  const { isPublic, setPublic } = usePublicMode();
+  if (!isPublic) return null;
+  return (
+    <button
+      type="button"
+      onClick={() => setPublic(false)}
+      title="Public mode is on — amounts are withheld. Click to show them again."
+      data-testid="chip-public-mode"
+      className="flex shrink-0 items-center gap-1 rounded-md border border-amber-500/50 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-500 transition-colors hover:bg-amber-500/20"
+    >
+      <EyeOff className="h-3 w-3" />
+      <span className="hidden sm:inline">Public</span>
+    </button>
+  );
+}
+
 export function Shell({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
 
@@ -231,6 +259,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
           </nav>
 
           <div className="ml-auto flex items-center gap-2">
+            <PublicChip />
             <XpChip />
             <LayoutSwitch />
             <ThemePicker />

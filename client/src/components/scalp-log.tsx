@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { ChevronDown, Ban, Undo2, Zap } from "lucide-react";
 import { useCreateTrade, useDeleteTrade, useStyles, useTrades } from "@/lib/data";
 import { store } from "@/lib/scoped-storage";
-import { computeMetrics, fmtMoney } from "@shared/metrics";
+import { computeMetrics, fmtAmount, fmtMoney } from "@shared/metrics";
 import { describeScalp, parseScalpLine } from "@shared/scalp";
 import { entriesOn } from "@shared/tilt";
 import { styleColor } from "@/lib/style-filter";
@@ -247,7 +247,7 @@ export function ScalpLog({
             {parsed == null
               ? `Ticker, what it made, and what it risked. ${
                   style?.defaultRisk
-                    ? `Leave the risk off and ${style.name} assumes $${style.defaultRisk}.`
+                    ? `Leave the risk off and ${style.name} assumes ${fmtAmount(style.defaultRisk)}.`
                     : "Set a usual risk on this book in Settings and you can leave it off."
                 }`
               : parsed.ok

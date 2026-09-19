@@ -4,6 +4,7 @@ import { fmtAmount } from "@shared/metrics";
 import { latestEquity } from "@shared/equity";
 import { useMemo, useState } from "react";
 import { MembersCard } from "@/components/members-card";
+import { usePublicMode } from "@/lib/public-mode";
 import { MarketsCard } from "@/components/markets-card";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -11,7 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
-import { Check, Pencil, Plus, Trash2, X } from "lucide-react";
+import { Check, Eye, EyeOff, Pencil, Plus, Trash2, X } from "lucide-react";
 import {
   useMistakeTags,
   useCreateTag,
@@ -163,7 +164,7 @@ function AccountFeesRow({
         {(
           [
             { k: "percent", l: "% notional" },
-            { k: "perContract", l: "$ / contract" },
+            { k: "perContract", l: "per contract" },
           ] as const
         ).map(({ k, l }) => (
           <button
@@ -733,6 +734,8 @@ export default function Settings() {
         </p>
       </div>
 
+      <PublicModeCard />
+
       <StylesCard />
 
       <AccountFeesCard />
@@ -920,6 +923,51 @@ export default function Settings() {
  * meaningfully consume a 512 MB free-tier database, so their cost gets a
  * gauge — storage problems should be watched approaching, not discovered.
  */
+/**
+ * The switch that makes the journal showable.
+ *
+ * Kept at the top of Settings rather than buried with the appearance bits,
+ * because it is the one setting here you turn on for a reason that is about to
+ * happen — a screen share, a screenshot, somebody looking over your shoulder —
+ * and having to hunt for it is having to hunt for it in front of them.
+ */
+function PublicModeCard() {
+  const { isPublic, setPublic } = usePublicMode();
+  return (
+    <Card className="border-card-border bg-card p-4 sm:p-5" data-testid="card-public-mode">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="flex items-center gap-2 text-sm font-semibold tracking-tight">
+            {isPublic ? <EyeOff className="h-4 w-4 text-amber-500" /> : <Eye className="h-4 w-4" />}
+            Public mode
+          </h2>
+          <p className="mt-0.5 max-w-prose text-[11px] leading-snug text-muted-foreground">
+            Withholds every figure in your account's own currency — P&amp;L, fees, 1R, position
+            size in USD, the balances and the equity axis — and leaves the rest of the journal
+            exactly as it is. R, the verdicts, the win rate, the expectancy and the shape of the
+            curve all still read, because none of them say how much money you have.
+          </p>
+          <p className="mt-1.5 text-[11px] leading-snug text-muted-foreground">
+            Nothing is changed or deleted, and the statistics stay in R while it is on. Turn it
+            off and the same numbers are where they were.
+          </p>
+        </div>
+        <Button
+          type="button"
+          variant={isPublic ? "default" : "outline"}
+          size="sm"
+          onClick={() => setPublic(!isPublic)}
+          aria-pressed={isPublic}
+          className="h-8 shrink-0 text-[11px]"
+          data-testid="button-public-mode"
+        >
+          {isPublic ? "On — amounts hidden" : "Off"}
+        </Button>
+      </div>
+    </Card>
+  );
+}
+
 function StorageCard() {
   const { data } = useStorageUsage();
   if (!data) return null;

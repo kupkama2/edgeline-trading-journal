@@ -66,6 +66,7 @@ import {
 } from "@/lib/trade-draft";
 import { FillForm } from "@/components/fill-dialog";
 import { typedSymbol } from "@shared/symbols";
+import { maskIfQuote } from "@shared/redact";
 
 /**
  * Editing a trade, as a panel rather than a window.
@@ -1292,7 +1293,7 @@ export function TradeEditor({
                           {fl.kind === "add" ? "added" : "took"}
                         </Badge>
                         <span className="font-mono">
-                          {num(fl.size)}
+                          {maskIfQuote(trade.sizeUnit, num(fl.size))}
                           {trade.sizeUnit === "quote" ? " USD" : ""} @ {num(fl.price)}
                         </span>
                         <span className="truncate text-[11px] text-muted-foreground">
@@ -1323,7 +1324,7 @@ export function TradeEditor({
                     <p className="text-[11px] leading-snug text-muted-foreground">
                       Log it as one round trip instead:{" "}
                       <span className="font-mono text-foreground">
-                        {num(merged.size)}
+                        {maskIfQuote(trade.sizeUnit, num(merged.size))}
                         {trade.sizeUnit === "quote" ? " USD" : ""} @ {num(merged.entryPrice)}{" "}
                         &rarr; {num(merged.exitPrice)}
                       </span>

@@ -25,6 +25,7 @@ import { FillLogReview } from "@/components/import-fills";
 import type { LoggedFill } from "@shared/order-log";
 import type { FillRowParseResult } from "@shared/schema";
 import { useStyleFilter } from "@/lib/style-filter";
+import { maskIfQuote } from "@shared/redact";
 
 /**
  * Paste-import for resting orders.
@@ -604,7 +605,7 @@ export function ImportTradesDialog({
                     </span>
 
                     <span className="font-mono text-[11px]">
-                      {num(r.size)}
+                      {maskIfQuote(r.sizeUnit, num(r.size))}
                       <span className="ml-1 text-muted-foreground">
                         {r.sizeUnit === "quote" ? "USD" : "ct"}
                       </span>

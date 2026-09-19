@@ -1,5 +1,6 @@
 import type { Trade, TradeFill, TradeWithTags } from "./schema";
 import { totalPnLWithFills } from "./fills";
+import { maskAmount } from "./redact";
 
 export interface TradeMetrics {
   risk: number; // per-unit risk in price terms
@@ -484,6 +485,11 @@ export function fmtR(v: number | null | undefined, digits = 2): string {
 }
 
 export function fmtMoney(v: number | null | undefined): string {
+  // Before the missing check, not after: a withheld figure must read the same
+  // whether or not it happens to be recorded, or the mask itself says which
+  // trades have numbers on them.
+  const masked = maskAmount();
+  if (masked) return masked;
   if (v == null || !isFinite(v)) return "—";
   const sign = v < 0 ? "-" : v > 0 ? "+" : "";
   return `${sign}${fmtAmount(v)}`;
@@ -494,6 +500,8 @@ export function fmtMoney(v: number | null | undefined): string {
  * the words around them — "$310 lost" must not render as "+$310 lost".
  */
 export function fmtAmount(v: number | null | undefined, forceDigits?: 0 | 2): string {
+  const masked = maskAmount();
+  if (masked) return masked;
   if (v == null || !isFinite(v)) return "—";
   const a = Math.abs(v);
   // Whole dollars once the figure is big enough that cents are noise, but
@@ -516,6 +524,8 @@ export function fmtAmount(v: number | null | undefined, forceDigits?: 0 | 2): st
  * dollar that made it worth typing.
  */
 export function fmtFees(v: number | null | undefined): string {
+  const masked = maskAmount();
+  if (masked) return masked;
   if (v == null || !isFinite(v)) return "—";
   return `$${Math.abs(v).toLocaleString(undefined, {
     minimumFractionDigits: 2,
