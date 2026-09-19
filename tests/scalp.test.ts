@@ -97,9 +97,16 @@ describe("what it borrows", () => {
 
 describe("the line it shows back to you", () => {
   it("says the R, and admits when the risk was assumed", () => {
-    expect(describeScalp(ok("btc 100 50"))).toBe("BTC +$100, risked $50, so +2.00R");
+    /*
+     * The risk reads "$50.00" rather than "$50" because it now goes through
+     * the app's own money formatter instead of being interpolated raw — which
+     * is what puts it behind public mode's mask along with every other
+     * amount. The rule below $100 is cents, and a sentence that used to print
+     * an unformatted number now agrees with the rest of the journal.
+     */
+    expect(describeScalp(ok("btc 100 50"))).toBe("BTC +$100, risked $50.00, so +2.00R");
     expect(describeScalp(ok("btc 100", { defaultRisk: 50 }))).toBe(
-      "BTC +$100, risked $50 (your default), so +2.00R",
+      "BTC +$100, risked $50.00 (your default), so +2.00R",
     );
   });
 
@@ -108,7 +115,9 @@ describe("the line it shows back to you", () => {
   });
 
   it("says the direction when it is not the usual one", () => {
-    expect(describeScalp(ok("btc short -20 40"))).toBe("BTC short -$20.00, risked $40, so -0.50R");
+    expect(describeScalp(ok("btc short -20 40"))).toBe(
+      "BTC short -$20.00, risked $40.00, so -0.50R",
+    );
   });
 });
 

@@ -29,7 +29,7 @@
  *      and one in another and then compare their means.
  */
 import type { Trade, TradeFill } from "./schema";
-import { computeMetrics } from "./metrics";
+import { computeMetrics, fmtAmount } from "./metrics";
 
 /** Fewer than this in a bucket and its mean is not worth printing. */
 export const MIN_PER_BUCKET = 3;
@@ -484,10 +484,12 @@ function ranks(xs: number[]): number[] {
 export function sizingSentence(rep: SizingReport): string | null {
   if (rep.measured === 0) return null;
   if (rep.flatRisk) {
-    return `Your risk barely varies — every trade risks between $${Math.round(
+    return `Your risk barely varies — every trade risks between ${fmtAmount(
       rep.minRisk,
-    )} and $${Math.round(rep.maxRisk)}, against a median of $${Math.round(
+      0,
+    )} and ${fmtAmount(rep.maxRisk, 0)}, against a median of ${fmtAmount(
       rep.medianRisk,
+      0,
     )}. There are no sizes here to compare.`;
   }
   if (rep.buckets.length < 2) {
@@ -498,7 +500,7 @@ export function sizingSentence(rep: SizingReport): string | null {
   const large = rep.buckets[rep.buckets.length - 1];
   const sig = gapInSigmas(large.expectancy, small.expectancy);
   const r = (n: number) => `${n > 0 ? "+" : ""}${n.toFixed(2)}R`;
-  const money = (n: number) => `${n < 0 ? "−" : ""}$${Math.abs(Math.round(n))}`;
+  const money = (n: number) => `${n < 0 ? "−" : ""}${fmtAmount(Math.abs(n), 0)}`;
 
   // A quarter whose ends coincide risked one amount, not a range.
   const range = (b: SizeBucket) =>

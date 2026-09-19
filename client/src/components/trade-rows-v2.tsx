@@ -33,6 +33,7 @@ import type { TradeWithTags } from "@shared/schema";
 import { computeMetrics, fmtAmount, fmtFees, fmtMoney, fmtR } from "@shared/metrics";
 import { tradeVerdict, isWin, type Verdict } from "@shared/verdict";
 import { markWhen, num } from "@/components/trade-shared";
+import { maskIfQuote } from "@shared/redact";
 
 /* ============================== the word ============================== */
 
@@ -399,7 +400,7 @@ export function OpenTradeRowV2({
         className="font-mono text-[11px] text-muted-foreground"
         data-testid={`row-v2-size-${t.id}`}
       >
-        {num(t.size)}
+        {maskIfQuote(t.sizeUnit, num(t.size))}
         {t.sizeUnit === "quote" ? " USD" : ""}
       </span>
       <span
