@@ -11,7 +11,8 @@ import {
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { EyeOff, Loader2 } from "lucide-react";
-import { useCreateTrade } from "@/lib/data";
+import { useAddTradeImage, useCreateTrade, fileToDownscaledDataUrl } from "@/lib/data";
+import { Dropzone } from "@/components/trade-shared";
 import { useStyleFilter } from "@/lib/style-filter";
 
 /**
@@ -25,6 +26,20 @@ import { useStyleFilter } from "@/lib/style-filter";
  * It lands as a cancelled trade with reason 'never_placed', so it stays out of
  * P&L, the daily calendar and every guardrail — it was never a position — while
  * still living in the same table as everything else.
+ *
+ * The prices are OPTIONAL, and that is the point of the form rather than a
+ * concession. A miss priced in R is the better record, but the moment worth
+ * capturing is the one where you are watching the thing go without you, and a
+ * form that demands three levels before it will take anything is a form you
+ * close. A screenshot and a sentence take four seconds, they are what you
+ * actually have at that moment, and an unreviewed note is still infinitely
+ * more than a miss nobody wrote down. Fill the levels in if you have them and
+ * the R comes with them.
+ *
+ * What is NOT optional is reading it back. Every miss joins its week's review
+ * beside the trades that were taken, and the week is not done until it has
+ * been gone over — one pass you talked yourself out of says nothing, six in a
+ * row say what your filter is actually doing.
  */
 export function MissedTradeDialog({
   open,
@@ -40,22 +55,43 @@ export function MissedTradeDialog({
   const [initialTarget, setTarget] = useState("");
   const [notes, setNotes] = useState("");
   const [outcome, setOutcome] = useState<"unknown" | "hit" | "missed">("unknown");
+  const [image, setImage] = useState<string | null>(null);
+  const [shrinking, setShrinking] = useState(false);
   const { toast } = useToast();
   const create = useCreateTrade();
+  const addImage = useAddTradeImage();
   const { activeStyleId } = useStyleFilter();
 
-  const nums = {
-    entryPrice: Number(entryPrice),
-    initialStop: Number(initialStop),
-    initialTarget: Number(initialTarget),
+  /** A level that was typed and makes sense, or null. */
+  const level = (v: string) => {
+    const n = Number(v.trim());
+    return v.trim() !== "" && isFinite(n) && n > 0 ? n : null;
   };
-  // Stop and target are required here even though a cancelled trade doesn't
-  // normally need them: without both there is no R to price the miss in, and an
-  // unpriceable missed trade is just a note.
-  const ready =
-    symbol.trim() !== "" &&
-    Object.values(nums).every((n) => isFinite(n) && n > 0) &&
+  const nums = {
+    entryPrice: level(entryPrice),
+    initialStop: level(initialStop),
+    initialTarget: level(initialTarget),
+  };
+  /*
+   * All three, or none of them, as far as R is concerned. One level on its own
+   * prices nothing, and two of three is the shape that looks like a record and
+   * is not — so the R only appears once the set is complete and the entry and
+   * the stop are actually apart.
+   */
+  const priced =
+    nums.entryPrice != null &&
+    nums.initialStop != null &&
+    nums.initialTarget != null &&
     nums.entryPrice !== nums.initialStop;
+
+  /*
+   * A ticker, and something to look at. The something can be either — a chart
+   * with no words is still the setup, and a sentence with no chart is still
+   * the reason — but both missing leaves a row that says a name and a date,
+   * which is not a thing anybody can review.
+   */
+  const said = notes.trim() !== "" || image != null;
+  const ready = symbol.trim() !== "" && said;
 
   function reset() {
     setSymbol("");
@@ -65,12 +101,13 @@ export function MissedTradeDialog({
     setTarget("");
     setNotes("");
     setOutcome("unknown");
+    setImage(null);
   }
 
   async function save() {
     if (!ready) return;
     try {
-      await create.mutateAsync({
+      const saved: any = await create.mutateAsync({
         trade: {
           styleId: activeStyleId,
           symbol: symbol.trim().toUpperCase(),
@@ -80,7 +117,10 @@ export function MissedTradeDialog({
           // figures obviously nominal.
           size: 1,
           sizeUnit: "base",
-          entryPrice: nums.entryPrice,
+          // Zero where no entry was typed, the way a scalp carries zero: not a
+          // price of nothing, the absence of one. Nothing measures a cancelled
+          // trade, and the chart already reads a zero entry as "no level".
+          entryPrice: nums.entryPrice ?? 0,
           initialStop: nums.initialStop,
           initialTarget: nums.initialTarget,
           entryTime: new Date().toISOString(),
@@ -91,12 +131,29 @@ export function MissedTradeDialog({
         },
         mistakeTagIds: [],
       });
+      /*
+       * The screenshot follows the trade rather than riding with it: images go
+       * to their own table through their own route. A failure here loses the
+       * picture and keeps the miss, which is the right way round — the record
+       * that you passed is the part that cannot be reconstructed later.
+       */
+      if (image && saved?.id != null) {
+        try {
+          await addImage.mutateAsync({ tradeId: saved.id, kind: "setup", data: image });
+        } catch {
+          toast({
+            title: "Logged, but the screenshot didn't attach",
+            description: "The miss is saved. Add the picture from the trade if you want it.",
+          });
+        }
+      }
       toast({
         title: "Missed trade logged",
-        description:
-          outcome === "unknown"
+        description: priced
+          ? outcome === "unknown"
             ? "Mark what it did later and it starts counting."
-            : "Priced against the trades you did take.",
+            : "Priced against the trades you did take."
+          : "It joins this week's review.",
       });
       reset();
       onClose();
@@ -109,11 +166,10 @@ export function MissedTradeDialog({
     }
   }
 
-  const rr =
-    ready && Math.abs(nums.entryPrice - nums.initialStop) > 0
-      ? Math.abs(nums.initialTarget - nums.entryPrice) /
-        Math.abs(nums.entryPrice - nums.initialStop)
-      : null;
+  const rr = priced
+    ? Math.abs(nums.initialTarget! - nums.entryPrice!) /
+      Math.abs(nums.entryPrice! - nums.initialStop!)
+    : null;
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
@@ -126,6 +182,33 @@ export function MissedTradeDialog({
         </DialogHeader>
 
         <div className="space-y-3">
+          {/* First, because it is what you have. The moment worth catching is
+              the one where the thing is going without you, and at that moment
+              the chart is already on screen and the levels are not in your
+              head. */}
+          <Dropzone
+            testId="dropzone-missed"
+            label="Drop the chart"
+            hint="Paste, drop or click. This is the record — the numbers below are optional."
+            image={image}
+            busy={shrinking}
+            onFile={async (f) => {
+              setShrinking(true);
+              try {
+                setImage(await fileToDownscaledDataUrl(f));
+              } catch (err: any) {
+                toast({
+                  title: "Couldn't read that image",
+                  description: String(err?.message ?? err).slice(0, 160),
+                  variant: "destructive",
+                });
+              } finally {
+                setShrinking(false);
+              }
+            }}
+            onClear={() => setImage(null)}
+          />
+
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
               <Label className="text-[11px]">Symbol</Label>
@@ -156,6 +239,19 @@ export function MissedTradeDialog({
             </div>
           </div>
 
+          <div className="space-y-1">
+            <Label className="text-[11px]">Why didn't you take it?</Label>
+            <Textarea
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="waited for a retest that never came · already down on the day · wasn't at the desk"
+              className="h-16 text-xs"
+              data-testid="input-missed-notes"
+            />
+          </div>
+
+          {/* Below the fold of attention on purpose: they make the miss
+              measurable, and nothing here waits on them. */}
           <div className="grid grid-cols-3 gap-3">
             {(
               [
@@ -165,7 +261,7 @@ export function MissedTradeDialog({
               ] as const
             ).map(([label, value, set, id]) => (
               <div key={id} className="space-y-1">
-                <Label className="text-[11px]">{label}</Label>
+                <Label className="text-[11px] text-muted-foreground">{label}</Label>
                 <Input
                   value={value}
                   onChange={(e) => set(e.target.value)}
@@ -178,12 +274,16 @@ export function MissedTradeDialog({
             ))}
           </div>
 
-          {rr != null && (
-            <p className="text-[11px] text-muted-foreground" data-testid="text-missed-rr">
-              Planned <span className="font-mono font-semibold">{rr.toFixed(2)}R</span> — what this
-              would have paid if it worked.
-            </p>
-          )}
+          <p className="text-[10px] leading-snug text-muted-foreground" data-testid="text-missed-rr">
+            {rr != null ? (
+              <>
+                Planned <span className="font-mono font-semibold">{rr.toFixed(2)}R</span> — what
+                this would have paid if it worked.
+              </>
+            ) : (
+              "All three levels prices the miss in R against the trades you did take. Leave them and it is a note, which still gets reviewed."
+            )}
+          </p>
 
           <div className="space-y-1">
             <Label className="text-[11px]">What did it do?</Label>
@@ -213,18 +313,16 @@ export function MissedTradeDialog({
             </p>
           </div>
 
-          <div className="space-y-1">
-            <Label className="text-[11px]">Why didn't you take it?</Label>
-            <Textarea
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              placeholder="waited for a retest that never came · already down on the day · wasn't at the desk"
-              className="h-16 text-xs"
-              data-testid="input-missed-notes"
-            />
-          </div>
-
-          <div className="flex items-center justify-end gap-2 border-t border-border pt-3">
+          <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border pt-3">
+            {/* Says what is missing rather than leaving a dead button to be
+                stared at. */}
+            {!ready && (
+              <p className="mr-auto text-[10px] text-muted-foreground" data-testid="text-missed-need">
+                {symbol.trim() === ""
+                  ? "Needs a ticker."
+                  : "Needs a chart or a sentence — something to read back on Sunday."}
+              </p>
+            )}
             <Button variant="ghost" size="sm" onClick={onClose}>
               Cancel
             </Button>

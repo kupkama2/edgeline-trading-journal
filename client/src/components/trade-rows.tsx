@@ -12,11 +12,12 @@ import { tiltFromHere } from "@shared/tilt";
 import { isWellTraded } from "@shared/well-traded";
 import { parseExtraTargets, type TradeWithTags } from "@shared/schema";
 import { parseHighlights } from "@shared/highlights";
-import { computeMetrics, fmtFees, fmtMoney, fmtR, EXIT_REASON_LABELS } from "@shared/metrics";
+import { computeMetrics, fmtAmount, fmtFees, fmtMoney, fmtR, EXIT_REASON_LABELS } from "@shared/metrics";
 import { positionLedger } from "@shared/fills";
 import { outcomeParked, outcomeUnknown } from "@shared/aftermath";
 import { StyleChip } from "@/components/style-switcher";
 import { markWhen, num, parseTags, RationaleTags } from "@/components/trade-shared";
+import { maskIfQuote } from "@shared/redact";
 
 /* ============================== trade rows ============================ */
 
@@ -259,7 +260,7 @@ export function PendingTradeRow({
             control or a name; the size-at-price can lose its tail on a phone
             and still say what it needs to. */}
         <span className="min-w-0 truncate font-mono text-[11px] text-muted-foreground">
-          {t.size}
+          {maskIfQuote(t.sizeUnit, String(t.size))}
           {t.sizeUnit === "quote" ? " USD" : ""} @ {num(t.entryPrice)}
         </span>
         {/* A resting order that has sat for days is usually a decision nobody
@@ -608,7 +609,7 @@ export function ClosedTradeRow({
           line says what it does have. */}
       {t.scalp ? (
         <div className="mt-1.5 font-mono text-[11px] text-muted-foreground">
-          {t.riskAmount != null ? `risked $${t.riskAmount}` : "no risk recorded"}
+          {t.riskAmount != null ? `risked ${fmtAmount(t.riskAmount)}` : "no risk recorded"}
           {t.netMfe != null || t.netMae != null
             ? ` · showed ${fmtMoney(t.netMae ?? 0)} to ${fmtMoney(t.netMfe ?? 0)}`
             : ""}

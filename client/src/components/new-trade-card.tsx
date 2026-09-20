@@ -19,7 +19,7 @@ import { ArrowDownRight, ArrowUpRight, Ban, CheckCircle2, ChevronDown, Clipboard
 import { useTrades, useMistakeTags, useStyles, useCreateTrade, useAddTradeImage, archiveDataUrl, parseScreenshot, fileToDownscaledDataUrl, analyzeRationale } from "@/lib/data";
 import { styleColor, styleName, useStyleFilter } from "@/lib/style-filter";
 import { parsePlaybook } from "@shared/schema";
-import { EXIT_REASON_LABELS } from "@shared/metrics";
+import { EXIT_REASON_LABELS, fmtAmount } from "@shared/metrics";
 import { useDemonGuard, useTiltGuard } from "@/components/daily-guard";
 import { fmtCountdown } from "@/components/tilt-meter";
 import { signalSentence, tiltSignals } from "@shared/tilt";
@@ -1412,7 +1412,7 @@ export function NewTradeCard({
                   <span className="text-foreground">
                     {sized.sizeUnit === "base"
                       ? `${sized.size} ${sized.size === 1 ? "contract" : "contracts"}`
-                      : `$${sized.size.toLocaleString()}`}
+                      : fmtAmount(sized.size, 0)}
                   </span>
                   {sized.sizeUnit === "base" && sized.size > 0 && (
                     <> · risks ${Math.round(sized.actualRiskDollars)}</>
@@ -1739,7 +1739,7 @@ export function NewTradeCard({
                 <span>
                   Risk{" "}
                   <span className="text-foreground">
-                    {preview.riskDollars != null ? `$${num(preview.riskDollars, 0)}` : "—"}
+                    {preview.riskDollars != null ? fmtAmount(preview.riskDollars, 0) : "—"}
                   </span>
                   {/* The same risk as a share of the account, once a balance
                       is logged — the number the sizing read is really about. */}

@@ -17,7 +17,7 @@
  * being typed the wrong way round; anything else is caught by the line of
  * plain English the form shows before you commit.
  */
-import { fmtMoney } from "./metrics";
+import { fmtAmount, fmtMoney } from "./metrics";
 
 export interface ScalpDraft {
   symbol: string;
@@ -135,5 +135,5 @@ export function describeScalp(s: ScalpDraft): string {
   if (s.riskAmount == null) return `${head}, no risk set, so money only`;
   const from = s.riskFrom === "default" ? " (your default)" : "";
   const rTxt = r == null ? "" : `, so ${r > 0 ? "+" : ""}${r.toFixed(2)}R`;
-  return `${head}, risked $${s.riskAmount}${from}${rTxt}`;
+  return `${head}, risked ${fmtAmount(s.riskAmount)}${from}${rTxt}`;
 }

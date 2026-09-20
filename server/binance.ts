@@ -187,7 +187,22 @@ async function get(base: string, path: string, timeoutMs = 12_000): Promise<any>
       // diagnosis and a shrug.
       throw new Error(`${new URL(base).hostname} → HTTP ${res.status} on ${path.split("?")[0]}`);
     }
-    return await res.json();
+    /*
+     * A 200 whose body is not JSON.
+     *
+     * res.json() throws "Unexpected end of JSON input" for an empty body, and
+     * that string went all the way to the chart card as the explanation for
+     * why there was no chart — a sentence about a parser, printed to somebody
+     * asking about a market. The status errors above go to the trouble of
+     * naming the host; losing it here is the difference between a diagnosis
+     * and a shrug.
+     */
+    try {
+      return await res.json();
+    } catch (err: any) {
+      const why = String(err?.message ?? err);
+      throw new Error(`${new URL(base).hostname} → unreadable reply on ${path.split("?")[0]} (${why})`);
+    }
   } finally {
     clearTimeout(timer);
   }
@@ -325,6 +340,9 @@ export async function readCandles(
   startMs: number,
   endMs: number,
   maxBars = 5000,
+  /** See binance-archive's prefix rule — the chart may begin late, the
+      settler may not. */
+  allowLateStart = false,
 ): Promise<CandleRead> {
   try {
     const candles = await liveCandles(pair, interval, startMs, endMs, maxBars);
@@ -339,7 +357,7 @@ export async function readCandles(
     const last = candles.length ? candles[candles.length - 1].t : startMs;
     return { candles, coveredTo: truncated ? last : endMs, source: "api" };
   } catch (err) {
-    const read = await archiveCandles(pair, interval, startMs, endMs);
+    const read = await archiveCandles(pair, interval, startMs, endMs, allowLateStart);
     if (read.candles.length === 0) {
       // Nothing from either place. The API's own words are the more useful
       // ones — "451 from fapi.binance.com" is a diagnosis, "no file for

@@ -38,6 +38,7 @@ import { filterByScope, useStyleFilter } from "@/lib/style-filter";
 import {
   aggregate,
   computeMetrics,
+  fmtAmount,
   fmtMoney,
   fmtR,
   mistakeCostLeaderboard,
@@ -549,7 +550,7 @@ export default function Dashboard({ embedded = false }: { embedded?: boolean } =
                 margin={{ top: 0, right: 16, bottom: 0, left: 8 }}
               >
                 <CartesianGrid stroke={C.grid} strokeDasharray="2 4" horizontal={false} />
-                <XAxis type="number" {...axisProps} tickFormatter={(v) => `$${v}`} />
+                <XAxis type="number" {...axisProps} tickFormatter={(v) => fmtAmount(v, 0)} />
                 <YAxis
                   type="category"
                   dataKey="name"

@@ -50,7 +50,7 @@ import {
   useUpdateTrade,
 } from "@/lib/data";
 import { parseExtraTargets, parsePlaybook, type TradeWithTags } from "@shared/schema";
-import { computeMetrics, fmtFees, fmtMoney, fmtR, EXIT_REASON_LABELS } from "@shared/metrics";
+import { computeMetrics, fmtAmount, fmtFees, fmtMoney, fmtR, EXIT_REASON_LABELS } from "@shared/metrics";
 import { positionLedger } from "@shared/fills";
 import { markNote, standingOf } from "@shared/marks";
 import type { LevelDraft } from "@/components/trade-chart";
@@ -86,6 +86,7 @@ import { StopMover } from "@/components/stop-mover";
 import { NewTradeCard } from "@/components/new-trade-card";
 import { FillDialog } from "@/components/fill-dialog";
 import { ResolveTradeDialog } from "@/components/resolve-trade";
+import { maskIfQuote } from "@shared/redact";
 
 /** A figure the page will let you correct without opening the editor. */
 export interface Editable {
@@ -712,7 +713,7 @@ export function TradeBody({
       hour: "2-digit",
       minute: "2-digit",
     });
-  const sizeText = `${num(trade.size)}${trade.sizeUnit === "quote" ? " USD" : ""}`;
+  const sizeText = `${maskIfQuote(trade.sizeUnit, num(trade.size))}${trade.sizeUnit === "quote" ? " USD" : ""}`;
   // For a contract quoted in dollars per coin or per ounce, what the position
   // actually holds is the more useful of the two.
   const sizeHint =
@@ -1185,7 +1186,7 @@ export function TradeBody({
             <>
               <Fig
                 label="1R"
-                value={m.riskDollars > 0 ? `$${num(m.riskDollars, 0)}` : "—"}
+                value={m.riskDollars > 0 ? fmtAmount(m.riskDollars, 0) : "—"}
                 hint={m.riskDollars > 0 ? "risked" : "no risk recorded"}
               />
               <Fig
@@ -1207,7 +1208,7 @@ export function TradeBody({
           <>
           <Fig
             label="1R"
-            value={`$${num(m.riskDollars, 0)}`}
+            value={fmtAmount(m.riskDollars, 0)}
             hint={
               riskPercent(m.riskDollars, equityThen) != null
                 ? `${num(m.risk)} pts · ${fmtPercent(riskPercent(m.riskDollars, equityThen))} of equity`
@@ -1689,7 +1690,7 @@ export function TradeBody({
                         {f.kind === "add" ? "added" : "took"}
                       </Badge>
                       <span className="font-mono">
-                        {num(f.size)}
+                        {maskIfQuote(trade.sizeUnit, num(f.size))}
                         {trade.sizeUnit === "quote" ? " USD" : ""} @ {num(f.price)}
                       </span>
                       <span className="truncate text-[11px] text-muted-foreground">

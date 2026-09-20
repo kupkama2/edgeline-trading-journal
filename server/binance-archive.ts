@@ -24,6 +24,22 @@
  * read the tenth, and a stop that was hit on day three becomes a target hit
  * on day ten. That is a confident wrong answer, and never returning one is
  * the whole contract this module lives under.
+ *
+ * `allowLateStart` bends the rule at ONE end, and only for a caller that says
+ * so. A coin listed three weeks ago has no file for the month before it
+ * existed, and a chart window routinely reaches back further than the listing
+ * — so a leading run of missing files used to return nothing at all, and the
+ * chart said the feed was broken about a coin whose last five days read
+ * perfectly. Skipping forward to the first file that answers is safe there,
+ * because nothing has been gathered yet for the gap to sit between: the run
+ * is still contiguous, it merely begins later than it was asked to.
+ *
+ * It is NOT safe for the settler, which is why it is off by default. That
+ * window starts at the ENTRY, so a missing file at its start is not a coin
+ * that did not exist — it is the entry day itself unread, and scanning from
+ * day two would report a target hit on day ten for a stop that went on day
+ * one. Exactly the wrong answer above. The settler asks for the strict read
+ * and gets "not yet" instead, which is the honest reply.
  */
 import { unzipSync, strFromU8 } from "fflate";
 import { fetch as undiciFetch } from "undici";
@@ -235,6 +251,12 @@ export async function archiveCandles(
   interval: string,
   startMs: number,
   endMs: number,
+  /**
+   * Let the run BEGIN later than it was asked to, when the files at the start
+   * of the window are not there. Off by default, and see the rule below for
+   * why the default is the one that matters.
+   */
+  allowLateStart = false,
 ): Promise<ArchiveRead> {
   const pieces = archivePlan(pair.symbol, pair.market, interval, startMs, endMs);
   const candles: Candle[] = [];
@@ -249,15 +271,41 @@ export async function archiveCandles(
    * saves the sequential version's fifteen-second wait on a month of days.
    */
   const fetched = await settleAll(pieces, 6, (piece) => fetchPiece(piece.url));
+  /** The first refusal, kept in case there turns out to be nothing at all. */
+  let firstMiss: string | undefined;
   for (let i = 0; i < pieces.length; i++) {
     const r = fetched[i];
     if (r.status === "rejected") {
-      stoppedBecause = String((r.reason as any)?.message ?? r.reason);
+      const why = String((r.reason as any)?.message ?? r.reason);
+      /*
+       * A missing file BEFORE anything has been read is not a hole.
+       *
+       * A coin listed three weeks ago has no file for the month before it
+       * existed, and a chart window routinely reaches back further than the
+       * listing — so this used to give up before it had started and return
+       * nothing at all, while the same coin's last five days read perfectly.
+       * Skipping forward loses no honesty: there is nothing yet for the gap
+       * to sit between, so what comes back is still one contiguous run, it
+       * merely begins later than it was asked to.
+       */
+      if (allowLateStart && candles.length === 0) {
+        firstMiss ??= why;
+        continue;
+      }
+      // Past this point a gap is a real one, and the rule that has always
+      // been right applies: stop, and say where. Bars either side of a
+      // missing day do not join up, and a chart that closes the gap quietly
+      // is drawing a day that did not happen.
+      stoppedBecause = why;
       break;
     }
     candles.push(...r.value);
     coveredTo = Math.min(pieces[i].through, endMs);
   }
+  // Nothing anywhere in the window. "No files for this coin" and "no such
+  // coin" look identical from an empty array, so the refusal goes back with
+  // it — an empty chart with no reason attached is how a dead feed hides.
+  if (candles.length === 0) stoppedBecause ??= firstMiss;
 
   return {
     candles: candles.filter((c) => c.t >= startMs && c.t <= endMs).sort((a, b) => a.t - b.t),

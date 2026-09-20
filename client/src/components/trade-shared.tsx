@@ -112,6 +112,21 @@ export function toLocalInput(iso: string | null | undefined) {
  * Entry time deliberately has no equivalent: on a new trade it already
  * defaults to now, and on an edit it is a past moment you are correcting.
  */
+/**
+ * The line a field's label sits on.
+ *
+ * Fixed height, because the inputs under these have to line up and the labels
+ * do not agree on one by themselves. A level label carries an icon and comes
+ * out at fifteen pixels; a time field carries a Now button and comes out at
+ * nineteen; a plain one carries neither and comes out at eleven. Three
+ * labels, three heights, and three inputs starting at three different places
+ * across one row — which is what a form looks like when it looks broken.
+ *
+ * Twenty, because the tallest of them has a button in it and a button is the
+ * one that cannot be squeezed.
+ */
+export const LABEL_ROW = "flex h-5 items-center";
+
 export function TimeField({
   label,
   value,
@@ -125,7 +140,7 @@ export function TimeField({
 }) {
   return (
     <div className="space-y-1">
-      <div className="flex items-center justify-between gap-2">
+      <div className={`${LABEL_ROW} justify-between gap-2`}>
         <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
           {label}
         </label>

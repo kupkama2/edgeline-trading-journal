@@ -967,7 +967,14 @@ export async function registerRoutes(
       let held = lastReadable.get(key);
       if (!held || at - held.at >= STALE_MARK_TTL_MS) {
         try {
-          const read = await readCandlesAt(pair!, "1h", at - STALE_MARK_WINDOW_MS, at, 200);
+          const read = await readCandlesAt(
+            pair!,
+            "1h",
+            at - STALE_MARK_WINDOW_MS,
+            at,
+            200,
+            true,
+          );
           const last = read.candles[read.candles.length - 1];
           held = { at, bar: last && last.c > 0 ? { t: last.t, c: last.c } : null };
         } catch {
@@ -1215,7 +1222,17 @@ export async function registerRoutes(
       let source: "api" | "archive" = "api";
       let coveredTo = win.to;
       try {
-        const read = await readCandlesAt(pair, interval, win.from, win.to, 1200);
+        /*
+         * The chart may begin later than it was asked to.
+         *
+         * A window runs from the entry back through whatever context fits,
+         * and on a coin listed a few weeks ago that reaches past the listing
+         * — where the archive has nothing, correctly. Refusing the whole read
+         * over it meant a newly listed coin got "the price feed did not
+         * answer" next to a P&L that had just been read from the same files.
+         * Only the chart gets this: see the prefix rule in binance-archive.
+         */
+        const read = await readCandlesAt(pair, interval, win.from, win.to, 1200, true);
         candles = read.candles;
         source = read.source;
         coveredTo = read.coveredTo;

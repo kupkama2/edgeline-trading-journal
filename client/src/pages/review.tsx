@@ -11,13 +11,14 @@ import {
   ChevronLeft,
   ChevronRight,
   Loader2,
+  EyeOff,
   Skull,
   Star,
   Zap,
 } from "lucide-react";
-import { useTrades, useUpdateTrade } from "@/lib/data";
+import { useTradeImages, useTrades, useUpdateTrade } from "@/lib/data";
 import { computeMetrics, fmtMoney, fmtR, EXIT_REASON_LABELS } from "@shared/metrics";
-import { isReviewed, reviewProgress, weekBefore, weekKey, weekStart } from "@shared/review";
+import { isMiss, isReviewed, reviewProgress, weekBefore, weekKey, weekStart } from "@shared/review";
 import { StyleChip } from "@/components/style-switcher";
 import type { TradeWithTags } from "@shared/schema";
 
@@ -160,6 +161,25 @@ function ReviewRow({ trade: t }: { trade: TradeWithTags }) {
   const [, navigate] = useLocation();
   const done = isReviewed(t);
   const win = (m.actualPnL ?? 0) >= 0;
+  /*
+   * A setup you passed on, read back beside the ones you took.
+   *
+   * It has no result, so everything the row usually ends with is absent and
+   * printing it would be four em-dashes pretending to be figures. What it has
+   * instead is the picture and the sentence, which is the whole of what there
+   * is to judge — and judging it is the point, because one pass says nothing
+   * and six in a row say what your filter is doing.
+   */
+  const miss = isMiss(t);
+  // Only fetched for a miss: the gallery is the record there, and for a taken
+  // trade it is one request per row for something the row does not show.
+  const { data: shots = [] } = useTradeImages(miss ? t.id : null);
+  const shot = shots[0]?.data ?? null;
+  /** A miss is only priceable if the levels were typed in. */
+  const plannedR =
+    miss && t.initialStop != null && t.initialTarget != null && t.entryPrice > 0
+      ? Math.abs(t.initialTarget - t.entryPrice) / Math.abs(t.entryPrice - t.initialStop)
+      : null;
 
   async function mark() {
     await update.mutateAsync({
@@ -215,7 +235,13 @@ function ReviewRow({ trade: t }: { trade: TradeWithTags }) {
             well traded
           </Badge>
         )}
-        {!t.scalp && t.exitReason && (
+        {miss && (
+          <Badge variant="outline" className="border-sky-500/40 text-[10px] text-sky-400">
+            <EyeOff className="mr-1 h-3 w-3" />
+            didn't take
+          </Badge>
+        )}
+        {!t.scalp && !miss && t.exitReason && (
           <Badge variant="outline" className="text-[10px] capitalize">
             {EXIT_REASON_LABELS[t.exitReason]}
           </Badge>
@@ -223,19 +249,55 @@ function ReviewRow({ trade: t }: { trade: TradeWithTags }) {
         <span className="text-[10px] text-muted-foreground">{when}</span>
 
         <span className="ml-auto flex items-center gap-2 font-mono text-sm">
-          <span className={`font-bold ${win ? "text-emerald-400" : "text-primary"}`}>
-            {fmtR(m.actualR)}
-          </span>
-          <span className={win ? "text-emerald-400/80" : "text-primary/80"}>
-            {fmtMoney(m.actualPnL)}
-          </span>
+          {miss ? (
+            /* What it would have been worth, when the levels were there to
+               say. No P&L and no actual R, because there was no position —
+               an em-dash where a result goes reads as a result nobody
+               recorded, and this is a trade that never had one. */
+            <span className="text-[11px] text-muted-foreground" data-testid={`review-miss-r-${t.id}`}>
+              {plannedR != null ? (
+                <>
+                  planned <span className="font-semibold text-sky-400">{plannedR.toFixed(2)}R</span>
+                </>
+              ) : (
+                "no levels logged"
+              )}
+            </span>
+          ) : (
+            <>
+              <span className={`font-bold ${win ? "text-emerald-400" : "text-primary"}`}>
+                {fmtR(m.actualR)}
+              </span>
+              <span className={win ? "text-emerald-400/80" : "text-primary/80"}>
+                {fmtMoney(m.actualPnL)}
+              </span>
+            </>
+          )}
         </span>
       </div>
+
+      {/* The chart you were looking at. It is the record for a miss, so it is
+          shown rather than linked — a picture behind one more click on a
+          Sunday is a picture nobody opens. */}
+      {shot && (
+        <button
+          type="button"
+          onClick={() => navigate(`/trade/${t.id}`)}
+          className="mt-2 block w-full overflow-hidden rounded-md border border-card-border"
+          data-testid={`review-miss-shot-${t.id}`}
+        >
+          <img src={shot} alt="" className="max-h-52 w-full bg-secondary/20 object-contain" />
+        </button>
+      )}
 
       {/* What it was for, in the words written at the time — the thing the
           second pass is judging. */}
       {(t.rationale?.trim() || t.notes?.trim()) && (
-        <p className="mt-1.5 text-[11px] leading-snug text-muted-foreground">
+        <p
+          className={`mt-1.5 text-[11px] leading-snug ${
+            miss ? "text-foreground/90" : "text-muted-foreground"
+          }`}
+        >
           {t.rationale?.trim() && <span className="text-foreground">{t.rationale.trim()}</span>}
           {t.rationale?.trim() && t.notes?.trim() && " · "}
           {t.notes?.trim()}
@@ -246,7 +308,11 @@ function ReviewRow({ trade: t }: { trade: TradeWithTags }) {
         <Textarea
           value={note}
           onChange={(e) => setNote(e.target.value)}
-          placeholder="What do you see now that you could not see then?"
+          placeholder={
+            miss
+              ? "Was passing it right? What would have had to be different?"
+              : "What do you see now that you could not see then?"
+          }
           className="min-h-[52px] flex-1 basis-64 text-xs"
           data-testid={`input-review-note-${t.id}`}
         />

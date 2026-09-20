@@ -86,7 +86,10 @@ export function LevelLabel({
   const l = LEVEL[kind];
   const Icon = l.icon;
   return (
-    <div className="flex items-center justify-between gap-2">
+    /* h-5 rather than whatever the icon happens to make it: these sit above
+       inputs, in rows with labels that have no icon, and the inputs line up
+       only if the labels above them are one height. See LABEL_ROW. */
+    <div className="flex h-5 items-center justify-between gap-2">
       <span
         className={`flex items-center gap-1 text-[10px] uppercase tracking-wider ${l.text}`}
         data-testid={`level-label-${kind}`}
