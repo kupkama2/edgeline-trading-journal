@@ -45,7 +45,7 @@ import { ClipboardList, Image as ImageIcon, Layers, LineChart, NotebookPen } fro
 import { AverageCloseSolver } from "@/components/average-close";
 import { useCloseCardPaste } from "@/lib/close-paste";
 import { computeMetrics, fmtFees, fmtMoney, fmtR, EXIT_REASON_LABELS } from "@shared/metrics";
-import { Dropzone, EXIT_REASONS, FormSection, RationaleTags, TimeField, localNow, num, parseTags, toIso, toLocalInput } from "@/components/trade-shared";
+import { Dropzone, EXIT_REASONS, FormSection, LABEL_ROW, RationaleTags, TimeField, localNow, num, parseTags, toIso, toLocalInput } from "@/components/trade-shared";
 import { EMPTY_GRADES, GradePicker, type GradeState } from "@/components/grade-picker";
 import {
   TradeOutcomeFields,
@@ -901,7 +901,7 @@ export function TradeEditor({
                 the tablet breakpoint up. */}
             <div className="grid grid-cols-2 gap-x-3 gap-y-2.5 [&>*]:min-w-0 sm:grid-cols-3">
               <div className="min-w-0 space-y-1">
-                <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                <label className={`${LABEL_ROW} text-[10px] uppercase tracking-wider text-muted-foreground`}>
                   Symbol
                 </label>
                 <SymbolPicker
@@ -938,7 +938,7 @@ export function TradeEditor({
                 </div>
               </div>
               <div className="space-y-1">
-                <div className="flex items-center justify-between">
+                <div className={`${LABEL_ROW} justify-between`}>
                   <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
                     Size
                   </label>

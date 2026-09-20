@@ -26,7 +26,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { EXIT_REASON_LABELS, EXIT_TIMING_MEANINGFUL_R, exitTimingVerdict } from "@shared/metrics";
 import { gradeLabel } from "@shared/grades";
-import { EXIT_REASONS, FormSection, TimeField } from "@/components/trade-shared";
+import { EXIT_REASONS, FormSection, LABEL_ROW, TimeField } from "@/components/trade-shared";
 import { GradePicker, type GradeState } from "@/components/grade-picker";
 import { HighlightPicker } from "@/components/trade-pickers";
 import type { MistakeTag } from "@shared/schema";
@@ -378,7 +378,16 @@ export function TradeOutcomeFields(p: OutcomeFieldsProps) {
         testId={`section-${p.testPrefix}-exit`}
         tone="exit"
       >
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+      {/*
+        Labels stay to one line, and the row is aligned from the top.
+        "Fees $ (both sides · optional — R and P&L go net)" was a sentence in
+        a label slot: at this width it wrapped to three lines and pushed its
+        own input a row and a half below the two beside it, so three fields
+        that belong together read as a broken layout. What it had to say is
+        worth saying — it just belongs under the field rather than above it,
+        where its length costs nothing.
+      */}
+      <div className="grid grid-cols-2 items-start gap-3 sm:grid-cols-3">
         <div className="space-y-1">
           {/* The fourth decision, marked like the other three. */}
           <LevelLabel kind="exit" text="Exit price" />
@@ -400,7 +409,7 @@ export function TradeOutcomeFields(p: OutcomeFieldsProps) {
         />
         {priced && (
           <div className="space-y-1">
-            <label className={LABEL}>Fees $ (both sides · optional — R and P&L go net)</label>
+            <label className={`${LABEL} ${LABEL_ROW}`}>Fees</label>
             <Input
               type="number"
               step="any"
@@ -410,6 +419,9 @@ export function TradeOutcomeFields(p: OutcomeFieldsProps) {
               className="h-9 font-mono text-sm"
               data-testid={`input-${p.testPrefix}-fees`}
             />
+            <p className="text-[10px] leading-snug text-muted-foreground">
+              Both sides, in dollars. Optional — R and P&amp;L go net of it.
+            </p>
             {!!p.feeChips?.length && (
               <div className="flex flex-wrap gap-1.5 pt-1">
                 {p.feeChips.map((c) => (
