@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   dueSentence,
+  isMiss,
   isReviewed,
   reviewDue,
   reviewProgress,
@@ -122,5 +123,89 @@ describe("what the pass is worth", () => {
   it("pays nothing on a trade that was never closed", () => {
     const open = trade({ status: "open", exitPrice: null, exitTime: null, reviewedAt: "2026-09-20T18:00:00Z" });
     expect(tradeXp(open).some((e) => e.id.endsWith(":reviewed"))).toBe(false);
+  });
+});
+
+/**
+ * The passes, read back beside the takes.
+ *
+ * A setup you saw and let go is a decision with a cost, and the only way it
+ * ever becomes a number is being read in a row with the others: one pass says
+ * nothing, six in a week say what your filter is actually doing. So a miss
+ * joins its week and the week is not done until it has been gone over.
+ *
+ * Which is NOT the same as counting every dead order. "Not filled" and
+ * "changed my mind" are things that happened to an order; only 'never_placed'
+ * is a decision somebody made, and only that one is worth a Sunday.
+ */
+const missOn = (id: number, day: number, over = {}) =>
+  trade({
+    id,
+    entryTime: new Date(2026, 8, day, 9).toISOString(),
+    exitTime: null,
+    exitPrice: null,
+    status: "cancelled",
+    cancelReason: "never_placed",
+    ...over,
+  });
+
+describe("setups that were passed on", () => {
+  it("counts a miss into its week, dated by the entry it never made", () => {
+    const ts = [closedOn(1, 15), missOn(2, 16), missOn(7, 21)];
+    // 21 September is the Monday after — a different week, as for any trade.
+    expect(tradesInWeek(ts, WED).map((t) => t.id)).toEqual([1, 2]);
+  });
+
+  it("leaves the other ways an order dies alone", () => {
+    /*
+     * An order that did not fill was never a decision, and a review full of
+     * them is a review nobody finishes. The distinction is the cancel reason,
+     * not the status.
+     */
+    const ts = [
+      missOn(1, 16),
+      missOn(2, 16, { cancelReason: "not_filled" }),
+      missOn(3, 16, { cancelReason: "pulled" }),
+      missOn(4, 16, { cancelReason: "changed_mind" }),
+      missOn(5, 16, { cancelReason: null }),
+    ];
+    expect(tradesInWeek(ts, WED).map((t) => t.id)).toEqual([1]);
+  });
+
+  it("holds the week open until the misses have been gone over too", () => {
+    const ts = [
+      closedOn(1, 15, { reviewedAt: new Date(2026, 8, 20, 12).toISOString() }),
+      missOn(2, 16),
+    ];
+    const p = reviewProgress(ts, WED);
+    expect(p.trades.map((t) => t.id)).toEqual([1, 2]);
+    expect(p.left.map((t) => t.id)).toEqual([2]);
+    expect(p.done).toBe(false);
+    expect(reviewDue(ts, NEXT_TUE)?.progress.left.map((t) => t.id)).toEqual([2]);
+  });
+
+  it("is done when the misses are, and the nag counts them as trades", () => {
+    const seen = new Date(2026, 8, 20, 12).toISOString();
+    const ts = [closedOn(1, 15, { reviewedAt: seen }), missOn(2, 16, { reviewedAt: seen })];
+    expect(reviewProgress(ts, WED).done).toBe(true);
+    expect(reviewDue(ts, NEXT_TUE)).toBeNull();
+
+    // And when they are not: one sentence covering both, because what is owed
+    // is a pass over the week's decisions and passing was one of them.
+    const owed = reviewDue([closedOn(1, 15), missOn(2, 16)], NEXT_TUE)!;
+    expect(dueSentence(owed)).toBe("2 trades from last week went unreviewed.");
+  });
+
+  it("brings a week that is nothing but misses to the review", () => {
+    // A week where you took nothing at all is the week most worth reading.
+    const owed = reviewDue([missOn(1, 15), missOn(2, 17)], NEXT_TUE);
+    expect(owed?.progress.trades.map((t) => t.id)).toEqual([1, 2]);
+  });
+
+  it("names a miss as one", () => {
+    expect(isMiss(missOn(1, 16))).toBe(true);
+    expect(isMiss(missOn(2, 16, { cancelReason: "not_filled" }))).toBe(false);
+    expect(isMiss(closedOn(3, 16))).toBe(false);
+    expect(isReviewed(missOn(4, 16))).toBe(false);
   });
 });

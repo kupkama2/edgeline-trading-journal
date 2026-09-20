@@ -50,22 +50,43 @@ export function weekLabel(d: Date): string {
 }
 
 /**
+ * A setup that was seen and not taken.
+ *
+ * Stored as a cancelled trade because that is what it is — no position, no
+ * P&L, out of every guardrail — and told apart from the other ways an order
+ * dies by its reason. "Not filled" and "changed my mind" are things that
+ * happened to an order; this one is a decision you made, which is the kind of
+ * thing a week is read to find out about.
+ */
+export const isMiss = (t: TradeWithTags) =>
+  t.status === "cancelled" && t.cancelReason === "never_placed";
+
+/** When a trade had its say: the exit, or the entry for something never taken. */
+const endedAt = (t: TradeWithTags) => t.exitTime ?? t.entryTime;
+
+/**
  * The trades a week's review is about: everything that finished inside it,
  * newest last so the week reads forwards the way it happened.
  *
- * Closed trades only. An open position has not finished having its say, and
- * a cancelled order was never a trade.
+ * Closed trades and the ones you passed on. An open position has not finished
+ * having its say, and an order that merely failed to fill was never a
+ * decision — but a setup you looked at and let go is exactly the sort of
+ * thing that only shows up read back in a row. Six passes in a week say
+ * something; one says nothing, which is why it has to be reviewed rather
+ * than logged and left.
+ *
+ * A miss is dated by its entry time, there being no exit to date it by.
  */
 export function tradesInWeek(trades: TradeWithTags[], d: Date): TradeWithTags[] {
   const from = weekStart(d).getTime();
   const to = from + 7 * DAY;
   return trades
     .filter((t) => {
-      if (t.status !== "closed") return false;
-      const when = new Date(t.exitTime ?? t.entryTime).getTime();
+      if (t.status !== "closed" && !isMiss(t)) return false;
+      const when = new Date(endedAt(t)).getTime();
       return Number.isFinite(when) && when >= from && when < to;
     })
-    .sort((a, b) => (a.exitTime ?? a.entryTime).localeCompare(b.exitTime ?? b.entryTime));
+    .sort((a, b) => endedAt(a).localeCompare(endedAt(b)));
 }
 
 export const isReviewed = (t: TradeWithTags) => Boolean(t.reviewedAt);
@@ -128,6 +149,9 @@ export function reviewDue(
 /** How the nag puts it. */
 export function dueSentence(due: { weeksAgo: number; progress: ReviewProgress }): string {
   const n = due.progress.left.length;
+  // "trades" covers both here on purpose. Splitting the count into "4 trades
+  // and 2 misses" makes the nag about bookkeeping; what is owed is a pass
+  // over the week's decisions, and passing on one was a decision.
   const which =
     due.weeksAgo === 0
       ? "this week"
