@@ -18,8 +18,8 @@ import {
 } from "lucide-react";
 import { useTradeImages, useTrades, useUpdateTrade } from "@/lib/data";
 import { computeMetrics, fmtMoney, fmtR, EXIT_REASON_LABELS } from "@shared/metrics";
-import { isMiss, isReviewed, reviewProgress, weekBefore, weekKey, weekStart } from "@shared/review";
-import { StyleChip } from "@/components/style-switcher";
+import { dayKey, isReviewed, reviewProgress, weekBefore, weekKey, weekStart } from "@shared/review";
+import { ReviewRow } from "@/components/review-row";
 import type { TradeWithTags } from "@shared/schema";
 
 /**
@@ -127,6 +127,18 @@ export default function Review() {
               <Check className="h-3.5 w-3.5" /> done
             </span>
           )}
+          {/* The other distance. A day gone over the evening it happened is
+              already gone over here — one flag — so this is a shortcut into
+              the same work, not a second copy of it. */}
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 shrink-0 text-[11px] text-muted-foreground"
+            onClick={() => navigate(`/review/day/${dayKey(new Date())}`)}
+            data-testid="button-to-today"
+          >
+            Today →
+          </Button>
         </div>
         {!p.done && (
           <p className="mt-2 text-[11px] leading-snug text-muted-foreground">
@@ -151,188 +163,5 @@ export default function Review() {
         </div>
       )}
     </div>
-  );
-}
-
-function ReviewRow({ trade: t }: { trade: TradeWithTags }) {
-  const m = computeMetrics(t);
-  const update = useUpdateTrade();
-  const [note, setNote] = useState(t.reviewNote ?? "");
-  const [, navigate] = useLocation();
-  const done = isReviewed(t);
-  const win = (m.actualPnL ?? 0) >= 0;
-  /*
-   * A setup you passed on, read back beside the ones you took.
-   *
-   * It has no result, so everything the row usually ends with is absent and
-   * printing it would be four em-dashes pretending to be figures. What it has
-   * instead is the picture and the sentence, which is the whole of what there
-   * is to judge — and judging it is the point, because one pass says nothing
-   * and six in a row say what your filter is doing.
-   */
-  const miss = isMiss(t);
-  // Only fetched for a miss: the gallery is the record there, and for a taken
-  // trade it is one request per row for something the row does not show.
-  const { data: shots = [] } = useTradeImages(miss ? t.id : null);
-  const shot = shots[0]?.data ?? null;
-  /** A miss is only priceable if the levels were typed in. */
-  const plannedR =
-    miss && t.initialStop != null && t.initialTarget != null && t.entryPrice > 0
-      ? Math.abs(t.initialTarget - t.entryPrice) / Math.abs(t.entryPrice - t.initialStop)
-      : null;
-
-  async function mark() {
-    await update.mutateAsync({
-      id: t.id,
-      trade: {
-        reviewNote: note.trim() || null,
-        // Un-marking keeps whatever was written: the note is the work, the
-        // stamp is only the record that the work happened.
-        reviewedAt: done ? null : new Date().toISOString(),
-      } as any,
-    });
-  }
-
-  const when = new Date(t.exitTime ?? t.entryTime).toLocaleDateString(undefined, {
-    weekday: "short",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-
-  return (
-    <Card
-      className={`border-card-border bg-card p-3.5 transition-colors ${
-        done ? "border-emerald-500/30" : ""
-      }`}
-      data-testid={`card-review-${t.id}`}
-      data-reviewed={done ? "true" : "false"}
-    >
-      <div className="flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          onClick={() => navigate(`/trade/${t.id}`)}
-          className="font-mono text-sm font-semibold hover:underline"
-          data-testid={`button-open-${t.id}`}
-        >
-          {t.symbol}
-        </button>
-        <StyleChip styleId={t.styleId} />
-        {t.scalp && (
-          <Badge variant="outline" className="border-amber-500/40 text-[10px] text-amber-400">
-            <Zap className="mr-1 h-3 w-3" />
-            scalp
-          </Badge>
-        )}
-        {t.tilt && (
-          <Badge variant="outline" className="border-primary/50 text-[10px] text-primary">
-            <Skull className="mr-1 h-3 w-3" />
-            tilt
-          </Badge>
-        )}
-        {t.wellTraded && !t.tilt && (
-          <Badge variant="outline" className="border-amber-500/50 text-[10px] text-amber-400">
-            <Star className="mr-1 h-3 w-3 fill-current" />
-            well traded
-          </Badge>
-        )}
-        {miss && (
-          <Badge variant="outline" className="border-sky-500/40 text-[10px] text-sky-400">
-            <EyeOff className="mr-1 h-3 w-3" />
-            didn't take
-          </Badge>
-        )}
-        {!t.scalp && !miss && t.exitReason && (
-          <Badge variant="outline" className="text-[10px] capitalize">
-            {EXIT_REASON_LABELS[t.exitReason]}
-          </Badge>
-        )}
-        <span className="text-[10px] text-muted-foreground">{when}</span>
-
-        <span className="ml-auto flex items-center gap-2 font-mono text-sm">
-          {miss ? (
-            /* What it would have been worth, when the levels were there to
-               say. No P&L and no actual R, because there was no position —
-               an em-dash where a result goes reads as a result nobody
-               recorded, and this is a trade that never had one. */
-            <span className="text-[11px] text-muted-foreground" data-testid={`review-miss-r-${t.id}`}>
-              {plannedR != null ? (
-                <>
-                  planned <span className="font-semibold text-sky-400">{plannedR.toFixed(2)}R</span>
-                </>
-              ) : (
-                "no levels logged"
-              )}
-            </span>
-          ) : (
-            <>
-              <span className={`font-bold ${win ? "text-emerald-400" : "text-primary"}`}>
-                {fmtR(m.actualR)}
-              </span>
-              <span className={win ? "text-emerald-400/80" : "text-primary/80"}>
-                {fmtMoney(m.actualPnL)}
-              </span>
-            </>
-          )}
-        </span>
-      </div>
-
-      {/* The chart you were looking at. It is the record for a miss, so it is
-          shown rather than linked — a picture behind one more click on a
-          Sunday is a picture nobody opens. */}
-      {shot && (
-        <button
-          type="button"
-          onClick={() => navigate(`/trade/${t.id}`)}
-          className="mt-2 block w-full overflow-hidden rounded-md border border-card-border"
-          data-testid={`review-miss-shot-${t.id}`}
-        >
-          <img src={shot} alt="" className="max-h-52 w-full bg-secondary/20 object-contain" />
-        </button>
-      )}
-
-      {/* What it was for, in the words written at the time — the thing the
-          second pass is judging. */}
-      {(t.rationale?.trim() || t.notes?.trim()) && (
-        <p
-          className={`mt-1.5 text-[11px] leading-snug ${
-            miss ? "text-foreground/90" : "text-muted-foreground"
-          }`}
-        >
-          {t.rationale?.trim() && <span className="text-foreground">{t.rationale.trim()}</span>}
-          {t.rationale?.trim() && t.notes?.trim() && " · "}
-          {t.notes?.trim()}
-        </p>
-      )}
-
-      <div className="mt-2 flex flex-wrap items-end gap-2">
-        <Textarea
-          value={note}
-          onChange={(e) => setNote(e.target.value)}
-          placeholder={
-            miss
-              ? "Was passing it right? What would have had to be different?"
-              : "What do you see now that you could not see then?"
-          }
-          className="min-h-[52px] flex-1 basis-64 text-xs"
-          data-testid={`input-review-note-${t.id}`}
-        />
-        <Button
-          type="button"
-          size="sm"
-          variant={done ? "outline" : "default"}
-          className="h-9 shrink-0 text-[11px]"
-          disabled={update.isPending}
-          onClick={() => void mark()}
-          data-testid={`button-review-${t.id}`}
-        >
-          {update.isPending ? (
-            <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <Check className="mr-1.5 h-3.5 w-3.5" />
-          )}
-          {done ? "Gone over" : "Mark gone over"}
-        </Button>
-      </div>
-    </Card>
   );
 }

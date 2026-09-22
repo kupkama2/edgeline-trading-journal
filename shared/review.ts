@@ -17,6 +17,9 @@
  * itself on Monday is a nag for people who were going to do it anyway.
  */
 import type { TradeWithTags } from "./schema";
+import { dayKey } from "./daily";
+
+export { dayKey };
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -89,9 +92,48 @@ export function tradesInWeek(trades: TradeWithTags[], d: Date): TradeWithTags[] 
     .sort((a, b) => endedAt(a).localeCompare(endedAt(b)));
 }
 
+/**
+ * The same pass, on the day it happened.
+ *
+ * A week read end to end is the only way some patterns show up, and it is also
+ * five days after the fact — by Sunday you are reconstructing what you thought
+ * on Tuesday from a chart and a sentence. Doing it the same evening costs
+ * nothing extra and the memory is still there.
+ *
+ * What makes the two worth having together rather than being two chores is
+ * that there is only ONE reviewed flag on a trade. A trade gone over on
+ * Tuesday is already done when Sunday comes: it shows as reviewed in the
+ * week, it does not appear in the nag's count, and if every trade in a week
+ * was handled on its own day the week is simply finished. Nothing syncs the
+ * two because there is nothing to sync — the day and the week are two ways of
+ * asking the same column.
+ *
+ * Which day a trade belongs to is the day it ENDED, the same instant the week
+ * files it by: the day it stopped being a live question. A swing opened on
+ * Monday and closed on Thursday is Thursday's to judge, because Thursday is
+ * when there was something to judge.
+ */
+export function tradesOnDay(trades: TradeWithTags[], day: Date): TradeWithTags[] {
+  const from = new Date(day);
+  from.setHours(0, 0, 0, 0);
+  const to = from.getTime() + DAY;
+  return trades
+    .filter((t) => {
+      if (t.status !== "closed" && !isMiss(t)) return false;
+      const when = new Date(endedAt(t)).getTime();
+      return Number.isFinite(when) && when >= from.getTime() && when < to;
+    })
+    .sort((a, b) => endedAt(a).localeCompare(endedAt(b)));
+}
+
+export function dayLabel(d: Date): string {
+  return d.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" });
+}
+
 export const isReviewed = (t: TradeWithTags) => Boolean(t.reviewedAt);
 
 export interface ReviewProgress {
+  /** The start of the scope — Monday for a week, midnight for a day. */
   week: Date;
   key: string;
   label: string;
@@ -105,13 +147,29 @@ export interface ReviewProgress {
 
 export function reviewProgress(trades: TradeWithTags[], d: Date = new Date()): ReviewProgress {
   const inWeek = tradesInWeek(trades, d);
-  const left = inWeek.filter((t) => !isReviewed(t));
+  return progressOver(inWeek, weekStart(d), weekKey(d), weekLabel(d));
+}
+
+/** The same figures for one day. Same flag, so the two agree by construction. */
+export function dailyProgress(trades: TradeWithTags[], d: Date = new Date()): ReviewProgress {
+  const day = new Date(d);
+  day.setHours(0, 0, 0, 0);
+  return progressOver(tradesOnDay(trades, day), day, dayKey(day), dayLabel(day));
+}
+
+function progressOver(
+  inScope: TradeWithTags[],
+  start: Date,
+  key: string,
+  label: string,
+): ReviewProgress {
+  const left = inScope.filter((t) => !isReviewed(t));
   return {
-    week: weekStart(d),
-    key: weekKey(d),
-    label: weekLabel(d),
-    trades: inWeek,
-    reviewed: inWeek.length - left.length,
+    week: start,
+    key,
+    label,
+    trades: inScope,
+    reviewed: inScope.length - left.length,
     left,
     done: left.length === 0,
   };
