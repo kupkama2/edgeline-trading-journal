@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  dailyProgress,
   dueSentence,
   isMiss,
   isReviewed,
   reviewDue,
   reviewProgress,
   tradesInWeek,
+  tradesOnDay,
   weekBefore,
   weekKey,
   weekLabel,
@@ -207,5 +209,97 @@ describe("setups that were passed on", () => {
     expect(isMiss(missOn(2, 16, { cancelReason: "not_filled" }))).toBe(false);
     expect(isMiss(closedOn(3, 16))).toBe(false);
     expect(isReviewed(missOn(4, 16))).toBe(false);
+  });
+});
+
+/**
+ * The same pass, on the day it happened.
+ *
+ * The point of having both is that there is only one reviewed flag: a trade
+ * gone over on Tuesday evening is already done when Sunday comes. Nothing
+ * synchronises the two because there is nothing to synchronise — the day and
+ * the week are two ways of asking the same column — and these are the tests
+ * that say so out loud, because the day that stops being true is the day
+ * somebody is asked to write the same note twice.
+ */
+describe("a day's review", () => {
+  const TUE = new Date(2026, 8, 15, 20);
+
+  it("takes what ended that day, oldest first", () => {
+    const ts = [
+      closedOn(2, 15, {
+        entryTime: new Date(2026, 8, 15, 14).toISOString(),
+        exitTime: new Date(2026, 8, 15, 15).toISOString(),
+      }),
+      closedOn(1, 15),
+      closedOn(3, 16),
+      missOn(4, 15),
+    ];
+    expect(tradesOnDay(ts, TUE).map((t) => t.id)).toEqual([4, 1, 2]);
+  });
+
+  it("files a swing on the day it ENDED, not the day it was opened", () => {
+    // Thursday is when there was something to judge.
+    const swing = trade({
+      id: 1,
+      entryTime: new Date(2026, 8, 14, 9).toISOString(),
+      exitTime: new Date(2026, 8, 17, 11).toISOString(),
+      status: "closed",
+    });
+    expect(tradesOnDay([swing], new Date(2026, 8, 14, 20)).map((t) => t.id)).toEqual([]);
+    expect(tradesOnDay([swing], new Date(2026, 8, 17, 20)).map((t) => t.id)).toEqual([1]);
+  });
+
+  it("counts the day the way it counts the week", () => {
+    const ts = [closedOn(1, 15), closedOn(2, 15, { reviewedAt: TUE.toISOString() })];
+    const p = dailyProgress(ts, TUE);
+    expect(p.key).toBe("2026-09-15");
+    expect(p.trades.map((t) => t.id)).toEqual([1, 2]);
+    expect(p.left.map((t) => t.id)).toEqual([1]);
+    expect(p.reviewed).toBe(1);
+    expect(p.done).toBe(false);
+  });
+
+  it("is a day done when its trades are", () => {
+    const seen = TUE.toISOString();
+    expect(dailyProgress([closedOn(1, 15, { reviewedAt: seen })], TUE).done).toBe(true);
+    // A day with nothing on it is not owed anything.
+    expect(dailyProgress([closedOn(1, 16)], TUE).trades).toEqual([]);
+    expect(dailyProgress([closedOn(1, 16)], TUE).done).toBe(true);
+  });
+});
+
+describe("the day and the week are one flag", () => {
+  it("does not ask again on Sunday for what was done on Tuesday", () => {
+    const onTheDay = new Date(2026, 8, 15, 20).toISOString();
+    const ts = [closedOn(1, 15, { reviewedAt: onTheDay }), closedOn(2, 17)];
+
+    // Tuesday's own review is finished.
+    expect(dailyProgress(ts, new Date(2026, 8, 15, 21)).done).toBe(true);
+    // And the week only still wants the one that was never gone over.
+    const week = reviewProgress(ts, WED);
+    expect(week.left.map((t) => t.id)).toEqual([2]);
+    expect(dueSentence(reviewDue(ts, NEXT_TUE)!)).toBe(
+      "1 trade from last week went unreviewed.",
+    );
+  });
+
+  it("finishes the week outright when every day was done on the day", () => {
+    const stamp = (day: number) => new Date(2026, 8, day, 20).toISOString();
+    const ts = [
+      closedOn(1, 15, { reviewedAt: stamp(15) }),
+      closedOn(2, 17, { reviewedAt: stamp(17) }),
+      missOn(3, 18, { reviewedAt: stamp(18) }),
+    ];
+    expect(reviewProgress(ts, WED).done).toBe(true);
+    // Nothing owed, and nothing to nag about: the Sunday is already spent.
+    expect(reviewDue(ts, NEXT_TUE)).toBeNull();
+  });
+
+  it("works the other way round too", () => {
+    // Reviewed in the weekly pass, so the day it belongs to is finished as
+    // well — there is no direction to this, only the one column.
+    const ts = [closedOn(1, 15, { reviewedAt: new Date(2026, 8, 20, 12).toISOString() })];
+    expect(dailyProgress(ts, new Date(2026, 8, 15, 9)).done).toBe(true);
   });
 });

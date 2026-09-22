@@ -617,6 +617,21 @@ export default function JournalV2() {
                         >
                           {fmtMoney(g.pnl)}
                         </span>
+                        {/* Go over the day while you still remember it. Anything
+                            done here is done for the week too — one flag. */}
+                        <button
+                          type="button"
+                          onClick={() => navigate(`/review/day/${g.key}`)}
+                          title="Go over this day's trades"
+                          className={`rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wider transition-colors ${
+                            g.trades.every((t) => t.reviewedAt)
+                              ? "text-emerald-400/80 hover:text-emerald-400"
+                              : "text-muted-foreground hover:text-foreground"
+                          }`}
+                          data-testid={`button-review-day-${g.key}`}
+                        >
+                          {g.trades.every((t) => t.reviewedAt) ? "reviewed" : "review"}
+                        </button>
                       </span>
                     </div>
                     <div className="mt-1 space-y-0.5">

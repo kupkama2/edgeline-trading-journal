@@ -27,6 +27,7 @@ import TradeView from "@/pages/trade-view";
  * visit.
  */
 const Daily = lazy(() => import("@/pages/daily"));
+const DailyReview = lazy(() => import("@/pages/daily-review"));
 const Settings = lazy(() => import("@/pages/settings"));
 const Stats = lazy(() => import("@/pages/stats"));
 const Review = lazy(() => import("@/pages/review"));
@@ -77,6 +78,10 @@ function AppRouter() {
         {/* The Sunday pass. Both addresses: the bare one opens the week you
             are in, the dated one a week you were sent to. */}
         <Route path="/review" component={Review} />
+        {/* Before the dated week, and it has to be: a week key and a day key
+            are the same shape, so "/review/2026-09-22" would swallow the day
+            if the wildcard were reached first. */}
+        <Route path="/review/day/:day" component={DailyReview} />
         <Route path="/review/:week" component={Review} />
         <Route path="/settings" component={Settings} />
         <Route component={NotFound} />
