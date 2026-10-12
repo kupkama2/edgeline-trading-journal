@@ -657,6 +657,17 @@ export interface SyncSummary {
       entryTime: string;
       how: "created" | "claimed" | "updated";
     }[];
+    /** What was asked, shortened — a wallet "0x1234…abcd", a key "…abcd". */
+    source: string | null;
+    /** Every market in the venue's answer, most recently traded first. */
+    markets: {
+      coin: string;
+      fills: number;
+      trades: number;
+      unreconstructed: number;
+      first: number;
+      last: number;
+    }[];
     error?: string;
   }[];
   message?: string;

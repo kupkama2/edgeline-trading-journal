@@ -123,9 +123,12 @@ function AccountFeesRow({
     const summary = `${a.fills} fills read — ${parts.join(", ")}.`;
     // An error beside a partial result is still a result; it is said after.
     if (a.error && a.fills === 0) return toast({ title: `${venue} did not answer`, description: a.error, variant: "destructive" });
-    // Something was written: show it, trade by trade, rather than a count
-    // that disappears in four seconds. Nothing written is a toast's worth.
-    if (a.written.length > 0) return setReport({ venue, account: a });
+    // Anything read is shown in full: what was written, trade by trade, and
+    // what the venue sent, market by market — a sync that wrote nothing is
+    // the one whose answer most needs reading, because a trade that is not
+    // in the journal is either absent from the venue's answer or in it and
+    // set aside, and only the list says which. An empty answer is a toast.
+    if (a.written.length > 0 || a.fills > 0) return setReport({ venue, account: a });
     toast({ title: `Synced ${name}`, description: a.error ? `${summary} ${a.error}` : summary });
   }
 

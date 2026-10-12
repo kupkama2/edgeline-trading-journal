@@ -74,7 +74,11 @@ export function SyncReportDialog({
           </p>
         )}
         {groups.length === 0 && (
-          <p className="py-4 text-center text-xs text-muted-foreground">Nothing changed — the journal already had all of it.</p>
+          <p className="py-4 text-center text-xs text-muted-foreground">
+            {account.fills > 0
+              ? "Nothing changed — the journal already had all of it."
+              : `${venue} sent no fills for ${account.source ?? "this account"}.`}
+          </p>
         )}
         {groups.map(({ how, rows }) => {
           const meta = HOW[how];
@@ -120,7 +124,69 @@ export function SyncReportDialog({
             </div>
           );
         })}
+        <MarketsSeen venue={venue} account={account} />
       </DialogContent>
     </Dialog>
+  );
+}
+
+const when = (ms: number) =>
+  new Date(ms).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+
+/**
+ * What the venue's answer contained, market by market.
+ *
+ * The question this answers is the one a sync report otherwise cannot: "I
+ * traded WTIOIL on Thursday — where is it?" Either the market is not in this
+ * list, and the venue did not send it for the address that was asked, or it
+ * is here with fills that were set aside, and the reason is in the row. A
+ * count of fills read, however large, says neither.
+ */
+function MarketsSeen({ venue, account }: { venue: string; account: SyncSummary["accounts"][number] }) {
+  const markets = account.markets ?? [];
+  if (markets.length === 0) return null;
+  const first = Math.min(...markets.map((m) => m.first).filter((t) => t > 0));
+  const last = Math.max(...markets.map((m) => m.last));
+  return (
+    <div className="space-y-1.5" data-testid="sync-report-markets">
+      <div className="flex items-baseline gap-2">
+        <Badge variant="outline" className="text-[10px] text-muted-foreground">
+          What {venue} sent{account.source ? ` for ${account.source}` : ""} · {markets.length} market{markets.length === 1 ? "" : "s"}
+        </Badge>
+        {Number.isFinite(first) && (
+          <span className="text-[10px] text-muted-foreground">
+            {when(first)} → {when(last)}
+          </span>
+        )}
+      </div>
+      <ul className="divide-y divide-border/50 rounded-md border border-card-border">
+        {markets.map((m) => (
+          <li
+            key={m.coin}
+            className="flex flex-wrap items-center gap-x-3 gap-y-0.5 px-3 py-1.5 text-xs"
+            data-testid={`sync-report-market-${m.coin}`}
+          >
+            <span className="min-w-[6rem] font-mono font-semibold">{m.coin}</span>
+            <span className="font-mono text-muted-foreground">
+              {m.fills} fill{m.fills === 1 ? "" : "s"} · {m.trades} trade{m.trades === 1 ? "" : "s"}
+            </span>
+            {m.unreconstructed > 0 && (
+              <span className="text-[10px] text-amber-500" title="The position these fills belong to was open before the venue's record begins, so its entry is not in it and nothing honest can be written.">
+                {m.unreconstructed} set aside: opened before the record
+              </span>
+            )}
+            <span className="ml-auto text-[10px] text-muted-foreground">
+              {m.first === m.last || m.fills === 1 ? when(m.last) : `${when(m.first)} → ${when(m.last)}`}
+            </span>
+          </li>
+        ))}
+      </ul>
+      <p className="text-[10px] leading-snug text-muted-foreground">
+        A market you traded that is not in this list was not in {venue}'s answer for this account.{" "}
+        {venue === "Hyperliquid"
+          ? "The address has to be the account itself — an API wallet or a sub-account has a history of its own — and the venue hands over its most recent two thousand fills, no older."
+          : "The key reads the futures account it was made for, and only markets with a realised P&L in the last ninety days, or a position open now, are asked about."}
+      </p>
+    </div>
   );
 }

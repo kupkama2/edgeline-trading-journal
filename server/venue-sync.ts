@@ -21,7 +21,7 @@
  *      created is a trade, not a draft to confirm.
  */
 import { findClaim, type VenueTrade } from "@shared/claim";
-import type { HlTrade } from "@shared/hyperliquid";
+import type { HlTrade, MarketSeen } from "@shared/hyperliquid";
 import type { InsertTrade, TradeWithTags } from "@shared/schema";
 import type { storageFor } from "./storage";
 
@@ -58,6 +58,19 @@ export interface AccountSync {
   unreconstructed: number;
   /** Every trade touched, in the order they were met. */
   written: WrittenTrade[];
+  /**
+   * What was asked, shortened: "0x1234…abcd" for a wallet, "…abcd" for a key.
+   * The first question when a trade is missing is whether the right account
+   * was asked, and this answers it without a trip to the settings.
+   */
+  source: string | null;
+  /**
+   * Every market the venue's answer contained, with what became of its fills.
+   * A trade that is missing from the journal is either missing from this
+   * list — the venue did not send it for this address — or in it with fills
+   * that were set aside, and those are different problems.
+   */
+  markets: MarketSeen[];
   error?: string;
 }
 
@@ -70,6 +83,8 @@ export const emptySync = (account: string): AccountSync => ({
   claimed: 0,
   unreconstructed: 0,
   written: [],
+  source: null,
+  markets: [],
 });
 
 const note = (row: AccountSync, t: TradeWithTags, how: WrittenTrade["how"]) =>
@@ -186,6 +201,31 @@ export function claimPatch(
   return patch as Partial<InsertTrade>;
 }
 
+/**
+ * A symbol this sync itself once wrote under an older spelling, put right.
+ *
+ * Before builder-book coins were understood, a fill on "xyz:WTIOIL" was
+ * written as the symbol "XYZ:WTIOIL" — and a trade found by its id on the
+ * next sync is otherwise left exactly as a person may have edited it. But
+ * nobody types a colon into a symbol: a symbol that is precisely the old
+ * spelling of this coin is the sync's own mistake, and the one field on a
+ * found trade it is free to correct. The book goes in the price pair at the
+ * same time, where nothing was chosen by hand.
+ */
+export function renamePatch(
+  existing: TradeWithTags,
+  t: HlTrade,
+  symbol: string,
+  pricePair: string | null,
+): Partial<InsertTrade> {
+  const patch: Record<string, unknown> = {};
+  if (existing.symbol !== symbol && existing.symbol === t.coin.toUpperCase()) {
+    patch.symbol = symbol;
+    if (!existing.pricePair && pricePair) patch.pricePair = pricePair;
+  }
+  return patch as Partial<InsertTrade>;
+}
+
 const asVenueTrade = (t: HlTrade, symbol: string): VenueTrade => ({
   symbol,
   direction: t.direction,
@@ -229,8 +269,8 @@ export async function writeVenueTrades(
 
     const existing = await store.tradeByExternalId(t.externalId);
     if (existing) {
-      const patch = closingPatch(existing, t, levels);
-      if (patch) {
+      const patch = { ...closingPatch(existing, t, levels), ...renamePatch(existing, t, symbol, pair) };
+      if (Object.keys(patch).length) {
         const after = await store.updateTrade(existing.id, patch);
         row.updated += 1;
         note(row, after ?? existing, "updated");

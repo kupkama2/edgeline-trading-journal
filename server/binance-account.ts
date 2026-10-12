@@ -31,7 +31,7 @@ import {
   type BinanceUserTrade,
   type KeyRestrictions,
 } from "@shared/binance-account";
-import { tradesFromFills } from "@shared/hyperliquid";
+import { marketsSeen, tradesFromFills } from "@shared/hyperliquid";
 import { egressFor } from "./egress";
 import { ensureCatalogue } from "./outcomes";
 import { open } from "./secrets";
@@ -201,6 +201,7 @@ export async function syncBinance(userId: number, onlyAccount?: string): Promise
         );
       }
       const creds: Creds = { key: acct.binanceKey!, secret };
+      row.source = `…${acct.binanceKey!.slice(-4)}`;
 
       const positions = await fetchPositions(creds);
       const closedSymbols = await fetchClosedSymbols(creds, Date.now() - LOOKBACK_MS);
@@ -226,6 +227,11 @@ export async function syncBinance(userId: number, onlyAccount?: string): Promise
       row.unreconstructed =
         unreconstructable.reduce((n, u) => n + u.fills, 0) +
         read.unreconstructed.reduce((n, u) => n + u.fills, 0);
+      row.markets = marketsSeen(
+        allRows.map((r) => ({ coin: r.symbol, time: r.time })),
+        read,
+        unreconstructable.map((u) => ({ coin: u.symbol, fills: u.fills })),
+      );
       if (truncated.length) {
         row.error = `More history than one sync reads on ${truncated.join(", ")} — those were left alone.`;
       }

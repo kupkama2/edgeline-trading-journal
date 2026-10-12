@@ -261,6 +261,12 @@ describe.skipIf(!DB)("a Binance account, synced", () => {
     const a = r.accounts[0];
     expect(a.error).toBeUndefined();
     expect(a).toMatchObject({ account: ACCOUNT, created: 2, claimed: 1, updated: 0, unchanged: 0, unreconstructed: 1 });
+    // The census: which key was asked, and what each market's fills became —
+    // DOGE's one fill set aside before anything was reconstructed from it.
+    expect(a.source).toBe(`…${KEY.slice(-4)}`);
+    expect(a.markets.map((m: any) => [m.coin, m.fills, m.trades, m.unreconstructed])).toEqual(
+      expect.arrayContaining([["ETHUSDT", 2, 1, 0], ["BTCUSDT", 1, 1, 0], ["SOLUSDT", 1, 1, 0], ["DOGEUSDT", 1, 0, 1]]),
+    );
     // Every account read was signed; the venue was asked for each symbol's
     // fills, the open positions, the income record and the resting orders.
     expect(asked.every((x) => x.signed)).toBe(true);
