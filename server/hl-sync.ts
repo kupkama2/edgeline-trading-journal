@@ -17,7 +17,8 @@
  * The writing itself — by id, by resemblance to a hand-logged trade, or new —
  * is shared with the Binance sync; see venue-sync.ts.
  */
-import { levelsFromOrders, tradesFromFills } from "@shared/hyperliquid";
+import { levelsFromOrders, splitHlAsset, tradesFromFills } from "@shared/hyperliquid";
+import { formatPricePair } from "@shared/price-pair";
 import { fetchHistoricalOrders, fetchUserFills } from "./hyperliquid";
 import { storageFor } from "./storage";
 import { emptySync, writeVenueTrades, type AccountSync, type SyncSummary } from "./venue-sync";
@@ -55,8 +56,20 @@ export async function syncHyperliquid(userId: number, onlyAccount?: string): Pro
       // The order history is a nicety: a trade without a stop is still a trade.
       const orders = await fetchHistoricalOrders(acct.wallet!).catch(() => []);
       await writeVenueTrades(store, row, read.trades, {
-        symbolOf: (coin) => coin.toUpperCase(),
+        /*
+         * A builder-book coin arrives as "xyz:WTIOIL". The journal's symbol is
+         * WTIOIL — upper-casing the whole thing wrote "XYZ:WTIOIL", a name no
+         * chart could resolve and no hand-logged WTIOIL would ever match —
+         * and the book it trades on is kept, in the venue's own spelling, as
+         * the trade's price pair, which is where the chart and the mark look
+         * first. The venue's own coins have no dex and get no pair.
+         */
+        symbolOf: (coin) => splitHlAsset(coin).coin.toUpperCase(),
         levelsFor: (t) => levelsFromOrders(t, orders),
+        pairFor: (t) =>
+          splitHlAsset(t.coin).dex
+            ? formatPricePair({ venue: "hyperliquid", market: "futures", symbol: t.coin })
+            : null,
       });
     } catch (err: any) {
       row.error = String(err?.message ?? err);

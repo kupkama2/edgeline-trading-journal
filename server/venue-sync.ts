@@ -28,6 +28,24 @@ import type { storageFor } from "./storage";
 export type Levels = { initialStop: number | null; initialTarget: number | null };
 type Store = ReturnType<typeof storageFor>;
 
+/**
+ * One trade the sync wrote or changed, enough to read it back in a list and
+ * open it. Counts say the sync did something; this says WHAT, which is the
+ * part worth looking at afterwards — in particular which hand-logged trades
+ * it decided were the venue's, because that is the one decision in here that
+ * is a judgement rather than a fact.
+ */
+export interface WrittenTrade {
+  id: number;
+  symbol: string;
+  direction: "long" | "short";
+  status: "open" | "closed";
+  entryPrice: number;
+  exitPrice: number | null;
+  entryTime: string;
+  how: "created" | "claimed" | "updated";
+}
+
 export interface AccountSync {
   account: string;
   fills: number;
@@ -38,18 +56,33 @@ export interface AccountSync {
   claimed: number;
   /** Positions open before the fill history begins — not written. */
   unreconstructed: number;
+  /** Every trade touched, in the order they were met. */
+  written: WrittenTrade[];
   error?: string;
 }
 
 export const emptySync = (account: string): AccountSync => ({
   account,
   fills: 0,
-  created: 0,
   updated: 0,
+  created: 0,
   unchanged: 0,
   claimed: 0,
   unreconstructed: 0,
+  written: [],
 });
+
+const note = (row: AccountSync, t: TradeWithTags, how: WrittenTrade["how"]) =>
+  row.written.push({
+    id: t.id,
+    symbol: t.symbol,
+    direction: t.direction === "short" ? "short" : "long",
+    status: t.status === "closed" ? "closed" : "open",
+    entryPrice: t.entryPrice,
+    exitPrice: t.exitPrice,
+    entryTime: t.entryTime,
+    how,
+  });
 
 export interface SyncSummary {
   accounts: AccountSync[];
@@ -63,9 +96,16 @@ export function asInsert(
   account: string,
   levels: Levels,
   symbol: string = t.coin.toUpperCase(),
+  /**
+   * The book the trade was in, when the symbol alone cannot say. A coin on a
+   * Hyperliquid builder DEX — "xyz:WTIOIL" — is written as WTIOIL, and the
+   * book it trades on goes here, where the chart and the mark look first.
+   */
+  pricePair: string | null = null,
 ): InsertTrade {
   return {
     symbol,
+    pricePair,
     direction: t.direction,
     size: t.size,
     sizeUnit: "base",
@@ -124,9 +164,17 @@ export function closingPatch(existing: TradeWithTags, t: HlTrade, levels: Levels
  * blank. The exit reason, if the venue supplies one, is "other": the venue
  * knows the price and not the decision.
  */
-export function claimPatch(existing: TradeWithTags, t: HlTrade, levels: Levels): Partial<InsertTrade> {
+export function claimPatch(
+  existing: TradeWithTags,
+  t: HlTrade,
+  levels: Levels,
+  pricePair: string | null = null,
+): Partial<InsertTrade> {
   const patch: Record<string, unknown> = { externalId: t.externalId };
   if (existing.fees == null) patch.fees = t.fees;
+  // A hand-logged WTIOIL had no way of saying which book it was on; the
+  // venue just said. Only where nothing was chosen by hand already.
+  if (!existing.pricePair && pricePair) patch.pricePair = pricePair;
   if (existing.status === "open" && t.status === "closed") {
     patch.status = "closed";
     patch.exitPrice = t.exitPrice;
@@ -162,6 +210,8 @@ export async function writeVenueTrades(
   opts: {
     symbolOf: (venueSymbol: string) => string;
     levelsFor: (t: HlTrade) => Levels;
+    /** The stored price pair for a venue trade, where the symbol alone cannot name the book. */
+    pairFor?: (t: HlTrade) => string | null;
   },
 ): Promise<void> {
   // The hand-logged trades on this account, fetched once: candidates for a
@@ -175,13 +225,15 @@ export async function writeVenueTrades(
   for (const t of trades) {
     const symbol = opts.symbolOf(t.coin);
     const levels = opts.levelsFor(t);
+    const pair = opts.pairFor?.(t) ?? null;
 
     const existing = await store.tradeByExternalId(t.externalId);
     if (existing) {
       const patch = closingPatch(existing, t, levels);
       if (patch) {
-        await store.updateTrade(existing.id, patch);
+        const after = await store.updateTrade(existing.id, patch);
         row.updated += 1;
+        note(row, after ?? existing, "updated");
       } else {
         row.unchanged += 1;
       }
@@ -195,12 +247,14 @@ export async function writeVenueTrades(
     );
     if (mine) {
       claimedIds.add(mine.id);
-      await store.updateTrade(mine.id, claimPatch(mine, t, levels));
+      const after = await store.updateTrade(mine.id, claimPatch(mine, t, levels, pair));
       row.claimed += 1;
+      note(row, after ?? mine, "claimed");
       continue;
     }
 
-    await store.createTrade(asInsert(t, row.account, levels, symbol));
+    const made = await store.createTrade(asInsert(t, row.account, levels, symbol, pair));
     row.created += 1;
+    note(row, made, "created");
   }
 }

@@ -4,6 +4,8 @@ import { fmtAmount } from "@shared/metrics";
 import { latestEquity } from "@shared/equity";
 import { useMemo, useState } from "react";
 import { MembersCard } from "@/components/members-card";
+import { SyncReportDialog } from "@/components/sync-report";
+import type { SyncSummary } from "@/lib/data";
 import { usePublicMode } from "@/lib/public-mode";
 import { MarketsCard } from "@/components/markets-card";
 import { Card } from "@/components/ui/card";
@@ -79,6 +81,8 @@ function AccountFeesRow({
   const [bnKey, setBnKey] = useState("");
   const [bnSecret, setBnSecret] = useState("");
   const [bnOpen, setBnOpen] = useState(false);
+  /** The last sync's trade-by-trade account, open until it has been looked at. */
+  const [report, setReport] = useState<{ venue: string; account: SyncSummary["accounts"][number] } | null>(null);
   const [balance, setBalance] = useState("");
   const equity = latestEquity(balances, name);
   const walletDirty = (existing?.wallet ?? "") !== wallet.trim();
@@ -119,6 +123,9 @@ function AccountFeesRow({
     const summary = `${a.fills} fills read — ${parts.join(", ")}.`;
     // An error beside a partial result is still a result; it is said after.
     if (a.error && a.fills === 0) return toast({ title: `${venue} did not answer`, description: a.error, variant: "destructive" });
+    // Something was written: show it, trade by trade, rather than a count
+    // that disappears in four seconds. Nothing written is a toast's worth.
+    if (a.written.length > 0) return setReport({ venue, account: a });
     toast({ title: `Synced ${name}`, description: a.error ? `${summary} ${a.error}` : summary });
   }
 
@@ -432,6 +439,9 @@ function AccountFeesRow({
           </span>
         )}
       </div>
+      {report && (
+        <SyncReportDialog venue={report.venue} account={report.account} onClose={() => setReport(null)} />
+      )}
 
       {/*
         What the account IS, which decides whether it counts.

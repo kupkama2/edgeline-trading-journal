@@ -295,11 +295,23 @@ describe.skipIf(!DB)("a Binance account, synced", () => {
 
     // And nothing was written for DOGE: its record opens mid-position.
     expect(trades.some((t) => t.symbol === "DOGE")).toBe(false);
+
+    // The sync says WHAT it touched, not only how many — and names the one
+    // judgement it made, the claim, so it can be looked at.
+    expect(a.written.map((w: any) => [w.how, w.symbol, w.status])).toEqual(
+      expect.arrayContaining([
+        ["created", "BTC", "open"],
+        ["created", "SOL", "open"],
+        ["claimed", "ETH", "closed"],
+      ]),
+    );
+    expect(a.written).toHaveLength(3);
+    expect(a.written.find((w: any) => w.how === "claimed")).toMatchObject({ id: manualEthId, entryPrice: 2001, exitPrice: 2100 });
   });
 
   it("changes nothing on a second pass", async () => {
     const r = await (await send("POST", "/api/binance/sync", { account: ACCOUNT })).json();
-    expect(r.accounts[0]).toMatchObject({ created: 0, claimed: 0, updated: 0, unchanged: 3 });
+    expect(r.accounts[0]).toMatchObject({ created: 0, claimed: 0, updated: 0, unchanged: 3, written: [] });
     const trades: any[] = await get("/api/trades");
     expect(trades.filter((t) => t.account === ACCOUNT)).toHaveLength(4);
   });
