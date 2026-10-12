@@ -274,6 +274,16 @@ export function hlCoinFor(symbol: string | null | undefined, names: string[]): s
 /* ------------------------------- fills ------------------------------- */
 
 /** One fill as the venue reports it, numbers already read. */
+/**
+ * One fill, as the position reader wants it.
+ *
+ * Hyperliquid's own shape, and kept as the common one: Binance's userTrades
+ * rows carry the same facts under other names and are mapped onto this, so
+ * the reader below — which is where every position is reconstructed — exists
+ * once. `startPosition` is the venue's ledger before the fill; Hyperliquid
+ * reports it per fill, and for Binance it is a running sum checked against
+ * the venue's open positions at the end (see shared/binance-account.ts).
+ */
 export interface HlFill {
   coin: string;
   px: number;
@@ -394,7 +404,15 @@ const wavg = (legs: HlLeg[]) => {
  * one that grows it is an add. Entry and exit are size-weighted over their
  * legs, which is what the account actually paid and received.
  */
-export function tradesFromFills(fills: HlFill[]): FillsRead {
+export function tradesFromFills(
+  fills: HlFill[],
+  /**
+   * The prefix on every external id — "hl" or "binance". The id is how a
+   * re-sync finds what it wrote last time, so two venues that could ever
+   * share a trade id must not share a prefix.
+   */
+  venue: string = "hl",
+): FillsRead {
   const byCoin = new Map<string, HlFill[]>();
   for (const f of fills) {
     const list = byCoin.get(f.coin) ?? [];
@@ -428,7 +446,7 @@ export function tradesFromFills(fills: HlFill[]): FillsRead {
       status: "open",
       fees: leg.fee,
       closedPnl: 0,
-      externalId: `hl:${coin}:${leg.tid}`,
+      externalId: `${venue}:${coin}:${leg.tid}`,
       opens: [leg],
       closes: [],
     });

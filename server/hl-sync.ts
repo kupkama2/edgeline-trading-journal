@@ -13,52 +13,17 @@
  * panel points at the blanks. Nothing a person has since written on a
  * synced trade is touched; a re-sync only fills in an exit that was still
  * open last time.
+ *
+ * The writing itself — by id, by resemblance to a hand-logged trade, or new —
+ * is shared with the Binance sync; see venue-sync.ts.
  */
-import { levelsFromOrders, tradesFromFills, type HlTrade } from "@shared/hyperliquid";
-import type { InsertTrade, TradeWithTags } from "@shared/schema";
+import { levelsFromOrders, tradesFromFills } from "@shared/hyperliquid";
 import { fetchHistoricalOrders, fetchUserFills } from "./hyperliquid";
 import { storageFor } from "./storage";
+import { emptySync, writeVenueTrades, type AccountSync, type SyncSummary } from "./venue-sync";
 
-export interface AccountSync {
-  account: string;
-  fills: number;
-  created: number;
-  updated: number;
-  unchanged: number;
-  /** Positions open before the fill history begins — not written. */
-  unreconstructed: number;
-  error?: string;
-}
-
-export interface SyncSummary {
-  accounts: AccountSync[];
-  /** When no account names a wallet, this says so instead of a silent nothing. */
-  message?: string;
-}
-
-/** What a venue-written trade looks like in the journal's own terms. */
-function asInsert(t: HlTrade, account: string, levels: { initialStop: number | null; initialTarget: number | null }): InsertTrade {
-  return {
-    symbol: t.coin.toUpperCase(),
-    direction: t.direction,
-    size: t.size,
-    sizeUnit: "base",
-    pointValue: 1,
-    entryPrice: t.entryPrice,
-    entryTime: new Date(t.entryTime).toISOString(),
-    initialStop: levels.initialStop,
-    initialTarget: levels.initialTarget,
-    status: t.status,
-    exitPrice: t.exitPrice,
-    exitTime: t.exitTime != null ? new Date(t.exitTime).toISOString() : null,
-    // How it closed is not in the fills. "other" is the honest reading, and
-    // the health panel lists it as an exit reason still to be given.
-    exitReason: t.status === "closed" ? "other" : null,
-    fees: t.fees,
-    account,
-    externalId: t.externalId,
-  } as InsertTrade;
-}
+export type { AccountSync, SyncSummary } from "./venue-sync";
+export { closingPatch } from "./venue-sync";
 
 /**
  * Sync every account of one user that names a wallet.
@@ -81,67 +46,22 @@ export async function syncHyperliquid(userId: number, onlyAccount?: string): Pro
 
   const out: AccountSync[] = [];
   for (const acct of accounts) {
-    const row: AccountSync = { account: acct.name, fills: 0, created: 0, updated: 0, unchanged: 0, unreconstructed: 0 };
+    const row = emptySync(acct.name);
     try {
       const fills = await fetchUserFills(acct.wallet!);
       row.fills = fills.length;
-      const read = tradesFromFills(fills);
+      const read = tradesFromFills(fills, "hl");
       row.unreconstructed = read.unreconstructed.reduce((n, u) => n + u.fills, 0);
       // The order history is a nicety: a trade without a stop is still a trade.
       const orders = await fetchHistoricalOrders(acct.wallet!).catch(() => []);
-
-      for (const t of read.trades) {
-        const levels = levelsFromOrders(t, orders);
-        const existing = await store.tradeByExternalId(t.externalId);
-        if (!existing) {
-          await store.createTrade(asInsert(t, acct.name, levels));
-          row.created += 1;
-          continue;
-        }
-        const patch = closingPatch(existing, t, levels);
-        if (patch) {
-          await store.updateTrade(existing.id, patch);
-          row.updated += 1;
-        } else {
-          row.unchanged += 1;
-        }
-      }
+      await writeVenueTrades(store, row, read.trades, {
+        symbolOf: (coin) => coin.toUpperCase(),
+        levelsFor: (t) => levelsFromOrders(t, orders),
+      });
     } catch (err: any) {
       row.error = String(err?.message ?? err);
     }
     out.push(row);
   }
   return { accounts: out };
-}
-
-/**
- * What a re-sync may change on a trade it wrote before: the exit, when the
- * position has closed since; a stop or target the orders now reveal, when
- * the trade still has none. Never a field a person could have edited.
- */
-export function closingPatch(
-  existing: TradeWithTags,
-  t: HlTrade,
-  levels: { initialStop: number | null; initialTarget: number | null },
-): Partial<InsertTrade> | null {
-  const patch: Record<string, unknown> = {};
-  if (existing.status === "open" && t.status === "closed") {
-    patch.status = "closed";
-    patch.exitPrice = t.exitPrice;
-    patch.exitTime = t.exitTime != null ? new Date(t.exitTime).toISOString() : null;
-    patch.exitReason = existing.exitReason ?? "other";
-    patch.fees = t.fees;
-    // An add while open moves the average entry; the record follows the fills.
-    patch.size = t.size;
-    patch.entryPrice = t.entryPrice;
-  } else if (existing.status === "open" && t.status === "open") {
-    if (Math.abs(existing.size - t.size) > 1e-9) {
-      patch.size = t.size;
-      patch.entryPrice = t.entryPrice;
-      patch.fees = t.fees;
-    }
-  }
-  if (existing.initialStop == null && levels.initialStop != null) patch.initialStop = levels.initialStop;
-  if (existing.initialTarget == null && levels.initialTarget != null) patch.initialTarget = levels.initialTarget;
-  return Object.keys(patch).length ? (patch as Partial<InsertTrade>) : null;
 }

@@ -41,6 +41,8 @@ import {
 } from "./hyperliquid";
 import { fetchCandlesAt, pairForTradeAt, readCandlesAt } from "./candles";
 import { syncHyperliquid } from "./hl-sync";
+import { syncBinance, verifyKey } from "./binance-account";
+import { seal } from "./secrets";
 import { hlAsset, splitHlAsset, venueOfAccount } from "@shared/hyperliquid";
 
 import {
@@ -49,6 +51,7 @@ import {
   type Candle,
 } from "@shared/binance";
 import Anthropic from "@anthropic-ai/sdk";
+import type { AccountSettings } from "@shared/schema";
 import {
   insertTradeSchema,
   updateTradeSchema,
@@ -809,6 +812,18 @@ export async function registerRoutes(
    * alone, or could not be reconstructed — the last of which is said out
    * loud rather than guessed at.
    */
+  /** The same, for an account that holds a Binance key. */
+  app.post("/api/binance/sync", async (req, res) => {
+    const userId = (req as any).userId as number | undefined;
+    if (!userId) return res.status(401).json({ message: "No account on request" });
+    const only = typeof req.body?.account === "string" ? req.body.account : undefined;
+    try {
+      res.json(await syncBinance(userId, only));
+    } catch (err: any) {
+      res.status(502).json({ message: String(err?.message ?? err) });
+    }
+  });
+
   app.post("/api/hyperliquid/sync", async (req, res) => {
     const userId = (req as any).userId as number | undefined;
     if (!userId) return res.status(401).json({ message: "No account on request" });
@@ -1496,15 +1511,43 @@ export async function registerRoutes(
   /* ---------------------------- mistake tags ---------------------------- */
   /* -------------------------- account settings -------------------------- */
 
+  /**
+   * What the browser is told about an account's Binance key: that there is
+   * one, and how it ends. The secret never leaves the server, sealed or not —
+   * nothing in the client needs it, and a thing the client never receives is
+   * a thing a browser extension, a screenshot or a shared screen cannot leak.
+   */
+  const publicSettings = (a: AccountSettings) => {
+    const { binanceSecret: _secret, binanceKey, ...rest } = a;
+    return {
+      ...rest,
+      binanceKeyHint: binanceKey ? `…${binanceKey.slice(-4)}` : null,
+    };
+  };
+
   app.get("/api/account-settings", async (req, res) => {
-    res.json(await store(req).listAccountSettings());
+    res.json((await store(req).listAccountSettings()).map(publicSettings));
   });
 
   app.put("/api/account-settings", async (req, res) => {
     const parsed = upsertAccountSettingsSchema.safeParse(req.body);
     if (!parsed.success)
       return res.status(400).json({ message: "Invalid account settings", issues: parsed.error.issues });
-    res.json(await store(req).upsertAccountSettings(parsed.data));
+    const data = { ...parsed.data };
+    if (data.binanceKey) {
+      /*
+       * A key is asked what it may do BEFORE it is kept, and refused if the
+       * answer is anything a stolen key could spend. The check is the venue's
+       * own word, not a guess from the key's shape; failing to reach the check
+       * fails the key, because "probably fine" is not a permission.
+       */
+      if (!data.binanceSecret)
+        return res.status(400).json({ message: "A key needs its secret." });
+      const verdict = await verifyKey({ key: data.binanceKey, secret: data.binanceSecret });
+      if (!verdict.ok) return res.status(400).json({ message: verdict.reason });
+      data.binanceSecret = seal(data.binanceSecret);
+    }
+    res.json(publicSettings(await store(req).upsertAccountSettings(data)));
   });
 
   /*
