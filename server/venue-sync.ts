@@ -28,6 +28,24 @@ import type { storageFor } from "./storage";
 export type Levels = { initialStop: number | null; initialTarget: number | null };
 type Store = ReturnType<typeof storageFor>;
 
+/**
+ * One trade the sync wrote or changed, enough to read it back in a list and
+ * open it. Counts say the sync did something; this says WHAT, which is the
+ * part worth looking at afterwards — in particular which hand-logged trades
+ * it decided were the venue's, because that is the one decision in here that
+ * is a judgement rather than a fact.
+ */
+export interface WrittenTrade {
+  id: number;
+  symbol: string;
+  direction: "long" | "short";
+  status: "open" | "closed";
+  entryPrice: number;
+  exitPrice: number | null;
+  entryTime: string;
+  how: "created" | "claimed" | "updated";
+}
+
 export interface AccountSync {
   account: string;
   fills: number;
@@ -38,18 +56,33 @@ export interface AccountSync {
   claimed: number;
   /** Positions open before the fill history begins — not written. */
   unreconstructed: number;
+  /** Every trade touched, in the order they were met. */
+  written: WrittenTrade[];
   error?: string;
 }
 
 export const emptySync = (account: string): AccountSync => ({
   account,
   fills: 0,
-  created: 0,
   updated: 0,
+  created: 0,
   unchanged: 0,
   claimed: 0,
   unreconstructed: 0,
+  written: [],
 });
+
+const note = (row: AccountSync, t: TradeWithTags, how: WrittenTrade["how"]) =>
+  row.written.push({
+    id: t.id,
+    symbol: t.symbol,
+    direction: t.direction === "short" ? "short" : "long",
+    status: t.status === "closed" ? "closed" : "open",
+    entryPrice: t.entryPrice,
+    exitPrice: t.exitPrice,
+    entryTime: t.entryTime,
+    how,
+  });
 
 export interface SyncSummary {
   accounts: AccountSync[];
@@ -198,8 +231,9 @@ export async function writeVenueTrades(
     if (existing) {
       const patch = closingPatch(existing, t, levels);
       if (patch) {
-        await store.updateTrade(existing.id, patch);
+        const after = await store.updateTrade(existing.id, patch);
         row.updated += 1;
+        note(row, after ?? existing, "updated");
       } else {
         row.unchanged += 1;
       }
@@ -213,12 +247,14 @@ export async function writeVenueTrades(
     );
     if (mine) {
       claimedIds.add(mine.id);
-      await store.updateTrade(mine.id, claimPatch(mine, t, levels, pair));
+      const after = await store.updateTrade(mine.id, claimPatch(mine, t, levels, pair));
       row.claimed += 1;
+      note(row, after ?? mine, "claimed");
       continue;
     }
 
-    await store.createTrade(asInsert(t, row.account, levels, symbol, pair));
+    const made = await store.createTrade(asInsert(t, row.account, levels, symbol, pair));
     row.created += 1;
+    note(row, made, "created");
   }
 }

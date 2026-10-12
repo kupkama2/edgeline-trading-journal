@@ -234,6 +234,7 @@ describe.skipIf(!DB)("a Hyperliquid account, synced", () => {
     ];
     const r = await send("POST", "/api/hyperliquid/sync", {}).then((x) => x.json());
     expect(r.accounts[0]).toMatchObject({ created: 0, updated: 1, unchanged: 1 });
+    expect(r.accounts[0].written).toEqual([expect.objectContaining({ how: "updated", symbol: "BTC", status: "closed", exitPrice: 90 })]);
     const btc = (await get("/api/trades")).find((t: any) => t.externalId === "hl:BTC:3");
     expect(btc).toMatchObject({ status: "closed", exitPrice: 90, exitReason: "other" });
     expect(btc.fees).toBeCloseTo(0.5);

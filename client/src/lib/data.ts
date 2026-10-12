@@ -646,6 +646,17 @@ export interface SyncSummary {
     /** Hand-logged trades recognised as the venue's and stamped, not duplicated. */
     claimed: number;
     unreconstructed: number;
+    /** Every trade touched, in the order they were met. */
+    written: {
+      id: number;
+      symbol: string;
+      direction: "long" | "short";
+      status: "open" | "closed";
+      entryPrice: number;
+      exitPrice: number | null;
+      entryTime: string;
+      how: "created" | "claimed" | "updated";
+    }[];
     error?: string;
   }[];
   message?: string;
