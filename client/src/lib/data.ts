@@ -643,6 +643,8 @@ export interface SyncSummary {
     created: number;
     updated: number;
     unchanged: number;
+    /** Hand-logged trades recognised as the venue's and stamped, not duplicated. */
+    claimed: number;
     unreconstructed: number;
     error?: string;
   }[];
@@ -653,6 +655,14 @@ export interface SyncSummary {
  * Pull a wallet's fills into the journal. Every account naming a wallet, or
  * one by name. Writes trades, so the trade list is refreshed after.
  */
+export function useBinanceSync() {
+  return useMutation({
+    mutationFn: async (account?: string) =>
+      (await apiRequest("POST", "/api/binance/sync", account ? { account } : {})).json() as Promise<SyncSummary>,
+    onSuccess: invalidateTrades,
+  });
+}
+
 export function useHyperliquidSync() {
   return useMutation({
     mutationFn: async (account?: string) =>

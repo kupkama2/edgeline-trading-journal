@@ -787,6 +787,14 @@ export const accountSettings = pgTable("account_settings", {
   kind: text("kind").notNull().default("live"), // 'live' | 'evaluation'
   /** Hyperliquid wallet address, when this account IS one. Fills sync from it. */
   wallet: text("wallet"),
+  /**
+   * A Binance API key, when this account is one. Read-only by rule — the
+   * server refuses to store a key that can withdraw or trade — and the secret
+   * is sealed before it is written (server/secrets.ts). The GET route never
+   * returns the secret; the client sees the key's last four characters.
+   */
+  binanceKey: text("binance_key"),
+  binanceSecret: text("binance_secret"),
 });
 
 /**
@@ -830,6 +838,13 @@ export const upsertAccountSettingsSchema = z.object({
     .regex(/^0x[0-9a-fA-F]{40}$/, "A Hyperliquid address is 0x followed by 40 hex characters")
     .nullable()
     .optional(),
+  /**
+   * Both or neither: a key is useless without its secret and the secret is
+   * meaningless without its key. Omitted leaves the stored pair alone; null
+   * on the key clears both.
+   */
+  binanceKey: z.string().min(16).max(128).nullable().optional(),
+  binanceSecret: z.string().min(16).max(128).optional(),
 });
 
 /** Move every trade from one account onto another — an eval that got funded. */

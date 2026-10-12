@@ -243,6 +243,8 @@ CREATE TABLE IF NOT EXISTS account_settings (
   taker_fee DOUBLE PRECISION NOT NULL DEFAULT 0
 );
 ALTER TABLE account_settings ADD COLUMN IF NOT EXISTS wallet TEXT;
+ALTER TABLE account_settings ADD COLUMN IF NOT EXISTS binance_key TEXT;
+ALTER TABLE account_settings ADD COLUMN IF NOT EXISTS binance_secret TEXT;
 CREATE TABLE IF NOT EXISTS account_balances (
   id SERIAL PRIMARY KEY,
   user_id INTEGER NOT NULL,
@@ -1351,6 +1353,11 @@ export class DatabaseStorage implements IStorage {
           // knowing about kinds, and it must not quietly relive an account.
           ...(s.kind ? { kind: s.kind } : {}),
           ...(s.wallet !== undefined ? { wallet: s.wallet } : {}),
+          // The route has already sealed the secret and checked the key's
+          // permissions by the time it gets here; null on the key clears both.
+          ...(s.binanceKey !== undefined
+            ? { binanceKey: s.binanceKey, binanceSecret: s.binanceKey ? (s.binanceSecret ?? null) : null }
+            : {}),
         })
         .where(eq(accountSettings.id, existing.id))
         .returning();
@@ -1365,6 +1372,8 @@ export class DatabaseStorage implements IStorage {
         takerFee: s.takerFee,
         kind: s.kind ?? "live",
         wallet: s.wallet ?? null,
+        binanceKey: s.binanceKey ?? null,
+        binanceSecret: s.binanceKey ? (s.binanceSecret ?? null) : null,
         userId: this.userId,
       })
       .returning();

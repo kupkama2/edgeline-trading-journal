@@ -247,6 +247,53 @@ describe.skipIf(!DB)("a Hyperliquid account, synced", () => {
     expect(r.accounts[0]).toMatchObject({ fills: 1, created: 0, unreconstructed: 1 });
   });
 
+  it("claims a trade the person had already logged, rather than writing it twice", async () => {
+    /*
+     * The first sync after a month of logging by hand. The venue brings a SOL
+     * long the person logged on the way in — ten minutes late, entry rounded
+     * — and never closed. Written as a second row it would double the trade;
+     * instead the hand-written one is stamped with the venue's id and its
+     * exit filled in, and the entry and levels they typed are left exactly
+     * as they typed them.
+     */
+    const solIn = now - 6 * HOUR;
+    const solOut = now - 4 * HOUR;
+    const made = await send("POST", "/api/trades", {
+      trade: {
+        symbol: "SOL", direction: "long", size: 10, sizeUnit: "base", entryPrice: 150.5, initialStop: 145, initialTarget: 165,
+        entryTime: new Date(solIn + 10 * 60_000).toISOString(), status: "open", account: "Hyperliquid",
+      },
+    });
+    expect(made.status).toBe(201);
+    const manual = await made.json();
+
+    fills = [
+      { coin: "SOL", px: "150", sz: "10", side: "B", time: solIn, startPosition: "0", dir: "Open Long", closedPnl: "0", fee: "0.5", tid: 6, oid: 16 },
+      { coin: "SOL", px: "160", sz: "10", side: "A", time: solOut, startPosition: "10", dir: "Close Long", closedPnl: "100", fee: "0.5", tid: 7, oid: 17 },
+    ];
+    const r = await send("POST", "/api/hyperliquid/sync", {}).then((x) => x.json());
+    expect(r.accounts[0]).toMatchObject({ fills: 2, created: 0, claimed: 1, updated: 0 });
+
+    const trades = await get("/api/trades");
+    expect(trades.filter((t: any) => t.symbol === "SOL")).toHaveLength(1);
+    const sol = trades.find((t: any) => t.id === manual.id);
+    expect(sol).toMatchObject({
+      externalId: "hl:SOL:6",
+      status: "closed",
+      exitPrice: 160,
+      exitReason: "other",
+      // Theirs, untouched.
+      entryPrice: 150.5,
+      initialStop: 145,
+      initialTarget: 165,
+    });
+    expect(sol.fees).toBeCloseTo(1);
+
+    // And now it is found by name: a second pass is a no-op.
+    const again = await send("POST", "/api/hyperliquid/sync", {}).then((x) => x.json());
+    expect(again.accounts[0]).toMatchObject({ created: 0, claimed: 0, updated: 0, unchanged: 1 });
+  });
+
   it("keeps balance snapshots per account", async () => {
     const bad = await send("POST", "/api/account-balances", { account: "Hyperliquid", balance: 5000, at: "yesterday-ish" });
     expect(bad.status).toBe(400);

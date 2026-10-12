@@ -1,4 +1,4 @@
-import { useAccountBalances, useAddAccountBalance, useHyperliquidSync } from "@/lib/data";
+import { useAccountBalances, useAddAccountBalance, useBinanceSync, useHyperliquidSync } from "@/lib/data";
 import { isWalletAddress, venueOfAccount } from "@shared/hyperliquid";
 import { fmtAmount } from "@shared/metrics";
 import { latestEquity } from "@shared/equity";
@@ -54,21 +54,38 @@ function AccountFeesRow({
 }: {
   name: string;
   existing:
-    | { feeMode: string; makerFee: number; takerFee: number; kind?: string; wallet?: string | null }
+    | {
+        feeMode: string;
+        makerFee: number;
+        takerFee: number;
+        kind?: string;
+        wallet?: string | null;
+        /** "…ab12" when a Binance key is held. The key itself never comes back. */
+        binanceKeyHint?: string | null;
+      }
     | undefined;
   /** The other accounts, for folding a passed evaluation into one of them. */
   others: string[];
 }) {
   const save = useSaveAccountSettings();
   const sync = useHyperliquidSync();
+  const bnSync = useBinanceSync();
   const { data: balances = [] } = useAccountBalances();
   const addBalance = useAddAccountBalance();
   const [wallet, setWallet] = useState(existing?.wallet ?? "");
+  // The key and its secret are typed, sent once, and forgotten here: the
+  // server keeps the key and a sealed secret, and hands back only how the
+  // key ends. Nothing in this component ever holds a saved secret.
+  const [bnKey, setBnKey] = useState("");
+  const [bnSecret, setBnSecret] = useState("");
+  const [bnOpen, setBnOpen] = useState(false);
   const [balance, setBalance] = useState("");
   const equity = latestEquity(balances, name);
   const walletDirty = (existing?.wallet ?? "") !== wallet.trim();
   const walletOk = wallet.trim() === "" || isWalletAddress(wallet);
   const looksHl = venueOfAccount(name) === "hyperliquid";
+  const looksBn = venueOfAccount(name) === "binance";
+  const bnReady = bnKey.trim().length >= 16 && bnSecret.trim().length >= 16;
 
   async function saveWallet() {
     await save.mutateAsync({
@@ -86,18 +103,57 @@ function AccountFeesRow({
     });
   }
 
-  async function syncNow() {
-    const r = await sync.mutateAsync(name);
+  /** One sentence for what a sync did, whichever venue did it. */
+  function sayWhatHappened(venue: string, r: { accounts: any[]; message?: string }, fallback: string) {
     const a = r.accounts[0];
-    if (!a) return toast({ title: "Nothing synced", description: r.message ?? "No wallet on this account." });
-    if (a.error) return toast({ title: "Hyperliquid did not answer", description: a.error });
+    if (!a) return toast({ title: "Nothing synced", description: r.message ?? fallback });
     const parts = [
       `${a.created} new`,
+      // The claimed count is the one worth reading after a month of logging
+      // by hand: it is the trades the venue recognised as already yours.
+      ...(a.claimed ? [`${a.claimed} matched to trades you had logged`] : []),
       `${a.updated} updated`,
       `${a.unchanged} unchanged`,
       ...(a.unreconstructed ? [`${a.unreconstructed} fill${a.unreconstructed === 1 ? "" : "s"} from before the record`] : []),
     ];
-    toast({ title: `Synced ${name}`, description: `${a.fills} fills read — ${parts.join(", ")}.` });
+    const summary = `${a.fills} fills read — ${parts.join(", ")}.`;
+    // An error beside a partial result is still a result; it is said after.
+    if (a.error && a.fills === 0) return toast({ title: `${venue} did not answer`, description: a.error, variant: "destructive" });
+    toast({ title: `Synced ${name}`, description: a.error ? `${summary} ${a.error}` : summary });
+  }
+
+  async function syncNow() {
+    sayWhatHappened("Hyperliquid", await sync.mutateAsync(name), "No wallet on this account.");
+  }
+
+  async function saveBinanceKey() {
+    try {
+      await save.mutateAsync({
+        name,
+        feeMode: mode,
+        makerFee: Number(maker) || 0,
+        takerFee: Number(taker) || 0,
+        binanceKey: bnKey.trim(),
+        binanceSecret: bnSecret.trim(),
+      } as any);
+      setBnKey("");
+      setBnSecret("");
+      setBnOpen(false);
+      toast({ title: "Key saved", description: `${name} will sync its positions from Binance. The key was checked: it can read, and it cannot spend.` });
+    } catch (err: any) {
+      // The server's refusal is the useful part — "this key can withdraw" is
+      // an instruction, and it must not be flattened into "didn't save".
+      toast({ title: "Key not kept", description: String(err?.message ?? err).replace(/^\d+:\s*/, "").slice(0, 220), variant: "destructive" });
+    }
+  }
+
+  async function clearBinanceKey() {
+    await save.mutateAsync({ name, feeMode: mode, makerFee: Number(maker) || 0, takerFee: Number(taker) || 0, binanceKey: null } as any);
+    toast({ title: "Key removed", description: `${name} is back to trades logged by hand.` });
+  }
+
+  async function syncBinanceNow() {
+    sayWhatHappened("Binance", await bnSync.mutateAsync(name), "No key on this account.");
   }
 
   async function logBalance() {
@@ -294,6 +350,84 @@ function AccountFeesRow({
               >
                 {sync.isPending ? "Syncing…" : "Sync fills"}
               </Button>
+            )}
+          </span>
+        )}
+
+        {/*
+          Binance has no public record by address; its history is behind a
+          key. So the key goes here, read-only by rule — the server asks the
+          venue what the key may do and refuses one that can withdraw or
+          trade — and once kept, the venue writes this account's positions
+          the same way a wallet does. The secret is typed, sent, and gone:
+          what comes back is the key's last four characters and nothing else.
+        */}
+        {(looksBn || existing?.binanceKeyHint) && (
+          <span className="ml-auto flex flex-wrap items-center gap-1.5" data-testid={`binance-key-${name}`}>
+            {existing?.binanceKeyHint && !bnOpen ? (
+              <>
+                <span className="font-mono text-[11px] text-muted-foreground" data-testid={`text-binance-key-${name}`}>
+                  key {existing.binanceKeyHint}
+                </span>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 px-2 text-[11px]"
+                  onClick={syncBinanceNow}
+                  disabled={bnSync.isPending}
+                  data-testid={`button-sync-binance-${name}`}
+                >
+                  {bnSync.isPending ? "Syncing…" : "Sync positions"}
+                </Button>
+                <Button size="sm" variant="ghost" className="h-7 px-2 text-[11px] text-muted-foreground" onClick={() => setBnOpen(true)} data-testid={`button-replace-binance-key-${name}`}>
+                  Replace
+                </Button>
+                <Button size="sm" variant="ghost" className="h-7 px-2 text-[11px] text-muted-foreground" onClick={clearBinanceKey} disabled={save.isPending} data-testid={`button-clear-binance-key-${name}`}>
+                  Remove
+                </Button>
+              </>
+            ) : (
+              <>
+                <Input
+                  value={bnKey}
+                  onChange={(e) => setBnKey(e.target.value)}
+                  placeholder="Binance API key (read-only)"
+                  spellCheck={false}
+                  autoComplete="off"
+                  className="h-7 w-52 max-w-full font-mono text-[11px]"
+                  data-testid={`input-binance-key-${name}`}
+                />
+                <Input
+                  value={bnSecret}
+                  onChange={(e) => setBnSecret(e.target.value)}
+                  placeholder="secret"
+                  type="password"
+                  spellCheck={false}
+                  autoComplete="new-password"
+                  className="h-7 w-40 max-w-full font-mono text-[11px]"
+                  data-testid={`input-binance-secret-${name}`}
+                />
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 px-2 text-[11px]"
+                  onClick={saveBinanceKey}
+                  disabled={save.isPending || !bnReady}
+                  data-testid={`button-save-binance-key-${name}`}
+                >
+                  <Check className="mr-1 h-3 w-3" />
+                  {save.isPending ? "Checking…" : "Save"}
+                </Button>
+                {bnOpen && (
+                  <Button size="sm" variant="ghost" className="h-7 px-2 text-[11px] text-muted-foreground" onClick={() => setBnOpen(false)}>
+                    Cancel
+                  </Button>
+                )}
+                <span className="basis-full text-[10px] leading-snug text-muted-foreground">
+                  Make it in Binance under API Management with only <em>Enable Reading</em> and{" "}
+                  <em>Enable Futures</em> ticked. A key that can withdraw or trade is refused.
+                </span>
+              </>
             )}
           </span>
         )}
