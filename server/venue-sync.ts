@@ -63,9 +63,16 @@ export function asInsert(
   account: string,
   levels: Levels,
   symbol: string = t.coin.toUpperCase(),
+  /**
+   * The book the trade was in, when the symbol alone cannot say. A coin on a
+   * Hyperliquid builder DEX — "xyz:WTIOIL" — is written as WTIOIL, and the
+   * book it trades on goes here, where the chart and the mark look first.
+   */
+  pricePair: string | null = null,
 ): InsertTrade {
   return {
     symbol,
+    pricePair,
     direction: t.direction,
     size: t.size,
     sizeUnit: "base",
@@ -124,9 +131,17 @@ export function closingPatch(existing: TradeWithTags, t: HlTrade, levels: Levels
  * blank. The exit reason, if the venue supplies one, is "other": the venue
  * knows the price and not the decision.
  */
-export function claimPatch(existing: TradeWithTags, t: HlTrade, levels: Levels): Partial<InsertTrade> {
+export function claimPatch(
+  existing: TradeWithTags,
+  t: HlTrade,
+  levels: Levels,
+  pricePair: string | null = null,
+): Partial<InsertTrade> {
   const patch: Record<string, unknown> = { externalId: t.externalId };
   if (existing.fees == null) patch.fees = t.fees;
+  // A hand-logged WTIOIL had no way of saying which book it was on; the
+  // venue just said. Only where nothing was chosen by hand already.
+  if (!existing.pricePair && pricePair) patch.pricePair = pricePair;
   if (existing.status === "open" && t.status === "closed") {
     patch.status = "closed";
     patch.exitPrice = t.exitPrice;
@@ -162,6 +177,8 @@ export async function writeVenueTrades(
   opts: {
     symbolOf: (venueSymbol: string) => string;
     levelsFor: (t: HlTrade) => Levels;
+    /** The stored price pair for a venue trade, where the symbol alone cannot name the book. */
+    pairFor?: (t: HlTrade) => string | null;
   },
 ): Promise<void> {
   // The hand-logged trades on this account, fetched once: candidates for a
@@ -175,6 +192,7 @@ export async function writeVenueTrades(
   for (const t of trades) {
     const symbol = opts.symbolOf(t.coin);
     const levels = opts.levelsFor(t);
+    const pair = opts.pairFor?.(t) ?? null;
 
     const existing = await store.tradeByExternalId(t.externalId);
     if (existing) {
@@ -195,12 +213,12 @@ export async function writeVenueTrades(
     );
     if (mine) {
       claimedIds.add(mine.id);
-      await store.updateTrade(mine.id, claimPatch(mine, t, levels));
+      await store.updateTrade(mine.id, claimPatch(mine, t, levels, pair));
       row.claimed += 1;
       continue;
     }
 
-    await store.createTrade(asInsert(t, row.account, levels, symbol));
+    await store.createTrade(asInsert(t, row.account, levels, symbol, pair));
     row.created += 1;
   }
 }

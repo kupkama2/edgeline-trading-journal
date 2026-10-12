@@ -294,6 +294,45 @@ describe.skipIf(!DB)("a Hyperliquid account, synced", () => {
     expect(again.accounts[0]).toMatchObject({ created: 0, claimed: 0, updated: 0, unchanged: 1 });
   });
 
+  it("writes a builder-book coin under its own name, with the book as its price pair", async () => {
+    /*
+     * WTIOIL trades on the "xyz" builder DEX and arrives in the fills as
+     * "xyz:WTIOIL". Upper-casing that whole string was the symbol "XYZ:WTIOIL"
+     * — unchartable, and never the equal of a WTIOIL somebody logged by hand.
+     * The symbol is the coin; the book goes in the price pair, in the venue's
+     * own spelling, because that is the string the venue is asked with.
+     */
+    const oilIn = now - 9 * HOUR;
+    const oilOut = now - 8 * HOUR;
+    // One logged by hand on the way in, to be claimed; one the venue alone knows.
+    const made = await send("POST", "/api/trades", {
+      trade: {
+        symbol: "WTIOIL", direction: "long", size: 10, sizeUnit: "base", entryPrice: 60.2, initialStop: 58, initialTarget: 64,
+        entryTime: new Date(oilIn + 15 * 60_000).toISOString(), status: "open", account: "Hyperliquid",
+      },
+    });
+    const manual = await made.json();
+    fills = [
+      { coin: "xyz:WTIOIL", px: "60", sz: "10", side: "B", time: oilIn, startPosition: "0", dir: "Open Long", closedPnl: "0", fee: "0.2", tid: 8, oid: 18 },
+      { coin: "xyz:WTIOIL", px: "62", sz: "10", side: "A", time: oilOut, startPosition: "10", dir: "Close Long", closedPnl: "20", fee: "0.2", tid: 9, oid: 19 },
+      { coin: "xyz:GOLD", px: "2400", sz: "1", side: "A", time: now - 3 * HOUR, startPosition: "0", dir: "Open Short", closedPnl: "0", fee: "0.5", tid: 10, oid: 20 },
+    ];
+    const r = await send("POST", "/api/hyperliquid/sync", {}).then((x) => x.json());
+    expect(r.accounts[0]).toMatchObject({ fills: 3, created: 1, claimed: 1 });
+
+    const trades = await get("/api/trades");
+    expect(trades.filter((t: any) => t.symbol === "WTIOIL")).toHaveLength(1);
+    expect(trades.some((t: any) => t.symbol.includes(":"))).toBe(false);
+
+    const oil = trades.find((t: any) => t.id === manual.id);
+    expect(oil).toMatchObject({ symbol: "WTIOIL", externalId: "hl:xyz:WTIOIL:8", status: "closed", exitPrice: 62, entryPrice: 60.2, pricePair: "hyperliquid:xyz:WTIOIL" });
+
+    const gold = trades.find((t: any) => t.externalId === "hl:xyz:GOLD:10");
+    expect(gold).toMatchObject({ symbol: "GOLD", direction: "short", status: "open", pricePair: "hyperliquid:xyz:GOLD" });
+    // The venue's own coins carry no pair: the symbol is enough for them.
+    expect(trades.find((t: any) => t.externalId === "hl:ETH:1").pricePair).toBeNull();
+  });
+
   it("keeps balance snapshots per account", async () => {
     const bad = await send("POST", "/api/account-balances", { account: "Hyperliquid", balance: 5000, at: "yesterday-ish" });
     expect(bad.status).toBe(400);
