@@ -23,6 +23,7 @@ import { useRoute } from "wouter";
 import { BarChart3, Repeat } from "lucide-react";
 import { StyleSwitcher } from "@/components/style-switcher";
 import { DenomToggle } from "@/lib/denom";
+import { ChapterSwitch } from "@/lib/chapters";
 import { useStyleScopedTrades } from "@/lib/style-filter";
 import { useTrades } from "@/lib/data";
 import { closedTrades } from "@shared/breakdowns";
@@ -91,6 +92,9 @@ export default function Stats() {
             varies — so flipping card by card would let two cards on the same
             screen answer in different units. */}
         <div className="flex flex-wrap items-center gap-2">
+          {/* Which chapter. Only here: every other page shows the current
+              one, and the choice made here follows you until you leave. */}
+          <ChapterSwitch />
           <DenomToggle />
           <StyleSwitcher />
         </div>

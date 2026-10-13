@@ -3,6 +3,7 @@ import {
   hlCoinFor,
   isWalletAddress,
   levelsFromOrders,
+  marketsSeen,
   parseAllMids,
   parseCandleSnapshot,
   parseFundingHistory,
@@ -155,6 +156,30 @@ describe("fills into trades", () => {
 
   it("ignores a fill of nothing", () => {
     expect(tradesFromFills([fill("ETH", "B", 0, 2000, 0, 1000)]).trades).toEqual([]);
+  });
+});
+
+describe("the census of a sync's fills", () => {
+  it("lists every market, most recently traded first, with what became of its fills", () => {
+    const fills = [
+      fill("ETH", "B", 1, 2000, 0, 1000),
+      fill("ETH", "A", 1, 2100, 1, 6000),
+      fill("xyz:WTIOIL", "B", 10, 60, 0, 7000),
+      // Already open before the record: one fill, no trade, set aside.
+      fill("DOGE", "A", 100, 0.2, 100, 3000),
+    ];
+    const read = tradesFromFills(fills);
+    expect(marketsSeen(fills, read)).toEqual([
+      { coin: "xyz:WTIOIL", fills: 1, trades: 1, unreconstructed: 0, first: 7000, last: 7000 },
+      { coin: "ETH", fills: 2, trades: 1, unreconstructed: 0, first: 1000, last: 6000 },
+      { coin: "DOGE", fills: 1, trades: 0, unreconstructed: 1, first: 3000, last: 3000 },
+    ]);
+  });
+
+  it("keeps a market whose fills were set aside before the reader ever saw them", () => {
+    expect(marketsSeen([], { trades: [], unreconstructed: [] }, [{ coin: "LINKUSDT", fills: 3 }])).toEqual([
+      { coin: "LINKUSDT", fills: 0, trades: 0, unreconstructed: 3, first: 0, last: 0 },
+    ]);
   });
 });
 

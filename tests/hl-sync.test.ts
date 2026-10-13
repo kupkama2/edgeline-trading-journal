@@ -38,9 +38,13 @@ const orders = [
   { order: { coin: "ETH", oid: 22, side: "A", isTrigger: true, triggerPx: "2200", orderType: "Take Profit Market", reduceOnly: false, isPositionTpsl: true, timestamp: ethIn + 120_000 }, status: "canceled", statusTimestamp: ethOut },
 ];
 
+// Trigger orders the venue only hands over when asked for that book by name.
+let dexOrders: Record<string, unknown[]> = {};
+
 let venue: Server;
 let app: Server;
 let base: string;
+let userId: number;
 const asked: string[] = [];
 
 function startVenue(): Promise<string> {
@@ -65,7 +69,7 @@ function startVenue(): Promise<string> {
           case "userFills":
             return json(q.user === WALLET ? fills : []);
           case "historicalOrders":
-            return json(orders);
+            return json(q.dex ? (dexOrders[q.dex] ?? []) : orders);
           case "allMids":
             return json({ BTC: "95", ETH: "2050" });
           case "candleSnapshot": {
@@ -115,6 +119,7 @@ describe.skipIf(!DB)("a Hyperliquid account, synced", () => {
     const { initSchema, accounts } = await import("../server/storage");
     await initSchema();
     const acct = await accounts.create({ googleSub: `hls-${stamp}`, email: `hls-${stamp}@x.test` });
+    userId = acct.id;
 
     const express = (await import("express")).default;
     const { registerRoutes } = await import("../server/routes");
@@ -246,6 +251,12 @@ describe.skipIf(!DB)("a Hyperliquid account, synced", () => {
     ];
     const r = await send("POST", "/api/hyperliquid/sync", {}).then((x) => x.json());
     expect(r.accounts[0]).toMatchObject({ fills: 1, created: 0, unreconstructed: 1 });
+    // And the census says WHICH market, and that its one fill was set aside —
+    // the difference between "the venue never sent it" and "it was sent and
+    // could not be read" is the whole diagnosis.
+    expect(r.accounts[0].markets).toEqual([
+      { coin: "kPEPE", fills: 1, trades: 0, unreconstructed: 1, first: now - 3 * HOUR, last: now - 3 * HOUR },
+    ]);
   });
 
   it("claims a trade the person had already logged, rather than writing it twice", async () => {
@@ -313,13 +324,29 @@ describe.skipIf(!DB)("a Hyperliquid account, synced", () => {
       },
     });
     const manual = await made.json();
+    const goldIn = now - 3 * HOUR;
     fills = [
       { coin: "xyz:WTIOIL", px: "60", sz: "10", side: "B", time: oilIn, startPosition: "0", dir: "Open Long", closedPnl: "0", fee: "0.2", tid: 8, oid: 18 },
       { coin: "xyz:WTIOIL", px: "62", sz: "10", side: "A", time: oilOut, startPosition: "10", dir: "Close Long", closedPnl: "20", fee: "0.2", tid: 9, oid: 19 },
-      { coin: "xyz:GOLD", px: "2400", sz: "1", side: "A", time: now - 3 * HOUR, startPosition: "0", dir: "Open Short", closedPnl: "0", fee: "0.5", tid: 10, oid: 20 },
+      { coin: "xyz:GOLD", px: "2400", sz: "1", side: "A", time: goldIn, startPosition: "0", dir: "Open Short", closedPnl: "0", fee: "0.5", tid: 10, oid: 20 },
     ];
+    // The gold stop lives in the book's own order history, served only when
+    // the book is named; the unqualified history knows nothing of it.
+    dexOrders = {
+      xyz: [
+        { order: { coin: "xyz:GOLD", oid: 23, side: "B", isTrigger: true, triggerPx: "2450", orderType: "Stop Market", reduceOnly: true, timestamp: goldIn + 60_000 }, status: "open", statusTimestamp: goldIn + 60_000 },
+      ],
+    };
+    asked.length = 0;
     const r = await send("POST", "/api/hyperliquid/sync", {}).then((x) => x.json());
-    expect(r.accounts[0]).toMatchObject({ fills: 3, created: 1, claimed: 1 });
+    expect(r.accounts[0]).toMatchObject({ fills: 3, created: 1, claimed: 1, source: "0xabab…abab" });
+    // The census names the books' coins as the venue spells them, latest first.
+    expect(r.accounts[0].markets.map((m: any) => [m.coin, m.fills, m.trades, m.unreconstructed])).toEqual([
+      ["xyz:GOLD", 1, 1, 0],
+      ["xyz:WTIOIL", 2, 1, 0],
+    ]);
+    // The order history was asked for once plainly and once per book traded.
+    expect(asked.filter((a) => a === "historicalOrders")).toHaveLength(2);
 
     const trades = await get("/api/trades");
     expect(trades.filter((t: any) => t.symbol === "WTIOIL")).toHaveLength(1);
@@ -329,9 +356,39 @@ describe.skipIf(!DB)("a Hyperliquid account, synced", () => {
     expect(oil).toMatchObject({ symbol: "WTIOIL", externalId: "hl:xyz:WTIOIL:8", status: "closed", exitPrice: 62, entryPrice: 60.2, pricePair: "hyperliquid:xyz:WTIOIL" });
 
     const gold = trades.find((t: any) => t.externalId === "hl:xyz:GOLD:10");
-    expect(gold).toMatchObject({ symbol: "GOLD", direction: "short", status: "open", pricePair: "hyperliquid:xyz:GOLD" });
+    expect(gold).toMatchObject({ symbol: "GOLD", direction: "short", status: "open", pricePair: "hyperliquid:xyz:GOLD", initialStop: 2450 });
     // The venue's own coins carry no pair: the symbol is enough for them.
     expect(trades.find((t: any) => t.externalId === "hl:ETH:1").pricePair).toBeNull();
+    dexOrders = {};
+  });
+
+  it("puts right a builder-book symbol an earlier sync wrote under its old spelling", async () => {
+    /*
+     * Before builder books were understood, this sync wrote "xyz:WTIOIL" as
+     * the symbol "XYZ:WTIOIL", and a later sync finding that trade by its id
+     * left it alone — so the fix never reached the trades that had prompted
+     * it. Nobody types a colon into a symbol: the old spelling is the sync's
+     * own, and the one field on a found trade it is free to correct.
+     */
+    const { storageFor } = await import("../server/storage");
+    const at = now - 20 * HOUR;
+    const stale = await storageFor(userId).createTrade({
+      symbol: "XYZ:WTIOIL", pricePair: null, direction: "short", size: 5, sizeUnit: "base", pointValue: 1,
+      entryPrice: 70, entryTime: new Date(at).toISOString(), initialStop: null, initialTarget: null,
+      status: "open", exitPrice: null, exitTime: null, exitReason: null, fees: 0.1,
+      account: "Hyperliquid", externalId: "hl:xyz:WTIOIL:40",
+    } as any);
+    fills = [
+      { coin: "xyz:WTIOIL", px: "70", sz: "5", side: "A", time: at, startPosition: "0", dir: "Open Short", closedPnl: "0", fee: "0.1", tid: 40, oid: 50 },
+    ];
+    const r = await send("POST", "/api/hyperliquid/sync", {}).then((x) => x.json());
+    expect(r.accounts[0]).toMatchObject({ fills: 1, created: 0, claimed: 0, updated: 1 });
+    expect(r.accounts[0].written).toEqual([expect.objectContaining({ id: stale.id, symbol: "WTIOIL", how: "updated" })]);
+    const fixed = (await get("/api/trades")).find((t: any) => t.id === stale.id);
+    expect(fixed).toMatchObject({ symbol: "WTIOIL", pricePair: "hyperliquid:xyz:WTIOIL", entryPrice: 70, size: 5 });
+    // Once is enough.
+    const again = await send("POST", "/api/hyperliquid/sync", {}).then((x) => x.json());
+    expect(again.accounts[0]).toMatchObject({ updated: 0, unchanged: 1 });
   });
 
   it("keeps balance snapshots per account", async () => {

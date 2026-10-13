@@ -17,7 +17,14 @@
  * The writing itself — by id, by resemblance to a hand-logged trade, or new —
  * is shared with the Binance sync; see venue-sync.ts.
  */
-import { levelsFromOrders, splitHlAsset, tradesFromFills } from "@shared/hyperliquid";
+import {
+  levelsFromOrders,
+  marketsSeen,
+  splitHlAsset,
+  tradesFromFills,
+  type HlFill,
+  type HlOrder,
+} from "@shared/hyperliquid";
 import { formatPricePair } from "@shared/price-pair";
 import { fetchHistoricalOrders, fetchUserFills } from "./hyperliquid";
 import { storageFor } from "./storage";
@@ -25,6 +32,33 @@ import { emptySync, writeVenueTrades, type AccountSync, type SyncSummary } from 
 
 export type { AccountSync, SyncSummary } from "./venue-sync";
 export { closingPatch } from "./venue-sync";
+
+/** "0x1234…abcd" — enough to recognise a wallet, not enough to mistype one. */
+const shortAddress = (w: string) => `${w.slice(0, 6)}…${w.slice(-4)}`;
+
+/**
+ * The wallet's order history, across every book its fills name.
+ *
+ * The fills come back for every book in one answer — a builder-book fill
+ * arrives as "xyz:WTIOIL" with no extra request. Whether the order history
+ * does the same is not something the venue documents, and the clients that
+ * trade those books ask for it book by book. So it is asked both ways and
+ * merged by order id: a venue that already answered for every book costs one
+ * redundant request per book traded, and one that did not would otherwise
+ * leave every builder-book trade without the stop it was placed with.
+ */
+async function ordersAcross(wallet: string, fills: HlFill[]): Promise<HlOrder[]> {
+  const dexes = Array.from(
+    new Set(fills.map((f) => splitHlAsset(f.coin).dex).filter((d): d is string => !!d)),
+  );
+  const batches = await Promise.all([
+    fetchHistoricalOrders(wallet).catch(() => [] as HlOrder[]),
+    ...dexes.map((dex) => fetchHistoricalOrders(wallet, dex).catch(() => [] as HlOrder[])),
+  ]);
+  const byOid = new Map<number, HlOrder>();
+  for (const o of batches.flat()) if (!byOid.has(o.oid)) byOid.set(o.oid, o);
+  return Array.from(byOid.values()).sort((a, b) => a.timestamp - b.timestamp);
+}
 
 /**
  * Sync every account of one user that names a wallet.
@@ -49,12 +83,14 @@ export async function syncHyperliquid(userId: number, onlyAccount?: string): Pro
   for (const acct of accounts) {
     const row = emptySync(acct.name);
     try {
+      row.source = shortAddress(acct.wallet!);
       const fills = await fetchUserFills(acct.wallet!);
       row.fills = fills.length;
       const read = tradesFromFills(fills, "hl");
       row.unreconstructed = read.unreconstructed.reduce((n, u) => n + u.fills, 0);
+      row.markets = marketsSeen(fills, read);
       // The order history is a nicety: a trade without a stop is still a trade.
-      const orders = await fetchHistoricalOrders(acct.wallet!).catch(() => []);
+      const orders = await ordersAcross(acct.wallet!, fills);
       await writeVenueTrades(store, row, read.trades, {
         /*
          * A builder-book coin arrives as "xyz:WTIOIL". The journal's symbol is

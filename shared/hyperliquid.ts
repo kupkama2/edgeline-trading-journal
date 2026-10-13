@@ -524,6 +524,63 @@ export function tradesFromFills(
   };
 }
 
+/**
+ * One market as it appeared in a sync's fills — the census behind a report.
+ *
+ * A sync that writes nothing looks the same whether the venue sent nothing,
+ * sent fills this reader could not finish, or sent fills for trades the
+ * journal already had. Those are three different problems with three
+ * different fixes, and "412 fills read" tells them apart not at all. This
+ * does: which markets were in the answer, how many fills each, how many
+ * trades came of them, and how many fills were set aside unread.
+ */
+export interface MarketSeen {
+  /** The venue's own name for it — "xyz:WTIOIL", not the journal's symbol. */
+  coin: string;
+  fills: number;
+  /** Positions from flat to flat the fills added up to. */
+  trades: number;
+  /** Fills set aside because the position they belong to began before the record. */
+  unreconstructed: number;
+  /** Epoch ms of the earliest and latest fill seen. */
+  first: number;
+  last: number;
+}
+
+/**
+ * The markets in a batch of fills, most recently traded first.
+ *
+ * `extra` is for a venue that sets fills aside before this reader sees them
+ * — Binance's reconciliation does — so those markets still appear, with the
+ * fills they lost, rather than vanishing from the census as well.
+ */
+export function marketsSeen(
+  fills: ReadonlyArray<Pick<HlFill, "coin" | "time">>,
+  read: Pick<FillsRead, "trades" | "unreconstructed">,
+  extra: ReadonlyArray<{ coin: string; fills: number }> = [],
+): MarketSeen[] {
+  const by = new Map<string, MarketSeen>();
+  const at = (coin: string) => {
+    let m = by.get(coin);
+    if (!m) {
+      m = { coin, fills: 0, trades: 0, unreconstructed: 0, first: Number.POSITIVE_INFINITY, last: 0 };
+      by.set(coin, m);
+    }
+    return m;
+  };
+  for (const f of fills) {
+    const m = at(f.coin);
+    m.fills += 1;
+    if (f.time < m.first) m.first = f.time;
+    if (f.time > m.last) m.last = f.time;
+  }
+  for (const t of read.trades) at(t.coin).trades += 1;
+  for (const u of [...read.unreconstructed, ...extra]) at(u.coin).unreconstructed += u.fills;
+  return Array.from(by.values())
+    .map((m) => (Number.isFinite(m.first) ? m : { ...m, first: 0 }))
+    .sort((a, b) => b.last - a.last || a.coin.localeCompare(b.coin));
+}
+
 /* ------------------------------- orders ------------------------------- */
 
 /** A trigger order as the venue's order history reports it. */

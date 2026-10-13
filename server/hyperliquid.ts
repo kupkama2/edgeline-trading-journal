@@ -282,9 +282,14 @@ export async function fetchUserFills(address: string): Promise<HlFill[]> {
   return parseUserFills(await info({ type: "userFills", user: address }, 20_000));
 }
 
-/** The wallet's order history, trigger orders included. */
-export async function fetchHistoricalOrders(address: string): Promise<HlOrder[]> {
-  return parseHistoricalOrders(await info({ type: "historicalOrders", user: address }, 20_000));
+/**
+ * The wallet's order history, trigger orders included — for the venue's own
+ * book when `dex` is not given, or for one builder-deployed book by name.
+ */
+export async function fetchHistoricalOrders(address: string, dex?: string): Promise<HlOrder[]> {
+  return parseHistoricalOrders(
+    await info(dex ? { type: "historicalOrders", user: address, dex } : { type: "historicalOrders", user: address }, 20_000),
+  );
 }
 
 /* ------------------------------- prices ------------------------------- */

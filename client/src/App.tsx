@@ -11,6 +11,7 @@ import { StyleFilterProvider } from "@/lib/style-filter";
 import { DenomProvider } from "@/lib/denom";
 import { LayoutProvider } from "@/lib/layout";
 import { PublicModeProvider } from "@/lib/public-mode";
+import { ChapterProvider } from "@/lib/chapters";
 import { LoginGate } from "@/components/login-gate";
 import NotFound from "@/pages/not-found";
 import Journal from "@/pages/journal";
@@ -110,6 +111,7 @@ function App() {
                   the setting is per account, and nothing underneath may paint
                   an amount before this has said whether it may. */}
               <PublicModeProvider>
+              <ChapterProvider>
               <GuardrailProvider>
                 <Router hook={useHashLocation}>
                   <Shell>
@@ -117,6 +119,7 @@ function App() {
                   </Shell>
                 </Router>
               </GuardrailProvider>
+              </ChapterProvider>
               </PublicModeProvider>
               </LayoutProvider>
               </DenomProvider>

@@ -815,6 +815,30 @@ export const accountBalances = pgTable("account_balances", {
   note: text("note"),
 });
 
+/**
+ * A fresh start. See shared/chapters.ts: a date from which the journal
+ * starts over, with everything before it kept and set aside.
+ */
+export const chapters = pgTable("chapters", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull(),
+  /** ISO instant the chapter began; every trade entered from here on is its. */
+  startedAt: text("started_at").notNull(),
+  name: text("name"),
+  /** What was left behind, and what is meant to change. */
+  note: text("note"),
+  createdAt: text("created_at").notNull(),
+});
+
+export const insertChapterSchema = z.object({
+  startedAt: z.string().min(1).optional(),
+  name: z.string().trim().max(60).nullable().optional(),
+  note: z.string().trim().max(1000).nullable().optional(),
+});
+export const updateChapterSchema = insertChapterSchema;
+export type Chapter = typeof chapters.$inferSelect;
+export type InsertChapter = z.infer<typeof insertChapterSchema>;
+
 export const insertAccountBalanceSchema = z.object({
   account: z.string().min(1).max(80),
   at: z.string().min(1).optional(),

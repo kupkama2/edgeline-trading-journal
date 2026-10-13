@@ -9,11 +9,11 @@ import {
   LineChart,
   NotebookPen,
   Palette,
-  Settings2,
-} from "lucide-react";
+  Settings2, BookOpen } from "lucide-react";
 import { XpChip, XpToaster } from "@/components/xp";
 import { useLayout, type LayoutVersion } from "@/lib/layout";
 import { usePublicMode } from "@/lib/public-mode";
+import { CURRENT, spanLabel, spanRange, useChapters } from "@/lib/chapters";
 import { AccountMenu } from "@/components/account-menu";
 import {
   DropdownMenu,
@@ -219,6 +219,33 @@ function PublicChip() {
   );
 }
 
+/**
+ * A reminder that the past is on screen.
+ *
+ * The chapter switch lives on the stats page, but what it chooses follows
+ * you to every page until you leave, and a journal quietly showing last
+ * quarter's record as if it were this one is the exact confusion a fresh
+ * start exists to end. Shown the whole time an older chapter, or all of
+ * them, is on screen; one click is back to now.
+ */
+function ChapterChip() {
+  const { spans, shown, view, setView } = useChapters();
+  if (spans.length === 0 || view.kind === "current") return null;
+  const label = shown ? spanLabel(shown) : "All chapters";
+  return (
+    <button
+      type="button"
+      onClick={() => setView(CURRENT)}
+      title={`Showing ${label}${shown ? ` (${spanRange(shown)})` : ""}. Click to return to the current chapter.`}
+      data-testid="chip-chapter"
+      className="flex shrink-0 items-center gap-1 rounded-md border border-sky-500/50 bg-sky-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-sky-400 transition-colors hover:bg-sky-500/20"
+    >
+      <BookOpen className="h-3 w-3" />
+      <span className="hidden sm:inline">{label}</span>
+    </button>
+  );
+}
+
 export function Shell({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
 
@@ -259,6 +286,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
           </nav>
 
           <div className="ml-auto flex items-center gap-2">
+            <ChapterChip />
             <PublicChip />
             <XpChip />
             <LayoutSwitch />

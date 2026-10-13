@@ -14,13 +14,17 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
-import { Check, Eye, EyeOff, Pencil, Plus, Trash2, X } from "lucide-react";
+import { BookOpen, Check, Eye, EyeOff, Pencil, Plus, RotateCcw, Trash2, X } from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
+import { spanLabel, spanRange, useChapters, useDeleteChapter, useStartChapter } from "@/lib/chapters";
+import { inSpan } from "@shared/chapters";
+import { localNow, toIso } from "@/components/trade-shared";
 import {
   useMistakeTags,
   useCreateTag,
   useUpdateTag,
   useDeleteTag,
-  useTrades,
+  useAllTrades,
   useStyles,
   useCreateStyle,
   useUpdateStyle,
@@ -123,9 +127,12 @@ function AccountFeesRow({
     const summary = `${a.fills} fills read — ${parts.join(", ")}.`;
     // An error beside a partial result is still a result; it is said after.
     if (a.error && a.fills === 0) return toast({ title: `${venue} did not answer`, description: a.error, variant: "destructive" });
-    // Something was written: show it, trade by trade, rather than a count
-    // that disappears in four seconds. Nothing written is a toast's worth.
-    if (a.written.length > 0) return setReport({ venue, account: a });
+    // Anything read is shown in full: what was written, trade by trade, and
+    // what the venue sent, market by market — a sync that wrote nothing is
+    // the one whose answer most needs reading, because a trade that is not
+    // in the journal is either absent from the venue's answer or in it and
+    // set aside, and only the list says which. An empty answer is a toast.
+    if (a.written.length > 0 || a.fills > 0) return setReport({ venue, account: a });
     toast({ title: `Synced ${name}`, description: a.error ? `${summary} ${a.error}` : summary });
   }
 
@@ -505,7 +512,7 @@ function AccountFeesRow({
 }
 
 function AccountFeesCard() {
-  const { data: trades = [] } = useTrades();
+  const { data: trades = [] } = useAllTrades();
   const { data: settings = [] } = useAccountSettings();
   const [newName, setNewName] = useState("");
   const [added, setAdded] = useState<string[]>([]);
@@ -573,7 +580,7 @@ function AccountFeesCard() {
 function StylesCard() {
   const { toast } = useToast();
   const { data: styles = [], isLoading } = useStyles();
-  const { data: trades = [] } = useTrades();
+  const { data: trades = [] } = useAllTrades();
   const createStyle = useCreateStyle();
   const updateStyle = useUpdateStyle();
   const deleteStyle = useDeleteStyle();
@@ -840,7 +847,7 @@ function StylesCard() {
 export default function Settings() {
   const { toast } = useToast();
   const { data: tags, isLoading } = useMistakeTags();
-  const { data: trades = [] } = useTrades();
+  const { data: trades = [] } = useAllTrades();
   const createTag = useCreateTag();
   const updateTag = useUpdateTag();
   const deleteTag = useDeleteTag();
@@ -879,6 +886,8 @@ export default function Settings() {
       </div>
 
       <PublicModeCard />
+
+      <FreshStartCard />
 
       <StylesCard />
 
@@ -1075,6 +1084,137 @@ export default function Settings() {
  * happen — a screen share, a screenshot, somebody looking over your shoulder —
  * and having to hunt for it is having to hunt for it in front of them.
  */
+/**
+ * Starting over.
+ *
+ * The thing wanted after a bad run is a journal with no memory of it, and
+ * the thing NOT wanted is to lose the record of what happened. A fresh start
+ * is a date: from it on is the chapter every page shows; before it is kept
+ * whole and reachable from the stats. See shared/chapters.ts for the rule.
+ */
+function FreshStartCard() {
+  const { spans, current } = useChapters();
+  const { data: all = [] } = useAllTrades();
+  const start = useStartChapter();
+  const remove = useDeleteChapter();
+  const { toast } = useToast();
+  const [open, setOpen] = useState(false);
+  const [when, setWhen] = useState(localNow);
+  const [name, setName] = useState("");
+  const [note, setNote] = useState("");
+  const [undoing, setUndoing] = useState(false);
+  const counts = useMemo(
+    () => new Map(spans.map((s) => [s.id, all.filter((t) => inSpan(t, s)).length])),
+    [spans, all],
+  );
+
+  async function begin() {
+    try {
+      await start.mutateAsync({ startedAt: toIso(when), name: name.trim() || null, note: note.trim() || null });
+      setOpen(false);
+      setName("");
+      setNote("");
+      toast({
+        title: "Fresh start",
+        description: "The journal begins again from here. Everything before it is kept, and is in Stats under its own chapter.",
+      });
+    } catch (err: any) {
+      toast({ title: "Not started", description: String(err?.message ?? err), variant: "destructive" });
+    }
+  }
+
+  async function undo() {
+    if (!current) return;
+    await remove.mutateAsync(current.id);
+    setUndoing(false);
+    toast({ title: "Fresh start undone", description: "The two chapters are one again. Nothing was deleted either way." });
+  }
+
+  return (
+    <Card className="border-card-border bg-card p-4 sm:p-5" data-testid="card-fresh-start">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="flex items-center gap-2 text-sm font-semibold tracking-tight">
+            <RotateCcw className="h-4 w-4" />
+            Fresh start
+          </h2>
+          <p className="mt-0.5 max-w-prose text-[11px] leading-snug text-muted-foreground">
+            Start the journal over from a moment you choose. Nothing is deleted or changed: every trade
+            before it stays stored, is left out of every page by default, and is one switch away in Stats
+            — on its own, or alongside everything since. A position still open comes with you.
+          </p>
+        </div>
+        {!open && (
+          <Button type="button" size="sm" variant="outline" className="h-8 shrink-0 text-[11px]" onClick={() => { setWhen(localNow()); setOpen(true); }} data-testid="button-fresh-start">
+            <RotateCcw className="mr-1 h-3.5 w-3.5" />
+            Start over…
+          </Button>
+        )}
+      </div>
+
+      {open && (
+        <div className="mt-3 space-y-2 rounded-md border border-border/70 bg-secondary/20 p-3" data-testid="form-fresh-start">
+          <div className="grid gap-2 sm:grid-cols-2">
+            <label className="space-y-1 text-[11px] text-muted-foreground">
+              <span>From</span>
+              <Input type="datetime-local" value={when} onChange={(e) => setWhen(e.target.value)} className="h-8 font-mono text-xs" data-testid="input-fresh-start-when" />
+            </label>
+            <label className="space-y-1 text-[11px] text-muted-foreground">
+              <span>Name (optional)</span>
+              <Input value={name} maxLength={60} onChange={(e) => setName(e.target.value)} placeholder={`Chapter ${spans.length + 1}`} className="h-8 text-xs" data-testid="input-fresh-start-name" />
+            </label>
+          </div>
+          <label className="block space-y-1 text-[11px] text-muted-foreground">
+            <span>What you are leaving behind, and what changes (optional)</span>
+            <Textarea value={note} maxLength={1000} onChange={(e) => setNote(e.target.value)} rows={2} className="text-xs" data-testid="input-fresh-start-note" />
+          </label>
+          <div className="flex items-center gap-2">
+            <Button type="button" size="sm" className="h-8 text-[11px]" onClick={begin} disabled={start.isPending} data-testid="button-fresh-start-confirm">
+              <Check className="mr-1 h-3.5 w-3.5" />
+              Start the new chapter
+            </Button>
+            <Button type="button" size="sm" variant="ghost" className="h-8 text-[11px]" onClick={() => setOpen(false)}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {spans.length > 0 && (
+        <ul className="mt-3 divide-y divide-border/50 rounded-md border border-card-border" data-testid="list-chapters">
+          {[...spans].reverse().map((s) => (
+            <li key={s.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-xs" data-testid={`chapter-${s.id}`}>
+              <BookOpen className={`h-3.5 w-3.5 ${s.current ? "text-sky-400" : "text-muted-foreground"}`} />
+              <span className="font-semibold">{spanLabel(s)}</span>
+              <span className="text-muted-foreground">{spanRange(s)}</span>
+              <span className="font-mono text-muted-foreground">
+                {counts.get(s.id) ?? 0} trade{(counts.get(s.id) ?? 0) === 1 ? "" : "s"}
+              </span>
+              {s.current && <Badge variant="outline" className="text-[10px] text-sky-400 border-sky-500/40">now</Badge>}
+              {s.current && !undoing && (
+                <Button type="button" size="sm" variant="ghost" className="ml-auto h-7 text-[11px] text-muted-foreground" onClick={() => setUndoing(true)} data-testid="button-undo-fresh-start">
+                  Undo
+                </Button>
+              )}
+              {s.current && undoing && (
+                <span className="ml-auto flex items-center gap-1 text-[11px] text-muted-foreground">
+                  Merge back into the chapter before? Nothing is deleted.
+                  <Button type="button" size="sm" variant="destructive" className="h-7 text-[11px]" onClick={undo} disabled={remove.isPending} data-testid="button-undo-fresh-start-confirm">
+                    Undo
+                  </Button>
+                  <Button type="button" size="sm" variant="ghost" className="h-7 text-[11px]" onClick={() => setUndoing(false)}>
+                    Keep
+                  </Button>
+                </span>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </Card>
+  );
+}
+
 function PublicModeCard() {
   const { isPublic, setPublic } = usePublicMode();
   return (
