@@ -13,6 +13,7 @@ import {
   binanceSymbols,
   hyperliquidSymbols,
   accountBalances,
+  chapters,
 } from "@shared/schema";
 import type {
   InsertTrade,
@@ -31,6 +32,8 @@ import type {
   UpsertAccountSettings,
   AccountBalance,
   InsertAccountBalance,
+  Chapter,
+  InsertChapter,
   User,
   Invite,
   BinanceSymbolRow,
@@ -253,6 +256,15 @@ CREATE TABLE IF NOT EXISTS account_balances (
   balance DOUBLE PRECISION NOT NULL,
   note TEXT
 );
+CREATE TABLE IF NOT EXISTS chapters (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL,
+  started_at TEXT NOT NULL,
+  name TEXT,
+  note TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS chapters_user_id ON chapters (user_id);
 CREATE TABLE IF NOT EXISTS mistake_tags (
   id SERIAL PRIMARY KEY,
   name TEXT NOT NULL,
@@ -957,6 +969,12 @@ export interface IStorage {
   listAccountBalances(): Promise<AccountBalance[]>;
   addAccountBalance(b: InsertAccountBalance): Promise<AccountBalance>;
   deleteAccountBalance(id: number): Promise<void>;
+
+  listChapters(): Promise<Chapter[]>;
+  createChapter(c: InsertChapter): Promise<Chapter>;
+  /** undefined when the chapter is not this account's. */
+  updateChapter(id: number, c: InsertChapter): Promise<Chapter | undefined>;
+  deleteChapter(id: number): Promise<void>;
   /** The trade a venue wrote, by the id the venue gave it. */
   tradeByExternalId(externalId: string): Promise<TradeWithTags | undefined>;
 
@@ -1408,6 +1426,47 @@ export class DatabaseStorage implements IStorage {
     await db
       .delete(accountBalances)
       .where(and(eq(accountBalances.id, id), this.owns(accountBalances)));
+  }
+
+  /* ------------------------------- chapters ------------------------------ */
+
+  async listChapters(): Promise<Chapter[]> {
+    return db.select().from(chapters).where(this.owns(chapters)).orderBy(chapters.startedAt, chapters.id);
+  }
+
+  async createChapter(c: InsertChapter): Promise<Chapter> {
+    const [row] = await db
+      .insert(chapters)
+      .values({
+        startedAt: c.startedAt ?? new Date().toISOString(),
+        name: c.name?.trim() || null,
+        note: c.note?.trim() || null,
+        createdAt: new Date().toISOString(),
+        userId: this.userId,
+      })
+      .returning();
+    return row;
+  }
+
+  async updateChapter(id: number, c: InsertChapter): Promise<Chapter | undefined> {
+    const patch: Partial<typeof chapters.$inferInsert> = {};
+    if (c.startedAt !== undefined) patch.startedAt = c.startedAt;
+    if (c.name !== undefined) patch.name = c.name?.trim() || null;
+    if (c.note !== undefined) patch.note = c.note?.trim() || null;
+    if (Object.keys(patch).length === 0) {
+      const [row] = await db.select().from(chapters).where(and(eq(chapters.id, id), this.owns(chapters)));
+      return row;
+    }
+    const [row] = await db
+      .update(chapters)
+      .set(patch)
+      .where(and(eq(chapters.id, id), this.owns(chapters)))
+      .returning();
+    return row;
+  }
+
+  async deleteChapter(id: number): Promise<void> {
+    await db.delete(chapters).where(and(eq(chapters.id, id), this.owns(chapters)));
   }
 
   async tradeByExternalId(externalId: string): Promise<TradeWithTags | undefined> {

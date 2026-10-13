@@ -1,4 +1,7 @@
+import { useMemo } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
+import { chapterTrades } from "@shared/chapters";
+import { useChapters } from "./chapters";
 import type { CloseRead } from "@shared/close-read";
 import type { ReadCloseRequest } from "@shared/schema";
 import { apiRequest, queryClient } from "./queryClient";
@@ -22,8 +25,26 @@ import type { InsightsBundle, WeeklyInsights } from "@shared/weekly-insights";
 import type { AccountBalance } from "@shared/schema";
 import type { Mark } from "@shared/marks";
 
-export function useTrades() {
+/** Every trade the account has, whatever chapter it falls in. */
+export function useAllTrades() {
   return useQuery<TradeWithTags[]>({ queryKey: ["/api/trades"] });
+}
+
+/**
+ * The trades of the chapter on screen — the current one unless the stats
+ * were asked for another. This is what every page reads, so a fresh start
+ * reaches the list, the statistics, the calendar, the review queue and the
+ * health panel through one hook rather than a filter in each. The one page
+ * that must find a trade from any chapter, the trade's own, reads them all.
+ */
+export function useTrades() {
+  const q = useAllTrades();
+  const { chapters, view } = useChapters();
+  const data = useMemo(
+    () => (q.data ? chapterTrades(q.data, chapters, view) : q.data),
+    [q.data, chapters, view],
+  );
+  return { ...q, data } as typeof q;
 }
 
 /**

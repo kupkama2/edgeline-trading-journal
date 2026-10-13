@@ -46,7 +46,7 @@ import {
   useDeleteTrade,
   useMarks,
   useMistakeTags,
-  useTrades,
+  useAllTrades,
   useUpdateTrade,
 } from "@/lib/data";
 import { parseExtraTargets, parsePlaybook, type TradeWithTags } from "@shared/schema";
@@ -432,7 +432,8 @@ export default function TradeView({ under = "/" }: { under?: string }) {
   const [isEditRoute, editParams] = useRoute("/trade/:id/edit");
   const [, navigate] = useLocation();
   const id = isNew ? NaN : Number(editParams?.id ?? params?.id);
-  const { data: trades, isLoading } = useTrades();
+  // Every chapter: a trade opened from the stats, or a link, may be from any.
+  const { data: trades, isLoading } = useAllTrades();
 
   const editing = isEditRoute;
   const setEditing = (on: boolean) =>

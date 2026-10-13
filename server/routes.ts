@@ -41,6 +41,7 @@ import {
 } from "./hyperliquid";
 import { fetchCandlesAt, pairForTradeAt, readCandlesAt } from "./candles";
 import { syncHyperliquid } from "./hl-sync";
+import { freshStartRefusal } from "@shared/chapters";
 import { syncBinance, verifyKey } from "./binance-account";
 import { seal } from "./secrets";
 import { hlAsset, splitHlAsset, venueOfAccount } from "@shared/hyperliquid";
@@ -72,6 +73,8 @@ import {
   directionEnum,
   sizeUnitEnum,
   insertAccountBalanceSchema,
+  insertChapterSchema,
+  updateChapterSchema,
 } from "@shared/schema";
 import { normalizeCloseRead } from "@shared/close-read";
 import { exclusiveVerdict } from "@shared/well-traded";
@@ -852,6 +855,46 @@ export async function registerRoutes(
 
   app.delete("/api/account-balances/:id", async (req, res) => {
     await store(req).deleteAccountBalance(Number(req.params.id));
+    res.status(204).end();
+  });
+
+  /* ------------------------------- chapters ------------------------------ */
+  /*
+   * A fresh start is a row, not a deletion — see shared/chapters.ts. The
+   * trades are not touched here or anywhere: which chapter a trade is in is
+   * worked out from its entry time wherever the trades are shown.
+   */
+  app.get("/api/chapters", async (req, res) => {
+    res.json(await store(req).listChapters());
+  });
+
+  app.post("/api/chapters", async (req, res) => {
+    const parsed = insertChapterSchema.safeParse(req.body);
+    if (!parsed.success)
+      return res.status(400).json({ message: "Invalid fresh start", issues: parsed.error.issues });
+    const startedAt = parsed.data.startedAt ?? new Date().toISOString();
+    const refusal = freshStartRefusal(startedAt);
+    if (refusal) return res.status(400).json({ message: refusal });
+    res.status(201).json(await store(req).createChapter({ ...parsed.data, startedAt: new Date(startedAt).toISOString() }));
+  });
+
+  app.patch("/api/chapters/:id", async (req, res) => {
+    const parsed = updateChapterSchema.safeParse(req.body);
+    if (!parsed.success)
+      return res.status(400).json({ message: "Invalid fresh start", issues: parsed.error.issues });
+    const patch = { ...parsed.data };
+    if (patch.startedAt !== undefined) {
+      const refusal = freshStartRefusal(patch.startedAt);
+      if (refusal) return res.status(400).json({ message: refusal });
+      patch.startedAt = new Date(patch.startedAt).toISOString();
+    }
+    const row = await store(req).updateChapter(Number(req.params.id), patch);
+    if (!row) return res.status(404).json({ message: "No such fresh start" });
+    res.json(row);
+  });
+
+  app.delete("/api/chapters/:id", async (req, res) => {
+    await store(req).deleteChapter(Number(req.params.id));
     res.status(204).end();
   });
 
