@@ -42,6 +42,7 @@ import {
 import { fetchCandlesAt, pairForTradeAt, readCandlesAt } from "./candles";
 import { syncHyperliquid } from "./hl-sync";
 import { freshStartRefusal } from "@shared/chapters";
+import { normalizeSetupRead } from "@shared/setup-read";
 import { syncBinance, verifyKey } from "./binance-account";
 import { seal } from "./secrets";
 import { hlAsset, splitHlAsset, venueOfAccount } from "@shared/hyperliquid";
@@ -1839,21 +1840,13 @@ export async function registerRoutes(
 
       if (kind === "setup") {
         /*
-         * Deliberately NOT normalized here. The contract as written ("MNQU6")
-         * is what tells a micro apart from an e-mini — $2 a point versus $20 —
-         * and the point value is derived from it when the trade is saved.
-         * Rolling it up to "NQ" at this point discards that and silently
-         * multiplies every dollar figure on a micro trade by ten. The rollup
-         * still happens, on the way into the database.
+         * The symbol is deliberately NOT rolled up here. The contract as
+         * written ("MNQU6") is what tells a micro apart from an e-mini — $2 a
+         * point versus $20 — and the point value is derived from it when the
+         * trade is saved. Everything else is made safe to apply in shared
+         * code, where the rules are tested: see shared/setup-read.ts.
          */
-        // A screenshot only counts as a closed trade if a usable exit price came
-        // back with it — otherwise fall back to the normal open-trade flow.
-        if (json.isClosed !== true || typeof json.exitPrice !== "number") {
-          json.isClosed = false;
-          json.exitPrice = null;
-          json.exitTime = null;
-          json.exitReason = null;
-        }
+        return res.json({ ok: true, kind, result: normalizeSetupRead(json) });
       }
       res.json({ ok: true, kind, result: json });
     } catch (err: any) {

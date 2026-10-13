@@ -1127,13 +1127,21 @@ export interface SetupParseResult {
   entryPrice: number | null;
   initialStop: number | null;
   initialTarget: number | null;
+  /** Scale-out levels beyond the first target, nearest first — a venue's resting limit closes. */
+  extraTargets?: number[] | null;
   entryTime: string | null;
   size: number | null;
+  /** "quote" when the size was printed as a currency amount ("5,093.13 USDT"); "base" for coins or contracts. */
+  sizeUnit?: "base" | "quote" | null;
+  /** True when the screenshot shows an order that has not filled yet — the trade is pending, not open. */
+  isResting?: boolean;
   /** True when the screenshot already shows the trade as completed/closed. */
   isClosed?: boolean | null;
   exitPrice?: number | null;
   exitTime?: string | null;
   exitReason?: z.infer<typeof exitReasonEnum> | null;
+  /** The venue's own net realised P&L on a closed position, as printed; fees and funding already taken. */
+  realizedPnl?: number | null;
 }
 
 export interface OutcomeParseResult {
