@@ -1,5 +1,6 @@
 import { useAccountBalances } from "@/lib/data";
 import { fmtPercent, latestEquity, parseRiskBudget, riskPercent } from "@shared/equity";
+import { impliedFees } from "@shared/setup-read";
 /**
  * The entry card: log a setup by hand or drop a chart and confirm the numbers.
  */
@@ -220,6 +221,13 @@ export function NewTradeCard({
   // symbol so the common case needs no click, but always overridable — the
   // guess is from the ticker, and tickers are not a reliable venue signal.
   const [sizeUnit, setSizeUnit] = useState<"base" | "quote">("base");
+  /*
+   * A unit the screenshot reader stated for a symbol it also set. The unit
+   * effect below fires when the symbol lands and would otherwise overwrite a
+   * unit the reader had just chosen with the ticker's default — and a size
+   * read as "5,093 USDT" booked as 5,093 coins is wrong by a factor of ten.
+   */
+  const [readUnit, setReadUnit] = useState<{ symbol: string; unit: "base" | "quote" } | null>(null);
   // The risk budget is a account-level habit, not a per-trade fact — it
   // survives reloads so it is typed once, not every morning.
   const [riskBudget, setRiskBudget] = useState<string>(
@@ -410,7 +418,9 @@ export function NewTradeCard({
   const instrumentKey = spec?.root ?? (v.symbol?.trim() ? "unknown" : "");
   useEffect(() => {
     if (instrumentKey === "") return;
-    setSizeUnit(instrumentKey === "unknown" ? "quote" : "base");
+    const read = readUnit && readUnit.symbol === (v.symbol ?? "").trim().toUpperCase() ? readUnit.unit : null;
+    setSizeUnit(read ?? (instrumentKey === "unknown" ? "quote" : "base"));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [instrumentKey]);
   const sized = useMemo(
     () =>
@@ -544,6 +554,12 @@ export function NewTradeCard({
       if (r.initialStop != null) form.setValue("initialStop", r.initialStop as any);
       if (r.initialTarget != null) form.setValue("initialTarget", r.initialTarget as any);
       if (r.size != null) form.setValue("size", r.size as any);
+      if (r.sizeUnit) {
+        setReadUnit(r.symbol ? { symbol: r.symbol.trim().toUpperCase(), unit: r.sizeUnit } : null);
+        setSizeUnit(r.sizeUnit);
+      }
+      // A venue's resting limit closes are the plan's scale-outs, nearest first.
+      setExtraTps((r.extraTargets ?? []).map(String));
       if (r.entryTime) {
         const d = new Date(r.entryTime);
         if (!isNaN(d.getTime())) {
@@ -552,12 +568,31 @@ export function NewTradeCard({
         }
       }
 
+      // An order that has not filled is a pending trade, not an open one.
+      if (r.isResting) setLifecycle("pending");
+
       const detectedClosed = r.isClosed === true && r.exitPrice != null;
+      let feesImplied: number | null = null;
       if (detectedClosed) {
         setClosedMode(true);
         setAutoClosed(true);
         setExitPrice(String(r.exitPrice));
         setExitReason(r.exitReason ?? "other");
+        /*
+         * A position-history card prints the net P&L and never the fees. With
+         * the size in coins, the gross is arithmetic and the fees are the
+         * difference; see impliedFees for when that answer is trusted.
+         */
+        if (r.realizedPnl != null && r.direction && r.entryPrice != null && r.size != null && r.sizeUnit === "base") {
+          feesImplied = impliedFees({
+            direction: r.direction,
+            entryPrice: r.entryPrice,
+            exitPrice: r.exitPrice as number,
+            size: r.size,
+            realizedPnl: r.realizedPnl,
+          });
+          if (feesImplied != null) setFees(String(feesImplied));
+        }
         if (r.exitTime) {
           const d = new Date(r.exitTime);
           if (!isNaN(d.getTime())) {
@@ -569,10 +604,14 @@ export function NewTradeCard({
 
       setParsed(true);
       toast({
-        title: detectedClosed ? "Completed trade read" : "Chart read",
+        title: detectedClosed ? "Completed trade read" : r.isResting ? "Resting order read" : "Chart read",
         description: detectedClosed
-          ? "An exit was visible — this will be logged as a closed trade."
-          : "Check the pre-filled numbers, then confirm.",
+          ? feesImplied != null
+            ? "An exit was visible — this will be logged as a closed trade. Fees were worked back from the venue's net P&L, so they include funding."
+            : "An exit was visible — this will be logged as a closed trade."
+          : r.isResting
+            ? "Not filled yet — this will be logged as waiting to fill. Check the levels, then confirm."
+            : "Check the pre-filled numbers, then confirm.",
       });
     } catch (e: any) {
       toast({
@@ -756,6 +795,7 @@ export function NewTradeCard({
     setSetupTags([]);
     setPickedStyleId(null);
     setExtraTps([]);
+    setReadUnit(null);
     // The account survives the reset on purpose — next trade, same account.
     store.set(ACCOUNT_KEY, account.trim());
     setPb({ setupName: "", stopLogic: "", targetLogic: "", confidence: null, standAside: "" });

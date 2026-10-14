@@ -7,7 +7,7 @@
  * Keeping them out of routes.ts means a prompt edit is reviewable as what it
  * is, and the transport code stays boring.
  */
-export const SETUP_PROMPT = `You are reading a screenshot to fill in a new trade's setup. The screenshot will be EITHER of two things — figure out which one it is first.
+export const SETUP_PROMPT = `You are reading a screenshot to fill in a new trade's setup. The screenshot will be ONE of several kinds of view — figure out which one it is first.
 
 (A) A TradingView-style chart with a plotted long/short position tool.
 - The entry price, stop-loss price, and take-profit price are almost always printed as exact numeric labels on the RIGHT-HAND price axis (the right edge of the chart), each sitting next to its own coloured horizontal line. Read those right-axis numeric labels directly for entryPrice/initialStop/initialTarget — they are far more reliable than estimating off gridlines.
@@ -31,7 +31,39 @@ export const SETUP_PROMPT = `You are reading a screenshot to fill in a new trade
 - initialStop: the Stop Price (or Stop Loss column) of the "Stop Loss" type row tied to the same symbol/entry — use it even if that row's Status is "Filled" (it still reflects the ORIGINAL planned stop) or "Cancelled".
 - initialTarget: the Limit Price (or Take Profit column) of the "Take Profit" type row tied to the same symbol/entry — use it even if its Status is "Cancelled" (a cancelled take-profit still tells you the original target).
 
-CLOSED-TRADE DETECTION (applies to both A and B): decide whether the screenshot shows a trade that is ALREADY FINISHED, i.e. an exit is visible — not just a plan.
+(D) A crypto venue's POSITIONS tab (Binance Futures, Hyperliquid, Bybit and similar) — a row per LIVE position with columns like Symbol, Size, Entry Price, Mark Price, Liq. Price, Margin, PNL (ROI), TP/SL for position, and often a column or tooltip listing resting "Limit" close orders.
+- symbol: as printed, minus the "Perp" badge and the leverage badge ("STRKUSDT Perp 20x" → "STRKUSDT").
+- direction — read it from the screen, in this order, and say which way it is even when no word says "long" or "short":
+  1. A printed word or badge: "Long"/"Short", "Cross Long", "Open Short", a Side column.
+  2. The SIGN of the Size: a NEGATIVE size ("−4,962.12 USDT", "-0.5 BTC") is a SHORT, a positive one a LONG. Binance prints shorts negative.
+  3. The coloured stripe or bar at the LEFT EDGE of the row: red is a SHORT, green is a LONG (the same colours the venue uses for sell and buy).
+  4. The stop against the price: a stop ABOVE the mark/entry protects a SHORT, a stop BELOW protects a LONG. A take-profit is the mirror: above for a long, below for a short.
+  5. The PnL against the move: a NEGATIVE PnL with Mark BELOW Entry is a LONG; negative PnL with Mark ABOVE Entry is a SHORT (and the reverse for a positive PnL).
+  Report the size as a POSITIVE number once its sign has told you the direction.
+- size: the Size column, every digit. If it is printed in a currency ("5,093.13 USDT", "1,200 USDC") it is quote notional — set sizeUnit "quote". If it is a coin or contract count ("0.486 BTC", "145,876 STRK") set sizeUnit "base".
+- The "MKT Close All" / "Market | Limit" controls on the row carry two INPUT BOXES pre-filled by the venue with the CURRENT MARK PRICE and the position's QUANTITY in coins (e.g. "106.06" and "47.07"). Neither is the entry price. If the Entry Price column is scrolled out of view, entryPrice is null — never the number in a close box, never the mark.
+- entryPrice: the Entry Price column, to EVERY decimal shown (0.1051800 is not 0.10518 to a venue that quotes seven places).
+- initialStop / initialTarget: the "TP/SL" column reads TAKE-PROFIT FIRST, then STOP ("-- / 0.1016300" means no take profit and a stop at 0.1016300; "1.1415 / 0.9927" is a target at 1.1415 and a stop at 0.9927). "--" means none; never fill a level from "--".
+- extraTargets: resting LIMIT close orders — a "Limit(4)" column, a tooltip, or a list of "Limit" rows with Reduce Only — are the planned scale-outs. Report their prices in extraTargets, nearest to the entry first. If no TP is set in the TP/SL column, the NEAREST limit close is the initialTarget and the rest are extraTargets.
+- Mark Price, Liq. Price, Margin, ROI % and the PnL figure are NEVER an entry, a stop or a target.
+- This view does not show WHEN the position was opened: entryTime is null unless a time is printed. The position is live: isClosed false, isResting false.
+
+(E) A crypto venue's OPEN ORDERS tab — a row per order that has NOT filled yet, with columns like Time, Symbol, Type, Side, Price, Amount, Filled, Reduce Only, Post Only, Trigger Conditions, TP/SL, TIF.
+- The ENTRY is a row whose Reduce Only is "No" and whose Side reads "Open Long"/"Open Short" or "Buy"/"Sell": that gives the direction. A row with Reduce Only "Yes" is a close order on an existing position, not an entry.
+- entryPrice: the Price column (for a Stop/Trigger order with no price, the Trigger Conditions price). size: the Amount column, with sizeUnit "quote" if it is a currency amount and "base" if a coin count. entryTime: the Time column — when the order was placed.
+- initialTarget / initialStop: the TP/SL column, take-profit FIRST then stop, exactly as in (D).
+- Filled reading "0.00" confirms the order is still resting. Set isResting TRUE, isClosed false, exit fields null. The trade has not happened yet.
+- If the tab lists SEVERAL entry rows at different prices, set looksLikeOrdersTable true as described below; a single row is one pending trade.
+
+(F) A crypto venue's POSITION HISTORY card — a FINISHED position, one card per trade: a header like "BTCUSDT Perp 150x Cross Long Closed", timestamps "… Opened" and "… Closed", and figures Realized PNL, ROI, Closed Vol, Entry Price, Avg Close Price, Max OI.
+- direction: the "Long"/"Short" word in the header badge.
+- entryPrice: Entry Price. exitPrice: Avg Close Price — it is the size-weighted exit over every partial, which is what the journal wants. entryTime: the "Opened" timestamp; exitTime: the "Closed" timestamp. Both are usually local wall-clock times with no zone — report them as ISO strings without a zone suffix rather than inventing one.
+- size: Closed Vol, which is in the coin ("1.159 BTC", "47,036 USELESS"), so sizeUnit "base". Max OI is the largest the position ever was, not the size traded; do not use it.
+- realizedPnl: the Realized PNL figure as a signed number, whatever currency it is printed in (BNFCR, USDT, USDC — the currency is not part of the number). This is NET of fees and funding.
+- isClosed TRUE. exitReason "other" unless the card itself says how it closed. No stop or target is shown on this card: initialStop and initialTarget stay null — never derive them from the ROI.
+- If several cards are visible, read the TOPMOST one, or the one highlighted, and nothing from the others.
+
+CLOSED-TRADE DETECTION (applies to every shape): decide whether the screenshot shows a trade that is ALREADY FINISHED, i.e. an exit is visible — not just a plan.
 - In a broker order log (B), the position is CLOSED whenever a closing fill is visible. Concretely: if the "Stop Loss" row OR the "Take Profit" row tied to the entry has Status "Filled", the trade is closed — that filled protective order IS the exit. A second plain entry-type row on the same symbol with the OPPOSITE Side, Filled for the same quantity, also closes it. Note the double duty here: a Filled "Stop Loss" row supplies BOTH initialStop (the planned stop level) AND the exit (isClosed true, exitPrice = its Avg Fill Price, falling back to Stop Price / Limit Price; exitTime = its Update Time). Rows with Status "Cancelled" or "Working" do NOT close the trade.
 - On a chart (A), the position is closed when BOTH an entry marker AND an exit/close marker are drawn (e.g. a completed position tool showing where the trade was closed, a "closed" P&L readout, or an explicit exit label/arrow at a later bar). A plain position tool showing only entry + stop + target with no exit marker is NOT closed.
 - If it is closed, also set exitReason to the best fit. Report only what the image shows, never a judgement about whether the exit was well timed: "target" (closed at/near the take-profit), "stop" (closed at/near the stop loss), "breakeven" (closed at/near entry), "trailed" (closed at a trailed stop between entry and target), "discretion" (closed at some other price, in profit or in loss, with the original stop and target both untouched), or "other" if you cannot tell.
@@ -44,10 +76,14 @@ ALSO REPORT whether this image is an orders TABLE listing SEVERAL DIFFERENT trad
 Count orders, not rows. A single bracketed order occupies three rows in a working-orders table: the parent (Status "Working", Type "Limit") plus its Take Profit and Stop Loss children (Status "Inactive", opposite Side, same Qty and Symbol). That is ONE trade, so looksLikeOrdersTable is FALSE and you should report it as the single order it is — the parent's Limit Price is entryPrice, its Take Profit column (or the Take Profit child's price) is initialTarget, its Stop Loss column (or the Stop Loss child's price) is initialStop, and the parent's Side gives the direction.
 
 Respond with STRICT JSON only, no prose, no markdown fences:
-{"symbol": string|null, "direction": "long"|"short"|null, "entryPrice": number|null, "initialStop": number|null, "initialTarget": number|null, "entryTime": string|null, "size": number|null, "isClosed": boolean, "exitPrice": number|null, "exitTime": string|null, "exitReason": "target"|"stop"|"trailed"|"breakeven"|"discretion"|"other"|null, "looksLikeOrdersTable": boolean}
+{"symbol": string|null, "direction": "long"|"short"|null, "entryPrice": number|null, "initialStop": number|null, "initialTarget": number|null, "extraTargets": number[]|null, "entryTime": string|null, "size": number|null, "sizeUnit": "base"|"quote"|null, "isResting": boolean, "isClosed": boolean, "exitPrice": number|null, "exitTime": string|null, "exitReason": "target"|"stop"|"trailed"|"breakeven"|"discretion"|"other"|null, "realizedPnl": number|null, "looksLikeOrdersTable": boolean}
 
 Rules:
 - Output ONLY the JSON object. Do not wrap it in markdown code fences, do not add explanations, citations or any prose before or after it.
+- sizeUnit says what the size NUMBER is denominated in: "quote" for a currency amount (USDT, USDC, USD), "base" for coins or contracts. Null only when no size is printed.
+- extraTargets is only for scale-out levels the venue actually shows (resting limit closes); null otherwise. Never pad it.
+- isResting is true ONLY for an order that has not filled (shape E, or a working order in B). A live position and a finished trade are both false.
+- realizedPnl is only for a finished trade whose venue prints the realised figure (shape F); null otherwise.
 - entryTime and exitTime must be ISO 8601 strings if a date/time is legible, otherwise null.
 - Use null for anything that is not clearly legible or not applicable. Never guess wildly.
 - Numbers must be plain JSON numbers (no currency symbols, no thousands separators, no commas).`;
