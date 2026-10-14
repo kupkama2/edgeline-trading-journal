@@ -20,7 +20,16 @@ export const MAX_EXTRA_TARGETS = 3;
 export function normalizeSetupRead(json: Record<string, unknown> | null | undefined): SetupParseResult {
   const j: Record<string, unknown> = json && typeof json === "object" ? json : {};
   const initialTarget = num(j.initialTarget);
-  const direction = j.direction === "long" || j.direction === "short" ? j.direction : null;
+  /*
+   * The sign of the size is the venue's own statement of direction — Binance
+   * prints a short's size negative — and it outranks whatever word the model
+   * chose, because the word is an inference and the sign is a fact read off
+   * the row. The size itself is always positive in the journal.
+   */
+  const rawSize = num(j.size);
+  const said = j.direction === "long" || j.direction === "short" ? j.direction : null;
+  const direction = rawSize != null && rawSize < 0 ? "short" : said;
+  const size = rawSize != null ? Math.abs(rawSize) : null;
 
   /*
    * Scale-outs: unique, positive, not the first target, in the order the
@@ -68,7 +77,7 @@ export function normalizeSetupRead(json: Record<string, unknown> | null | undefi
     initialTarget: target,
     extraTargets: extraTargets.length ? extraTargets : null,
     entryTime: typeof j.entryTime === "string" && j.entryTime ? j.entryTime : null,
-    size: num(j.size),
+    size,
     sizeUnit: j.sizeUnit === "quote" ? "quote" : j.sizeUnit === "base" ? "base" : null,
     isResting,
     isClosed,

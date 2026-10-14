@@ -33,8 +33,15 @@ export const SETUP_PROMPT = `You are reading a screenshot to fill in a new trade
 
 (D) A crypto venue's POSITIONS tab (Binance Futures, Hyperliquid, Bybit and similar) — a row per LIVE position with columns like Symbol, Size, Entry Price, Mark Price, Liq. Price, Margin, PNL (ROI), TP/SL for position, and often a column or tooltip listing resting "Limit" close orders.
 - symbol: as printed, minus the "Perp" badge and the leverage badge ("STRKUSDT Perp 20x" → "STRKUSDT").
-- direction: a printed Long/Short badge wins. Otherwise the sign of Size — a negative size is a SHORT. Otherwise from the PnL: a NEGATIVE PnL with Mark BELOW Entry is a LONG; negative PnL with Mark ABOVE Entry is a SHORT (and the reverse for a positive PnL).
+- direction — read it from the screen, in this order, and say which way it is even when no word says "long" or "short":
+  1. A printed word or badge: "Long"/"Short", "Cross Long", "Open Short", a Side column.
+  2. The SIGN of the Size: a NEGATIVE size ("−4,962.12 USDT", "-0.5 BTC") is a SHORT, a positive one a LONG. Binance prints shorts negative.
+  3. The coloured stripe or bar at the LEFT EDGE of the row: red is a SHORT, green is a LONG (the same colours the venue uses for sell and buy).
+  4. The stop against the price: a stop ABOVE the mark/entry protects a SHORT, a stop BELOW protects a LONG. A take-profit is the mirror: above for a long, below for a short.
+  5. The PnL against the move: a NEGATIVE PnL with Mark BELOW Entry is a LONG; negative PnL with Mark ABOVE Entry is a SHORT (and the reverse for a positive PnL).
+  Report the size as a POSITIVE number once its sign has told you the direction.
 - size: the Size column, every digit. If it is printed in a currency ("5,093.13 USDT", "1,200 USDC") it is quote notional — set sizeUnit "quote". If it is a coin or contract count ("0.486 BTC", "145,876 STRK") set sizeUnit "base".
+- The "MKT Close All" / "Market | Limit" controls on the row carry two INPUT BOXES pre-filled by the venue with the CURRENT MARK PRICE and the position's QUANTITY in coins (e.g. "106.06" and "47.07"). Neither is the entry price. If the Entry Price column is scrolled out of view, entryPrice is null — never the number in a close box, never the mark.
 - entryPrice: the Entry Price column, to EVERY decimal shown (0.1051800 is not 0.10518 to a venue that quotes seven places).
 - initialStop / initialTarget: the "TP/SL" column reads TAKE-PROFIT FIRST, then STOP ("-- / 0.1016300" means no take profit and a stop at 0.1016300; "1.1415 / 0.9927" is a target at 1.1415 and a stop at 0.9927). "--" means none; never fill a level from "--".
 - extraTargets: resting LIMIT close orders — a "Limit(4)" column, a tooltip, or a list of "Limit" rows with Reduce Only — are the planned scale-outs. Report their prices in extraTargets, nearest to the entry first. If no TP is set in the TP/SL column, the NEAREST limit close is the initialTarget and the rest are extraTargets.

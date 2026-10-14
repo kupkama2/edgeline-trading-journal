@@ -59,6 +59,26 @@ describe("a positions-tab read", () => {
   });
 });
 
+describe("which way a position is", () => {
+  // SOLUSDT 100x: Size "−4,962.12 USDT", no TP, SL 113.40, mark 106.06.
+  it("takes a negative size as a short, whatever word came with it", () => {
+    const sol = normalizeSetupRead({ symbol: "SOLUSDT", direction: "long", size: -4962.12, sizeUnit: "quote", initialStop: 113.4 });
+    expect(sol.direction).toBe("short");
+    expect(sol.size).toBe(4962.12);
+    expect(sol.initialStop).toBe(113.4);
+  });
+
+  it("leaves a positive size's direction to the reader", () => {
+    expect(normalizeSetupRead({ direction: "short", size: 2 }).direction).toBe("short");
+    expect(normalizeSetupRead({ direction: null, size: 2 }).direction).toBeNull();
+  });
+
+  it("does not take a close box's mark price for the entry", () => {
+    // The prompt says so; the guard here is that a missing entry stays missing.
+    expect(normalizeSetupRead({ direction: "short", size: -47.07, entryPrice: null }).entryPrice).toBeNull();
+  });
+});
+
 describe("an open-orders read", () => {
   // SUIUSDT limit, 4,999.99 USDT, TP/SL 1.1415 / 0.9927, filled 0.00.
   const sui = normalizeSetupRead({
