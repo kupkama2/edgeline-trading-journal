@@ -4,7 +4,6 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
-  CalendarRange,
   ChevronDown,
   ClipboardList,
   ClipboardPaste,
@@ -14,6 +13,7 @@ import {
   X,
 } from "lucide-react";
 import {
+  useAllTrades,
   useTrades,
   useMistakeTags,
   useAccountSettings,
@@ -26,9 +26,10 @@ import { scorecard } from "@shared/scorecard";
 import { groupByDay, dayLabel } from "@shared/verdict";
 import { owedOutcome } from "@shared/aftermath";
 import { journalHealth } from "@shared/health";
-import { reviewDue, weekKey } from "@shared/review";
 import { openRisk } from "@shared/exposure";
 import { DailyGuardCard, useDailyStats, useTiltGuard } from "@/components/daily-guard";
+import { dayKey } from "@shared/review";
+import { ReviewDebtBanner, ReviewGate, useReviewPressure } from "@/components/review-debt";
 import { Spark } from "@/components/scorecard-card";
 import { StyleSwitcher } from "@/components/style-switcher";
 import { ImportTradesDialog } from "@/components/import-trades";
@@ -220,13 +221,11 @@ function Chip({
 function AttentionRow({
   closed,
   scoped,
-  allTrades,
   feeAccounts,
   onOpen,
 }: {
   closed: TradeWithTags[];
   scoped: TradeWithTags[];
-  allTrades: TradeWithTags[];
   feeAccounts: ReadonlySet<string>;
   onOpen: (t: TradeWithTags) => void;
 }) {
@@ -234,22 +233,14 @@ function AttentionRow({
   const owed = owedOutcome(closed);
   const issues = journalHealth(scoped, Date.now(), feeAccounts);
   const missing = issues.reduce((n, i) => n + i.trades.length, 0);
-  // The week you owe is never scoped: the style filter asks questions of the
-  // record, and the week you owe is the week you owe.
-  const due = reviewDue(allTrades);
+  // The review owed is no longer a chip here: the banner above carries it,
+  // day by day, and a second message about one debt is the one ignored.
 
-  if (!due && owed.length === 0 && missing === 0) return null;
+  if (owed.length === 0 && missing === 0) return null;
 
   return (
     <div className="space-y-2" data-testid="attention-row">
       <div className="flex flex-wrap items-center gap-2">
-        {due && (
-          <Link href={`/review/${weekKey(due.week)}`} data-testid="chip-review">
-            <Chip tone={due.weeksAgo >= 2 ? "red" : "amber"} icon={CalendarRange}>
-              {due.progress.left.length} to go over{due.weeksAgo >= 2 ? ` · ${due.weeksAgo} weeks back` : ""}
-            </Chip>
-          </Link>
-        )}
         {owed.length > 0 && (
           <Chip
             tone="amber"
@@ -340,9 +331,12 @@ export default function JournalV2() {
   const scoped = useMemo(() => filterByScope(trades ?? [], scope), [trades, scope]);
   // The day is the day: the guard reads every trade taken today, tilt
   // included, whichever book the rest of the page is showing.
+  // Every chapter: a fresh start mid-session must not reset today's loss
+  // stop or tilt lock — the guard is about the day, not the record.
+  const { data: everyTrade } = useAllTrades();
   const dayTrades = useMemo(
-    () => filterByScope(trades ?? [], { ...scope, book: "both" }),
-    [trades, scope],
+    () => filterByScope(everyTrade ?? [], { ...scope, book: "both" }),
+    [everyTrade, scope],
   );
   const open = useMemo(
     () =>
@@ -363,6 +357,17 @@ export default function JournalV2() {
   const guardLoud = tilt.meter.state !== "calm" || tilt.locked;
 
   useOutcomeWatch(closed.length > 0);
+  const review = useReviewPressure();
+  /*
+   * Whether a day is reviewed, by the same rule its review page uses: every
+   * trade it finished, tilt and passes included. The rows shown here are the
+   * filtered book, so "every row reviewed" said "reviewed" over a day the
+   * review page still counted as 3 of 4.
+   */
+  const reviewedDays = useMemo(() => {
+    const owed = new Set([...review.debt.days.map((d) => d.key), ...(review.debt.today.length ? [dayKey(new Date())] : [])]);
+    return new Set(days.map((g) => g.key).filter((k) => !owed.has(k)));
+  }, [days, review.debt]);
 
   const shown = allDays ? days : days.slice(0, DAY_PREVIEW);
 
@@ -452,14 +457,16 @@ export default function JournalV2() {
 
       {filtersOpen && <StyleSwitcher />}
 
-      <FiguresStrip trades={scoped} />
+      {/* The review owed. With enforcement on and something late, the gate
+          takes the figures' place, and the record below stays shut too. */}
+      {review.shut ? <ReviewGate pressure={review} what="Your record and today's figures" /> : <FiguresStrip trades={scoped} />}
+      <ReviewDebtBanner pressure={review} />
 
       {guardLoud && <DailyGuardCard trades={dayTrades} tags={tags} styleId={activeStyleId} />}
 
       <AttentionRow
         closed={closed}
         scoped={scoped}
-        allTrades={trades ?? []}
         feeAccounts={feeAccounts}
         onOpen={openTrade}
       />
@@ -572,6 +579,7 @@ export default function JournalV2() {
 
       {/* The record. A day at a time, because that is the unit it happened in —
           which is also what lets every row underneath drop its timestamp. */}
+      {!review.shut && (
       <div className="space-y-3">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
           <button
@@ -624,13 +632,13 @@ export default function JournalV2() {
                           onClick={() => navigate(`/review/day/${g.key}`)}
                           title="Go over this day's trades"
                           className={`rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wider transition-colors ${
-                            g.trades.every((t) => t.reviewedAt)
+                            reviewedDays.has(g.key)
                               ? "text-emerald-400/80 hover:text-emerald-400"
                               : "text-muted-foreground hover:text-foreground"
                           }`}
                           data-testid={`button-review-day-${g.key}`}
                         >
-                          {g.trades.every((t) => t.reviewedAt) ? "reviewed" : "review"}
+                          {reviewedDays.has(g.key) ? "reviewed" : "review"}
                         </button>
                       </span>
                     </div>
@@ -668,6 +676,7 @@ export default function JournalV2() {
             </>
           ))}
       </div>
+      )}
 
       <ImportTradesDialog
         open={importing}

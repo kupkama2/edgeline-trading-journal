@@ -180,13 +180,20 @@ export function computeMetrics(t: Trade & { fills?: TradeFill[] }): TradeMetrics
   const mfeR = safe && t.mfe != null ? (sign * (t.mfe - t.entryPrice)) / risk : null;
   const maeR = safe && t.mae != null ? (sign * (t.mae - t.entryPrice)) / risk : null;
 
+  /*
+   * What the untouched plan would have made, on the same footing as what was
+   * made: after the same fees and funding. Gross against net filed a trade
+   * left alone to its target as "cutting winners early" by exactly its fees,
+   * and a clean stop-out as "held past the stop".
+   */
+  const costR = riskDollars > 0 ? costs / riskDollars : 0;
   let potentialR: number | null = null;
   if (safe && t.noManagementOutcome === "target_first") {
     if (t.initialTarget != null) {
-      potentialR = (sign * (t.initialTarget - t.entryPrice)) / risk;
+      potentialR = (sign * (t.initialTarget - t.entryPrice)) / risk - costR;
     }
   } else if (t.noManagementOutcome === "stop_first") {
-    potentialR = -1;
+    potentialR = -1 - costR;
   }
 
   const managementDeltaR =
@@ -372,8 +379,29 @@ export interface AggregateStats {
  * how they stop agreeing.
  */
 export function closedTrades<T extends Trade>(trades: T[]): T[] {
-  return trades.filter((t) => t.status === "closed" && t.exitPrice != null);
+  return trades.filter(isSettled);
 }
+
+/**
+ * A trade with a result: closed, and either exited at a price or logged as
+ * a scalp, whose result is the number typed rather than a price. Scalps
+ * used to fall out of every statistic here, because they are closed with no
+ * exit price by design, while the tilt and sizing cards still counted them
+ * — so two cards on one screen disagreed about the same day.
+ */
+export const isSettled = (t: Pick<Trade, "status" | "exitPrice" | "scalp">): boolean =>
+  t.status === "closed" && (t.exitPrice != null || t.scalp === true);
+
+/**
+ * Win or loss, the one rule for every count of them: on the trade's R, a
+ * result above zero is a win and anything else a loss. A trade without R —
+ * no stop recorded, or a scalp with no risk typed — is neither: it counts in
+ * dollars and is left out of win rates, streaks and averages, never folded
+ * in as a 0R loss.
+ */
+export type Outcome = "win" | "loss" | "unmeasured";
+export const outcomeOf = (m: Pick<TradeMetrics, "actualR">): Outcome =>
+  m.actualR == null ? "unmeasured" : m.actualR > 0 ? "win" : "loss";
 
 export function aggregate(trades: Trade[]): AggregateStats {
   const closed = closedTrades(trades);

@@ -20,6 +20,7 @@ import { useTradeImages, useTrades, useUpdateTrade } from "@/lib/data";
 import { computeMetrics, fmtMoney, fmtR, EXIT_REASON_LABELS } from "@shared/metrics";
 import { dayKey, isReviewed, reviewProgress, weekBefore, weekKey, weekStart } from "@shared/review";
 import { ReviewRow } from "@/components/review-row";
+import { VenueCheck } from "@/components/venue-check";
 import type { TradeWithTags } from "@shared/schema";
 
 /**
@@ -50,7 +51,8 @@ export default function Review() {
   const [, params] = useRoute("/review/:week");
   const [, navigate] = useLocation();
   const { data: trades, isLoading } = useTrades();
-  const week = parseWeek(params?.week);
+  // Keyed on the route's string, so the memo below can actually hit.
+  const week = useMemo(() => parseWeek(params?.week), [params?.week]);
   const p = useMemo(() => reviewProgress(trades ?? [], week), [trades, week]);
 
   const go = (d: Date) => navigate(`/review/${weekKey(d)}`);
@@ -93,7 +95,7 @@ export default function Review() {
             size="icon"
             className="h-8 w-8"
             disabled={weekKey(week) >= thisWeek}
-            onClick={() => go(new Date(week.getTime() + 7 * 24 * 60 * 60 * 1000))}
+            onClick={() => go(weekBefore(week, -1))}
             aria-label="The week after"
             data-testid="button-week-forward"
           >
@@ -147,6 +149,10 @@ export default function Review() {
           </p>
         )}
       </Card>
+
+      {/* The week as the venue has it, beside the week as it was logged —
+          for the trades that never made it in, or were never closed. */}
+      <VenueCheck />
 
       {p.trades.length === 0 ? (
         <Card className="border-card-border bg-card p-6 text-center">

@@ -21,27 +21,38 @@ import { _resetKeyForTests, open, seal } from "../server/secrets";
  * what the journal calls a market the venue calls BTCUSDT.
  */
 describe("which keys are let in", () => {
-  const ok = parseRestrictions({ enableReading: true, enableFutures: true });
+  // A real read-only key: Enable Reading on, everything else off.
+  const ok = parseRestrictions({ enableReading: true });
 
-  it("keeps a key that can only read futures", () => {
+  it("keeps a key that can only read", () => {
     expect(keyRefusal(ok)).toBeNull();
+  });
+
+  it("does not demand Enable Futures, which is futures trading, not reading", () => {
+    // The old rule refused exactly the key the settings page asked for.
+    expect(keyRefusal({ ...ok, enableFutures: false })).toBeNull();
+    expect(keyRefusal({ ...ok, enableFutures: true })).toBeNull();
   });
 
   it("refuses anything a stolen key could spend", () => {
     expect(keyRefusal({ ...ok, enableWithdrawals: true })).toMatch(/withdraw/);
     expect(keyRefusal({ ...ok, enableInternalTransfer: true })).toMatch(/transfer/);
-    expect(keyRefusal({ ...ok, enableSpotAndMarginTrading: true })).toMatch(/spot orders/);
+    expect(keyRefusal({ ...ok, enableSpotAndMarginTrading: true })).toMatch(/spot or margin/);
+    expect(keyRefusal({ ...ok, enableMargin: true })).toMatch(/spot or margin/);
+    expect(keyRefusal({ ...ok, permitsUniversalTransfer: true })).toMatch(/transfer/);
+    expect(keyRefusal({ ...ok, enableVanillaOptions: true })).toMatch(/options/);
+    expect(keyRefusal({ ...ok, enablePortfolioMarginTrading: true })).toMatch(/portfolio margin/);
   });
 
-  it("refuses a key that cannot read futures, which would be stored only to fail", () => {
-    expect(keyRefusal({ ...ok, enableFutures: false })).toMatch(/Futures/);
+  it("refuses a key that cannot read, which would be stored only to fail", () => {
+    expect(keyRefusal({ ...ok, enableReading: false })).toMatch(/Enable Reading/);
   });
 
   it("reads anything missing from the venue's answer as off", () => {
     // The venue's shape is not under this journal's control; a field it stops
     // sending must not read as a permission granted.
-    expect(parseRestrictions({})).toMatchObject({ enableFutures: false, enableWithdrawals: false });
-    expect(keyRefusal(parseRestrictions(null))).toMatch(/Futures/);
+    expect(parseRestrictions({})).toMatchObject({ enableReading: false, enableWithdrawals: false });
+    expect(keyRefusal(parseRestrictions(null))).toMatch(/Enable Reading/);
   });
 });
 
@@ -118,7 +129,7 @@ describe("rows of userTrades into fills", () => {
     ]);
     const out = fillsFromUserTrades(rows, parsePositions([{ symbol: "DOGEUSDT", positionAmt: "0" }]));
     expect(out.fills).toEqual([]);
-    expect(out.unreconstructable).toEqual([{ symbol: "DOGEUSDT", fills: 1 }]);
+    expect(out.unreconstructable).toEqual([{ symbol: "DOGEUSDT", fills: 1, reason: "before-window" }]);
   });
 
   it("keeps a symbol whose fills land exactly on the venue's open position", () => {
@@ -233,5 +244,31 @@ describe("the secret at rest", () => {
     expect(open("plaintext-secret")).toBeNull();
     expect(open("v1.not-base64-at-all!!")).toBeNull();
     expect(open("v2.AAAA")).toBeNull();
+  });
+});
+
+describe("what a fill's fee and side mean", () => {
+  it("leaves a fee paid in a coin unknown, rather than booking it as dollars", () => {
+    const rows = parseUserTrades([
+      row({ id: 1, commission: "0.0021", commissionAsset: "BNB" }),
+      row({ id: 2, side: "SELL", price: "2100", commission: "0.6", commissionAsset: "USDT", time: T0 + H }),
+    ]);
+    const read = tradesFromFills(fillsFromUserTrades(rows, new Map()).fills, "binance");
+    expect(Number.isFinite(read.trades[0].fees)).toBe(false);
+  });
+
+  it("takes Binance's dollar fee credit as dollars", () => {
+    const rows = parseUserTrades([row({ id: 1, commission: "0.4", commissionAsset: "BNFCR" })]);
+    expect(fillsFromUserTrades(rows, new Map([["ETHUSDT", { amt: 1, entryPrice: 2000 }]])).fills[0].fee).toBe(0.4);
+  });
+
+  it("sets a hedge-mode symbol aside, even when its net adds up", () => {
+    const rows = parseUserTrades([
+      row({ symbol: "BTCUSDT", id: 1, positionSide: "LONG", price: "100", qty: "1" }),
+      row({ symbol: "BTCUSDT", id: 2, positionSide: "SHORT", side: "SELL", price: "105", qty: "1", time: T0 + H }),
+    ]);
+    const out = fillsFromUserTrades(rows, parsePositions([{ symbol: "BTCUSDT", positionAmt: "0" }]));
+    expect(out.fills).toEqual([]);
+    expect(out.unreconstructable).toEqual([{ symbol: "BTCUSDT", fills: 2, reason: "hedge-mode" }]);
   });
 });

@@ -18,6 +18,8 @@ import { BookOpen, Check, Eye, EyeOff, Pencil, Plus, RotateCcw, Trash2, X } from
 import { Textarea } from "@/components/ui/textarea";
 import { spanLabel, spanRange, useChapters, useDeleteChapter, useStartChapter } from "@/lib/chapters";
 import { inSpan } from "@shared/chapters";
+import { usePrefs, useSetPrefs } from "@/lib/prefs";
+import type { ReviewMode } from "@shared/review-pressure";
 import { localNow, toIso } from "@/components/trade-shared";
 import {
   useMistakeTags,
@@ -95,14 +97,30 @@ function AccountFeesRow({
   const looksBn = venueOfAccount(name) === "binance";
   const bnReady = bnKey.trim().length >= 16 && bnSecret.trim().length >= 16;
 
+  /*
+   * The fees as STORED, for every save that is not about fees. Each of these
+   * used to send the fee boxes as they stood — so clearing the maker fee to
+   * retype it and then saving a wallet saved a maker fee of zero.
+   */
+  const storedFees = () => ({
+    name,
+    feeMode: (existing?.feeMode === "perContract" ? "perContract" : "percent") as "percent" | "perContract",
+    makerFee: existing?.makerFee ?? 0,
+    takerFee: existing?.takerFee ?? 0,
+  });
+  /** Run a save; on failure say so and return null, so no success toast follows. */
+  async function attempt<T>(title: string, fn: () => Promise<T>): Promise<{ value: T } | null> {
+    try {
+      return { value: await fn() };
+    } catch (err: any) {
+      toast({ title, description: String(err?.message ?? err).replace(/^\d+:\s*/, "").slice(0, 220), variant: "destructive" });
+      return null;
+    }
+  }
+
   async function saveWallet() {
-    await save.mutateAsync({
-      name,
-      feeMode: mode,
-      makerFee: Number(maker) || 0,
-      takerFee: Number(taker) || 0,
-      wallet: wallet.trim() || null,
-    });
+    if (!(await attempt("Wallet not saved", () => save.mutateAsync({ ...storedFees(), wallet: wallet.trim() || null }))))
+      return;
     toast({
       title: wallet.trim() ? "Wallet saved" : "Wallet cleared",
       description: wallet.trim()
@@ -137,16 +155,14 @@ function AccountFeesRow({
   }
 
   async function syncNow() {
-    sayWhatHappened("Hyperliquid", await sync.mutateAsync(name), "No wallet on this account.");
+    const r = await attempt("Hyperliquid sync failed", () => sync.mutateAsync(name));
+    if (r) sayWhatHappened("Hyperliquid", r.value, "No wallet on this account.");
   }
 
   async function saveBinanceKey() {
     try {
       await save.mutateAsync({
-        name,
-        feeMode: mode,
-        makerFee: Number(maker) || 0,
-        takerFee: Number(taker) || 0,
+        ...storedFees(),
         binanceKey: bnKey.trim(),
         binanceSecret: bnSecret.trim(),
       } as any);
@@ -162,18 +178,19 @@ function AccountFeesRow({
   }
 
   async function clearBinanceKey() {
-    await save.mutateAsync({ name, feeMode: mode, makerFee: Number(maker) || 0, takerFee: Number(taker) || 0, binanceKey: null } as any);
+    if (!(await attempt("Key not removed", () => save.mutateAsync({ ...storedFees(), binanceKey: null } as any)))) return;
     toast({ title: "Key removed", description: `${name} is back to trades logged by hand.` });
   }
 
   async function syncBinanceNow() {
-    sayWhatHappened("Binance", await bnSync.mutateAsync(name), "No key on this account.");
+    const r = await attempt("Binance sync failed", () => bnSync.mutateAsync(name));
+    if (r) sayWhatHappened("Binance", r.value, "No key on this account.");
   }
 
   async function logBalance() {
     const v = Number(balance.replace(/[,$\s]/g, ""));
     if (!Number.isFinite(v) || v < 0) return;
-    await addBalance.mutateAsync({ account: name, balance: v });
+    if (!(await attempt("Balance not logged", () => addBalance.mutateAsync({ account: name, balance: v })))) return;
     setBalance("");
     toast({ title: "Balance logged", description: `${name} is ${fmtAmount(v, 0)} as of now.` });
   }
@@ -194,18 +211,12 @@ function AccountFeesRow({
   async function persist() {
     const m = Number(maker) || 0;
     const t = Number(taker) || 0;
-    await save.mutateAsync({ name, feeMode: mode, makerFee: m, takerFee: t });
+    if (!(await attempt("Fees not saved", () => save.mutateAsync({ name, feeMode: mode, makerFee: m, takerFee: t })))) return;
     toast({ title: "Fees saved", description: `${name} — schedule updated.` });
   }
 
   async function setKind(kind: "live" | "evaluation") {
-    await save.mutateAsync({
-      name,
-      feeMode: mode,
-      makerFee: Number(maker) || 0,
-      takerFee: Number(taker) || 0,
-      kind,
-    });
+    if (!(await attempt("Not changed", () => save.mutateAsync({ ...storedFees(), kind })))) return;
     toast({
       title: kind === "evaluation" ? "Held out of the record" : "Counting again",
       description:
@@ -216,8 +227,10 @@ function AccountFeesRow({
   }
 
   async function foldInto(into: string) {
-    const { moved } = await merge.mutateAsync({ from: name, into });
+    const r = await attempt("Not merged", () => merge.mutateAsync({ from: name, into }));
     setMergeInto("");
+    if (!r) return;
+    const { moved } = r.value;
     toast({
       title: `Merged into ${into}`,
       description: `${moved} ${moved === 1 ? "trade" : "trades"} moved. ${name} is gone.`,
@@ -438,8 +451,9 @@ function AccountFeesRow({
                   </Button>
                 )}
                 <span className="basis-full text-[10px] leading-snug text-muted-foreground">
-                  Make it in Binance under API Management with only <em>Enable Reading</em> and{" "}
-                  <em>Enable Futures</em> ticked. A key that can withdraw or trade is refused.
+                  Make it in Binance under API Management with only <em>Enable Reading</em> ticked —
+                  that is all the sync needs, futures history included. A key that can withdraw,
+                  transfer, or place spot or margin orders is refused.
                 </span>
               </>
             )}
@@ -487,11 +501,7 @@ function AccountFeesRow({
                 <span className="text-muted-foreground">Passed it? Fold into</span>
                 <select
                   value={mergeInto}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    setMergeInto(v);
-                    if (v) void foldInto(v);
-                  }}
+                  onChange={(e) => setMergeInto(e.target.value)}
                   className="rounded border border-border bg-transparent px-1.5 py-0.5 text-[10px]"
                   data-testid={`select-merge-${name}`}
                 >
@@ -502,6 +512,26 @@ function AccountFeesRow({
                     </option>
                   ))}
                 </select>
+                {/* Merging moves every trade and deletes this account's
+                    settings, and there is no undo — so picking a name only
+                    asks; this button does it. */}
+                {mergeInto && (
+                  <>
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      className="h-6 px-2 text-[10px]"
+                      disabled={merge.isPending}
+                      onClick={() => void foldInto(mergeInto)}
+                      data-testid={`button-merge-confirm-${name}`}
+                    >
+                      Move all into {mergeInto}
+                    </Button>
+                    <Button size="sm" variant="ghost" className="h-6 px-2 text-[10px]" onClick={() => setMergeInto("")}>
+                      Cancel
+                    </Button>
+                  </>
+                )}
               </span>
             )}
           </>
@@ -851,6 +881,8 @@ export default function Settings() {
   const createTag = useCreateTag();
   const updateTag = useUpdateTag();
   const deleteTag = useDeleteTag();
+  /** A demon about to be deleted — it comes off every trade it was on, so it asks first. */
+  const [deletingTagId, setDeletingTagId] = useState<number | null>(null);
 
   const [newName, setNewName] = useState("");
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -886,6 +918,8 @@ export default function Settings() {
       </div>
 
       <PublicModeCard />
+
+      <ReviewDisciplineCard />
 
       <FreshStartCard />
 
@@ -995,16 +1029,40 @@ export default function Settings() {
                       >
                         <Pencil className="h-3.5 w-3.5" />
                       </Button>
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        className="h-7 w-7 shrink-0 text-muted-foreground hover:text-destructive"
-                        onClick={() => deleteTag.mutate(t.id)}
-                        data-testid={`button-delete-tag-${t.id}`}
-                        aria-label="Delete tag"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
+                      {deletingTagId === t.id ? (
+                        <>
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            className="h-7 shrink-0 px-2 text-[11px]"
+                            disabled={deleteTag.isPending}
+                            onClick={() =>
+                              deleteTag.mutate(t.id, {
+                                onSuccess: () => setDeletingTagId(null),
+                                onError: (err: any) =>
+                                  toast({ title: "Not deleted", description: String(err?.message ?? err).slice(0, 200), variant: "destructive" }),
+                              })
+                            }
+                            data-testid={`button-delete-tag-confirm-${t.id}`}
+                          >
+                            Delete — off every trade
+                          </Button>
+                          <Button size="sm" variant="ghost" className="h-7 shrink-0 px-2 text-[11px]" onClick={() => setDeletingTagId(null)}>
+                            Keep
+                          </Button>
+                        </>
+                      ) : (
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-7 w-7 shrink-0 text-muted-foreground hover:text-destructive"
+                          onClick={() => setDeletingTagId(t.id)}
+                          data-testid={`button-delete-tag-${t.id}`}
+                          aria-label="Delete tag"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      )}
                     </>
                   )}
                 </div>
@@ -1092,6 +1150,74 @@ export default function Settings() {
  * is a date: from it on is the chapter every page shows; before it is kept
  * whole and reachable from the stats. See shared/chapters.ts for the rule.
  */
+/**
+ * How hard the journal pushes the review. On the user row, so the rule set
+ * on the laptop holds on the phone; see shared/review-pressure.ts.
+ */
+function ReviewDisciplineCard() {
+  const prefs = usePrefs();
+  const set = useSetPrefs();
+  const { toast } = useToast();
+  const MODES: { id: ReviewMode; label: string; says: string }[] = [
+    { id: "off", label: "Off", says: "No reminders. The Review tab is still there when you want it." },
+    {
+      id: "remind",
+      label: "Remind",
+      says: "A count on the Review tab and a banner on the journal whenever a finished day is not gone over — amber the day after, red once it is older.",
+    },
+    {
+      id: "enforce",
+      label: "Enforce",
+      says: "As Remind, and once a day is past the grace your record and your stats stay shut until it is reviewed. Logging trades and open positions are never blocked, and you can look for an hour once a day. Only trades that finish after you switch this on can shut anything.",
+    },
+  ];
+  const pick = async (id: ReviewMode) => {
+    try {
+      await set.mutateAsync({ reviewMode: id });
+    } catch (err: any) {
+      toast({ title: "Not saved", description: String(err?.message ?? err), variant: "destructive" });
+    }
+  };
+  const current = MODES.find((m) => m.id === prefs.reviewMode) ?? MODES[1];
+  return (
+    <Card className="border-card-border bg-card p-4 sm:p-5" data-testid="card-review-discipline">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="flex items-center gap-2 text-sm font-semibold tracking-tight">
+            <BookOpen className="h-4 w-4" />
+            Review discipline
+          </h2>
+          <p className="mt-0.5 max-w-prose text-[11px] leading-snug text-muted-foreground">{current.says}</p>
+          {prefs.reviewMode === "enforce" && prefs.reviewEnforcedSince && (
+            <p className="mt-1 text-[10px] text-muted-foreground" data-testid="text-enforced-since">
+              Enforced for trades finished since{" "}
+              {new Date(prefs.reviewEnforcedSince).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}.
+            </p>
+          )}
+        </div>
+        <div className="inline-flex shrink-0 rounded-lg border border-border bg-secondary/30 p-0.5" role="radiogroup" aria-label="Review discipline">
+          {MODES.map((m) => (
+            <button
+              key={m.id}
+              type="button"
+              role="radio"
+              aria-checked={prefs.reviewMode === m.id}
+              disabled={set.isPending}
+              onClick={() => pick(m.id)}
+              data-testid={`button-review-mode-${m.id}`}
+              className={`rounded-md px-3 py-1.5 text-[11px] font-medium transition-colors ${
+                prefs.reviewMode === m.id ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {m.label}
+            </button>
+          ))}
+        </div>
+      </div>
+    </Card>
+  );
+}
+
 function FreshStartCard() {
   const { spans, current } = useChapters();
   const { data: all = [] } = useAllTrades();

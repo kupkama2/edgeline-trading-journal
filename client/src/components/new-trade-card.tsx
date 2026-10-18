@@ -1,4 +1,5 @@
 import { useAccountBalances } from "@/lib/data";
+import { toInstant } from "@shared/import-parse";
 import { fmtPercent, latestEquity, parseRiskBudget, riskPercent } from "@shared/equity";
 import { impliedFees } from "@shared/setup-read";
 /**
@@ -18,9 +19,10 @@ import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { ArrowDownRight, ArrowUpRight, Ban, CheckCircle2, ChevronDown, ClipboardList, Clock3, Loader2, Skull, Sparkles } from "lucide-react";
 import { useTrades, useMistakeTags, useStyles, useCreateTrade, useAddTradeImage, archiveDataUrl, parseScreenshot, fileToDownscaledDataUrl, analyzeRationale } from "@/lib/data";
-import { styleColor, styleName, useStyleFilter } from "@/lib/style-filter";
-import { parsePlaybook } from "@shared/schema";
+import { OWN_IDEA, styleColor, styleName, useStyleFilter } from "@/lib/style-filter";
+import { missingRisk, parsePlaybook } from "@shared/schema";
 import { EXIT_REASON_LABELS, fmtAmount } from "@shared/metrics";
+import { maskAmount } from "@shared/redact";
 import { useDemonGuard, useTiltGuard } from "@/components/daily-guard";
 import { fmtCountdown } from "@/components/tilt-meter";
 import { signalSentence, tiltSignals } from "@shared/tilt";
@@ -54,9 +56,15 @@ const setupFormSchema = z.object({
   symbol: z.string().min(1, "Required"),
   direction: z.enum(["long", "short"]),
   size: z.coerce.number().positive("Must be > 0"),
-  entryPrice: z.coerce.number(),
-  initialStop: z.coerce.number(),
-  initialTarget: z.coerce.number(),
+  /*
+   * Prices are read with priceOrNull, not coerced: Number("") is 0, so an
+   * empty stop box went to the server as a stop AT ZERO — which passes the
+   * "a live trade needs a stop" rule, because 0 is not null, and then every
+   * R on the trade is measured against a stop nobody set.
+   */
+  entryPrice: z.any(),
+  initialStop: z.any(),
+  initialTarget: z.any(),
   entryTime: z.string().min(1),
   notes: z.string().optional(),
   rationale: z.string().optional(),
@@ -123,7 +131,25 @@ export function NewTradeCard({
    * the page, which is how a trade usually starts anyway.
    */
   const [expanded, setExpanded] = useState(defaultExpanded);
+  const hasDraftRef = useRef(false);
+  /** What the last screenshot read wrote, so the next read can take it back. */
+  const lastRead = useRef<{ fields: Record<string, string>; closed: boolean; pending: boolean } | null>(null);
   useEffect(() => onExpandedChange?.(expanded), [expanded, onExpandedChange]);
+  /*
+   * The card stays mounted, folded, all session, so the default times were
+   * the moment the PAGE loaded: the first trade logged hours later got that
+   * time, and the tilt and session checks read it. An empty form opening is
+   * now, every time; one with a draft in it keeps what was typed.
+   */
+  const wasExpanded = useRef(expanded);
+  useEffect(() => {
+    if (expanded && !wasExpanded.current && !hasDraftRef.current) {
+      form.setValue("entryTime", localNow());
+      setExitTime(localNow());
+    }
+    wasExpanded.current = expanded;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expanded]);
   /*
    * And it closes on its own. Opening a trade keeps this page mounted
    * underneath, so a form opened once used to stay open for the whole visit,
@@ -252,7 +278,9 @@ export function NewTradeCard({
   // Same reasoning for the source: reading Severin's trades and then logging
   // one is almost always logging one of his.
   useEffect(() => {
-    if (activeSource) setSource(activeSource);
+    // "My own idea" is a filter meaning NO source, not a source called
+    // "__own__"; copying it in logged trades out of the view they came from.
+    if (activeSource && activeSource !== OWN_IDEA) setSource(activeSource);
   }, [activeSource]);
   // Every account name already on a trade, so picking stays one click and one
   // spelling. Free text underneath it all: no accounts table to administer.
@@ -296,6 +324,7 @@ export function NewTradeCard({
     [v.symbol, v.size, v.entryPrice, v.initialStop, v.initialTarget, v.rationale, v.notes].some(
       (x) => String(x ?? "").trim() !== "",
     );
+  hasDraftRef.current = hasDraft;
 
   const tiltSigns = useMemo(() => {
     const typed = v.entryTime ? new Date(v.entryTime) : new Date();
@@ -419,7 +448,15 @@ export function NewTradeCard({
   useEffect(() => {
     if (instrumentKey === "") return;
     const read = readUnit && readUnit.symbol === (v.symbol ?? "").trim().toUpperCase() ? readUnit.unit : null;
-    setSizeUnit(read ?? (instrumentKey === "unknown" ? "quote" : "base"));
+    /*
+     * An unrecognised ticker is usually a coin, sized in dollars — unless the
+     * journal has logged it before as a contract (a point value other than 1),
+     * or it is written like one (root plus month code). Defaulting those to
+     * dollars hid the contract-size box and saved "2 contracts" as $2.
+     */
+    const contractLike =
+      instrumentKey === "unknown" && ((remembered != null && remembered !== 1) || looksLikeFuturesContract(v.symbol));
+    setSizeUnit(read ?? (instrumentKey === "unknown" && !contractLike ? "quote" : "base"));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [instrumentKey]);
   const sized = useMemo(
@@ -520,7 +557,7 @@ export function NewTradeCard({
               entryPrice: o.entryPrice as number,
               initialStop: o.initialStop ?? null,
               initialTarget: o.initialTarget ?? null,
-              entryTime: o.entryTime ?? null,
+              entryTime: toInstant(o.entryTime),
               source: "binance-orders" as const,
               raw: "(from screenshot)",
               warnings:
@@ -538,7 +575,36 @@ export function NewTradeCard({
           return;
         }
       }
-      if (r.symbol) form.setValue("symbol", r.symbol);
+      /*
+       * What the PREVIOUS read filled in goes first, unless it has been
+       * changed by hand since. Fields were only ever written when the new
+       * read had a value, so a setup chart read after a closed-position
+       * card kept that card's exit, fees and closed state, and a chart
+       * with no stop on it kept the last one's stop.
+       */
+      const prev = lastRead.current;
+      if (prev) {
+        for (const [k, val] of Object.entries(prev.fields)) {
+          if (String(form.getValues(k as any) ?? "") === val) form.setValue(k as any, "" as any);
+        }
+        if (prev.closed) {
+          setClosedMode(false);
+          setAutoClosed(false);
+          setExitPrice("");
+          setExitReason(null);
+          setFees("");
+        }
+        if (prev.pending && lifecycle === "pending") setLifecycle("open");
+        setReadUnit(null);
+        setDirectionPicked(false);
+      }
+      const wrote: Record<string, string> = {};
+      const put = (k: "symbol" | "entryPrice" | "initialStop" | "initialTarget" | "size", v: unknown) => {
+        form.setValue(k, v as any);
+        wrote[k] = String(v);
+      };
+
+      if (r.symbol) put("symbol", r.symbol);
       if (r.direction) {
         /*
          * A direction read off the chart counts as answered, so the level
@@ -550,10 +616,10 @@ export function NewTradeCard({
         setDirectionPicked(true);
         form.setValue("direction", r.direction);
       }
-      if (r.entryPrice != null) form.setValue("entryPrice", r.entryPrice as any);
-      if (r.initialStop != null) form.setValue("initialStop", r.initialStop as any);
-      if (r.initialTarget != null) form.setValue("initialTarget", r.initialTarget as any);
-      if (r.size != null) form.setValue("size", r.size as any);
+      if (r.entryPrice != null) put("entryPrice", r.entryPrice);
+      if (r.initialStop != null) put("initialStop", r.initialStop);
+      if (r.initialTarget != null) put("initialTarget", r.initialTarget);
+      if (r.size != null) put("size", r.size);
       if (r.sizeUnit) {
         setReadUnit(r.symbol ? { symbol: r.symbol.trim().toUpperCase(), unit: r.sizeUnit } : null);
         setSizeUnit(r.sizeUnit);
@@ -602,6 +668,7 @@ export function NewTradeCard({
         }
       }
 
+      lastRead.current = { fields: wrote, closed: detectedClosed, pending: r.isResting === true };
       setParsed(true);
       toast({
         title: detectedClosed ? "Completed trade read" : r.isResting ? "Resting order read" : "Chart read",
@@ -700,8 +767,28 @@ export function NewTradeCard({
       toast({ title: "Exit price required", variant: "destructive" });
       return;
     }
+    const entryPrice = priceOrNull(values.entryPrice);
+    const initialStop = priceOrNull(values.initialStop);
+    const initialTarget = priceOrNull(values.initialTarget);
+    if (entryPrice == null) {
+      toast({ title: "Entry price required", variant: "destructive" });
+      return;
+    }
+    const status = loggingClosed ? "closed" : lifecycle === "pending" ? "pending" : "open";
+    // The server's rule, asked here first so the answer is a sentence rather
+    // than a 400: an open or closed plan trade needs both levels.
+    if (missingRisk({ status, initialStop, initialTarget, tilt: asTilt }).length) {
+      toast({
+        title: "A stop and a target are needed",
+        description: "1R is measured entry-to-stop. Log it as tilt if there was no plan.",
+        variant: "destructive",
+      });
+      return;
+    }
 
-    const created = await createTrade.mutateAsync({
+    let created: Awaited<ReturnType<typeof createTrade.mutateAsync>>;
+    try {
+    created = await createTrade.mutateAsync({
       trade: {
         styleId,
         symbol: data.symbol.toUpperCase(),
@@ -713,10 +800,10 @@ export function NewTradeCard({
         ...(needsMultiplier && isFinite(typedMult) && typedMult > 0
           ? { pointValue: typedMult }
           : {}),
-        entryPrice: data.entryPrice,
-        // A tilt trade owes no levels; an empty box is not a stop at zero.
-        initialStop: asTilt ? priceOrNull(values.initialStop) : data.initialStop,
-        initialTarget: asTilt ? priceOrNull(values.initialTarget) : data.initialTarget,
+        entryPrice,
+        // An empty box is no level, never a level at zero.
+        initialStop,
+        initialTarget,
         tilt: asTilt,
         wellTraded: loggingClosed && !asTilt && wellTraded,
         extraTargets: extras.length ? JSON.stringify(extras) : null,
@@ -743,6 +830,9 @@ export function NewTradeCard({
               mfe: mfe.trim() && isFinite(Number(mfe)) ? Number(mfe) : null,
               postExitPeak:
                 postExitPeak.trim() && isFinite(Number(postExitPeak)) ? Number(postExitPeak) : null,
+              // Asked for on the form, and used to be dropped on the way out.
+              postExitAdverse:
+                postExitAdverse.trim() && isFinite(Number(postExitAdverse)) ? Number(postExitAdverse) : null,
               noManagementOutcome: (nmo as any) ?? null,
               fees: fees.trim() && isFinite(Number(fees)) ? Number(fees) : null,
               entryGrade: grades.entry as any,
@@ -753,6 +843,15 @@ export function NewTradeCard({
       },
       mistakeTagIds: loggingClosed ? selectedDemons : [],
     });
+    } catch (err: any) {
+      // A trade that did not save must say so; the form keeps everything typed.
+      toast({
+        title: "Not logged — nothing was saved",
+        description: `${String(err?.message ?? err).slice(0, 160)} · your entries are still here.`,
+        variant: "destructive",
+      });
+      return;
+    }
 
     // Keep the parsed chart as the trade's setup screenshot — archival
     // quality, lazy-loaded, never in the list payload. Best-effort: a failed
@@ -796,6 +895,7 @@ export function NewTradeCard({
     setPickedStyleId(null);
     setExtraTps([]);
     setReadUnit(null);
+    lastRead.current = null;
     // The account survives the reset on purpose — next trade, same account.
     store.set(ACCOUNT_KEY, account.trim());
     setPb({ setupName: "", stopLogic: "", targetLogic: "", confidence: null, standAside: "" });
@@ -1235,7 +1335,7 @@ export function NewTradeCard({
                           title="Size is being solved from the risk you typed. Click to set it by hand again."
                           className="rounded-full bg-primary/15 px-1.5 py-0.5 text-[9px] text-primary transition-colors"
                         >
-                          from ${riskOverride} risk
+                          from {fmtAmount(Number(riskOverride), 0)} risk
                         </button>
                       )}
                     </div>
@@ -1289,7 +1389,8 @@ export function NewTradeCard({
                   <FormMessage className="text-[10px]" />
                   {sizeReadout && (
                     <p className="font-mono text-[10px] text-muted-foreground" data-testid="text-size-readout">
-                      {sizeReadout}
+                      {/* A notional in dollars says how big the account is. */}
+                      {maskAmount() ?? sizeReadout}
                     </p>
                   )}
                 </FormItem>
@@ -1455,7 +1556,7 @@ export function NewTradeCard({
                       : fmtAmount(sized.size, 0)}
                   </span>
                   {sized.sizeUnit === "base" && sized.size > 0 && (
-                    <> · risks ${Math.round(sized.actualRiskDollars)}</>
+                    <> · risks {fmtAmount(sized.actualRiskDollars, 0)}</>
                   )}
                 </span>
               ) : preview ? (
@@ -1478,8 +1579,8 @@ export function NewTradeCard({
 
               {sizeMode === "auto" && sized?.sizeUnit === "base" && sized.size === 0 && (
                 <span className="text-[10px] text-amber-500" data-testid="text-stop-too-far">
-                  stop too far for this budget — even 1 contract risks $
-                  {Math.round(sized.perUnitRisk)}
+                  stop too far for this budget — even 1 contract risks{" "}
+                  {fmtAmount(sized.perUnitRisk, 0)}
                 </span>
               )}
             </div>

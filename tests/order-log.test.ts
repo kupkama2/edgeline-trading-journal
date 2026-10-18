@@ -361,3 +361,38 @@ describe("a stop that held while the target moved", () => {
     expect(trades[0].brackets.map((b) => b.level)).toEqual([130, 118, 95]);
   });
 });
+
+describe("what a fill log can and cannot say", () => {
+  const row = (over: Partial<LoggedFill>): LoggedFill =>
+    ({ symbol: "ESZ6", side: "buy", kind: "Limit", qty: 1, price: 100, time: "2026-10-12 10:00:00", status: "filled", ...over }) as LoggedFill;
+
+  it("keeps a partial already taken on a trade still open", () => {
+    // Buy 3 @ 100, sell 1 @ 110, still holding 2.
+    const { trades } = tradesFromLog([
+      row({ qty: 3 }),
+      row({ side: "sell", qty: 1, price: 110, time: "2026-10-12 10:30:00" }),
+    ]);
+    expect(trades).toHaveLength(1);
+    expect(trades[0]).toMatchObject({ stillOpen: true, exitPrice: null, exitTime: null });
+    expect(trades[0].partials).toEqual([expect.objectContaining({ price: 110, size: 1 })]);
+  });
+
+  it("does not take a stop that was moved before it fired as the plan's stop", () => {
+    // Long at 100; a stop at 95 placed then cancelled; a stop at 98 fires.
+    const { trades } = tradesFromLog([
+      row({}),
+      row({ side: "sell", kind: "Stop", qty: 1, price: null as any, stopPrice: 95, status: "cancelled", time: "2026-10-12 10:05:00" }),
+      row({ side: "sell", kind: "Stop", qty: 1, price: 98, stopPrice: 98, time: "2026-10-12 10:40:00" }),
+    ]);
+    expect(trades[0].exitPrice).toBe(98);
+    expect(trades[0].initialStop).toBe(95);
+  });
+
+  it("still takes a stop that was never moved", () => {
+    const { trades } = tradesFromLog([
+      row({}),
+      row({ side: "sell", kind: "Stop", qty: 1, price: 95, stopPrice: 95, time: "2026-10-12 10:40:00" }),
+    ]);
+    expect(trades[0].initialStop).toBe(95);
+  });
+});

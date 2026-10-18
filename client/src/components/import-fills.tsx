@@ -161,14 +161,17 @@ export function FillLogReview({
             size: t.size,
             sizeUnit: "base",
             entryPrice: t.entryPrice,
-            entryTime: t.entryTime,
+            // The log's times are the broker's wall clock with no zone — read
+            // as local here, the same as the fills below, rather than stored
+            // bare for the server to read as UTC.
+            entryTime: new Date(t.entryTime).toISOString(),
             // Only where a fired stop proved it. Everything else about a trade
             // can be corrected later from memory; a stop that was never the
             // plan sets 1R wrong and quietly rescales the whole book.
             initialStop: numOrNull(l.stop),
             initialTarget: numOrNull(l.target),
             exitPrice: t.stillOpen ? null : t.exitPrice,
-            exitTime: t.stillOpen ? null : t.exitTime,
+            exitTime: t.stillOpen || !t.exitTime ? null : new Date(t.exitTime).toISOString(),
             status: t.stillOpen ? "open" : "closed",
             exitReason: t.stillOpen ? null : t.exitReason,
             source: "broker-log",

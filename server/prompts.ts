@@ -332,3 +332,35 @@ Output ONLY this JSON object, no prose and no markdown fences:
 {"isExecutionLog": boolean, "fills": [{"symbol": string|null, "side": "buy"|"sell"|null, "kind": string|null, "qty": number|null, "price": number|null, "time": string|null, "stopPrice": number|null, "limitPrice": number|null, "status": "filled"|"cancelled"|"working"|"other"}]}
 
 If the image is not an execution log, return {"isExecutionLog": false, "fills": []}.`;
+
+/**
+ * A venue's HISTORY, read for comparison with the journal — never written
+ * from directly. See shared/reconcile.ts for what is done with it.
+ *
+ * Two shapes, because the two venues keep history differently: Binance
+ * prints one card per finished position; Hyperliquid prints one row per fill
+ * with its own direction ("Open Long", "Close Long"). Positions are taken as
+ * printed; fills are transcribed and walked into positions in code, where
+ * the arithmetic can be trusted.
+ */
+export const HISTORY_PROMPT = `You are reading a screenshot of a trading venue's HISTORY — finished positions or past fills — so it can be compared with a trading journal. Transcribe what is printed. Do not invent anything that is not on the screen.
+
+The screenshot is ONE of these:
+
+(P) POSITION HISTORY — one card or row per finished position (Binance "Position History", Bybit "Closed P&L"). Typical: a header like "BTCUSDT Perp 150x Cross Long Closed", "… Opened" and "… Closed" timestamps, Realized PNL, Entry Price, Avg Close Price, Closed Vol, Max OI.
+  For EACH position return: symbol (as printed, minus "Perp" and the leverage badge), direction ("long" or "short" — the word in the header badge), entryPrice (Entry Price), exitPrice (Avg Close Price), size (Closed Vol — NOT Max OI), sizeUnit ("base" when it is in the coin, "quote" when it is a currency amount), entryTime (the "Opened" time), exitTime (the "Closed" time), realizedPnl (signed number, whatever currency), closed (true unless the card says the position is still open).
+
+(F) TRADE HISTORY / FILLS — one row per fill, with a direction column (Hyperliquid "Trade History": Time, Market/Coin, Direction, Price, Size, Trade Value, Fee, Closed PNL).
+  For EACH row return: symbol (the market as printed, including any small badge next to it such as "xyz"), dir (the Direction column verbatim: "Open Long", "Close Long", "Open Short", "Close Short"), price, size (in the coin — the Size column, not Trade Value), time, closedPnl (signed; null where blank or "--").
+  Return EVERY row, in the order printed. Do not pair opens with closes — that is done afterwards.
+
+Rules:
+- Times exactly as printed, as "YYYY-MM-DDTHH:mm:ss" with NO timezone conversion. Read dates in the venue's own order (10/12/2026 on Binance and Hyperliquid is month/day/year).
+- Prices and sizes to every decimal shown. Plain JSON numbers: no thousands separators, no currency.
+- If a value is not legible, use null rather than guessing.
+- A screenshot is one shape: fill "positions" or "fills", and leave the other an empty list.
+
+Output ONLY this JSON object, no prose and no markdown fences:
+{"positions": [{"symbol": string, "direction": "long"|"short", "entryPrice": number|null, "exitPrice": number|null, "size": number|null, "sizeUnit": "base"|"quote"|null, "entryTime": string|null, "exitTime": string|null, "realizedPnl": number|null, "closed": boolean}], "fills": [{"symbol": string, "dir": string, "price": number|null, "size": number|null, "time": string|null, "closedPnl": number|null}]}
+
+If the image shows no history at all, return {"positions": [], "fills": []}.`;

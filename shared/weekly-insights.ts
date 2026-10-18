@@ -133,11 +133,18 @@ export function buildInsightsBundle(
   tags: MistakeTag[],
   weekStartDate = startOfWeek(),
   dailyNotes: { day: string; body: string | null }[] = [],
+  /**
+   * The week as instants, from the person's own clock. The server runs in
+   * UTC, so a week built from its midnight is not the week the review page
+   * shows anyone east or west of Greenwich: Sunday evening's closes in New
+   * York land in the next one. When given, these decide the week.
+   */
+  window?: { from: string; to: string; key: string },
 ): InsightsBundle {
   const end = new Date(weekStartDate);
   end.setDate(end.getDate() + 7);
-  const fromIso = weekStartDate.toISOString();
-  const toIso = end.toISOString();
+  const fromIso = window?.from ?? weekStartDate.toISOString();
+  const toIso = window?.to ?? end.toISOString();
 
   const inWeek = trades.filter((t) => {
     if (t.status !== "closed") return false;
@@ -185,8 +192,11 @@ export function buildInsightsBundle(
       };
     });
 
-  const weekStart = weekStartKey(weekStartDate);
-  const weekEnd = weekStartKey(new Date(end.getTime() - 86400000));
+  const weekStart = window?.key ?? weekStartKey(weekStartDate);
+  // Six days on from the key, as calendar days — the same on any clock.
+  const weekEnd = window
+    ? new Date(Date.parse(`${window.key}T12:00:00Z`) + 6 * 86_400_000).toISOString().slice(0, 10)
+    : weekStartKey(new Date(end.getTime() - 86400000));
 
   // Day keys are yyyy-MM-dd, so the week membership test is a string compare.
   const dayNotes: DayNoteEntry[] = dailyNotes

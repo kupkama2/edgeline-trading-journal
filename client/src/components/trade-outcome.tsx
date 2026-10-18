@@ -34,7 +34,7 @@ import type { MistakeTag } from "@shared/schema";
 import { LevelLabel, PathBands } from "@/components/levels";
 import { Activity, Gavel, Loader2, LogOut, Star } from "lucide-react";
 import { aftermathWindowMs } from "@shared/aftermath";
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { Textarea } from "@/components/ui/textarea";
 import { readCloseNote } from "@/lib/data";
 import { closeReadSummary } from "@shared/close-read";
@@ -328,6 +328,9 @@ export function TradeOutcomeFields(p: OutcomeFieldsProps) {
    * saw and the worst a short did; a form that says "fell to" on a short
    * has the sign backwards, and the sign is the whole question.
    */
+  /** The newest props, for work that finishes after a later render. */
+  const latest = useRef(p);
+  latest.current = p;
   const short = p.timing?.direction === "short";
   const hi = short ? "highest" : "lowest";
   const lo = short ? "lowest" : "highest";
@@ -335,6 +338,9 @@ export function TradeOutcomeFields(p: OutcomeFieldsProps) {
   async function readNote() {
     const text = (p.note ?? "").trim();
     if (!text || text === readOf || reading) return;
+    // What was picked when the read began, to tell afterwards what the person
+    // changed by hand while it ran — a pick made then wins over the read.
+    const before = { grades: p.grades, exitReason: p.exitReason, nmo: p.nmo };
     setReading(true);
     setReadFailed(false);
     p.onReading?.(true);
@@ -355,15 +361,23 @@ export function TradeOutcomeFields(p: OutcomeFieldsProps) {
       setAdjust(true);
       return;
     }
-    if (read.exitReason) p.setExitReason(read.exitReason);
-    p.setGrades({
-      entry: read.entryGrade ?? p.grades.entry,
-      stop: read.stopGrade ?? p.grades.stop,
-      exit: read.exitGrade ?? p.grades.exit,
+    /*
+     * Against the LATEST values. `p` here is the render this read started
+     * in, about a second ago; writing its grades back reverted anything
+     * picked while the read was running — which is exactly when "adjust"
+     * gets clicked.
+     */
+    const now = latest.current;
+    const kept = <T,>(was: T, is: T, read: T | null | undefined) => (is !== was ? is : (read ?? is));
+    if (read.exitReason && now.exitReason === before.exitReason) now.setExitReason(read.exitReason);
+    now.setGrades({
+      entry: kept(before.grades.entry, now.grades.entry, read.entryGrade),
+      stop: kept(before.grades.stop, now.grades.stop, read.stopGrade),
+      exit: kept(before.grades.exit, now.grades.exit, read.exitGrade),
     });
-    if (read.demonIds.length) p.setDemonIds(Array.from(new Set([...p.demonIds, ...read.demonIds])));
-    if (read.highlights.length) p.setHighlights(Array.from(new Set([...p.highlights, ...read.highlights])));
-    if (read.noManagementOutcome) p.setNmo(read.noManagementOutcome);
+    if (read.demonIds.length) now.setDemonIds(Array.from(new Set([...now.demonIds, ...read.demonIds])));
+    if (read.highlights.length) now.setHighlights(Array.from(new Set([...now.highlights, ...read.highlights])));
+    if (read.noManagementOutcome && now.nmo === before.nmo) now.setNmo(read.noManagementOutcome);
     const line = closeReadSummary(read, p.demons);
     setReadLine(line);
     if (!line) setAdjust(true);

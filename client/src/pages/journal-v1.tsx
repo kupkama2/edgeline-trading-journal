@@ -4,7 +4,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ChevronDown, ClipboardPaste, Eye, EyeOff } from "lucide-react";
-import { useTrades, useMistakeTags } from "@/lib/data";
+import { useAllTrades, useTrades, useMistakeTags } from "@/lib/data";
 import { filterByScope, useStyleFilter } from "@/lib/style-filter";
 import { type TradeWithTags } from "@shared/schema";
 import { computeMetrics } from "@shared/metrics";
@@ -175,9 +175,12 @@ export default function JournalV1() {
   const scoped = useMemo(() => filterByScope(trades ?? [], scope), [trades, scope]);
   // The day is the day: the guard and the tilt meter read every trade taken
   // today, tilt included, whichever book the rest of the page is showing.
+  // Every chapter: a fresh start mid-session must not reset today's loss
+  // stop or tilt lock — the guard is about the day, not the record.
+  const { data: everyTrade } = useAllTrades();
   const dayTrades = useMemo(
-    () => filterByScope(trades ?? [], { ...scope, book: "both" }),
-    [trades, scope],
+    () => filterByScope(everyTrade ?? [], { ...scope, book: "both" }),
+    [everyTrade, scope],
   );
   const pending = sortTrades(scoped.filter((t) => t.status === "pending"), sortBy);
   const open = sortTrades(scoped.filter((t) => t.status === "open"), sortBy);

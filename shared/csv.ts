@@ -187,7 +187,8 @@ const HEADER_PATTERNS: [RegExp, string][] = [
   [/^(qty|quantity|size|contracts|amount|volume|filled.?qty)$/, "size"],
   [/(entry|open|fill|avg).*(price|fill)|^price$/, "entryPrice"],
   [/(exit|close|closing).*(price)|^close$/, "exitPrice"],
-  [/(stop.?loss|initial.?stop|^stop$|sl)/, "initialStop"],
+  // "sl" whole, never as part of a word: "Slippage" is not the stop.
+  [/(stop.?loss|initial.?stop|^stop$|^sl$)/, "initialStop"],
   [/(take.?profit|target|^tp$)/, "initialTarget"],
   [/(entry|open|trade).*(time|date)|^(time|date|datetime|timestamp)$/, "entryTime"],
   [/(exit|close|closing).*(time|date)/, "exitTime"],
@@ -252,6 +253,13 @@ function toIso(raw: string | undefined): string | null {
   // string with a zone, a locale date — falls through to the Date parser.
   const venue = parseVenueTime(raw);
   if (venue) return venue;
+  // A bare date is a local DAY. new Date("2026-08-05") is UTC midnight,
+  // which west of Greenwich is the evening before. Noon is safely inside.
+  const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw.trim());
+  if (dateOnly) {
+    const d = new Date(Number(dateOnly[1]), Number(dateOnly[2]) - 1, Number(dateOnly[3]), 12);
+    return isNaN(d.getTime()) ? null : d.toISOString();
+  }
   const parsed = new Date(raw.trim());
   return isNaN(parsed.getTime()) ? null : parsed.toISOString();
 }

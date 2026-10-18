@@ -1,6 +1,7 @@
 import type { Express } from "express";
+import { loggableError } from "./errors";
 import type { Server } from "node:http";
-import { storageFor } from "./storage";
+import { accounts, storageFor } from "./storage";
 // Deliberately unscoped, and the one exception that proves the rule: the
 // allowlist is consulted before there is an account to scope to. It holds no
 // trade data, so the isolation guarantee is untouched.
@@ -41,6 +42,7 @@ import {
 } from "./hyperliquid";
 import { fetchCandlesAt, pairForTradeAt, readCandlesAt } from "./candles";
 import { syncHyperliquid } from "./hl-sync";
+import { oneAtATime } from "./venue-sync";
 import { freshStartRefusal } from "@shared/chapters";
 import { normalizeSetupRead } from "@shared/setup-read";
 import { syncBinance, verifyKey } from "./binance-account";
@@ -75,6 +77,7 @@ import {
   sizeUnitEnum,
   insertAccountBalanceSchema,
   insertChapterSchema,
+  updateUserPrefsSchema,
   updateChapterSchema,
 } from "@shared/schema";
 import { normalizeCloseRead } from "@shared/close-read";
@@ -90,6 +93,7 @@ import {
 } from "@shared/symbols";
 import {
   FILL_LOG_PROMPT,
+  HISTORY_PROMPT,
   ORDERS_PROMPT,
   ordersPrompt,
   RATIONALE_PROMPT,
@@ -822,9 +826,9 @@ export async function registerRoutes(
     if (!userId) return res.status(401).json({ message: "No account on request" });
     const only = typeof req.body?.account === "string" ? req.body.account : undefined;
     try {
-      res.json(await syncBinance(userId, only));
+      res.json(await oneAtATime(`sync:${userId}`, () => syncBinance(userId, only)));
     } catch (err: any) {
-      res.status(502).json({ message: String(err?.message ?? err) });
+      res.status(502).json({ message: loggableError(err) });
     }
   });
 
@@ -833,9 +837,9 @@ export async function registerRoutes(
     if (!userId) return res.status(401).json({ message: "No account on request" });
     const only = typeof req.body?.account === "string" ? req.body.account : undefined;
     try {
-      res.json(await syncHyperliquid(userId, only));
+      res.json(await oneAtATime(`sync:${userId}`, () => syncHyperliquid(userId, only)));
     } catch (err: any) {
-      res.status(502).json({ message: String(err?.message ?? err) });
+      res.status(502).json({ message: loggableError(err) });
     }
   });
 
@@ -857,6 +861,22 @@ export async function registerRoutes(
   app.delete("/api/account-balances/:id", async (req, res) => {
     await store(req).deleteAccountBalance(Number(req.params.id));
     res.status(204).end();
+  });
+
+  /* -------------------------------- prefs -------------------------------- */
+  /*
+   * The person's own settings. Read and written for the signed-in account
+   * only — there is no id in the path, so there is nobody else's to ask for.
+   */
+  app.get("/api/prefs", async (req, res) => {
+    res.json(await accounts.prefs(req.userId!));
+  });
+
+  app.patch("/api/prefs", async (req, res) => {
+    const parsed = updateUserPrefsSchema.safeParse(req.body);
+    if (!parsed.success)
+      return res.status(400).json({ message: "Invalid settings", issues: parsed.error.issues });
+    res.json(await accounts.setPrefs(req.userId!, parsed.data));
   });
 
   /* ------------------------------- chapters ------------------------------ */
@@ -1657,7 +1677,20 @@ export async function registerRoutes(
     const weekDate = weekStartInput
       ? startOfWeek(new Date(`${weekStartInput}T00:00:00`))
       : startOfWeek();
-    const key = weekStartKey(weekDate);
+    /*
+     * The person's own week, when the browser says where it starts and ends.
+     * This server's clock is UTC; theirs is not, and the review page files a
+     * trade by THEIR Monday. Accepted only as a well-formed window of about
+     * seven days (a DST week is an hour either way) on a yyyy-MM-dd key.
+     */
+    const from = typeof req.body?.from === "string" ? req.body.from : null;
+    const to = typeof req.body?.to === "string" ? req.body.to : null;
+    const span = from && to ? Date.parse(to) - Date.parse(from) : NaN;
+    const window =
+      weekStartInput && /^\d{4}-\d{2}-\d{2}$/.test(weekStartInput) && Math.abs(span - 7 * 86_400_000) <= 2 * 3_600_000
+        ? { from: new Date(from!).toISOString(), to: new Date(to!).toISOString(), key: weekStartInput }
+        : undefined;
+    const key = window?.key ?? weekStartKey(weekDate);
 
     const existing = (await store(req).listWeeklyReviews()).find(
       (r) => r.weekStart === key,
@@ -1671,7 +1704,7 @@ export async function registerRoutes(
       store(req).listMistakeTags(),
       store(req).listDailyNotes(),
     ]);
-    const bundle = buildInsightsBundle(trades, tags, weekDate, notes);
+    const bundle = buildInsightsBundle(trades, tags, weekDate, notes, window);
 
     // Without any writing there is nothing for this to read — per-trade
     // reflections and end-of-day reviews both count. Saying so beats spending
@@ -1752,7 +1785,9 @@ export async function registerRoutes(
               ? closeCardPrompt(context ?? {})
               : kind === "fills"
                 ? FILL_LOG_PROMPT
-                : outcomePrompt(context ?? {});
+                : kind === "history"
+                  ? HISTORY_PROMPT
+                  : outcomePrompt(context ?? {});
       const text = await callLLM(prompt, { mediaType, data });
       const json = extractJson(text);
 

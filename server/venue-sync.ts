@@ -105,6 +105,35 @@ export interface SyncSummary {
   message?: string;
 }
 
+/**
+ * The fees a venue trade paid, or null when any of them was paid in a coin
+ * rather than dollars — a known-wrong figure is worse than a blank.
+ */
+export const feesOf = (t: HlTrade): number | null => (Number.isFinite(t.fees) ? t.fees : null);
+
+/**
+ * One sync at a time per person.
+ *
+ * Writing is read-then-insert — find the trade by its venue id, else
+ * create it — so two syncs in flight together (two tabs, or a retry after
+ * a slow one) both found nothing and both inserted: two rows for one
+ * position. This server is a single process, so a queue per user is the
+ * whole lock; the second sync waits for the first and then finds
+ * everything it wrote.
+ */
+const running = new Map<string, Promise<unknown>>();
+export function oneAtATime<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const before = running.get(key) ?? Promise.resolve();
+  const mine = before.catch(() => {}).then(fn);
+  const tail = mine.catch(() => {});
+  running.set(key, tail);
+  // Forget the key once nothing is queued behind this one.
+  void tail.then(() => {
+    if (running.get(key) === tail) running.delete(key);
+  });
+  return mine;
+}
+
 /** What a venue-written trade looks like in the journal's own terms. */
 export function asInsert(
   t: HlTrade,
@@ -135,7 +164,7 @@ export function asInsert(
     // How it closed is not in the fills. "other" is the honest reading, and
     // the health panel lists it as an exit reason still to be given.
     exitReason: t.status === "closed" ? "other" : null,
-    fees: t.fees,
+    fees: feesOf(t),
     account,
     externalId: t.externalId,
   } as InsertTrade;
@@ -148,20 +177,28 @@ export function asInsert(
  */
 export function closingPatch(existing: TradeWithTags, t: HlTrade, levels: Levels): Partial<InsertTrade> | null {
   const patch: Record<string, unknown> = {};
+  /*
+   * A trade the person logged and the sync later claimed keeps THEIR entry
+   * and size — they are what the claim matched on, and the entry is half of
+   * 1R. Only a trade the sync created follows the fills.
+   */
+  const followsFills = !existing.claimedAt;
   if (existing.status === "open" && t.status === "closed") {
     patch.status = "closed";
     patch.exitPrice = t.exitPrice;
     patch.exitTime = t.exitTime != null ? new Date(t.exitTime).toISOString() : null;
     patch.exitReason = existing.exitReason ?? "other";
-    patch.fees = t.fees;
+    if (followsFills || existing.fees == null) patch.fees = feesOf(t);
     // An add while open moves the average entry; the record follows the fills.
-    patch.size = t.size;
-    patch.entryPrice = t.entryPrice;
-  } else if (existing.status === "open" && t.status === "open") {
+    if (followsFills) {
+      patch.size = t.size;
+      patch.entryPrice = t.entryPrice;
+    }
+  } else if (existing.status === "open" && t.status === "open" && followsFills) {
     if (Math.abs(existing.size - t.size) > 1e-9) {
       patch.size = t.size;
       patch.entryPrice = t.entryPrice;
-      patch.fees = t.fees;
+      patch.fees = feesOf(t);
     }
   }
   if (existing.initialStop == null && levels.initialStop != null) patch.initialStop = levels.initialStop;
@@ -185,8 +222,8 @@ export function claimPatch(
   levels: Levels,
   pricePair: string | null = null,
 ): Partial<InsertTrade> {
-  const patch: Record<string, unknown> = { externalId: t.externalId };
-  if (existing.fees == null) patch.fees = t.fees;
+  const patch: Record<string, unknown> = { externalId: t.externalId, claimedAt: new Date().toISOString() };
+  if (existing.fees == null) patch.fees = feesOf(t);
   // A hand-logged WTIOIL had no way of saying which book it was on; the
   // venue just said. Only where nothing was chosen by hand already.
   if (!existing.pricePair && pricePair) patch.pricePair = pricePair;

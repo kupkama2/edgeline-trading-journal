@@ -140,6 +140,9 @@ function palette(host: HTMLElement) {
 const digitsFor = (p: number) =>
   p >= 1000 ? 2 : p >= 100 ? 3 : p >= 1 ? 4 : p >= 0.01 ? 6 : 8;
 
+/** Pixels a press must travel before it is a drag rather than a click. */
+const DRAG_SLOP = 3;
+
 export function TradeChart({
   trade,
   draft,
@@ -389,8 +392,10 @@ function Candles({
   const dragRef = useRef<{
     field: LevelField;
     line: IPriceLine | null;
-    /** Set by the first move, so a press-and-release writes nothing. */
+    /** Set once the pointer has travelled DRAG_SLOP, so a press-and-release writes nothing. */
     moved: boolean;
+    /** Where the press began, to tell a drag from a hand that is not quite still. */
+    startY: number;
   } | null>(null);
   /** Whether panning is currently given up in favour of a handle. */
   const armedRef = useRef(false);
@@ -423,9 +428,15 @@ function Candles({
    * draw a chart that is simply wrong. Declared before the drawing effect so
    * it runs first on the commit where both change.
    */
+  /** Bumped with every new set of bars, so a page fetched for the old one is dropped. */
+  const generationRef = useRef(0);
   useEffect(() => {
     olderRef.current = [];
     exhaustedRef.current = false;
+    generationRef.current += 1;
+    // A fetch still in flight belongs to the old timeframe; it must not hold
+    // the loader shut for the new one either.
+    loadingRef.current = false;
   }, [tradeId, interval]);
 
   /** Everything drawn: pages scrolled into, then the trade's own window. */
@@ -446,8 +457,12 @@ function Candles({
     const drawn = bars();
     if (drawn.length === 0) return;
     loadingRef.current = true;
+    const generation = generationRef.current;
     try {
       const page = await fetchCandlePage(tradeId, interval, drawn[0].t - 1);
+      // The timeframe (or the trade) changed while this was in flight:
+      // prepending it would draw the old bars over the new series.
+      if (generation !== generationRef.current) return;
       const older = (page.candles ?? []).filter((k) => k.t < drawn[0].t);
       if (older.length === 0) {
         exhaustedRef.current = true;
@@ -462,7 +477,7 @@ function Candles({
       // A failed page is a page you can ask for again by scrolling; there is
       // nothing to say and nothing to undo.
     } finally {
-      loadingRef.current = false;
+      if (generation === generationRef.current) loadingRef.current = false;
     }
   }
 
@@ -746,7 +761,7 @@ function Candles({
           if (!hit || y == null) return;
           e.preventDefault();
           const a = api.current;
-          dragRef.current = { field: hit.field, line: a?.lines[hit.index] ?? null, moved: false };
+          dragRef.current = { field: hit.field, line: a?.lines[hit.index] ?? null, moved: false, startY: y };
           e.currentTarget.setPointerCapture(e.pointerId);
           /* Nothing is reported yet. The price under a pointer NEAR a line is
              not that line's price, so emitting here would let a stray click
@@ -758,6 +773,10 @@ function Candles({
           const drag = dragRef.current;
           if (!drag) return armFor(y);
           if (y == null) return;
+          /* A few pixels of jitter, or a touch landing, is not a drag. Any
+             pointermove used to count, so a click could still save a stop
+             snapped to wherever the pointer twitched. */
+          if (!drag.moved && Math.abs(y - drag.startY) < DRAG_SLOP) return;
           const price = priceAt(y);
           if (price == null) return;
           /* Moved here as well as through the caller: a parent that only

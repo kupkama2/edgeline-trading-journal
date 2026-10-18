@@ -23,7 +23,8 @@ import { useRoute } from "wouter";
 import { BarChart3, Repeat } from "lucide-react";
 import { StyleSwitcher } from "@/components/style-switcher";
 import { DenomToggle } from "@/lib/denom";
-import { ChapterSwitch } from "@/lib/chapters";
+import { CURRENT, ChapterSwitch, useChapters } from "@/lib/chapters";
+import { ReviewGate, useReviewPressure } from "@/components/review-debt";
 import { useStyleScopedTrades } from "@/lib/style-filter";
 import { useTrades } from "@/lib/data";
 import { closedTrades } from "@shared/breakdowns";
@@ -74,6 +75,23 @@ export default function Stats() {
   const { data: trades = [] } = useTrades();
   const scoped = useStyleScopedTrades(trades);
   const n = closedTrades(scoped).length;
+  const review = useReviewPressure();
+  /*
+   * An older chapter is something looked at HERE. Leaving the page puts the
+   * journal back on the current one; otherwise the list, the calendar, and
+   * the loss and tilt guards all went on reading last quarter.
+   */
+  const { setView } = useChapters();
+  useEffect(() => () => setView(CURRENT), [setView]);
+
+  if (review.shut) {
+    return (
+      <div className="space-y-5">
+        <h1 className="text-xl font-bold tracking-tight">Stats</h1>
+        <ReviewGate pressure={review} what="The stats" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-5">

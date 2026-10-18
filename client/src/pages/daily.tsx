@@ -14,6 +14,7 @@ import {
   Loader2,
 } from "lucide-react";
 import { useDailyNotes, useSaveDailyNote, useTrades } from "@/lib/data";
+import { apiUrl, queryClient } from "@/lib/queryClient";
 import { useStyleScopedTrades } from "@/lib/style-filter";
 import { takeJumpDay } from "@/lib/jump";
 import { useLocation } from "wouter";
@@ -95,15 +96,46 @@ export default function Daily() {
   // Debounced autosave: the note should survive a tab close without a save
   // button, but not cost a write per keystroke.
   const timer = useRef<ReturnType<typeof setTimeout>>();
+  /** The write still waiting on the debounce, so leaving can send it instead of dropping it. */
+  const pending = useRef<{ day: string; body: string } | null>(null);
   function onType(next: string) {
     setDraft(next);
     setDirty(true);
     clearTimeout(timer.current);
+    pending.current = { day: selected, body: next };
     timer.current = setTimeout(() => {
+      pending.current = null;
       save.mutate({ day: selected, body: next }, { onSuccess: () => setDirty(false) });
     }, 800);
   }
-  useEffect(() => () => clearTimeout(timer.current), []);
+  /*
+   * Leaving with a save still waiting sends it now. Cancelling the timer on
+   * the way out threw away whatever was typed in the last 800ms — the end of
+   * the sentence, as a rule. On a tab close the request is sent `keepalive`
+   * so the browser finishes it after the page is gone.
+   */
+  useEffect(() => {
+    const flush = () => {
+      const p = pending.current;
+      if (!p) return;
+      pending.current = null;
+      clearTimeout(timer.current);
+      void fetch(apiUrl(`/api/daily-notes/${p.day}`), {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ body: p.body }),
+        credentials: "include",
+        keepalive: true,
+      })
+        .then(() => queryClient.invalidateQueries({ queryKey: ["/api/daily-notes"] }))
+        .catch(() => {});
+    };
+    window.addEventListener("pagehide", flush);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      flush();
+    };
+  }, []);
 
   function stampTime() {
     const now = new Date().toLocaleTimeString(undefined, {

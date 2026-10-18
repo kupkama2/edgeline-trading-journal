@@ -69,6 +69,23 @@ describe("parseImport", () => {
     expect(btc.warnings.join(" ")).toMatch(/no stop or target/i);
   });
 
+  it("does not read a closing order as a new entry", () => {
+    // "Close Long" contains "long"; it is a take-profit on a held position.
+    const r = parseImport(
+      [
+        "2026-08-05 21:30:51\tBTCUSDT Perp\tLimit\tClose Long\t70,000.00\t1,000.00 USDT\t0.00 USDT\tYes",
+        "2026-08-05 21:31:00\tETHUSDT Perp\tLimit\tSell\t3,000.00\t500.00 USDT\t0.00 USDT\tYes",
+        "2026-08-05 12:55:01\tHYPEUSDT Perp\tLimit\tOpen Long\t53.84200\t4,655.18 USDT\t0.00 USDT\tNo",
+      ].join("\n"),
+    );
+    expect(r.candidates.map((c) => c.symbol)).toEqual(["HYPEUSDT"]);
+  });
+
+  it("reads the amount in the unit it is printed in", () => {
+    const r = parseImport("2026-08-05 21:30:51\tBTCUSDT Perp\tLimit\tOpen Long\t65,000.00\t0.010 BTC\t0 BTC\tNo");
+    expect(r.candidates[0]).toMatchObject({ size: 0.01, sizeUnit: "base" });
+  });
+
   it("reads the OTOCO dialog as one order with both legs", () => {
     const r = parseImport(OTOCO);
     expect(r.candidates).toHaveLength(1);

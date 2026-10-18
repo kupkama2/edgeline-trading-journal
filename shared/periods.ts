@@ -11,6 +11,7 @@
  * calendar and the equity curve already use, so no two surfaces can disagree
  * about which period a result belongs to.
  */
+import { dayKey } from "./daily";
 import type { TradeWithTags } from "./schema";
 import { summarizeDays } from "./daily";
 
@@ -36,7 +37,8 @@ export interface PeriodBucket {
 export function mondayOf(day: string): string {
   const d = new Date(`${day}T12:00:00`);
   d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
-  return d.toISOString().slice(0, 10);
+  // The local date. toISOString() is UTC, which east of +12 is the Sunday.
+  return dayKey(d);
 }
 
 function isoWeekLabel(monday: string): string {

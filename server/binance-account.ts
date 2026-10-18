@@ -15,6 +15,7 @@
  * In production the futures host is fapi.binance.com, which answers 451 to a
  * US IP: the service is deployed in Frankfurt for exactly this (render.yaml).
  */
+import { loggableError } from "./errors";
 import { createHmac } from "node:crypto";
 import { fetch as undiciFetch } from "undici";
 import {
@@ -38,14 +39,57 @@ import { open } from "./secrets";
 import { storageFor } from "./storage";
 import { emptySync, writeVenueTrades, type AccountSync, type SyncSummary } from "./venue-sync";
 
-const SPOT = (process.env.BINANCE_BASE || "https://api.binance.com").replace(/\/+$/, "");
+/*
+ * The key's permissions are asked of the SPOT host's /sapi API, which is a
+ * different service from market data. BINANCE_BASE may point the market
+ * reads at a mirror (data-api.binance.vision), which has no /sapi at all, so
+ * the account host is its own setting and defaults to the real one.
+ */
+const SAPI = (process.env.BINANCE_SAPI_BASE || process.env.BINANCE_BASE || "https://api.binance.com").replace(/\/+$/, "");
 const FUTURES = (process.env.BINANCE_FUTURES_BASE || "https://fapi.binance.com").replace(/\/+$/, "");
 
-/** How far back the first sync reads closed positions. Open ones are read regardless. */
-const LOOKBACK_MS = 90 * 24 * 60 * 60 * 1000;
-/** A thousand fills a page; thirty pages a symbol before it is called too much for one sync. */
+const DAY_MS = 24 * 60 * 60 * 1000;
+/** How far back a sync reads positions that have closed. */
+const LOOKBACK_MS = 90 * DAY_MS;
+/**
+ * How far back it reads a symbol with a position open NOW — further, because
+ * the entry of a long-held position is the fill most worth having, and
+ * Binance keeps about six months of a symbol's fills.
+ */
+const OPEN_LOOKBACK_MS = 180 * DAY_MS;
+/** Binance caps a time-filtered userTrades or income query at seven days. */
+const WINDOW_MS = 7 * DAY_MS;
+/** Below this, a window that still comes back full is split no further. */
+const MIN_WINDOW_MS = 60 * 60 * 1000;
 const PAGE = 1000;
-const MAX_PAGES = 30;
+
+/**
+ * A refusal from the venue, with Binance's own code kept: "-2015" or a 429
+ * is a diagnosis the sync acts on, not just text to print.
+ */
+export class BinanceError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code: number | null,
+  ) {
+    super(message);
+  }
+  /** Binance is limiting this server's IP; asking again now makes it worse. */
+  get rateLimited() {
+    return this.status === 429 || this.status === 418;
+  }
+}
+
+/** What a known code means for the person reading it. */
+function adviceFor(code: number | null, path: string): string {
+  if (code === -2015)
+    return path.startsWith("/fapi")
+      ? " The key was refused by the futures API. A key made before the futures account was opened cannot read it — make a new read-only key. If the key is limited to trusted IPs, the server's IP must be on its list."
+      : " If the key is limited to trusted IPs, the server's IP must be on its list.";
+  if (code === -1021) return " The server's clock and Binance's disagree; try again in a minute.";
+  return "";
+}
 
 export interface Creds {
   key: string;
@@ -69,13 +113,19 @@ async function signedGet(base: string, path: string, params: Record<string, stri
       // The venue's own message is the useful part: "-2015 Invalid API-key,
       // IP, or permissions" is a diagnosis, "401" is a shrug.
       let said = "";
+      let code: number | null = null;
       try {
         const j: any = await res.json();
         said = j?.msg ? ` — ${String(j.msg)}` : "";
+        code = typeof j?.code === "number" ? j.code : null;
       } catch {
         /* no body worth reading */
       }
-      throw new Error(`${host} → HTTP ${res.status} on ${path}${said}`);
+      throw new BinanceError(
+        `${host} → HTTP ${res.status} on ${path}${code != null ? ` (${code})` : ""}${said}.${adviceFor(code, path)}`,
+        res.status,
+        code,
+      );
     }
     try {
       return await res.json();
@@ -98,7 +148,7 @@ async function signedGet(base: string, path: string, params: Record<string, stri
  * which host would not answer so the fix is obvious.
  */
 export async function fetchRestrictions(creds: Creds): Promise<KeyRestrictions> {
-  return parseRestrictions(await signedGet(SPOT, "/sapi/v1/account/apiRestrictions", {}, creds));
+  return parseRestrictions(await signedGet(SAPI, "/sapi/v1/account/apiRestrictions", {}, creds));
 }
 
 export async function verifyKey(creds: Creds): Promise<{ ok: true; restrictions: KeyRestrictions } | { ok: false; reason: string }> {
@@ -122,47 +172,88 @@ export async function fetchOpenOrders(creds: Creds) {
   return parseOpenOrders(await signedGet(FUTURES, "/fapi/v1/openOrders", {}, creds));
 }
 
+/** [from, to) cut into consecutive windows no longer than Binance allows. */
+export function windows(from: number, to: number, size = WINDOW_MS): [number, number][] {
+  const out: [number, number][] = [];
+  for (let a = from; a < to; a += size) out.push([a, Math.min(a + size, to) - 1]);
+  return out;
+}
+
+/**
+ * Every row a time-filtered endpoint holds for [start, end], however many.
+ *
+ * Asked in explicit windows, because a query with only a start time is not
+ * documented to reach past seven days, and a first page from three months
+ * ago that comes back short would end the read with eleven weeks unseen. A
+ * window that comes back FULL is split in half and each half asked again —
+ * which does not depend on which thousand of the window's rows the venue
+ * chose to return, oldest or newest.
+ */
+async function readWindow<T>(
+  ask: (start: number, end: number) => Promise<T[]>,
+  start: number,
+  end: number,
+): Promise<{ rows: T[]; truncated: boolean }> {
+  const got = await ask(start, end);
+  if (got.length < PAGE) return { rows: got, truncated: false };
+  if (end - start <= MIN_WINDOW_MS) return { rows: got, truncated: true };
+  const mid = start + Math.floor((end - start) / 2);
+  const a = await readWindow(ask, start, mid);
+  const b = await readWindow(ask, mid + 1, end);
+  return { rows: [...a.rows, ...b.rows], truncated: a.truncated || b.truncated };
+}
+
 /** Symbols that realised a P&L inside the lookback — the closed trades to go and read. */
-export async function fetchClosedSymbols(creds: Creds, since: number): Promise<string[]> {
+export async function fetchClosedSymbols(creds: Creds, since: number, now = Date.now()): Promise<string[]> {
   const seen = new Set<string>();
-  let start = since;
-  for (let page = 0; page < MAX_PAGES; page++) {
-    const rows: any = await signedGet(
-      FUTURES,
-      "/fapi/v1/income",
-      { incomeType: "REALIZED_PNL", startTime: start, limit: PAGE },
-      creds,
+  for (const [start, end] of windows(since, now)) {
+    const { rows } = await readWindow(
+      async (a, b) => {
+        const got: any = await signedGet(
+          FUTURES,
+          "/fapi/v1/income",
+          { incomeType: "REALIZED_PNL", startTime: a, endTime: b, limit: PAGE },
+          creds,
+        );
+        return Array.isArray(got) ? got : [];
+      },
+      start,
+      end,
     );
     for (const s of symbolsFromIncome(rows)) seen.add(s);
-    if (!Array.isArray(rows) || rows.length < PAGE) break;
-    const last = Number(rows[rows.length - 1]?.time);
-    if (!Number.isFinite(last) || last <= start) break;
-    start = last + 1;
   }
   return Array.from(seen);
 }
 
 /**
- * Every fill on one symbol, walked forward by id.
+ * Every fill on one symbol since `since`, in seven-day windows.
  *
- * Forward from the first id rather than back from now, because fromId is the
- * one way to page userTrades without the seven-day window the time filters
- * impose. The cost is that a symbol with more history than MAX_PAGES holds is
- * read from the beginning and cut short of the present — and a window that
- * does not reach the present cannot be reconciled with the venue's open
- * position, so the symbol is set aside rather than half-written. `truncated`
- * says so, so the sync can report it instead of swallowing it.
+ * `truncated` is a window so busy that even an hour of it holds more than a
+ * page; that symbol's record has a hole in it, and a record with a hole
+ * cannot be reconciled with the venue's open position, so the sync sets it
+ * aside and says so rather than writing half of it.
  */
-export async function fetchUserTrades(creds: Creds, symbol: string): Promise<{ rows: BinanceUserTrade[]; truncated: boolean }> {
-  const rows: BinanceUserTrade[] = [];
-  let fromId = 1;
-  for (let page = 0; page < MAX_PAGES; page++) {
-    const got = parseUserTrades(await signedGet(FUTURES, "/fapi/v1/userTrades", { symbol, fromId, limit: PAGE }, creds));
-    rows.push(...got);
-    if (got.length < PAGE) return { rows, truncated: false };
-    fromId = got[got.length - 1].id + 1;
+export async function fetchUserTrades(
+  creds: Creds,
+  symbol: string,
+  since: number,
+  now = Date.now(),
+): Promise<{ rows: BinanceUserTrade[]; truncated: boolean }> {
+  const byId = new Map<number, BinanceUserTrade>();
+  let truncated = false;
+  for (const [start, end] of windows(since, now)) {
+    const got = await readWindow(
+      async (a, b) =>
+        parseUserTrades(
+          await signedGet(FUTURES, "/fapi/v1/userTrades", { symbol, startTime: a, endTime: b, limit: PAGE }, creds),
+        ),
+      start,
+      end,
+    );
+    truncated ||= got.truncated;
+    for (const r of got.rows) byId.set(r.id, r);
   }
-  return { rows, truncated: true };
+  return { rows: Array.from(byId.values()).sort((a, b) => a.time - b.time || a.id - b.id), truncated };
 }
 
 /* ------------------------------ the sync ------------------------------ */
@@ -203,22 +294,45 @@ export async function syncBinance(userId: number, onlyAccount?: string): Promise
       const creds: Creds = { key: acct.binanceKey!, secret };
       row.source = `…${acct.binanceKey!.slice(-4)}`;
 
+      const now = Date.now();
       const positions = await fetchPositions(creds);
-      const closedSymbols = await fetchClosedSymbols(creds, Date.now() - LOOKBACK_MS);
+      const closedSymbols = await fetchClosedSymbols(creds, now - LOOKBACK_MS, now);
       const openSymbols = Array.from(positions.entries())
         .filter(([, p]) => Math.abs(p.amt) > 1e-9)
         .map(([s]) => s);
       const symbols = Array.from(new Set([...closedSymbols, ...openSymbols]));
+      const isOpen = new Set(openSymbols);
 
+      /*
+       * One symbol at a time, each on its own. A symbol the venue will not
+       * answer for — delisted inside the window, renamed, settled — is
+       * skipped and named, and the rest are still read: one bad market
+       * used to cost the whole account its sync. Being rate-limited is
+       * different: every later request would be refused too, and asking
+       * again makes the ban longer, so the read stops there and what was
+       * read in full is still written.
+       */
       const allRows: BinanceUserTrade[] = [];
       const truncated: string[] = [];
+      const skipped: string[] = [];
+      let limited = false;
       for (const symbol of symbols) {
-        const { rows, truncated: cut } = await fetchUserTrades(creds, symbol);
-        if (cut) {
-          truncated.push(symbol);
+        if (limited) {
+          skipped.push(symbol);
           continue;
         }
-        allRows.push(...rows);
+        try {
+          const since = now - (isOpen.has(symbol) ? OPEN_LOOKBACK_MS : LOOKBACK_MS);
+          const { rows, truncated: cut } = await fetchUserTrades(creds, symbol, since, now);
+          if (cut) {
+            truncated.push(symbol);
+            continue;
+          }
+          allRows.push(...rows);
+        } catch (err: any) {
+          if (err instanceof BinanceError && err.rateLimited) limited = true;
+          skipped.push(symbol);
+        }
       }
       row.fills = allRows.length;
 
@@ -232,9 +346,15 @@ export async function syncBinance(userId: number, onlyAccount?: string): Promise
         read,
         unreconstructable.map((u) => ({ coin: u.symbol, fills: u.fills })),
       );
-      if (truncated.length) {
-        row.error = `More history than one sync reads on ${truncated.join(", ")} — those were left alone.`;
-      }
+      const problems: string[] = [];
+      if (limited)
+        problems.push(`Binance is rate-limiting this server, so the read stopped early — sync again in a few minutes for ${skipped.join(", ")}.`);
+      else if (skipped.length) problems.push(`Binance would not answer for ${skipped.join(", ")}, so those were skipped.`);
+      if (truncated.length) problems.push(`Too many fills in an hour to read whole on ${truncated.join(", ")} — those were left alone.`);
+      const hedged = unreconstructable.filter((u) => u.reason === "hedge-mode").map((u) => u.symbol);
+      if (hedged.length)
+        problems.push(`${hedged.join(", ")} ${hedged.length === 1 ? "was" : "were"} traded in hedge mode, which the sync cannot read as single positions — log those by hand.`);
+      if (problems.length) row.error = problems.join(" ");
 
       const orders = await fetchOpenOrders(creds).catch(() => []);
       await writeVenueTrades(store, row, read.trades, {
@@ -242,7 +362,7 @@ export async function syncBinance(userId: number, onlyAccount?: string): Promise
         levelsFor: (t) => levelsFromOpenOrders(t, orders),
       });
     } catch (err: any) {
-      row.error = String(err?.message ?? err);
+      row.error = loggableError(err);
     }
     out.push(row);
   }

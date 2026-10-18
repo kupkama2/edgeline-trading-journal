@@ -292,18 +292,30 @@ export function closeFromCard(
    * through a card for an entirely different instrument on exactly the
    * tickers where a mix-up is easiest.
    */
+  /*
+   * A card for another instrument, or the other side, is another trade's
+   * close. It used to be a warning beside an exit that was applied anyway —
+   * an ETH card at 3,500 filled the exit of a BTC trade.
+   */
+  let mismatch = false;
   if (card.symbol) {
-    const onCard = card.symbol.replace(/[^A-Z0-9]/g, "");
-    const mine = trade.symbol.toUpperCase().replace(/[^A-Z0-9]/g, "");
+    const clean = (x: string) => x.toUpperCase().replace(/[^A-Z0-9]/g, "");
+    const onCard = clean(card.symbol);
+    const mine = clean(trade.symbol);
+    const contract = clean((trade as any).contract ?? "");
     const base = QUOTES.reduce(
       (s, q) => (s.length > q.length && s.endsWith(q) ? s.slice(0, -q.length) : s),
       onCard,
     );
-    if (base !== mine) warnings.push(`The card is ${card.symbol}, this trade is ${trade.symbol}.`);
+    if (base !== mine && onCard !== mine && (!contract || onCard !== contract)) {
+      mismatch = true;
+      warnings.push(`The card is ${card.symbol}, this trade is ${trade.symbol} — not applied.`);
+    }
   }
 
   if (card.direction && card.direction !== trade.direction) {
-    warnings.push(`The card is a ${card.direction}, this trade is a ${trade.direction}.`);
+    mismatch = true;
+    warnings.push(`The card is a ${card.direction}, this trade is a ${trade.direction} — not applied.`);
   }
 
   if (card.isClosed === false) {
@@ -361,7 +373,13 @@ export function closeFromCard(
     (card.fills.some((f) => f.fee != null)
       ? card.fills.reduce((n, f) => n + Math.abs(f.fee ?? 0), 0)
       : null);
-  if (feeOnCard != null && feeOnCard > 0) {
+  // A fee printed in a coin (BNB, most often) is not a dollar figure; booking
+  // 0.0021 BNB as $0.0021 understates it several hundredfold.
+  const dollarFee = !card.feeCurrency || /^(USDT|USDC|USD|BUSD|FDUSD|BNFCR|\$)$/i.test(card.feeCurrency.trim());
+  if (feeOnCard != null && feeOnCard > 0 && !dollarFee) {
+    warnings.push(`The card's fee is in ${card.feeCurrency}, not dollars — add it in dollars by hand.`);
+  }
+  if (feeOnCard != null && feeOnCard > 0 && dollarFee) {
     const already = trade.fees ?? null;
     if (already == null || already === 0) apply.fees = Math.abs(feeOnCard);
     else if (Math.abs(Math.abs(feeOnCard) - already) / Math.max(already, 1e-9) > 0.05) {
@@ -403,7 +421,7 @@ export function closeFromCard(
   return {
     apply,
     warnings,
-    usable: apply.exitPrice != null,
+    usable: apply.exitPrice != null && !mismatch,
     partials: spreadFills(card.fills),
     fillsSeen: card.fills.length,
     fills: card.fills.filter((f) => f.price != null && (f.size ?? 0) > 0),

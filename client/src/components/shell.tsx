@@ -13,6 +13,7 @@ import {
 import { XpChip, XpToaster } from "@/components/xp";
 import { useLayout, type LayoutVersion } from "@/lib/layout";
 import { usePublicMode } from "@/lib/public-mode";
+import { ReviewTabBadge } from "@/components/review-debt";
 import { CURRENT, spanLabel, spanRange, useChapters } from "@/lib/chapters";
 import { AccountMenu } from "@/components/account-menu";
 import {
@@ -40,8 +41,18 @@ export type ThemeId = (typeof THEMES)[number]["id"];
 
 const THEME_KEY = "edgeline.theme";
 
+/*
+ * Guarded: this provider sits outside everything, so a browser that blocks
+ * storage (a private window, strict site settings) threw here and took the
+ * whole app down for the sake of a colour preference.
+ */
 function storedTheme(): ThemeId {
-  const raw = localStorage.getItem(THEME_KEY);
+  let raw: string | null = null;
+  try {
+    raw = localStorage.getItem(THEME_KEY);
+  } catch {
+    raw = null;
+  }
   return THEMES.some((t) => t.id === raw) ? (raw as ThemeId) : "ember";
 }
 
@@ -63,7 +74,11 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     root.classList.add("theme-anim");
     root.classList.toggle("dark", def.dark);
     root.dataset.theme = theme;
-    localStorage.setItem(THEME_KEY, theme);
+    try {
+      localStorage.setItem(THEME_KEY, theme);
+    } catch {
+      /* not remembered; still applied */
+    }
     const t = setTimeout(() => root.classList.remove("theme-anim"), 300);
     return () => clearTimeout(t);
   }, [theme]);
@@ -266,7 +281,10 @@ export function Shell({ children }: { children: React.ReactNode }) {
               // /daily still resolves to the same page, so it must still
               // light the tab that replaced it.
               const active =
-                location === href || (href === "/calendar" && location === "/daily");
+                location === href ||
+                (href === "/calendar" && location === "/daily") ||
+                // A day's or a week's review is still the Review tab.
+                (href === "/review" && location.startsWith("/review/"));
               return (
                 <Link
                   key={href}
@@ -280,6 +298,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
                 >
                   <Icon className="h-3.5 w-3.5" />
                   <span className="hidden sm:inline">{label}</span>
+                  {href === "/review" && <ReviewTabBadge />}
                 </Link>
               );
             })}

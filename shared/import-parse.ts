@@ -76,6 +76,19 @@ export function parseNum(raw: string | undefined | null): number | null {
  * the local clock, and a paste read as UTC would put an evening scalp on the
  * wrong day and in the wrong session for anyone west of Greenwich.
  */
+/**
+ * A time from a screenshot read as an instant. The reader reports times the
+ * way the venue printed them — wall clock, usually no zone — and a string
+ * like that stored bare is read as UTC by the server, which shifts candle
+ * windows and sorts it among real instants wrongly. A string with no zone
+ * is this browser's local time; one with a zone keeps it.
+ */
+export function toInstant(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const d = new Date(raw.trim().replace(" ", "T"));
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
+
 export function parseVenueTime(raw: string | undefined | null): string | null {
   if (!raw) return null;
   const m = /(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/.exec(raw);
@@ -199,22 +212,38 @@ function parseBinanceRow(cols: string[], raw: string): ImportCandidate | null {
   const time = parseVenueTime(cols[0]);
   if (!time) return null;
 
+  /*
+   * A CLOSING order is not a trade that could open. "Close Long" contains
+   * "long", so it used to come back as a new long entry at its take-profit
+   * price; and a reduce-only row is the same thing said another way.
+   */
+  if (/\bclose\b/i.test(cols[3] ?? "") || /^\s*yes\s*$/i.test(cols[7] ?? "")) return null;
   const direction = directionFrom(cols[3] ?? "");
   const entryPrice = parseNum(cols[4]);
   if (!direction || entryPrice == null) return null;
 
-  // Binance reports the order in quote notional ("37,177.47 USDT"), which is
-  // how the position was actually sized — so it is kept verbatim.
-  const notional = parseNum(cols[5]);
+  /*
+   * The Amount column says its own unit. Usually it is quote notional
+   * ("37,177.47 USDT"), which is how the position was sized; but Binance can
+   * show it in the coin ("0.010 BTC"), and taking that as dollars made a
+   * position a thousand times too small. A bare number is read as quote,
+   * Binance's default, with a warning.
+   */
+  const amountText = cols[5] ?? "";
+  const notional = parseNum(amountText);
+  const unitWord = (amountText.match(/[A-Za-z]{2,}/)?.[0] ?? "").toUpperCase();
+  const quoteUnits = ["USDT", "USDC", "USD", "BUSD", "FDUSD", "BNFCR"];
+  const sizeUnit: "base" | "quote" = unitWord && !quoteUnits.includes(unitWord) ? "base" : "quote";
   const warnings: string[] = [
     "No stop or target in this view — add them when it fills.",
+    ...(unitWord ? [] : ["The amount had no unit — read as USDT notional; check the size."]),
   ];
 
   return {
     symbol: cleanSymbol(cols[1] ?? ""),
     direction,
     size: notional,
-    sizeUnit: "quote",
+    sizeUnit,
     entryPrice,
     initialStop: null,
     initialTarget: null,

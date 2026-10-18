@@ -2,6 +2,7 @@ import "dotenv/config";
 import express, { Response, NextFunction } from 'express';
 import type { Request } from 'express';
 import { registerRoutes } from "./routes";
+import { loggableError } from "./errors";
 import { setupAuth, setupAuthStub } from "./auth";
 import { serveStatic } from "./static";
 import { createServer } from "node:http";
@@ -37,31 +38,22 @@ export function log(message: string, source = "express") {
   console.log(`${formattedTime} [${source}] ${message}`);
 }
 
+/*
+ * One line per API request: method, path, status, time. The response body
+ * used to be appended in full — every trade, note and member email on each
+ * refetch, and image payloads megabytes at a time — which cost a second
+ * serialisation per request and kept the journal's contents in the host's
+ * logs, where nobody had agreed to keep them.
+ */
 app.use((req, res, next) => {
   const start = Date.now();
   const path = req.path;
-  let capturedJsonResponse: Record<string, any> | undefined = undefined;
-
-  const originalResJson = res.json;
-  res.json = function (bodyJson, ...args) {
-    capturedJsonResponse = bodyJson;
-    return originalResJson.apply(res, [bodyJson, ...args]);
-  };
-
   res.on("finish", () => {
-    const duration = Date.now() - start;
-    if (path.startsWith("/api")) {
-      let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
-      if (capturedJsonResponse) {
-        logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
-      }
-
-      log(logLine);
-    }
+    if (path.startsWith("/api")) log(`${req.method} ${path} ${res.statusCode} in ${Date.now() - start}ms`);
   });
-
   next();
 });
+
 
 (async () => {
   // Tables must exist before any route can serve a query.
@@ -75,11 +67,17 @@ app.use((req, res, next) => {
 
   await registerRoutes(httpServer, app);
 
-  app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
+  app.use((err: any, req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
-    const message = err.message || "Internal Server Error";
-
-    console.error("Internal Server Error:", err);
+    /*
+     * A 4xx thrown on purpose (a body too large, a malformed one) means its
+     * message for the person who sent it. A 5xx is this server's failure,
+     * and its message is whatever broke — for a database error, the query
+     * and its parameters — so the browser gets a sentence and the log gets
+     * the detail, with the parameters cut.
+     */
+    const message = status < 500 ? err.message || "Bad request" : "Something went wrong on the server — try again.";
+    console.error(`${req.method} ${req.path} failed:`, loggableError(err));
 
     if (res.headersSent) {
       return next(err);

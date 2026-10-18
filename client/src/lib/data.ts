@@ -82,8 +82,11 @@ export function useCheckOutcomes() {
   return useMutation({
     mutationFn: async () => (await apiRequest("POST", "/api/outcomes/check", {})).json(),
     onSuccess: (res: any) => {
-      // Only disturb the cache when something actually changed.
-      if (res?.resolved?.length) invalidateTrades();
+      // Only disturb the cache when something actually changed — which includes
+      // excursions measured and funding filled in, not only outcomes settled.
+      // Otherwise they stayed invisible until a reload, and an editor left
+      // open could write the stale blanks back.
+      if (res?.resolved?.length || res?.measured?.length || res?.funded?.length) invalidateTrades();
     },
   });
 }
@@ -507,7 +510,12 @@ export async function parseScreenshot(
 ): Promise<{ isExecutionLog: boolean; fills: FillRowParseResult[]; skipped: number }>;
 export async function parseScreenshot(
   image: string,
-  kind: "setup" | "outcome" | "orders" | "close" | "fills",
+  kind: "history",
+  context?: Record<string, unknown>,
+): Promise<unknown>;
+export async function parseScreenshot(
+  image: string,
+  kind: "setup" | "outcome" | "orders" | "close" | "fills" | "history",
   context?: Record<string, unknown>,
 ): Promise<any> {
   const res = await apiRequest("POST", "/api/parse-screenshot", {
@@ -519,11 +527,23 @@ export async function parseScreenshot(
   return json.result;
 }
 
+/**
+ * The week as this browser's clock sees it: local Monday 00:00 to the next.
+ * The server's own clock is UTC, so it is told rather than left to guess.
+ */
+function localWeek(key?: string): { from?: string; to?: string } {
+  if (!key || !/^\d{4}-\d{2}-\d{2}$/.test(key)) return {};
+  const [y, m, d] = key.split("-").map(Number);
+  const from = new Date(y, m - 1, d);
+  const to = new Date(y, m - 1, d + 7);
+  return { from: from.toISOString(), to: to.toISOString() };
+}
+
 /** Generate (or fetch the cached) AI reading of this week's notes vs its numbers. */
 export function useWeeklyInsights() {
   return useMutation({
     mutationFn: async (v: { weekStart?: string; force?: boolean } = {}) =>
-      (await apiRequest("POST", "/api/weekly-insights", v)).json() as Promise<{
+      (await apiRequest("POST", "/api/weekly-insights", { ...v, ...localWeek(v.weekStart) })).json() as Promise<{
         ok: boolean;
         cached?: boolean;
         weekStart: string;

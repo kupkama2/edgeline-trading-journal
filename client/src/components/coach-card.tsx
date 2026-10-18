@@ -19,15 +19,12 @@ import { Badge } from "@/components/ui/badge";
 import { ChevronDown, Target, X } from "lucide-react";
 import { useMistakeTags, useStyles, useTrades } from "@/lib/data";
 import { reviewAll } from "@shared/coach";
+import { weekKey as sharedWeekKey } from "@shared/review";
 import { computeMetrics, fmtR } from "@shared/metrics";
 import { styleColor } from "@/lib/style-filter";
 
-/** Monday-anchored week key, so "this week" means the same all week. */
-function weekKey(d = new Date()): string {
-  const x = new Date(d);
-  x.setDate(x.getDate() - ((x.getDay() + 6) % 7));
-  return x.toISOString().slice(0, 10);
-}
+/** Monday-anchored week key, so "this week" means the same all week — the shared one. */
+const weekKey = (d = new Date()) => sharedWeekKey(d);
 
 const DISMISS_KEY = "edgeline.coachDismissed";
 

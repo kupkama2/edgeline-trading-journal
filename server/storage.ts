@@ -14,6 +14,7 @@ import {
   hyperliquidSymbols,
   accountBalances,
   chapters,
+  readPrefs,
 } from "@shared/schema";
 import type {
   InsertTrade,
@@ -37,6 +38,7 @@ import type {
   User,
   Invite,
   BinanceSymbolRow,
+  UserPrefs,
 } from "@shared/schema";
 import { DEMON_TAXONOMY, DEMON_LEGACY_ALIASES } from "@shared/demons";
 import { collapseToInstrument } from "@shared/binance";
@@ -149,6 +151,7 @@ ALTER TABLE trades ADD COLUMN IF NOT EXISTS cancel_reason TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS funding DOUBLE PRECISION;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS funding_checked_at TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS external_id TEXT;
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS claimed_at TEXT;
 -- A verdict on the entry, off by default: nothing recorded before it existed
 -- was tilt until somebody says so (or the migration below does).
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS tilt BOOLEAN NOT NULL DEFAULT FALSE;
@@ -370,6 +373,7 @@ CREATE TABLE IF NOT EXISTS users (
   created_at TEXT NOT NULL,
   last_login_at TEXT
 );
+ALTER TABLE users ADD COLUMN IF NOT EXISTS prefs TEXT;
 
 -- Every table that owns rows gains an owner. Left nullable on purpose: the
 -- rows that predate sign-in have no owner until the first Google account
@@ -696,6 +700,26 @@ export const accounts = {
   async owner(): Promise<User | undefined> {
     const [row] = await db.select().from(users).where(eq(users.isOwner, true));
     return row;
+  },
+
+  async prefs(id: number): Promise<UserPrefs> {
+    const [row] = await db.select({ prefs: users.prefs }).from(users).where(eq(users.id, id));
+    return readPrefs(row?.prefs);
+  },
+
+  /**
+   * Merge a change into the stored prefs. Turning enforcement ON stamps the
+   * moment, which is what decides which trades may close the record; any
+   * other change leaves the stamp alone.
+   */
+  async setPrefs(id: number, patch: Partial<Pick<UserPrefs, "reviewMode">>): Promise<UserPrefs> {
+    const current = await accounts.prefs(id);
+    const next: UserPrefs = { ...current, ...patch };
+    if (patch.reviewMode === "enforce" && current.reviewMode !== "enforce") {
+      next.reviewEnforcedSince = new Date().toISOString();
+    }
+    await db.update(users).set({ prefs: JSON.stringify(next) }).where(eq(users.id, id));
+    return next;
   },
 
   async touchLogin(id: number): Promise<void> {
@@ -1206,11 +1230,26 @@ export class DatabaseStorage implements IStorage {
       .from(tradeFills)
       .where(inArray(tradeFills.tradeId, ids))
       .orderBy(tradeFills.time);
+    // Grouped once. Filtering the whole tag and fill lists per trade was
+    // trades × (tags + fills), and this runs on every journal read, every
+    // trade created and every sync.
+    const tagsFor = new Map<number, number[]>();
+    for (const l of links) {
+      const list = tagsFor.get(l.tradeId);
+      if (list) list.push(l.mistakeTagId);
+      else tagsFor.set(l.tradeId, [l.mistakeTagId]);
+    }
+    const fillsFor = new Map<number, typeof allFills>();
+    for (const f of allFills) {
+      const list = fillsFor.get(f.tradeId);
+      if (list) list.push(f);
+      else fillsFor.set(f.tradeId, [f]);
+    }
     return rows.map((t) => ({
       ...t,
-      mistakeTagIds: links.filter((l) => l.tradeId === t.id).map((l) => l.mistakeTagId),
+      mistakeTagIds: tagsFor.get(t.id) ?? [],
       imageCount: countFor.get(t.id) ?? 0,
-      fills: allFills.filter((f) => f.tradeId === t.id),
+      fills: fillsFor.get(t.id) ?? [],
     }));
   }
 
@@ -1347,6 +1386,12 @@ export class DatabaseStorage implements IStorage {
         .set({ account: b })
         .where(and(eq(trades.account, a), this.owns(trades)))
         .returning({ id: trades.id });
+      // The balance history goes with the trades. Left behind, the merged
+      // account lost its curve and the old name lived on in every balance list.
+      await tx
+        .update(accountBalances)
+        .set({ account: b })
+        .where(and(eq(accountBalances.account, a), this.owns(accountBalances)));
       await tx
         .delete(accountSettings)
         .where(and(eq(accountSettings.name, a), this.owns(accountSettings)));
@@ -1654,21 +1699,16 @@ export class DatabaseStorage implements IStorage {
    */
   async upsertDailyNote(day: string, body: string): Promise<DailyNote> {
     const updatedAt = new Date().toISOString();
-    const [existing] = await db
-      .select()
-      .from(dailyNotes)
-      .where(and(eq(dailyNotes.day, day), this.owns(dailyNotes)));
-    if (existing) {
-      const [row] = await db
-        .update(dailyNotes)
-        .set({ body, updatedAt })
-        .where(eq(dailyNotes.id, existing.id))
-        .returning();
-      return row;
-    }
+    /*
+     * One statement, against the (user_id, day) unique index. Select-then-
+     * insert lost a race whenever two autosaves of a new day's note were in
+     * flight at once — the debounce plus a slow database is enough — and the
+     * one rejected was usually the later, longer text.
+     */
     const [row] = await db
       .insert(dailyNotes)
       .values({ day, body, updatedAt, userId: this.userId })
+      .onConflictDoUpdate({ target: [dailyNotes.userId, dailyNotes.day], set: { body, updatedAt } })
       .returning();
     return row;
   }

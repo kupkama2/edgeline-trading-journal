@@ -71,8 +71,12 @@ export function missedStats(trades: TradeWithTags[]): MissedStats {
   for (const t of missed) {
     if (t.wouldHaveHitTarget == null) continue;
     if (t.wouldHaveHitTarget) {
+      // Without levels there is no planned R, so nothing was forgone that
+      // can be counted — and a 0R "won miss" would dilute the ones that were.
+      const r = plannedR(t);
+      if (r == null) continue;
       wouldHaveWon += 1;
-      forgoneR += plannedR(t) ?? 0;
+      forgoneR += r;
     } else {
       wouldHaveLost += 1;
       avoidedR += 1;

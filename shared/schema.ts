@@ -38,9 +38,45 @@ export const users = pgTable("users", {
   isOwner: boolean("is_owner").notNull().default(false),
   createdAt: text("created_at").notNull(),
   lastLoginAt: text("last_login_at"),
+  /**
+   * The person's own settings, as JSON (see userPrefsSchema). On the user row
+   * rather than in the browser so a rule you set yourself — how hard to push
+   * the review — holds on the phone as well as the laptop.
+   */
+  prefs: text("prefs"),
 });
 
 export type User = typeof users.$inferSelect;
+
+export const reviewModeEnum = z.enum(["off", "remind", "enforce"]);
+export const userPrefsSchema = z.object({
+  reviewMode: reviewModeEnum,
+  /**
+   * When "enforce" was last switched on. Only trades that finished after it
+   * can close the record — turning the rule on must not lock anyone out over
+   * a backlog they never agreed to be held to.
+   */
+  reviewEnforcedSince: z.string().nullable(),
+});
+export type UserPrefs = z.infer<typeof userPrefsSchema>;
+export const DEFAULT_PREFS: UserPrefs = { reviewMode: "remind", reviewEnforcedSince: null };
+export const updateUserPrefsSchema = z.object({ reviewMode: reviewModeEnum }).partial().strict();
+
+/** Stored prefs, read leniently: a field that is missing or malformed takes its default. */
+export function readPrefs(raw: string | null | undefined): UserPrefs {
+  let parsed: unknown = null;
+  try {
+    parsed = raw ? JSON.parse(raw) : null;
+  } catch {
+    parsed = null;
+  }
+  const o = (parsed && typeof parsed === "object" ? parsed : {}) as Record<string, unknown>;
+  const mode = reviewModeEnum.safeParse(o.reviewMode);
+  return {
+    reviewMode: mode.success ? mode.data : DEFAULT_PREFS.reviewMode,
+    reviewEnforcedSince: typeof o.reviewEnforcedSince === "string" ? o.reviewEnforcedSince : null,
+  };
+}
 
 /** What the client is told about itself. Never the sub, which is a secret id. */
 export interface SessionUser {
@@ -362,6 +398,13 @@ export const trades = pgTable("trades", {
    * fills in its exit instead of logging it twice.
    */
   externalId: text("external_id"),
+  /**
+   * When a venue sync recognised this hand-logged trade as one of its own
+   * (see shared/claim.ts). Null for a trade the sync created, or never saw.
+   * A claimed trade's entry and size are the person's, and stay theirs on
+   * every later sync.
+   */
+  claimedAt: text("claimed_at"),
   /**
    * Green flags — JSON string[] of what went RIGHT ("Perfect Entry", "Let It
    * Run"). The positive counterpart to mistake tags, and sliced the same way
@@ -1043,7 +1086,7 @@ export const parseScreenshotSchema = z.object({
    * far above anything the app produces, far below anything that hurts.
    */
   image: z.string().min(1).max(6_000_000),
-  kind: z.enum(["setup", "outcome", "orders", "close", "fills"]),
+  kind: z.enum(["setup", "outcome", "orders", "close", "fills", "history"]),
   context: z
     .object({
       symbol: z.string().optional(),
