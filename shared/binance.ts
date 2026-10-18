@@ -25,6 +25,59 @@ export interface Candle {
   h: number;
   l: number;
   c: number;
+  /**
+   * How long the bar lasts, in ms, when it is known. A bar is a range of
+   * time, not an instant: one opened before the entry still holds prices
+   * from inside the trade, and one opened before the exit holds prices from
+   * after it. With a span the path is measured on overlap; without one each
+   * bar is read as the instant it opened, which is how bars arrive from a
+   * feed and how the older tests describe them.
+   */
+  span?: number;
+}
+
+const MINUTE = 60_000;
+
+/**
+ * Coarse bars with the ones that straddle an instant replaced by minutes.
+ *
+ * Measuring a trade on four-hour bars, the bar it was entered in holds up
+ * to four hours from BEFORE the entry, and the bar it was closed in up to
+ * four hours from AFTER the exit — whichever of those prices was the
+ * extreme became the trade's MAE or MFE. Only the two bars that straddle
+ * the entry and the exit carry that error, so only they are read finer:
+ * every bar of `coarse` that an edge falls strictly inside is replaced by
+ * the minute bars of `fine` within it. What is left can straddle an edge by
+ * less than a minute.
+ *
+ * `complete` is false when a straddling bar had no minutes to replace it;
+ * that bar is kept as it was, and a figure that must be exact should not
+ * be written from the result.
+ */
+export function withFineEdges(
+  coarse: Candle[],
+  coarseMs: number,
+  fine: Candle[],
+  edges: number[],
+): { bars: Candle[]; complete: boolean } {
+  const out: Candle[] = [];
+  let complete = true;
+  for (const c of coarse) {
+    const end = c.t + coarseMs;
+    const straddles = edges.some((e) => e > c.t && e < end);
+    if (!straddles) {
+      out.push({ ...c, span: coarseMs });
+      continue;
+    }
+    const minutes = fine.filter((f) => f.t >= c.t && f.t < end);
+    if (minutes.length === 0) {
+      complete = false;
+      out.push({ ...c, span: coarseMs });
+      continue;
+    }
+    for (const f of minutes) out.push({ ...f, span: MINUTE });
+  }
+  return { bars: out.sort((a, b) => a.t - b.t), complete };
 }
 
 export type Touch =
@@ -410,8 +463,17 @@ export function pathExtremes(
     bars.length === 0 ? null : long ? Math.min(...bars.map((c) => c.l)) : Math.max(...bars.map((c) => c.h));
 
   const exitMs = t.exitMs;
-  const held = candles.filter((c) => c.t >= t.entryMs && (exitMs == null || c.t <= exitMs));
-  const after = exitMs == null ? [] : candles.filter((c) => c.t > exitMs);
+  /*
+   * A bar with a span is in the hold when it OVERLAPS it, and after the exit
+   * when it STARTS after it. Without a span, the bar is the instant it
+   * opened. See Candle.span and withFineEdges for why the difference matters.
+   */
+  const held = candles.filter((c) =>
+    c.span
+      ? c.t + c.span > t.entryMs && (exitMs == null || c.t < exitMs)
+      : c.t >= t.entryMs && (exitMs == null || c.t <= exitMs),
+  );
+  const after = exitMs == null ? [] : candles.filter((c) => (c.span ? c.t >= exitMs : c.t > exitMs));
 
   // The favourable aftermath stops at the bar BEFORE the stop level breaks:
   // once it breaks, a position left alone would not have been there for what

@@ -68,14 +68,14 @@ export function excursions(trades: TradeWithTags[]): Excursion[] {
     .filter(
       (t) =>
         t.status === "closed" &&
-        t.exitPrice != null &&
         // A post-exit peak alone is enough to be worth a bar: "it ran on
         // without me" is the whole point of the third band, and requiring an
         // in-trade leg too would hide exactly the trades that story is about.
-        (t.mae != null ||
-          t.mfe != null ||
-          t.postExitPeak != null ||
-          t.postExitAdverse != null),
+        ((t.exitPrice != null &&
+          (t.mae != null || t.mfe != null || t.postExitPeak != null || t.postExitAdverse != null)) ||
+          // A scalp's excursions are typed as money, not prices; its metrics
+          // already turn them into R, so it gets a bar like any other.
+          (t.scalp === true && (t.netMfe != null || t.netMae != null))),
     )
     .slice()
     .sort((a, b) => (b.exitTime ?? b.entryTime).localeCompare(a.exitTime ?? a.entryTime))

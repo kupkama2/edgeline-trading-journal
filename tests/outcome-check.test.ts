@@ -29,6 +29,23 @@ let userId: number;
 let checkOutcomes: (id: number) => Promise<any>;
 let store: any;
 
+const INTERVAL_MS: Record<string, number> = { "1m": 60_000, "5m": 300_000, "15m": 900_000, "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000 };
+
+/*
+ * CCC's path, one minute at a time: flat at 100 ± 1, a dip to 91 twenty
+ * minutes after the entry, and a spike to 130 twenty minutes after the
+ * exit. Entry and exit sit at :20 and :30 past the hour, inside hourly bars.
+ */
+const cccEntry = Math.floor((Date.now() - 10 * 86_400_000) / 3_600_000) * 3_600_000 + 20 * 60_000;
+const cccExit = cccEntry + 3 * 3_600_000 + 10 * 60_000;
+function cccMinute(t: number): [number, number] {
+  if (t === cccEntry + 20 * 60_000) return [101, 91];
+  if (t === cccExit + 20 * 60_000) return [130, 99];
+  // Before the entry, a wick no trade was ever in.
+  if (t === cccEntry - 10 * 60_000) return [125, 99];
+  return [101, 99];
+}
+
 /** Binance's shape, with a price path we choose per symbol. */
 function startFeed(): Promise<number> {
   return new Promise((resolve) => {
@@ -41,6 +58,7 @@ function startFeed(): Promise<number> {
             symbols: [
               { symbol: "AAAUSDT", baseAsset: "AAA", quoteAsset: "USDT", status: "TRADING", contractType: "PERPETUAL" },
               { symbol: "BBBUSDT", baseAsset: "BBB", quoteAsset: "USDT", status: "TRADING", contractType: "PERPETUAL" },
+              { symbol: "CCCUSDT", baseAsset: "CCC", quoteAsset: "USDT", status: "TRADING", contractType: "PERPETUAL" },
             ],
           }),
         );
@@ -48,6 +66,25 @@ function startFeed(): Promise<number> {
       if (u.pathname === "/fapi/v1/klines" || u.pathname === "/api/v3/klines") {
         const symbol = u.searchParams.get("symbol");
         const start = Number(u.searchParams.get("startTime"));
+        if (symbol === "CCCUSDT") {
+          // A real venue: bars at the width asked for, aggregated from one
+          // path minute by minute, opening on the width's own boundaries.
+          const span = INTERVAL_MS[u.searchParams.get("interval") ?? "1h"];
+          const end = Number(u.searchParams.get("endTime") ?? Date.now());
+          const limit = Number(u.searchParams.get("limit") ?? 500);
+          const rows = [];
+          for (let t = Math.ceil(start / span) * span; t <= end && rows.length < limit; t += span) {
+            let h = -Infinity;
+            let l = Infinity;
+            for (let m = t; m < t + span; m += 60_000) {
+              const [mh, ml] = cccMinute(m);
+              h = Math.max(h, mh);
+              l = Math.min(l, ml);
+            }
+            rows.push([t, "100", String(h), String(l), "100", "1", t + span - 1, "1", 1, "1", "1", "0"]);
+          }
+          return res.end(JSON.stringify(rows));
+        }
         // AAA runs to the target, BBB to the stop. One bar is enough.
         const bar = symbol === "BBBUSDT"
           ? [start, "100", "101", "89", "90"]
@@ -198,6 +235,29 @@ describe.skipIf(!DB)("settling parked trades against the feed", () => {
     const after = await store.getTrade(t.id);
     expect(after.mfe).toBe(131);
     expect(after.mae).toBe(99);
+  });
+
+  it("measures a trade's excursions on its own hold, not on the bars around it", async () => {
+    /*
+     * Read ten days later, the window to now is long enough for hourly bars,
+     * and the entry and exit both fall inside one. By open time, the entry
+     * bar was dropped (losing the 91 dip and keeping nothing of the hold's
+     * first forty minutes) and the exit bar kept whole (gaining the 130
+     * spike from after the exit). On bars sized to a three-hour hold, and
+     * minutes at its edges, only the hold counts.
+     */
+    const t = await closedTrade({
+      symbol: "CCC",
+      entryTime: new Date(cccEntry).toISOString(),
+      exitTime: new Date(cccExit).toISOString(),
+      initialStop: 80,
+      initialTarget: 140,
+      exitPrice: 100,
+    });
+    await checkOutcomes(userId);
+    const after = await store.getTrade(t.id);
+    expect(after.mae).toBe(91);
+    expect(after.mfe).toBe(101);
   });
 
   it("never overwrites a path number read off a chart by hand", async () => {
