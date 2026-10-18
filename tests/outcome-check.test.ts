@@ -260,6 +260,29 @@ describe.skipIf(!DB)("settling parked trades against the feed", () => {
     expect(after.mfe).toBe(101);
   });
 
+  it("re-measures one trade when asked, replacing numbers the old reading wrote", async () => {
+    // The numbers the older method gave this trade: the after-exit spike as MFE.
+    const t = await closedTrade({
+      symbol: "CCC",
+      entryTime: new Date(cccEntry).toISOString(),
+      exitTime: new Date(cccExit).toISOString(),
+      initialStop: 80,
+      initialTarget: 140,
+      exitPrice: 100,
+      mae: 97,
+      mfe: 130,
+    });
+    // The sweep leaves them: it fills blanks, never overrules a number.
+    await checkOutcomes(userId);
+    expect(await store.getTrade(t.id)).toMatchObject({ mae: 97, mfe: 130, pathMeasuredAt: null });
+    // Asked for, on this one trade, it replaces them and says when.
+    const res = await (checkOutcomes as any)(userId, t.id, { remeasure: true });
+    const after = await store.getTrade(t.id);
+    expect(after).toMatchObject({ mae: 91, mfe: 101 });
+    expect(after.pathMeasuredAt).toEqual(expect.any(String));
+    expect(res.measured.find((m: any) => m.tradeId === t.id).fields).toEqual(expect.arrayContaining(["mae", "mfe"]));
+  });
+
   it("never overwrites a path number read off a chart by hand", async () => {
     // A hand-entered MAE is a judgement about which wick counted. There is no
     // provenance column on these fields, so replacing one would rewrite the

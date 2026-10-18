@@ -789,6 +789,26 @@ export function TradeBody({
     save: (v) => updateTrade.mutateAsync({ id: trade.id, trade: { [field]: v } as any }),
   });
   const checkTrade = useCheckTrade();
+  const [confirmRemeasure, setConfirmRemeasure] = useState(false);
+  async function remeasure() {
+    setRechecking(true);
+    try {
+      const res: any = await checkTrade.mutateAsync({ id: trade.id, remeasure: true });
+      const fields: string[] = (res?.measured ?? []).find((x: any) => x.tradeId === trade.id)?.fields ?? [];
+      toast(
+        fields.length
+          ? { title: "Re-measured", description: `${fields.join(", ")} replaced from the market's bars.` }
+          : res?.error
+            ? { title: "Couldn't re-measure", description: String(res.error).slice(0, 160), variant: "destructive" }
+            : { title: "Nothing replaced", description: "Either the market's bars give the numbers already on the trade, or it has no bars for this one yet." },
+      );
+    } catch (err) {
+      reportFailure("Re-measure", err);
+    } finally {
+      setRechecking(false);
+      setConfirmRemeasure(false);
+    }
+  }
   async function recheck() {
     setRechecking(true);
     try {
@@ -1374,6 +1394,42 @@ export function TradeBody({
           </Button>
         </div>
       )}
+
+      {/* Path numbers written before the edges of the hold were read at one
+          minute — or typed by hand — can be re-measured on request. Two
+          clicks, because it replaces numbers rather than filling blanks. */}
+      {trade.status === "closed" &&
+        !trade.scalp &&
+        !trade.pathMeasuredAt &&
+        [trade.mae, trade.mfe, trade.postExitPeak, trade.postExitAdverse].some((v) => v != null) && (
+          <div
+            className="flex flex-wrap items-center gap-2 rounded-md border border-border/60 px-3 py-2 text-[11px]"
+            data-testid="panel-remeasure"
+          >
+            <span className="text-muted-foreground">
+              {confirmRemeasure
+                ? "This replaces MAE, MFE and the aftermath with what the market says now, including any you typed."
+                : "These excursions were read by the older method, or typed in. The older reading could count prices from after your exit, and miss the start of the trade."}
+            </span>
+            <Button
+              type="button"
+              size="sm"
+              variant={confirmRemeasure ? "default" : "outline"}
+              className="ml-auto h-7 gap-1.5 px-2 text-[11px]"
+              disabled={rechecking}
+              onClick={() => (confirmRemeasure ? remeasure() : setConfirmRemeasure(true))}
+              data-testid="button-remeasure-trade"
+            >
+              {rechecking ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
+              {confirmRemeasure ? "Replace them" : "Re-measure"}
+            </Button>
+            {confirmRemeasure && (
+              <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-[11px]" onClick={() => setConfirmRemeasure(false)}>
+                Keep
+              </Button>
+            )}
+          </div>
+        )}
 
       {suggestion && (
         <MarketSuggestion

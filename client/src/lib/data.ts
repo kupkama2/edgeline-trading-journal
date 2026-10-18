@@ -64,9 +64,12 @@ export function useTrades() {
  */
 export function useCheckTrade() {
   return useMutation({
-    mutationFn: async (id: number) =>
-      (await apiRequest("POST", `/api/trades/${id}/check`, {})).json(),
-    onSuccess: (_res, id) => {
+    mutationFn: async (v: number | { id: number; remeasure?: boolean }) => {
+      const { id, remeasure } = typeof v === "number" ? { id: v, remeasure: false } : v;
+      return (await apiRequest("POST", `/api/trades/${id}/check`, remeasure ? { remeasure: true } : {})).json();
+    },
+    onSuccess: (_res, v) => {
+      const id = typeof v === "number" ? v : v.id;
       invalidateTrades();
       // The chart keeps its candles for five minutes, and "ask the market
       // again" is the one moment that memory is exactly wrong: the archive

@@ -779,7 +779,7 @@ export async function registerRoutes(
     const id = Number(req.params.id);
     const trade = await store(req).getTrade(id);
     if (!trade) return res.status(404).json({ message: "Trade not found" });
-    res.json(await checkOutcomes((req as any).userId, id));
+    res.json(await checkOutcomes((req as any).userId, id, { remeasure: req.body?.remeasure === true }));
   });
 
   app.post("/api/outcomes/check", async (req, res) => {

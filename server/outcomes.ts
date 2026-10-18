@@ -231,7 +231,17 @@ export async function ensureCatalogue(
  *              request knows something the schedule does not, which is that
  *              somebody is looking at this trade right now.
  */
-export async function checkOutcomes(userId: number, only?: number): Promise<CheckSummary> {
+export async function checkOutcomes(
+  userId: number,
+  only?: number,
+  /**
+   * Replace the trade's path numbers rather than only filling blanks. Asked
+   * for by a person, on one trade, from its page — never by the sweep,
+   * because a number typed by hand is a judgement this must not overrule
+   * on its own.
+   */
+  opts: { remeasure?: boolean } = {},
+): Promise<CheckSummary> {
   const store = storageFor(userId);
   const out: CheckSummary = {
     checked: 0,
@@ -375,12 +385,32 @@ export async function checkOutcomes(userId: number, only?: number): Promise<Chec
         ["postExitPeak", read.path.postExitPeak],
         ["postExitAdverse", read.path.postExitAdverse],
       ] as const) {
-        if (value != null && (t as any)[field] == null) {
+        const replacing = opts.remeasure === true && only === t.id;
+        if (value != null && ((t as any)[field] == null || (replacing && (t as any)[field] !== value))) {
           patch[field] = value;
           filled.push(field);
         }
       }
       if (filled.length) out.measured.push({ tradeId: t.id, symbol: t.symbol, fields: filled });
+      /*
+       * The marker says every path number on the trade is this method's.
+       * Filling the blank aftermath beside an MAE from the older reading
+       * does not make that MAE right, so the stamp goes on only when each
+       * number left on the trade is the one this read produced.
+       */
+      const fromThisRead = (
+        [
+          ["mae", read.path.mae],
+          ["mfe", read.path.mfe],
+          ["postExitPeak", read.path.postExitPeak],
+          ["postExitAdverse", read.path.postExitAdverse],
+        ] as const
+      ).every(([f, v]) => {
+        const final = f in patch ? patch[f] : (t as any)[f];
+        return final == null || final === v;
+      });
+      const anyNumber = [read.path.mae, read.path.mfe].some((v) => v != null);
+      if (fromThisRead && anyNumber && !t.pathMeasuredAt) patch.pathMeasuredAt = stamp;
 
       /*
        * Where the market disagrees with what is already recorded.
