@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { toInstant } from "@shared/import-parse";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -350,7 +351,7 @@ export function ImportTradesDialog({
             entryPrice: o.entryPrice as number,
             initialStop: o.initialStop ?? null,
             initialTarget: o.initialTarget ?? null,
-            entryTime: o.entryTime ?? null,
+            entryTime: toInstant(o.entryTime),
             source: "binance-orders" as const,
             raw: "(from screenshot)",
             warnings: [

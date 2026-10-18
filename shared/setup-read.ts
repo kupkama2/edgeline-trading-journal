@@ -73,7 +73,14 @@ export function normalizeSetupRead(json: Record<string, unknown> | null | undefi
     symbol: typeof j.symbol === "string" && j.symbol.trim() ? j.symbol.trim() : null,
     direction,
     entryPrice: entry,
-    initialStop: num(j.initialStop),
+    // A stop on the PROFIT side of the entry is not a stop — it is a misread
+    // target, or the wrong number in the TP/SL column — and as the R
+    // denominator it would be wrong on every figure the trade produces.
+    initialStop: (() => {
+      const st = num(j.initialStop);
+      if (st == null || entry == null || direction == null) return st;
+      return (direction === "long" ? st < entry : st > entry) ? st : null;
+    })(),
     initialTarget: target,
     extraTargets: extraTargets.length ? extraTargets : null,
     entryTime: typeof j.entryTime === "string" && j.entryTime ? j.entryTime : null,

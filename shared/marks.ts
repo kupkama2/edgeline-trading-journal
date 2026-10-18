@@ -1,3 +1,4 @@
+import { currentStop } from "./stops";
 /**
  * Where an open trade stands against its plan, right now.
  *
@@ -96,6 +97,8 @@ export function standingOf(
     direction: string;
     entryPrice: number;
     initialStop: number | null;
+    /** Moves of the stop since entry; the last one is the stop in force. */
+    stopMoves?: string | null;
     initialTarget: number | null;
     size: number;
     sizeUnit: string;
@@ -103,6 +106,14 @@ export function standingOf(
   },
   price: number,
 ): Standing {
+  /*
+   * R is measured against the ORIGINAL stop — it is the denominator, and a
+   * stop pulled up does not change what the trade risked. But whether the
+   * stop has been reached, and how far away it is, are questions about the
+   * stop in force now. A long at 100 with its stop moved to 105 and price at
+   * 103 has been stopped out, whatever the plan said.
+   */
+  const stopNow = currentStop(t);
   const sign = t.direction === "short" ? -1 : 1;
   const risk = t.initialStop != null ? Math.abs(t.entryPrice - t.initialStop) : 0;
   const qty = t.sizeUnit === "quote" ? (t.entryPrice > 0 ? t.size / t.entryPrice : 0) : t.size;
@@ -111,11 +122,10 @@ export function standingOf(
 
   const currentR = risk > 0 ? move / risk : null;
   const pnl = Number.isFinite(perPoint) && perPoint > 0 ? move * perPoint : null;
-  const toStopR = risk > 0 && t.initialStop != null ? (sign * (price - t.initialStop)) / risk : null;
+  const toStopR = risk > 0 && stopNow != null ? (sign * (price - stopNow)) / risk : null;
   const toTargetR =
     risk > 0 && t.initialTarget != null ? (sign * (t.initialTarget - price)) / risk : null;
-  const crossedStop =
-    t.initialStop != null && (sign > 0 ? price <= t.initialStop : price >= t.initialStop);
+  const crossedStop = stopNow != null && (sign > 0 ? price <= stopNow : price >= stopNow);
   const crossedTarget =
     t.initialTarget != null && (sign > 0 ? price >= t.initialTarget : price <= t.initialTarget);
 

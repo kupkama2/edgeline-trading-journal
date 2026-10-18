@@ -214,7 +214,7 @@ export function tradesFromFills(fills: LoggedFill[]): Reconstruction {
        */
       let initialStop: number | null = null;
       let exitReason: "stop" | null = null;
-      if (last && isStop(last.fill.kind)) {
+      if (last && pos === 0 && isStop(last.fill.kind)) {
         const level = last.fill.stopPrice ?? last.price;
         const losing = open.direction === "long" ? level < entryPrice : level > entryPrice;
         if (losing) {
@@ -230,9 +230,13 @@ export function tradesFromFills(fills: LoggedFill[]): Reconstruction {
         entryPrice,
         entryTime: first.time,
         adds: adds.map(({ price, size, time }) => ({ price, size, time })),
-        partials: closes.slice(0, -1).map(({ price, size, time }) => ({ price, size, time })),
-        exitPrice: last?.price ?? null,
-        exitTime: last?.time ?? null,
+        // Still open: every close so far is a partial, and there is no exit.
+        // The last one used to become the exit and be dropped from the
+        // partials — and the importer then blanked the exit of an open
+        // trade, so the partial vanished altogether.
+        partials: (pos !== 0 ? closes : closes.slice(0, -1)).map(({ price, size, time }) => ({ price, size, time })),
+        exitPrice: pos !== 0 ? null : (last?.price ?? null),
+        exitTime: pos !== 0 ? null : (last?.time ?? null),
         initialStop,
         planTarget: null,
         brackets: [],
@@ -424,7 +428,24 @@ export function attachBrackets(
     const targets = mine.filter((b) => b.kind === "target" && winning(b.level));
     const planTarget = t.exitReason === "stop" && targets.length === 1 ? targets[0].level : null;
 
-    return { ...t, brackets, planTarget };
+    /*
+     * The same proof, applied to the stop. A stop that fired is taken as the
+     * plan only when nothing in the window says it was moved: a CANCELLED
+     * stop leg at another level means the one that fired was where the stop
+     * ended up, not where it began — long at 100, stop at 95 cancelled, stop
+     * at 98 fired, is 1R of five points, not two. Then the earliest stop leg
+     * is the plan, if it sits on the losing side; otherwise nothing is.
+     */
+    const losing = (level: number) => !winning(level) && level !== t.entryPrice;
+    const earlierStops = mine.filter((b) => b.kind === "stop" && b.level !== t.initialStop);
+    const initialStop =
+      t.initialStop != null && earlierStops.length > 0
+        ? losing(earlierStops[0].level)
+          ? earlierStops[0].level
+          : null
+        : t.initialStop;
+
+    return { ...t, brackets, planTarget, initialStop };
   });
 }
 

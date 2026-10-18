@@ -156,6 +156,13 @@ describe("the rest of the answer", () => {
     expect(normalizeSetupRead({ direction: "short", entryPrice: 100, initialTarget: 95 }).initialTarget).toBe(95);
   });
 
+  it("drops a stop on the profit side of the entry", () => {
+    expect(normalizeSetupRead({ direction: "long", entryPrice: 100, initialStop: 110 }).initialStop).toBeNull();
+    expect(normalizeSetupRead({ direction: "short", entryPrice: 100, initialStop: 110 }).initialStop).toBe(110);
+    // With no direction or entry there is no side to judge, so it stands.
+    expect(normalizeSetupRead({ entryPrice: 100, initialStop: 110 }).initialStop).toBe(110);
+  });
+
   it("reads only the two units the journal has, and nothing from junk", () => {
     expect(normalizeSetupRead({ sizeUnit: "quote" }).sizeUnit).toBe("quote");
     expect(normalizeSetupRead({ sizeUnit: "USDT" }).sizeUnit).toBeNull();

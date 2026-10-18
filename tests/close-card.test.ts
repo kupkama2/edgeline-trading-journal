@@ -512,3 +512,33 @@ describe("several clips, each filled in pieces", () => {
       .toEqual([]);
   });
 });
+
+describe("a card that is not this trade's", () => {
+  it("is not applied when the instrument differs", () => {
+    const v = closeFromCard(normalizeCloseCard({ ...binance, symbol: "ETHUSDT", exitPrice: "3,500" }), trade as any);
+    expect(v.usable).toBe(false);
+    expect(v.warnings.join(" ")).toMatch(/ETHUSDT.*not applied/);
+  });
+
+  it("is not applied when the side differs", () => {
+    const v = closeFromCard(normalizeCloseCard({ ...binance, direction: "Cross Long" }), trade as any);
+    expect(v.usable).toBe(false);
+  });
+
+  it("is applied for the same market under the venue's spelling", () => {
+    expect(closeFromCard(normalizeCloseCard(binance), trade as any).usable).toBe(true);
+  });
+});
+
+describe("a fee in a coin", () => {
+  it("is not booked as dollars", () => {
+    const v = closeFromCard(normalizeCloseCard({ ...binance, fee: "0.0021", feeCurrency: "BNB" }), { ...trade, fees: null } as any);
+    expect(v.apply.fees).toBeUndefined();
+    expect(v.warnings.join(" ")).toMatch(/BNB/);
+  });
+
+  it("is booked when it is in dollars or the fee credit", () => {
+    const v = closeFromCard(normalizeCloseCard({ ...binance, fee: "1.25", feeCurrency: "USDT" }), { ...trade, fees: null } as any);
+    expect(v.apply.fees).toBe(1.25);
+  });
+});

@@ -106,3 +106,17 @@ describe("how a mark is labelled", () => {
     expect(markNote({ book: "spot", stale: true }, "x").badge).toBe("last read");
   });
 });
+
+describe("the stop in force", () => {
+  it("decides whether the stop is hit and how far it is, while R stays on the plan", async () => {
+    const { standingOf } = await import("../shared/marks");
+    const t = {
+      direction: "long", entryPrice: 100, initialStop: 90, initialTarget: 130, size: 1, sizeUnit: "base", pointValue: 1,
+      stopMoves: JSON.stringify([{ price: 105, at: "2026-10-12T10:00:00Z" }]),
+    };
+    const s = standingOf(t, 103);
+    expect(s.crossedStop).toBe(true);
+    expect(s.currentR).toBeCloseTo(0.3);
+    expect(s.toStopR).toBeCloseTo(-0.2);
+  });
+});

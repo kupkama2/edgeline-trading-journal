@@ -1,4 +1,5 @@
 import { useAccountBalances } from "@/lib/data";
+import { toInstant } from "@shared/import-parse";
 import { fmtPercent, latestEquity, parseRiskBudget, riskPercent } from "@shared/equity";
 import { impliedFees } from "@shared/setup-read";
 /**
@@ -548,7 +549,7 @@ export function NewTradeCard({
               entryPrice: o.entryPrice as number,
               initialStop: o.initialStop ?? null,
               initialTarget: o.initialTarget ?? null,
-              entryTime: o.entryTime ?? null,
+              entryTime: toInstant(o.entryTime),
               source: "binance-orders" as const,
               raw: "(from screenshot)",
               warnings:
