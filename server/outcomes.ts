@@ -422,7 +422,9 @@ export async function checkOutcomes(userId: number, only?: number): Promise<Chec
         try {
           const f = await fundingForTrade(t, pair);
           patch.fundingCheckedAt = stamp;
-          if (f && f.events > 0) {
+          // Only a figure over the whole hold; a partial one waits for the
+          // missing month and is asked again on the next recheck.
+          if (f && f.events > 0 && f.complete) {
             patch.funding = f.funding;
             out.funded.push({ tradeId: t.id, symbol: t.symbol, funding: f.funding, events: f.events });
           }

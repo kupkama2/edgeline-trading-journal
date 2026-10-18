@@ -399,6 +399,13 @@ export const trades = pgTable("trades", {
    */
   externalId: text("external_id"),
   /**
+   * When a venue sync recognised this hand-logged trade as one of its own
+   * (see shared/claim.ts). Null for a trade the sync created, or never saw.
+   * A claimed trade's entry and size are the person's, and stay theirs on
+   * every later sync.
+   */
+  claimedAt: text("claimed_at"),
+  /**
    * Green flags — JSON string[] of what went RIGHT ("Perfect Entry", "Let It
    * Run"). The positive counterpart to mistake tags, and sliced the same way
    * on Analysis so "perfect entry" earns an expectancy figure rather than a

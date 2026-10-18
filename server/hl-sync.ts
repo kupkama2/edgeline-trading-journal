@@ -17,6 +17,7 @@
  * The writing itself — by id, by resemblance to a hand-logged trade, or new —
  * is shared with the Binance sync; see venue-sync.ts.
  */
+import { loggableError } from "./errors";
 import {
   levelsFromOrders,
   marketsSeen,
@@ -108,7 +109,7 @@ export async function syncHyperliquid(userId: number, onlyAccount?: string): Pro
             : null,
       });
     } catch (err: any) {
-      row.error = String(err?.message ?? err);
+      row.error = loggableError(err);
     }
     out.push(row);
   }

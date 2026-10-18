@@ -15,6 +15,7 @@
  * In production the futures host is fapi.binance.com, which answers 451 to a
  * US IP: the service is deployed in Frankfurt for exactly this (render.yaml).
  */
+import { loggableError } from "./errors";
 import { createHmac } from "node:crypto";
 import { fetch as undiciFetch } from "undici";
 import {
@@ -361,7 +362,7 @@ export async function syncBinance(userId: number, onlyAccount?: string): Promise
         levelsFor: (t) => levelsFromOpenOrders(t, orders),
       });
     } catch (err: any) {
-      row.error = String(err?.message ?? err);
+      row.error = loggableError(err);
     }
     out.push(row);
   }

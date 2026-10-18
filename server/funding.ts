@@ -14,18 +14,24 @@ import type { TradeWithTags } from "@shared/schema";
 import { ARCHIVE_BASE, fetchArchiveText } from "./binance-archive";
 import { fetchHlFunding } from "./hyperliquid";
 
-async function binanceFunding(symbol: string, entryMs: number, exitMs: number): Promise<FundingEvent[]> {
+async function binanceFunding(
+  symbol: string,
+  entryMs: number,
+  exitMs: number,
+): Promise<{ events: FundingEvent[]; complete: boolean }> {
   const out: FundingEvent[] = [];
+  let complete = true;
   for (const month of fundingMonths(entryMs, exitMs)) {
     const url = `${ARCHIVE_BASE}/data/futures/um/monthly/fundingRate/${symbol}/${symbol}-fundingRate-${month}.zip`;
     try {
       out.push(...parseBinanceFundingCsv(await fetchArchiveText(url)));
     } catch {
-      // A month not published yet — the current one, usually. The estimate
-      // covers the settlements that exist and reports how many it rests on.
+      // A month not published yet — the current one, usually — or a read
+      // that failed. Either way the hold is not fully covered.
+      complete = false;
     }
   }
-  return out;
+  return { events: out, complete };
 }
 
 export interface FundingRead {
@@ -33,6 +39,13 @@ export interface FundingRead {
   funding: number;
   /** Settlements the estimate rests on. Zero means nothing was readable. */
   events: number;
+  /**
+   * Every settlement in the hold was readable. A figure from part of the
+   * hold — a month not published yet, a file that failed — is not written:
+   * once a trade has funding it is never asked again, so a partial figure
+   * written now would stand for good.
+   */
+  complete: boolean;
 }
 
 /**
@@ -55,9 +68,10 @@ export async function fundingForTrade(t: TradeWithTags, pair: PairRef): Promise<
   const notional = qty * t.entryPrice * (t.pointValue || 1);
   if (!(notional > 0)) return null;
 
-  const events =
+  const read =
     pair.venue === "hyperliquid"
-      ? await fetchHlFunding(pair.symbol, entryMs, exitMs)
+      ? { events: await fetchHlFunding(pair.symbol, entryMs, exitMs), complete: true }
       : await binanceFunding(pair.symbol, entryMs, exitMs);
-  return estimateFunding({ direction: t.direction, notional, entryMs, exitMs }, events);
+  const est = estimateFunding({ direction: t.direction, notional, entryMs, exitMs }, read.events);
+  return est ? { ...est, complete: read.complete } : null;
 }

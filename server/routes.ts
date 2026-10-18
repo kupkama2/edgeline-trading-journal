@@ -1,4 +1,5 @@
 import type { Express } from "express";
+import { loggableError } from "./errors";
 import type { Server } from "node:http";
 import { accounts, storageFor } from "./storage";
 // Deliberately unscoped, and the one exception that proves the rule: the
@@ -41,6 +42,7 @@ import {
 } from "./hyperliquid";
 import { fetchCandlesAt, pairForTradeAt, readCandlesAt } from "./candles";
 import { syncHyperliquid } from "./hl-sync";
+import { oneAtATime } from "./venue-sync";
 import { freshStartRefusal } from "@shared/chapters";
 import { normalizeSetupRead } from "@shared/setup-read";
 import { syncBinance, verifyKey } from "./binance-account";
@@ -823,9 +825,9 @@ export async function registerRoutes(
     if (!userId) return res.status(401).json({ message: "No account on request" });
     const only = typeof req.body?.account === "string" ? req.body.account : undefined;
     try {
-      res.json(await syncBinance(userId, only));
+      res.json(await oneAtATime(`sync:${userId}`, () => syncBinance(userId, only)));
     } catch (err: any) {
-      res.status(502).json({ message: String(err?.message ?? err) });
+      res.status(502).json({ message: loggableError(err) });
     }
   });
 
@@ -834,9 +836,9 @@ export async function registerRoutes(
     if (!userId) return res.status(401).json({ message: "No account on request" });
     const only = typeof req.body?.account === "string" ? req.body.account : undefined;
     try {
-      res.json(await syncHyperliquid(userId, only));
+      res.json(await oneAtATime(`sync:${userId}`, () => syncHyperliquid(userId, only)));
     } catch (err: any) {
-      res.status(502).json({ message: String(err?.message ?? err) });
+      res.status(502).json({ message: loggableError(err) });
     }
   });
 
