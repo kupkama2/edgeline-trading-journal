@@ -22,6 +22,7 @@ import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { TrendingUp, Target, Flame, Trophy, CalendarDays } from "lucide-react";
 import {
+  useAllTrades,
   useTrades,
   useMistakeTags,
   useWeeklyReviews,
@@ -249,9 +250,12 @@ export default function Dashboard({ embedded = false }: { embedded?: boolean } =
   const [, navigate] = useLocation();
   const all = useMemo(() => filterByScope(trades ?? [], scope), [trades, scope]);
   // Tilt included: the guard is about the day as it happened.
+  // Every chapter: a fresh start mid-session must not reset today's loss
+  // stop or tilt lock — the guard is about the day, not the record.
+  const { data: everyTrade } = useAllTrades();
   const dayTrades = useMemo(
-    () => filterByScope(trades ?? [], { ...scope, book: "both" }),
-    [trades, scope],
+    () => filterByScope(everyTrade ?? [], { ...scope, book: "both" }),
+    [everyTrade, scope],
   );
   const closed = useMemo(
     () =>

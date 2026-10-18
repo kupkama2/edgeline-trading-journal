@@ -13,6 +13,7 @@ import {
   X,
 } from "lucide-react";
 import {
+  useAllTrades,
   useTrades,
   useMistakeTags,
   useAccountSettings,
@@ -27,6 +28,7 @@ import { owedOutcome } from "@shared/aftermath";
 import { journalHealth } from "@shared/health";
 import { openRisk } from "@shared/exposure";
 import { DailyGuardCard, useDailyStats, useTiltGuard } from "@/components/daily-guard";
+import { dayKey } from "@shared/review";
 import { ReviewDebtBanner, ReviewGate, useReviewPressure } from "@/components/review-debt";
 import { Spark } from "@/components/scorecard-card";
 import { StyleSwitcher } from "@/components/style-switcher";
@@ -329,9 +331,12 @@ export default function JournalV2() {
   const scoped = useMemo(() => filterByScope(trades ?? [], scope), [trades, scope]);
   // The day is the day: the guard reads every trade taken today, tilt
   // included, whichever book the rest of the page is showing.
+  // Every chapter: a fresh start mid-session must not reset today's loss
+  // stop or tilt lock — the guard is about the day, not the record.
+  const { data: everyTrade } = useAllTrades();
   const dayTrades = useMemo(
-    () => filterByScope(trades ?? [], { ...scope, book: "both" }),
-    [trades, scope],
+    () => filterByScope(everyTrade ?? [], { ...scope, book: "both" }),
+    [everyTrade, scope],
   );
   const open = useMemo(
     () =>
@@ -353,6 +358,16 @@ export default function JournalV2() {
 
   useOutcomeWatch(closed.length > 0);
   const review = useReviewPressure();
+  /*
+   * Whether a day is reviewed, by the same rule its review page uses: every
+   * trade it finished, tilt and passes included. The rows shown here are the
+   * filtered book, so "every row reviewed" said "reviewed" over a day the
+   * review page still counted as 3 of 4.
+   */
+  const reviewedDays = useMemo(() => {
+    const owed = new Set([...review.debt.days.map((d) => d.key), ...(review.debt.today.length ? [dayKey(new Date())] : [])]);
+    return new Set(days.map((g) => g.key).filter((k) => !owed.has(k)));
+  }, [days, review.debt]);
 
   const shown = allDays ? days : days.slice(0, DAY_PREVIEW);
 
@@ -617,13 +632,13 @@ export default function JournalV2() {
                           onClick={() => navigate(`/review/day/${g.key}`)}
                           title="Go over this day's trades"
                           className={`rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wider transition-colors ${
-                            g.trades.every((t) => t.reviewedAt)
+                            reviewedDays.has(g.key)
                               ? "text-emerald-400/80 hover:text-emerald-400"
                               : "text-muted-foreground hover:text-foreground"
                           }`}
                           data-testid={`button-review-day-${g.key}`}
                         >
-                          {g.trades.every((t) => t.reviewedAt) ? "reviewed" : "review"}
+                          {reviewedDays.has(g.key) ? "reviewed" : "review"}
                         </button>
                       </span>
                     </div>

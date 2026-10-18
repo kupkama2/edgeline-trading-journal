@@ -74,9 +74,20 @@ export function WeeklyInsightsCard({
     if (autoTried.current || !reviewsReady) return;
     if (!hasMaterial || stored || insights || generate.isPending) return;
     const guard = `edgeline.autoInsights.${bundle.weekStart}`;
-    if (sessionStorage.getItem(guard)) return;
+    // Blocked storage reads as "not tried yet"; the ref still stops a repeat.
+    let tried = false;
+    try {
+      tried = sessionStorage.getItem(guard) != null;
+    } catch {
+      tried = false;
+    }
+    if (tried) return;
     autoTried.current = true;
-    sessionStorage.setItem(guard, "1");
+    try {
+      sessionStorage.setItem(guard, "1");
+    } catch {
+      /* the ref above is the guard for this visit */
+    }
     // Quietly: an auto run that fails should not toast over the journal.
     generate
       .mutateAsync({ weekStart: bundle.weekStart, force: false })

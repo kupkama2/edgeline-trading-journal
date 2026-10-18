@@ -12,6 +12,7 @@
  * where there is room to read it. Nothing is computed differently; the same
  * metrics run, fewer of them are printed.
  */
+import { failed, reportFailure } from "@/lib/report";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -170,6 +171,7 @@ export function ClosedTradeRowV2({
                           description: `${t.symbol} is out of the plan book and every number.`,
                         },
                   ),
+                onError: failed("Tilt"),
               },
             );
           }}
@@ -189,7 +191,7 @@ export function ClosedTradeRowV2({
             }`}
             onClick={(e) => {
               e.stopPropagation();
-              update.mutate({ id: t.id, trade: { wellTraded: !t.wellTraded } });
+              update.mutate({ id: t.id, trade: { wellTraded: !t.wellTraded } }, { onError: failed("Traded well") });
             }}
             aria-label={t.wellTraded ? "Not traded well after all" : "Mark as traded well"}
             aria-pressed={t.wellTraded === true}
@@ -227,7 +229,7 @@ export function ClosedTradeRowV2({
                     netPnl: m.actualPnL ?? 0,
                     riskAmount: m.riskDollars > 0 ? m.riskDollars : null,
                   } as any),
-            });
+            }, { onError: failed("Scalp mark") });
           }}
           aria-label={t.scalp ? "Not a scalp after all" : "Mark as a scalp"}
           aria-pressed={t.scalp === true}
@@ -247,13 +249,17 @@ export function ClosedTradeRowV2({
             onClick={(e) => {
               e.stopPropagation();
               const ids = tiltFromHere(all, t.id);
-              Promise.all(ids.map((id) => update.mutateAsync({ id, trade: { tilt: true } }))).then(
-                () =>
+              // Settled, not all: a partial failure must say how many went in,
+              // rather than leaving some marked and the rest silently not.
+              Promise.allSettled(ids.map((id) => update.mutateAsync({ id, trade: { tilt: true } }))).then((rs) => {
+                const bad = rs.filter((r) => r.status === "rejected") as PromiseRejectedResult[];
+                if (bad.length) reportFailure(`${bad.length} of ${ids.length} tilt marks`, bad[0].reason);
+                else
                   toast({
                     title: `${ids.length} marked tilt`,
                     description: "This one and everything after it that day.",
-                  }),
-              );
+                  });
+              });
             }}
             title="Everything after this one that day was tilt"
             data-testid={`button-v2-tilt-from-${t.id}`}

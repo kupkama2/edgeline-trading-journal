@@ -97,14 +97,30 @@ function AccountFeesRow({
   const looksBn = venueOfAccount(name) === "binance";
   const bnReady = bnKey.trim().length >= 16 && bnSecret.trim().length >= 16;
 
+  /*
+   * The fees as STORED, for every save that is not about fees. Each of these
+   * used to send the fee boxes as they stood — so clearing the maker fee to
+   * retype it and then saving a wallet saved a maker fee of zero.
+   */
+  const storedFees = () => ({
+    name,
+    feeMode: (existing?.feeMode === "perContract" ? "perContract" : "percent") as "percent" | "perContract",
+    makerFee: existing?.makerFee ?? 0,
+    takerFee: existing?.takerFee ?? 0,
+  });
+  /** Run a save; on failure say so and return null, so no success toast follows. */
+  async function attempt<T>(title: string, fn: () => Promise<T>): Promise<{ value: T } | null> {
+    try {
+      return { value: await fn() };
+    } catch (err: any) {
+      toast({ title, description: String(err?.message ?? err).replace(/^\d+:\s*/, "").slice(0, 220), variant: "destructive" });
+      return null;
+    }
+  }
+
   async function saveWallet() {
-    await save.mutateAsync({
-      name,
-      feeMode: mode,
-      makerFee: Number(maker) || 0,
-      takerFee: Number(taker) || 0,
-      wallet: wallet.trim() || null,
-    });
+    if (!(await attempt("Wallet not saved", () => save.mutateAsync({ ...storedFees(), wallet: wallet.trim() || null }))))
+      return;
     toast({
       title: wallet.trim() ? "Wallet saved" : "Wallet cleared",
       description: wallet.trim()
@@ -139,16 +155,14 @@ function AccountFeesRow({
   }
 
   async function syncNow() {
-    sayWhatHappened("Hyperliquid", await sync.mutateAsync(name), "No wallet on this account.");
+    const r = await attempt("Hyperliquid sync failed", () => sync.mutateAsync(name));
+    if (r) sayWhatHappened("Hyperliquid", r.value, "No wallet on this account.");
   }
 
   async function saveBinanceKey() {
     try {
       await save.mutateAsync({
-        name,
-        feeMode: mode,
-        makerFee: Number(maker) || 0,
-        takerFee: Number(taker) || 0,
+        ...storedFees(),
         binanceKey: bnKey.trim(),
         binanceSecret: bnSecret.trim(),
       } as any);
@@ -164,18 +178,19 @@ function AccountFeesRow({
   }
 
   async function clearBinanceKey() {
-    await save.mutateAsync({ name, feeMode: mode, makerFee: Number(maker) || 0, takerFee: Number(taker) || 0, binanceKey: null } as any);
+    if (!(await attempt("Key not removed", () => save.mutateAsync({ ...storedFees(), binanceKey: null } as any)))) return;
     toast({ title: "Key removed", description: `${name} is back to trades logged by hand.` });
   }
 
   async function syncBinanceNow() {
-    sayWhatHappened("Binance", await bnSync.mutateAsync(name), "No key on this account.");
+    const r = await attempt("Binance sync failed", () => bnSync.mutateAsync(name));
+    if (r) sayWhatHappened("Binance", r.value, "No key on this account.");
   }
 
   async function logBalance() {
     const v = Number(balance.replace(/[,$\s]/g, ""));
     if (!Number.isFinite(v) || v < 0) return;
-    await addBalance.mutateAsync({ account: name, balance: v });
+    if (!(await attempt("Balance not logged", () => addBalance.mutateAsync({ account: name, balance: v })))) return;
     setBalance("");
     toast({ title: "Balance logged", description: `${name} is ${fmtAmount(v, 0)} as of now.` });
   }
@@ -196,18 +211,12 @@ function AccountFeesRow({
   async function persist() {
     const m = Number(maker) || 0;
     const t = Number(taker) || 0;
-    await save.mutateAsync({ name, feeMode: mode, makerFee: m, takerFee: t });
+    if (!(await attempt("Fees not saved", () => save.mutateAsync({ name, feeMode: mode, makerFee: m, takerFee: t })))) return;
     toast({ title: "Fees saved", description: `${name} — schedule updated.` });
   }
 
   async function setKind(kind: "live" | "evaluation") {
-    await save.mutateAsync({
-      name,
-      feeMode: mode,
-      makerFee: Number(maker) || 0,
-      takerFee: Number(taker) || 0,
-      kind,
-    });
+    if (!(await attempt("Not changed", () => save.mutateAsync({ ...storedFees(), kind })))) return;
     toast({
       title: kind === "evaluation" ? "Held out of the record" : "Counting again",
       description:
@@ -218,8 +227,10 @@ function AccountFeesRow({
   }
 
   async function foldInto(into: string) {
-    const { moved } = await merge.mutateAsync({ from: name, into });
+    const r = await attempt("Not merged", () => merge.mutateAsync({ from: name, into }));
     setMergeInto("");
+    if (!r) return;
+    const { moved } = r.value;
     toast({
       title: `Merged into ${into}`,
       description: `${moved} ${moved === 1 ? "trade" : "trades"} moved. ${name} is gone.`,
@@ -490,11 +501,7 @@ function AccountFeesRow({
                 <span className="text-muted-foreground">Passed it? Fold into</span>
                 <select
                   value={mergeInto}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    setMergeInto(v);
-                    if (v) void foldInto(v);
-                  }}
+                  onChange={(e) => setMergeInto(e.target.value)}
                   className="rounded border border-border bg-transparent px-1.5 py-0.5 text-[10px]"
                   data-testid={`select-merge-${name}`}
                 >
@@ -505,6 +512,26 @@ function AccountFeesRow({
                     </option>
                   ))}
                 </select>
+                {/* Merging moves every trade and deletes this account's
+                    settings, and there is no undo — so picking a name only
+                    asks; this button does it. */}
+                {mergeInto && (
+                  <>
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      className="h-6 px-2 text-[10px]"
+                      disabled={merge.isPending}
+                      onClick={() => void foldInto(mergeInto)}
+                      data-testid={`button-merge-confirm-${name}`}
+                    >
+                      Move all into {mergeInto}
+                    </Button>
+                    <Button size="sm" variant="ghost" className="h-6 px-2 text-[10px]" onClick={() => setMergeInto("")}>
+                      Cancel
+                    </Button>
+                  </>
+                )}
               </span>
             )}
           </>
@@ -854,6 +881,8 @@ export default function Settings() {
   const createTag = useCreateTag();
   const updateTag = useUpdateTag();
   const deleteTag = useDeleteTag();
+  /** A demon about to be deleted — it comes off every trade it was on, so it asks first. */
+  const [deletingTagId, setDeletingTagId] = useState<number | null>(null);
 
   const [newName, setNewName] = useState("");
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -1000,16 +1029,40 @@ export default function Settings() {
                       >
                         <Pencil className="h-3.5 w-3.5" />
                       </Button>
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        className="h-7 w-7 shrink-0 text-muted-foreground hover:text-destructive"
-                        onClick={() => deleteTag.mutate(t.id)}
-                        data-testid={`button-delete-tag-${t.id}`}
-                        aria-label="Delete tag"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
+                      {deletingTagId === t.id ? (
+                        <>
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            className="h-7 shrink-0 px-2 text-[11px]"
+                            disabled={deleteTag.isPending}
+                            onClick={() =>
+                              deleteTag.mutate(t.id, {
+                                onSuccess: () => setDeletingTagId(null),
+                                onError: (err: any) =>
+                                  toast({ title: "Not deleted", description: String(err?.message ?? err).slice(0, 200), variant: "destructive" }),
+                              })
+                            }
+                            data-testid={`button-delete-tag-confirm-${t.id}`}
+                          >
+                            Delete — off every trade
+                          </Button>
+                          <Button size="sm" variant="ghost" className="h-7 shrink-0 px-2 text-[11px]" onClick={() => setDeletingTagId(null)}>
+                            Keep
+                          </Button>
+                        </>
+                      ) : (
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-7 w-7 shrink-0 text-muted-foreground hover:text-destructive"
+                          onClick={() => setDeletingTagId(t.id)}
+                          data-testid={`button-delete-tag-${t.id}`}
+                          aria-label="Delete tag"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      )}
                     </>
                   )}
                 </div>

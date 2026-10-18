@@ -33,10 +33,19 @@ const at = (levels: ReturnType<typeof chartLevels>, label: string) =>
   levels.find((l) => l.label === label);
 
 describe("what the chart draws", () => {
-  it("draws the plan, and lets you drag all of it", () => {
-    const l = chartLevels(base);
+  it("draws the plan, and lets you drag all of it in the editor", () => {
+    const l = chartLevels(base, { initialStop: 90 });
     expect(l.map((x) => x.label)).toEqual(["entry", "stop", "target"]);
     expect(l.map((x) => x.field)).toEqual(["entryPrice", "initialStop", "initialTarget"]);
+  });
+
+  it("lets a closed trade's stop be corrected, but not a live one's from the trade page", () => {
+    // On a live position, dragging the stop IS moving the stop — management,
+    // which the stop card records with its time. Writing it to initialStop
+    // would restate every R the trade has.
+    expect(at(chartLevels(base), "stop")?.field).toBeUndefined();
+    expect(at(chartLevels(base), "target")?.field).toBe("initialTarget");
+    expect(at(chartLevels({ ...base, status: "closed", exitPrice: 120 }), "stop")?.field).toBe("initialStop");
   });
 
   it("adds the exit once there is one", () => {

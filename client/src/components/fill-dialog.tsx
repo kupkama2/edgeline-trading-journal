@@ -197,8 +197,8 @@ export function FillForm({
             <div>
               <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Still on</p>
               <p data-testid="fill-open-qty">
-                {num(led.openQty)}
-                <span className="ml-0.5 text-muted-foreground">ct</span>
+                {maskIfQuote(trade.sizeUnit, num(led.openQty))}
+                <span className="ml-0.5 text-muted-foreground">{trade.sizeUnit === "quote" ? "USD" : "ct"}</span>
               </p>
             </div>
             <div>
@@ -256,7 +256,7 @@ export function FillForm({
                     data-testid="button-apply-split"
                     className="rounded px-1 font-mono text-[10px] leading-tight text-primary transition-colors hover:bg-primary/10"
                   >
-                    even → {sizeHintShown}
+                    even → {maskIfQuote(trade.sizeUnit, String(sizeHintShown))}
                   </button>
                 )}
               </div>

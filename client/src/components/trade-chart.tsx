@@ -140,6 +140,9 @@ function palette(host: HTMLElement) {
 const digitsFor = (p: number) =>
   p >= 1000 ? 2 : p >= 100 ? 3 : p >= 1 ? 4 : p >= 0.01 ? 6 : 8;
 
+/** Pixels a press must travel before it is a drag rather than a click. */
+const DRAG_SLOP = 3;
+
 export function TradeChart({
   trade,
   draft,
@@ -389,8 +392,10 @@ function Candles({
   const dragRef = useRef<{
     field: LevelField;
     line: IPriceLine | null;
-    /** Set by the first move, so a press-and-release writes nothing. */
+    /** Set once the pointer has travelled DRAG_SLOP, so a press-and-release writes nothing. */
     moved: boolean;
+    /** Where the press began, to tell a drag from a hand that is not quite still. */
+    startY: number;
   } | null>(null);
   /** Whether panning is currently given up in favour of a handle. */
   const armedRef = useRef(false);
@@ -746,7 +751,7 @@ function Candles({
           if (!hit || y == null) return;
           e.preventDefault();
           const a = api.current;
-          dragRef.current = { field: hit.field, line: a?.lines[hit.index] ?? null, moved: false };
+          dragRef.current = { field: hit.field, line: a?.lines[hit.index] ?? null, moved: false, startY: y };
           e.currentTarget.setPointerCapture(e.pointerId);
           /* Nothing is reported yet. The price under a pointer NEAR a line is
              not that line's price, so emitting here would let a stray click
@@ -758,6 +763,10 @@ function Candles({
           const drag = dragRef.current;
           if (!drag) return armFor(y);
           if (y == null) return;
+          /* A few pixels of jitter, or a touch landing, is not a drag. Any
+             pointermove used to count, so a click could still save a stop
+             snapped to wherever the pointer twitched. */
+          if (!drag.moved && Math.abs(y - drag.startY) < DRAG_SLOP) return;
           const price = priceAt(y);
           if (price == null) return;
           /* Moved here as well as through the caller: a parent that only

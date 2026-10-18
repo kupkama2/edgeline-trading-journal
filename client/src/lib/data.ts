@@ -82,8 +82,11 @@ export function useCheckOutcomes() {
   return useMutation({
     mutationFn: async () => (await apiRequest("POST", "/api/outcomes/check", {})).json(),
     onSuccess: (res: any) => {
-      // Only disturb the cache when something actually changed.
-      if (res?.resolved?.length) invalidateTrades();
+      // Only disturb the cache when something actually changed — which includes
+      // excursions measured and funding filled in, not only outcomes settled.
+      // Otherwise they stayed invisible until a reload, and an editor left
+      // open could write the stale blanks back.
+      if (res?.resolved?.length || res?.measured?.length || res?.funded?.length) invalidateTrades();
     },
   });
 }

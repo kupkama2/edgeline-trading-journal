@@ -8,7 +8,7 @@
  * are gone: this renders inside the trade's own surface, and "close this
  * trade" means filling in the exit.
  */
-import { useEffect, useMemo, useState, Suspense, lazy } from "react";
+import { useEffect, useMemo, useState, Suspense, lazy, useRef } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -38,7 +38,7 @@ import { TradeImageGallery } from "@/components/trade-images";
 const TradeChart = lazy(() =>
   import("@/components/trade-chart").then((m) => ({ default: m.TradeChart })),
 );
-import { parseExtraTargets, parsePlaybook, type TradeWithTags } from "@shared/schema";
+import { missingRisk, parseExtraTargets, parsePlaybook, type TradeWithTags } from "@shared/schema";
 import { type CloseCard, type CloseFill, closeFromCard, readHeadline, saysAnythingAboutClose } from "@shared/close-card";
 import { LevelLabel, LevelLadder, type LevelKind } from "@/components/levels";
 import { ClipboardList, Image as ImageIcon, Layers, LineChart, NotebookPen } from "lucide-react";
@@ -62,11 +62,12 @@ import {
   draftFromTrade,
   readDraft,
   stashDraft,
+  changedFields,
   type TradeDraft,
 } from "@/lib/trade-draft";
 import { FillForm } from "@/components/fill-dialog";
 import { typedSymbol } from "@shared/symbols";
-import { maskIfQuote } from "@shared/redact";
+import { maskAmount, maskIfQuote } from "@shared/redact";
 
 /**
  * Editing a trade, as a panel rather than a window.
@@ -157,7 +158,8 @@ export function TradeEditor({
           entryPrice: merged.entryPrice,
           exitPrice: merged.exitPrice,
         },
-        mistakeTagIds: selectedTags,
+        // No tags: they are part of the form's unsaved edits, and merging
+        // fills is not saving them.
       });
       for (const fl of trade.fills) await deleteFill.mutateAsync(fl.id);
       setF((prev) => ({
@@ -197,7 +199,12 @@ export function TradeEditor({
    * every step is editable: an order that never filled goes back to pending, a
    * trade closed by mistake goes back to open.
    */
-  const [lifecycle, setLifecycle] = useState<Lifecycle>("open");
+  const [lifecycle, setLifecycle] = useState<Lifecycle | "cancelled">("open");
+  /**
+   * The stored trade as the edit found it — what a save is a change FROM.
+   * Not the live row: that moves under the form whenever the list refetches.
+   */
+  const loaded = useRef<{ draft: TradeDraft; wellTraded: boolean } | null>(null);
   /** Which scaling dialog is open, if any. */
   const [fillKind, setFillKind] = useState<"add" | "partial" | null>(null);
 
@@ -238,8 +245,13 @@ export function TradeEditor({
     // keeping them — but never silently: the banner says they were restored
     // and offers to throw them away.
     const stored = readDraft(trade.id);
-    const use = stored && draftDiffers(stored.draft, base) ? stored.draft : base;
-    setRestored(stored && draftDiffers(stored.draft, base) ? stored.savedAt : null);
+    const restoring = Boolean(stored && draftDiffers(stored.draft, base));
+    const use = restoring ? stored!.draft : base;
+    setRestored(restoring ? stored!.savedAt : null);
+    // A restored edit is a change from the row as it was when the edit
+    // began, not as it is now — otherwise everything the server changed in
+    // between would read as something the person typed.
+    loaded.current = { draft: restoring && stored!.base ? stored!.base : base, wellTraded: trade.wellTraded === true };
     applyDraft(use);
     // Not part of the draft: it is one tap, and a verdict restored from a
     // half-finished edit would be a claim nobody made.
@@ -274,7 +286,7 @@ export function TradeEditor({
    */
   useEffect(() => {
     if (!trade || !saved || !f.symbol) return;
-    stashDraft(trade.id, current, saved);
+    stashDraft(trade.id, current, saved, loaded.current?.draft);
   });
 
   /*
@@ -477,6 +489,9 @@ export function TradeEditor({
     } as any);
   }, [trade, f, direction, nmo]);
 
+  const sameIds = (a: number[], b: number[]) =>
+    a.length === b.length && [...a].sort().every((x, i) => x === [...b].sort()[i]);
+
   async function save() {
     if (!trade) return;
     const entryPrice = numOrNull(f.entryPrice);
@@ -486,23 +501,31 @@ export function TradeEditor({
     // A pending trade is only a resting order, so it may be saved with just an
     // entry — that is the whole point of importing one before it fills. Stop
     // and target become mandatory when it goes live.
-    const isPending = trade.status === "pending";
     if (!f.symbol?.trim() || entryPrice == null || size == null) {
       toast({ title: "Symbol, size and entry are required", variant: "destructive" });
       return;
     }
-    if (!isPending && (initialStop == null || initialTarget == null)) {
-      toast({ title: "A live trade needs a stop and a target", variant: "destructive" });
-      return;
-    }
     // The picked lifecycle and the exit price must agree before anything is
     // written; see resolveLifecycle for why neither contradiction is allowed.
-    const resolution = resolveLifecycle(lifecycle, f.exitPrice ?? "");
+    // A cancelled trade stays cancelled: it has no exit, and saving a typo
+    // fix must not turn an order that never filled into a live position.
+    const resolution =
+      lifecycle === "cancelled"
+        ? (f.exitPrice ?? "").trim()
+          ? { error: "A cancelled trade has no exit price — clear it, or pick Closed." }
+          : { status: "cancelled" as const }
+        : resolveLifecycle(lifecycle, f.exitPrice ?? "");
     if ("error" in resolution) {
       toast({ title: resolution.error, variant: "destructive" });
       return;
     }
     const resolved = resolution;
+    // The server's own rule, on the state being saved — not the stored one,
+    // which refused moving an open trade back to Waiting.
+    if (missingRisk({ status: resolved.status, initialStop, initialTarget, tilt: trade.tilt, scalp: trade.scalp }).length) {
+      toast({ title: "A live trade needs a stop and a target", variant: "destructive" });
+      return;
+    }
     // Same promotion as the entry card: a source name typed into the tag
     // field moves to the source column rather than becoming a fake setup.
     const promoted = splitSourceFromTags(
@@ -512,46 +535,69 @@ export function TradeEditor({
     );
     const rTags = promoted.tags;
 
+    /*
+     * The row this form describes, built the same way for what was loaded
+     * and for what is on screen now, so that comparing the two leaves only
+     * what was actually changed here. See changedFields.
+     */
+    const rowOf = (d: TradeDraft, status: string, wt: boolean) => {
+      const g = d.f;
+      const tagsOf = splitSourceFromTags(
+        normalizeSetupTags((g.rationaleTags ?? "").split(",")),
+        knownSources,
+        d.source.trim() || null,
+      );
+      const reopened = status !== "closed";
+      return {
+        symbol: (g.symbol ?? "").trim().toUpperCase(),
+        direction: d.direction,
+        size: numOrNull(g.size ?? ""),
+        entryPrice: numOrNull(g.entryPrice ?? ""),
+        sizeUnit: d.sizeUnit,
+        initialStop: numOrNull(g.initialStop ?? ""),
+        initialTarget: numOrNull(g.initialTarget ?? ""),
+        entryTime: g.entryTime ? toIso(g.entryTime) : trade.entryTime,
+        extraTargets: (() => {
+          const xs = d.extraTps.map(Number).filter((x) => isFinite(x) && x > 0);
+          return xs.length ? JSON.stringify(xs) : null;
+        })(),
+        status,
+        exitPrice: numOrNull(g.exitPrice ?? ""),
+        // An open trade has no exit: reopening one clears what described it.
+        exitTime: reopened ? null : g.exitTime ? toIso(g.exitTime) : null,
+        exitReason: reopened ? null : ((d.exitReason as any) ?? null),
+        mae: numOrNull(g.mae ?? ""),
+        mfe: numOrNull(g.mfe ?? ""),
+        postExitPeak: numOrNull(g.postExitPeak ?? ""),
+        postExitAdverse: numOrNull(g.postExitAdverse ?? ""),
+        noManagementOutcome: (d.nmo as any) ?? null,
+        rationale: (g.rationale ?? "").trim() || null,
+        rationaleTags: tagsOf.tags.length ? JSON.stringify(tagsOf.tags) : null,
+        notes: (g.notes ?? "").trim() || null,
+        account: d.account.trim() || null,
+        source: tagsOf.source,
+        styleId: d.styleId,
+        fees: numOrNull(g.fees ?? ""),
+        highlights: serializeHighlights(d.highlights),
+        wellTraded: wt,
+        entryGrade: d.grades.entry as any,
+        stopGrade: d.grades.stop as any,
+        exitGrade: d.grades.exit as any,
+      };
+    };
+    const now = rowOf(current, resolved.status, wellTraded);
+    const was = loaded.current
+      ? rowOf(loaded.current.draft, loaded.current.draft.lifecycle, loaded.current.wellTraded)
+      : null;
+    const patch = was ? changedFields(was, now) : now;
+    const tagsChanged = !loaded.current || !sameIds(loaded.current.draft.selectedTags, selectedTags);
+
     try {
     await updateTrade.mutateAsync({
       id: trade.id,
-      trade: {
-        symbol: f.symbol.trim().toUpperCase(),
-        direction,
-        size,
-        entryPrice,
-        sizeUnit,
-        initialStop,
-        initialTarget,
-        entryTime: f.entryTime ? toIso(f.entryTime) : trade.entryTime,
-        extraTargets: (() => {
-          const xs = extraTps.map(Number).filter((x) => isFinite(x) && x > 0);
-          return xs.length ? JSON.stringify(xs) : null;
-        })(),
-        status: resolved.status,
-        exitPrice: numOrNull(f.exitPrice),
-        exitTime: f.exitTime ? toIso(f.exitTime) : null,
-        exitReason: (exitReason as any) ?? null,
-        mae: numOrNull(f.mae),
-        mfe: numOrNull(f.mfe),
-        postExitPeak: numOrNull(f.postExitPeak ?? ""),
-        postExitAdverse: numOrNull(f.postExitAdverse ?? ""),
-        noManagementOutcome: (nmo as any) ?? null,
-        rationale: f.rationale.trim() || null,
-        rationaleTags: rTags.length ? JSON.stringify(rTags) : null,
-        notes: f.notes.trim() || null,
-        account: account.trim() || null,
-        source: promoted.source,
-        styleId,
-        fees: numOrNull(f.fees ?? ""),
-        highlights: serializeHighlights(highlights),
-        wellTraded,
-        entryGrade: grades.entry as any,
-        stopGrade: grades.stop as any,
-        exitGrade: grades.exit as any,
-      },
-      mistakeTagIds: selectedTags,
-    });
+      trade: patch as any,
+      ...(tagsChanged ? { mistakeTagIds: selectedTags } : {}),
+    } as any);
     // Saved: the stored row IS the draft now, and a surviving copy is only a
     // way for the two to disagree the next time this opens.
     clearDraft(trade.id);
@@ -648,6 +694,9 @@ export function TradeEditor({
                   { id: "pending", label: "Waiting", icon: Clock3 },
                   { id: "open", label: "Open", icon: ArrowUpRight },
                   { id: "closed", label: "Closed", icon: CheckCircle2 },
+                  // Shown only for a trade that IS cancelled, so the state it is
+                  // in is on screen and saving keeps it there.
+                  ...(trade.status === "cancelled" ? ([{ id: "cancelled", label: "Cancelled", icon: Ban }] as const) : []),
                 ] as const
               ).map(({ id, label, icon: Icon }) => (
                 <button
@@ -724,7 +773,7 @@ export function TradeEditor({
               {cardRead.card.realizedPnl != null && (
                 <span className="font-mono">
                   {cardRead.card.realizedPnl > 0 ? "+" : ""}
-                  {num(cardRead.card.realizedPnl)} {cardRead.card.pnlCurrency ?? ""}
+                  {maskAmount() ?? `${num(cardRead.card.realizedPnl)} ${cardRead.card.pnlCurrency ?? ""}`}
                 </span>
               )}
               <button
@@ -740,7 +789,7 @@ export function TradeEditor({
               <p className="text-muted-foreground">
                 Fee{" "}
                 <span className="font-mono text-foreground/80">
-                  {num(Math.abs(cardRead.card.fee))} {cardRead.card.feeCurrency ?? ""}
+                  {maskAmount() ?? `${num(Math.abs(cardRead.card.fee))} ${cardRead.card.feeCurrency ?? ""}`}
                 </span>{" "}
                 — R and P&amp;L go net of it.
               </p>

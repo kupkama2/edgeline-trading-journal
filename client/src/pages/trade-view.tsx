@@ -1,4 +1,5 @@
 import { useAccountBalances } from "@/lib/data";
+import { failed, reportFailure } from "@/lib/report";
 import { equityAt, fmtPercent, riskPercent } from "@shared/equity";
 /**
  * One trade, in full — the single place a trade is ever looked at.
@@ -893,7 +894,7 @@ export function TradeBody({
             trade gets looked at properly. */}
         <button
           type="button"
-          onClick={() => updateTrade.mutate({ id: trade.id, trade: { tilt: !trade.tilt } })}
+          onClick={() => updateTrade.mutate({ id: trade.id, trade: { tilt: !trade.tilt } }, { onError: failed("Tilt") })}
           aria-pressed={trade.tilt}
           title={
             trade.tilt
@@ -917,7 +918,9 @@ export function TradeBody({
         {!trade.tilt && (
           <button
             type="button"
-            onClick={() => updateTrade.mutate({ id: trade.id, trade: { wellTraded: !trade.wellTraded } })}
+            onClick={() =>
+              updateTrade.mutate({ id: trade.id, trade: { wellTraded: !trade.wellTraded } }, { onError: failed("Traded well") })
+            }
             aria-pressed={trade.wellTraded === true}
             title={
               trade.wellTraded
@@ -963,7 +966,7 @@ export function TradeBody({
                       netPnl: m.actualPnL ?? 0,
                       riskAmount: m.riskDollars > 0 ? m.riskDollars : null,
                     } as any),
-              })
+              }, { onError: failed("Scalp mark") })
             }
             aria-pressed={trade.scalp === true}
             title={
@@ -1049,9 +1052,16 @@ export function TradeBody({
               variant="destructive"
               size="sm"
               className="h-8 text-[11px]"
+              // Disabled while in flight: a double click sent two DELETEs and the
+              // second came back 404 with nothing said. A failure is said now.
+              disabled={deleteTrade.isPending}
               onClick={async () => {
-                await deleteTrade.mutateAsync(trade.id);
-                onDeleted();
+                try {
+                  await deleteTrade.mutateAsync(trade.id);
+                  onDeleted();
+                } catch (err) {
+                  reportFailure("Delete", err);
+                }
               }}
               data-testid="button-view-delete-confirm"
             >
@@ -1707,7 +1717,7 @@ export function TradeBody({
                         size="icon"
                         variant="ghost"
                         className="ml-auto h-6 w-6 shrink-0 text-muted-foreground hover:text-destructive"
-                        onClick={() => deleteFill.mutate(f.id)}
+                        onClick={() => deleteFill.mutate(f.id, { onError: failed("Fill delete") })}
                         disabled={deleteFill.isPending}
                         aria-label="Remove this fill"
                         data-testid={`button-view-delete-fill-${f.id}`}
@@ -1719,7 +1729,7 @@ export function TradeBody({
               </ul>
               <p className="mt-2 font-mono text-[11px] text-muted-foreground" data-testid="view-ledger">
                 avg entry {num(led.avgEntry)}
-                {trade.status === "open" && ` · ${num(led.openQty)} still on`} ·{" "}
+                {trade.status === "open" && ` · ${maskIfQuote(trade.sizeUnit, num(led.openQty))} still on`} ·{" "}
                 {fmtMoney(led.realizedPnL)} banked before the close
               </p>
 

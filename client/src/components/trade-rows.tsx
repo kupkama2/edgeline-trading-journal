@@ -117,7 +117,7 @@ export function OpenTradeRow({
             </Badge>
           )}
           <span className="ml-auto shrink-0 rounded bg-secondary px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
-            {t.size} @ {num(t.entryPrice)}
+            {maskIfQuote(t.sizeUnit, String(t.size))} @ {num(t.entryPrice)}
           </span>
         </div>
         <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 font-mono text-[11px] text-muted-foreground">

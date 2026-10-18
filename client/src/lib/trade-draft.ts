@@ -40,13 +40,20 @@ export interface TradeDraft {
   source: string;
   styleId: number | null;
   sizeUnit: "base" | "quote";
-  lifecycle: "pending" | "open" | "closed";
+  /** "cancelled" only ever comes from the stored row: saving must not quietly reopen it. */
+  lifecycle: "pending" | "open" | "closed" | "cancelled";
 }
 
 export interface StoredDraft {
   draft: TradeDraft;
   /** When it was last typed into, for the banner. */
   savedAt: string;
+  /**
+   * The stored trade as it was when this edit began. A save sends only what
+   * differs from it, so a draft restored after a sync closed the trade does
+   * not write the stale open state back over the close.
+   */
+  base?: TradeDraft;
 }
 
 /*
@@ -101,13 +108,13 @@ const sameList = <T>(a: T[], b: T[]) =>
  * Two call sites deciding that independently is how a stale draft survives
  * being undone by hand.
  */
-export function stashDraft(tradeId: number, draft: TradeDraft, saved: TradeDraft): void {
+export function stashDraft(tradeId: number, draft: TradeDraft, saved: TradeDraft, base?: TradeDraft): void {
   try {
     if (!draftDiffers(draft, saved)) {
       store.remove(key(tradeId));
       return;
     }
-    const stored: StoredDraft = { draft, savedAt: new Date().toISOString() };
+    const stored: StoredDraft = { draft, savedAt: new Date().toISOString(), ...(base ? { base } : {}) };
     store.set(key(tradeId), JSON.stringify(stored));
   } catch {
     // A full or blocked localStorage must never take the editor down with it.
@@ -201,6 +208,30 @@ export function draftFromTrade(trade: TradeWithTags): TradeDraft {
     styleId: trade.styleId ?? null,
     sizeUnit: trade.sizeUnit === "quote" ? "quote" : "base",
     lifecycle:
-      trade.status === "pending" ? "pending" : trade.status === "closed" ? "closed" : "open",
+      trade.status === "pending"
+        ? "pending"
+        : trade.status === "closed"
+          ? "closed"
+          : trade.status === "cancelled"
+            ? "cancelled"
+            : "open",
   };
+}
+
+/**
+ * The fields of `next` that differ from `base`, for a PATCH.
+ *
+ * The editor builds a whole row from its form, and the form was filled once,
+ * when it opened. Sending the whole row wrote that snapshot back over
+ * anything that had changed on the server since — a sync closing the trade,
+ * the price feed filling in its excursions — whichever field the person
+ * actually touched. Sending only what they changed leaves the rest to
+ * whoever changed it last.
+ */
+export function changedFields<T extends Record<string, unknown>>(base: T, next: T): Partial<T> {
+  const out: Partial<T> = {};
+  for (const k of Object.keys(next) as (keyof T)[]) {
+    if (JSON.stringify(next[k] ?? null) !== JSON.stringify(base[k] ?? null)) out[k] = next[k];
+  }
+  return out;
 }

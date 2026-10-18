@@ -105,7 +105,15 @@ export function chartLevels(trade: TradeWithTags, draft?: LevelDraft): Level[] {
    * handle is offered only while the two are still the same number, which is
    * exactly the case this is for: a trade being filled in after the fact.
    */
-  const stopField: LevelField | undefined = managed ? undefined : "initialStop";
+  /*
+   * Nor does a position that is still OPEN, outside the editor. There,
+   * dragging the stop is moving the stop — management, which the stop card
+   * records with its time — and writing it to initialStop would restate the
+   * trade's R. The editor (draft carries initialStop) and a closed trade
+   * being corrected after the fact are where the plan's own stop is edited.
+   */
+  const live_ = trade.status === "open" || trade.status === "pending";
+  const stopField: LevelField | undefined = managed || (live_ && !editing) ? undefined : "initialStop";
   return [
     ...(entry != null
       ? [{ price: entry, label: "entry", color: "entry", dashed: false, field: "entryPrice" as const }]
