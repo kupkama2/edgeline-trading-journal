@@ -20,6 +20,10 @@ import { createServer, type Server } from "node:http";
  *     closed — claimed, not duplicated: stamped, and its exit filled in
  *   a short the person logged that the venue has as a long — left alone
  *   a symbol whose history begins mid-position — set aside, counted, unwritten
+ *   a symbol the venue will not answer for — skipped and named, the rest read
+ *   a symbol traded in hedge mode — set aside and named, not misread
+ *   a commission paid in BNB — the fee left blank, not booked as dollars
+ *   every time-filtered read asked in windows of at most seven days
  *   a second sync that changes nothing
  */
 const DB = process.env.DATABASE_URL;
@@ -44,8 +48,9 @@ const userTrades: Record<string, unknown[]> = {
     { symbol: "ETHUSDT", id: 1, orderId: 10, side: "BUY", price: "2000", qty: "1", realizedPnl: "0", commission: "0.4", time: ethIn },
     { symbol: "ETHUSDT", id: 2, orderId: 11, side: "SELL", price: "2100", qty: "1", realizedPnl: "100", commission: "0.6", time: ethOut },
   ],
+  // The commission paid in BNB: a quantity of a coin, not a dollar figure.
   BTCUSDT: [
-    { symbol: "BTCUSDT", id: 3, orderId: 12, side: "SELL", price: "100", qty: "2", realizedPnl: "0", commission: "0.2", time: btcIn },
+    { symbol: "BTCUSDT", id: 3, orderId: 12, side: "SELL", price: "100", qty: "2", realizedPnl: "0", commission: "0.0004", commissionAsset: "BNB", time: btcIn },
   ],
   SOLUSDT: [
     { symbol: "SOLUSDT", id: 4, orderId: 13, side: "BUY", price: "150", qty: "3", realizedPnl: "0", commission: "0.3", time: solIn },
@@ -55,7 +60,14 @@ const userTrades: Record<string, unknown[]> = {
   DOGEUSDT: [
     { symbol: "DOGEUSDT", id: 5, orderId: 14, side: "SELL", price: "0.2", qty: "500", realizedPnl: "12", commission: "0.1", time: now - 10 * H },
   ],
+  // Hedge mode: a long opened and closed under its own position side.
+  ADAUSDT: [
+    { symbol: "ADAUSDT", id: 6, orderId: 15, side: "BUY", price: "0.5", qty: "100", realizedPnl: "0", commission: "0.01", positionSide: "LONG", time: now - 20 * H },
+    { symbol: "ADAUSDT", id: 7, orderId: 16, side: "SELL", price: "0.6", qty: "100", realizedPnl: "10", commission: "0.01", positionSide: "LONG", time: now - 19 * H },
+  ],
 };
+// LINKUSDT realised something but the venue no longer answers for it.
+const REFUSED = "LINKUSDT";
 const positions = [
   { symbol: "BTCUSDT", positionAmt: "-2", entryPrice: "100" },
   { symbol: "SOLUSDT", positionAmt: "3", entryPrice: "150" },
@@ -72,12 +84,25 @@ const openOrders = [
 const income = [
   { symbol: "ETHUSDT", incomeType: "REALIZED_PNL", income: "100", time: ethOut },
   { symbol: "DOGEUSDT", incomeType: "REALIZED_PNL", income: "12", time: now - 10 * H },
+  { symbol: "ADAUSDT", incomeType: "REALIZED_PNL", income: "10", time: now - 19 * H },
+  { symbol: REFUSED, incomeType: "REALIZED_PNL", income: "-3", time: now - 40 * H },
 ];
+// The venue's own rule: a time-filtered read names both ends, at most a week apart.
+const WEEK = 7 * 24 * H;
+const windowed: { path: string; span: number | null }[] = [];
+const inWindow = (u: URL, t: number) => t >= Number(u.searchParams.get("startTime")) && t <= Number(u.searchParams.get("endTime"));
 
 let venue: Server;
 let app: Server;
 let base: string;
 const asked: { path: string; signed: boolean; key: string | undefined }[] = [];
+const windowOk = (u: URL) => {
+  const a = Number(u.searchParams.get("startTime"));
+  const b = Number(u.searchParams.get("endTime"));
+  const ok = u.searchParams.has("startTime") && u.searchParams.has("endTime") && b >= a && b - a <= WEEK;
+  windowed.push({ path: u.pathname, span: ok ? b - a : null });
+  return ok;
+};
 
 function startVenue(): Promise<string> {
   return new Promise((resolve) => {
@@ -114,19 +139,22 @@ function startVenue(): Promise<string> {
           return json(
             key === SPENDING_KEY
               ? { enableReading: true, enableFutures: true, enableWithdrawals: true }
-              : { enableReading: true, enableFutures: true, enableWithdrawals: false, enableSpotAndMarginTrading: false },
+              : // A real read-only key: Enable Reading and nothing else. "Enable
+                // Futures" is futures TRADING, and is off on a key like this.
+                { enableReading: true, enableFutures: false, enableWithdrawals: false, enableSpotAndMarginTrading: false },
           );
         case "/fapi/v2/positionRisk":
           return json(positions);
         case "/fapi/v1/openOrders":
           return json(openOrders);
         case "/fapi/v1/income":
-          return json(u.searchParams.get("incomeType") === "REALIZED_PNL" ? income : []);
+          if (!windowOk(u)) return json({ code: -1130, msg: "Data sent for parameter is not valid." }, 400);
+          return json(u.searchParams.get("incomeType") === "REALIZED_PNL" ? income.filter((r) => inWindow(u, r.time)) : []);
         case "/fapi/v1/userTrades": {
           const symbol = u.searchParams.get("symbol") ?? "";
-          const fromId = Number(u.searchParams.get("fromId") ?? 0);
-          const rows = (userTrades[symbol] ?? []).filter((r: any) => r.id >= fromId);
-          return json(rows);
+          if (symbol === REFUSED) return json({ code: -1121, msg: "Invalid symbol." }, 400);
+          if (!windowOk(u)) return json({ code: -1130, msg: "Data sent for parameter is not valid." }, 400);
+          return json((userTrades[symbol] ?? []).filter((r: any) => inWindow(u, r.time)));
         }
         default:
           return json({ code: -1121, msg: "Invalid symbol." }, 400);
@@ -259,13 +287,19 @@ describe.skipIf(!DB)("a Binance account, synced", () => {
     asked.length = 0;
     const r = await (await send("POST", "/api/binance/sync", { account: ACCOUNT })).json();
     const a = r.accounts[0];
-    expect(a.error).toBeUndefined();
-    expect(a).toMatchObject({ account: ACCOUNT, created: 2, claimed: 1, updated: 0, unchanged: 0, unreconstructed: 1 });
+    // One refused symbol and one hedged one are named — and the rest is
+    // still read and written, rather than the whole account failing.
+    expect(a.error).toMatch(/would not answer for LINKUSDT/);
+    expect(a.error).toMatch(/ADAUSDT was traded in hedge mode/);
+    expect(a).toMatchObject({ account: ACCOUNT, created: 2, claimed: 1, updated: 0, unchanged: 0, unreconstructed: 3 });
+    // Every time-filtered read named both ends, a week apart at most.
+    expect(windowed.length).toBeGreaterThan(10);
+    expect(windowed.every((w) => w.span != null)).toBe(true);
     // The census: which key was asked, and what each market's fills became —
     // DOGE's one fill set aside before anything was reconstructed from it.
     expect(a.source).toBe(`…${KEY.slice(-4)}`);
     expect(a.markets.map((m: any) => [m.coin, m.fills, m.trades, m.unreconstructed])).toEqual(
-      expect.arrayContaining([["ETHUSDT", 2, 1, 0], ["BTCUSDT", 1, 1, 0], ["SOLUSDT", 1, 1, 0], ["DOGEUSDT", 1, 0, 1]]),
+      expect.arrayContaining([["ETHUSDT", 2, 1, 0], ["BTCUSDT", 1, 1, 0], ["SOLUSDT", 1, 1, 0], ["DOGEUSDT", 1, 0, 1], ["ADAUSDT", 2, 0, 2]]),
     );
     // Every account read was signed; the venue was asked for each symbol's
     // fills, the open positions, the income record and the resting orders.
@@ -281,7 +315,8 @@ describe.skipIf(!DB)("a Binance account, synced", () => {
     // under the journal's own name for the market.
     const btc = byId("binance:BTCUSDT:3");
     expect(btc).toMatchObject({ symbol: "BTC", direction: "short", status: "open", size: 2, entryPrice: 100, initialStop: 110, initialTarget: 80, account: ACCOUNT });
-    expect(btc.fees).toBeCloseTo(0.2);
+    // Paid in BNB: unknown in dollars, so blank rather than $0.0004.
+    expect(btc.fees).toBeNull();
 
     // The open long with nothing resting: blanks, for the person to fill.
     const sol = byId("binance:SOLUSDT:4");

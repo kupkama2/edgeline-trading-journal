@@ -105,6 +105,12 @@ export interface SyncSummary {
   message?: string;
 }
 
+/**
+ * The fees a venue trade paid, or null when any of them was paid in a coin
+ * rather than dollars — a known-wrong figure is worse than a blank.
+ */
+export const feesOf = (t: HlTrade): number | null => (Number.isFinite(t.fees) ? t.fees : null);
+
 /** What a venue-written trade looks like in the journal's own terms. */
 export function asInsert(
   t: HlTrade,
@@ -135,7 +141,7 @@ export function asInsert(
     // How it closed is not in the fills. "other" is the honest reading, and
     // the health panel lists it as an exit reason still to be given.
     exitReason: t.status === "closed" ? "other" : null,
-    fees: t.fees,
+    fees: feesOf(t),
     account,
     externalId: t.externalId,
   } as InsertTrade;
@@ -153,7 +159,7 @@ export function closingPatch(existing: TradeWithTags, t: HlTrade, levels: Levels
     patch.exitPrice = t.exitPrice;
     patch.exitTime = t.exitTime != null ? new Date(t.exitTime).toISOString() : null;
     patch.exitReason = existing.exitReason ?? "other";
-    patch.fees = t.fees;
+    patch.fees = feesOf(t);
     // An add while open moves the average entry; the record follows the fills.
     patch.size = t.size;
     patch.entryPrice = t.entryPrice;
@@ -161,7 +167,7 @@ export function closingPatch(existing: TradeWithTags, t: HlTrade, levels: Levels
     if (Math.abs(existing.size - t.size) > 1e-9) {
       patch.size = t.size;
       patch.entryPrice = t.entryPrice;
-      patch.fees = t.fees;
+      patch.fees = feesOf(t);
     }
   }
   if (existing.initialStop == null && levels.initialStop != null) patch.initialStop = levels.initialStop;
@@ -186,7 +192,7 @@ export function claimPatch(
   pricePair: string | null = null,
 ): Partial<InsertTrade> {
   const patch: Record<string, unknown> = { externalId: t.externalId };
-  if (existing.fees == null) patch.fees = t.fees;
+  if (existing.fees == null) patch.fees = feesOf(t);
   // A hand-logged WTIOIL had no way of saying which book it was on; the
   // venue just said. Only where nothing was chosen by hand already.
   if (!existing.pricePair && pricePair) patch.pricePair = pricePair;

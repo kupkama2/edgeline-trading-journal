@@ -10,7 +10,8 @@
  *   history, which is what the sync needs, and nothing else is needed. A key
  *   that can also withdraw, or trade, is a key whose theft costs money, and
  *   the journal refuses to be the place it is stolen from — it is turned
- *   away before it is stored, with the reason.
+ *   away before it is stored, with the reason. Reading — futures included —
+ *   is Binance's "Enable Reading", and that is the one permission required.
  *
  *   WHAT A FILL IS. userTrades rows carry the same facts as Hyperliquid's
  *   fills under other names, and are mapped onto the shared fill shape so the
@@ -40,10 +41,15 @@ const num = (v: unknown): number | null => {
 
 export interface KeyRestrictions {
   enableReading: boolean;
+  /** Futures TRADING. Reading the futures account needs only enableReading. */
   enableFutures: boolean;
   enableWithdrawals: boolean;
   enableSpotAndMarginTrading: boolean;
+  enableMargin: boolean;
+  enableVanillaOptions: boolean;
+  enablePortfolioMarginTrading: boolean;
   enableInternalTransfer: boolean;
+  permitsUniversalTransfer: boolean;
   ipRestrict: boolean;
 }
 
@@ -56,7 +62,11 @@ export function parseRestrictions(json: unknown): KeyRestrictions {
     enableFutures: on("enableFutures"),
     enableWithdrawals: on("enableWithdrawals"),
     enableSpotAndMarginTrading: on("enableSpotAndMarginTrading"),
+    enableMargin: on("enableMargin"),
+    enableVanillaOptions: on("enableVanillaOptions"),
+    enablePortfolioMarginTrading: on("enablePortfolioMarginTrading"),
     enableInternalTransfer: on("enableInternalTransfer"),
+    permitsUniversalTransfer: on("permitsUniversalTransfer"),
     ipRestrict: on("ipRestrict"),
   };
 }
@@ -65,16 +75,26 @@ export function parseRestrictions(json: unknown): KeyRestrictions {
  * Why a key may not be kept, or null when it may.
  *
  * Withdrawals and transfers are refused outright — a stolen key must not be
- * able to move money. Spot trading is refused too: the sync has no use for
- * it and a key that can place orders is a key that can lose money. Futures
- * has to be ON, because the futures endpoints answer nothing without it, and
- * a key that cannot read futures would be stored only to fail.
+ * able to move money. Spot, margin and options trading are refused too: the
+ * sync has no use for them, and a key that can place orders can lose money.
+ *
+ * "Enable Reading" is the one permission REQUIRED. This rule once demanded
+ * "Enable Futures" as well, which on Binance is futures trading, not
+ * reading — so it refused the read-only key the settings page asked for.
+ * Enable Futures is now neither required nor refused: reading the futures
+ * account is documented to need only Enable Reading, and refusing the
+ * trading flag as well would leave nothing to fall back on if a particular
+ * account turns out to need it. The settings page says to leave it off.
  */
 export function keyRefusal(r: KeyRestrictions): string | null {
   if (r.enableWithdrawals) return "This key can withdraw. Make a read-only key — the journal will not keep one that can move money.";
-  if (r.enableInternalTransfer) return "This key can transfer between accounts. Make a read-only key.";
-  if (r.enableSpotAndMarginTrading) return "This key can place spot orders. The sync only reads — make a key with trading off.";
-  if (!r.enableFutures) return "This key cannot read Futures. Turn on Futures (reading) when you create it.";
+  if (r.enableInternalTransfer || r.permitsUniversalTransfer)
+    return "This key can transfer between accounts. Make a read-only key.";
+  if (r.enableSpotAndMarginTrading || r.enableMargin)
+    return "This key can place spot or margin orders. The sync only reads — make a key with only Enable Reading on.";
+  if (r.enablePortfolioMarginTrading) return "This key can trade on portfolio margin. Make a key with only Enable Reading on.";
+  if (r.enableVanillaOptions) return "This key can trade options. Make a key with only Enable Reading on.";
+  if (!r.enableReading) return "This key cannot read. Make one with Enable Reading on — it is the only permission needed.";
   return null;
 }
 
@@ -90,8 +110,20 @@ export interface BinanceUserTrade {
   qty: number;
   realizedPnl: number;
   commission: number;
+  /** What the commission was paid in. Only a dollar stable is a dollar figure. */
+  commissionAsset: string;
+  /** "BOTH" in one-way mode; "LONG"/"SHORT" in hedge mode. */
+  positionSide: string;
   time: number;
 }
+
+/**
+ * Commission assets whose amount is a dollar amount. BNFCR is Binance's
+ * futures fee credit, denominated in dollars. Anything else — BNB for the
+ * fee discount, most often — is a quantity of a coin, and adding 0.002 BNB
+ * to a P&L as $0.002 would understate the fee about six-hundredfold.
+ */
+export const USD_COMMISSION = new Set(["USDT", "USDC", "BUSD", "FDUSD", "BNFCR", "USD"]);
 
 export function parseUserTrades(json: unknown): BinanceUserTrade[] {
   if (!Array.isArray(json)) return [];
@@ -113,6 +145,8 @@ export function parseUserTrades(json: unknown): BinanceUserTrade[] {
       qty,
       realizedPnl: num(r.realizedPnl) ?? 0,
       commission: num(r.commission) ?? 0,
+      commissionAsset: typeof r.commissionAsset === "string" ? r.commissionAsset.trim().toUpperCase() : "USDT",
+      positionSide: typeof r.positionSide === "string" ? r.positionSide.trim().toUpperCase() : "BOTH",
       time,
     });
   }
@@ -152,11 +186,14 @@ export function symbolsFromIncome(json: unknown): string[] {
 export interface FillsFromTrades {
   fills: HlFill[];
   /**
-   * Symbols whose fills do not add up to what the venue says is open now,
-   * so the window must have opened with a position already on. Nothing
-   * honest can be written for them from this record.
+   * Symbols whose fills cannot be read as positions from flat to flat:
+   * either they do not add up to what the venue says is open now (the
+   * window opened with a position already on), or they were traded in
+   * hedge mode, where a long and a short on one symbol are open at once and
+   * a single running position is the wrong model. Nothing honest can be
+   * written for them from this record.
    */
-  unreconstructable: { symbol: string; fills: number }[];
+  unreconstructable: { symbol: string; fills: number; reason: "before-window" | "hedge-mode" }[];
 }
 
 const ZERO = 1e-9;
@@ -183,10 +220,20 @@ export function fillsFromUserTrades(
     bySymbol.set(r.symbol, list);
   }
   const fills: HlFill[] = [];
-  const unreconstructable: { symbol: string; fills: number }[] = [];
+  const unreconstructable: FillsFromTrades["unreconstructable"] = [];
 
   for (const [symbol, list] of Array.from(bySymbol.entries())) {
     list.sort((a, b) => a.time - b.time || a.id - b.id);
+    /*
+     * Hedge mode: a long and a short open on one symbol at the same time.
+     * The net can still reconcile with the venue while every trade read
+     * from it is wrong — a short opened under a held long reads as the
+     * long's partial close. Set aside, and said, rather than guessed at.
+     */
+    if (list.some((r) => r.positionSide === "LONG" || r.positionSide === "SHORT")) {
+      unreconstructable.push({ symbol, fills: list.length, reason: "hedge-mode" });
+      continue;
+    }
     let pos = 0;
     const mine: HlFill[] = [];
     for (const r of list) {
@@ -199,7 +246,9 @@ export function fillsFromUserTrades(
         startPosition: pos,
         dir: "",
         closedPnl: r.realizedPnl,
-        fee: r.commission,
+        // A fee in a coin is not a fee in dollars. NaN carries "unknown"
+        // through the position reader's sums, and the writer stores null.
+        fee: USD_COMMISSION.has(r.commissionAsset) ? r.commission : Number.NaN,
         tid: r.id,
         oid: r.orderId,
       });
@@ -207,7 +256,7 @@ export function fillsFromUserTrades(
     }
     const venueSays = openNow.get(symbol)?.amt ?? 0;
     if (Math.abs(pos - venueSays) > ZERO) {
-      unreconstructable.push({ symbol, fills: mine.length });
+      unreconstructable.push({ symbol, fills: mine.length, reason: "before-window" });
       continue;
     }
     fills.push(...mine);

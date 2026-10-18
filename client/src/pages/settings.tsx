@@ -440,8 +440,9 @@ function AccountFeesRow({
                   </Button>
                 )}
                 <span className="basis-full text-[10px] leading-snug text-muted-foreground">
-                  Make it in Binance under API Management with only <em>Enable Reading</em> and{" "}
-                  <em>Enable Futures</em> ticked. A key that can withdraw or trade is refused.
+                  Make it in Binance under API Management with only <em>Enable Reading</em> ticked —
+                  that is all the sync needs, futures history included. A key that can withdraw,
+                  transfer, or place spot or margin orders is refused.
                 </span>
               </>
             )}
