@@ -93,6 +93,7 @@ import {
 } from "@shared/symbols";
 import {
   FILL_LOG_PROMPT,
+  HISTORY_PROMPT,
   ORDERS_PROMPT,
   ordersPrompt,
   RATIONALE_PROMPT,
@@ -1784,7 +1785,9 @@ export async function registerRoutes(
               ? closeCardPrompt(context ?? {})
               : kind === "fills"
                 ? FILL_LOG_PROMPT
-                : outcomePrompt(context ?? {});
+                : kind === "history"
+                  ? HISTORY_PROMPT
+                  : outcomePrompt(context ?? {});
       const text = await callLLM(prompt, { mediaType, data });
       const json = extractJson(text);
 

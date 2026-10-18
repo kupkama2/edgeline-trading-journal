@@ -510,7 +510,12 @@ export async function parseScreenshot(
 ): Promise<{ isExecutionLog: boolean; fills: FillRowParseResult[]; skipped: number }>;
 export async function parseScreenshot(
   image: string,
-  kind: "setup" | "outcome" | "orders" | "close" | "fills",
+  kind: "history",
+  context?: Record<string, unknown>,
+): Promise<unknown>;
+export async function parseScreenshot(
+  image: string,
+  kind: "setup" | "outcome" | "orders" | "close" | "fills" | "history",
   context?: Record<string, unknown>,
 ): Promise<any> {
   const res = await apiRequest("POST", "/api/parse-screenshot", {

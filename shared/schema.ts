@@ -1086,7 +1086,7 @@ export const parseScreenshotSchema = z.object({
    * far above anything the app produces, far below anything that hurts.
    */
   image: z.string().min(1).max(6_000_000),
-  kind: z.enum(["setup", "outcome", "orders", "close", "fills"]),
+  kind: z.enum(["setup", "outcome", "orders", "close", "fills", "history"]),
   context: z
     .object({
       symbol: z.string().optional(),

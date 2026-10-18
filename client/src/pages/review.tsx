@@ -20,6 +20,7 @@ import { useTradeImages, useTrades, useUpdateTrade } from "@/lib/data";
 import { computeMetrics, fmtMoney, fmtR, EXIT_REASON_LABELS } from "@shared/metrics";
 import { dayKey, isReviewed, reviewProgress, weekBefore, weekKey, weekStart } from "@shared/review";
 import { ReviewRow } from "@/components/review-row";
+import { VenueCheck } from "@/components/venue-check";
 import type { TradeWithTags } from "@shared/schema";
 
 /**
@@ -148,6 +149,10 @@ export default function Review() {
           </p>
         )}
       </Card>
+
+      {/* The week as the venue has it, beside the week as it was logged —
+          for the trades that never made it in, or were never closed. */}
+      <VenueCheck />
 
       {p.trades.length === 0 ? (
         <Card className="border-card-border bg-card p-6 text-center">
