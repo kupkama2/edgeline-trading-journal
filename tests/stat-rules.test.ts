@@ -89,3 +89,13 @@ describe("a missed trade", () => {
     expect(s.forgoneR).toBeCloseTo(3);
   });
 });
+
+describe("a scalp, elsewhere", () => {
+  it("gets an excursion bar from the best and worst it showed", async () => {
+    const { excursions } = await import("../shared/excursion");
+    const s = { ...scalp(60, 30, 9), netMfe: 90, netMae: -15 } as any;
+    const [bar] = excursions([s]);
+    expect(bar).toMatchObject({ tradeId: 9, mfeR: 3 });
+    expect(bar.maeR).toBeCloseTo(-0.5);
+  });
+});

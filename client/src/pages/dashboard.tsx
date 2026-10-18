@@ -47,6 +47,7 @@ import {
   mistakeCostLeaderboard,
   EXIT_REASON_LABELS,
   getPrestige,
+  isSettled,
 } from "@shared/metrics";
 import { useFig } from "@/lib/denom";
 import type { TradeWithTags } from "@shared/schema";
@@ -260,7 +261,8 @@ export default function Dashboard({ embedded = false }: { embedded?: boolean } =
   const closed = useMemo(
     () =>
       all
-        .filter((t) => t.status === "closed" && t.exitPrice != null)
+        // Scalps too: closed with a result and no exit price, by design.
+        .filter(isSettled)
         .sort((a, b) => (a.exitTime ?? "").localeCompare(b.exitTime ?? "")),
     [all],
   );

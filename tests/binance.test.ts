@@ -9,6 +9,7 @@ import {
   firstTouch,
   matchBinanceSymbol,
   pathExtremes,
+  withFineEdges,
   perpAliases,
   type BinanceSymbol,
   type Candle,
@@ -504,5 +505,61 @@ describe("a perp the census marked delisted", () => {
 
   it("is not confused with a halted pair, which stays unmatched", () => {
     expect(matchBinanceSymbol("OLD", [spot("OLDUSDT", "OLD", "USDT", "BREAK")])).toBeNull();
+  });
+});
+
+describe("the hold, on bars that are ranges of time", () => {
+  /*
+   * Entry 10:20, exit 13:30, read on hourly bars. The 10:00 bar is mostly
+   * the trade (its low of 91 is at 10:40, inside it); the 13:00 bar is half
+   * after the exit (its spike to 130 is at 13:50, after it). Taken whole by
+   * open time, the trade lost its real low and gained a high it never saw.
+   */
+  const H = 3_600_000;
+  const M = 60_000;
+  const day = Date.UTC(2026, 9, 12);
+  const at = (h: number, m = 0) => day + h * H + m * M;
+  const flat = (t: number, span: number, h = 101, l = 99) => ({ t, o: 100, h, l, c: 100, span });
+  const hourly = [
+    { t: at(10), o: 100, h: 104, l: 91, c: 100 }, // low 91 at 10:40 (in), nothing pre-entry below 99
+    { t: at(11), o: 100, h: 103, l: 97, c: 100 },
+    { t: at(12), o: 100, h: 106, l: 98, c: 100 },
+    { t: at(13), o: 100, h: 130, l: 98, c: 100 }, // 130 at 13:50 (after the exit)
+    { t: at(14), o: 100, h: 102, l: 95, c: 100 },
+  ];
+  const minutes = [
+    ...Array.from({ length: 60 }, (_, i) => flat(at(10, i), M, i === 40 ? 101 : 101, i === 40 ? 91 : 99)),
+    ...Array.from({ length: 60 }, (_, i) => flat(at(13, i), M, i === 50 ? 130 : i === 10 ? 105 : 101, 98)),
+  ];
+  const trade = { direction: "long", entryMs: at(10, 20), exitMs: at(13, 30), stop: 80 };
+
+  it("used to keep the exit bar's after-exit spike and miss the entry bar", () => {
+    // Read the old way — bars as the instants they opened.
+    const old = pathExtremes(hourly, trade);
+    expect(old.mfe).toBe(130);
+    expect(old.mae).toBe(97);
+  });
+
+  it("now reads the two edge bars at one minute, and only what was inside the hold", () => {
+    const { bars, complete } = withFineEdges(hourly, H, minutes, [trade.entryMs, trade.exitMs]);
+    expect(complete).toBe(true);
+    const p = pathExtremes(bars, trade);
+    expect(p.mae).toBe(91); // 10:40, inside the entry bar
+    expect(p.mfe).toBe(106); // the 12:00 bar; not 130 at 13:50
+    // And the spike after the exit is the aftermath's, where it belongs.
+    expect(p.postExitPeak).toBe(130);
+  });
+
+  it("drops no bar that the edges do not cut, and says when an edge could not be read", () => {
+    const { bars } = withFineEdges(hourly, H, minutes, [trade.entryMs, trade.exitMs]);
+    expect(bars.filter((b) => b.span === H).map((b) => b.t)).toEqual([at(11), at(12), at(14)]);
+    const missing = withFineEdges(hourly, H, minutes.filter((m) => m.t < at(13)), [trade.entryMs, trade.exitMs]);
+    expect(missing.complete).toBe(false);
+  });
+
+  it("leaves a bar alone when an edge falls exactly on its open", () => {
+    const { bars, complete } = withFineEdges(hourly, H, [], [at(11), at(13)]);
+    expect(complete).toBe(true);
+    expect(bars.every((b) => b.span === H)).toBe(true);
   });
 });

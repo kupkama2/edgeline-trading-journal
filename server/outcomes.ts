@@ -25,13 +25,15 @@ import {
   firstTouch,
   SEED_CATALOGUE,
   pathExtremes,
+  withFineEdges,
+  type Candle,
   scanWindow,
   type BinanceSymbol,
   type PairRef,
 } from "@shared/binance";
 import { aftermathReadyAt, aftermathWindowMs, outcomeUnknown, pathIncomplete } from "@shared/aftermath";
 import type { TradeWithTags } from "@shared/schema";
-import { fetchCatalogue, intervalFor, lastListed } from "./binance";
+import { fetchCatalogue, intervalFor, lastListed, type Interval } from "./binance";
 import { fetchCandlesAt, pairForTradeAt, readCandlesAt } from "./candles";
 import { fundingForTrade } from "./funding";
 import { hyperliquidAssets } from "./hyperliquid";
@@ -229,7 +231,17 @@ export async function ensureCatalogue(
  *              request knows something the schedule does not, which is that
  *              somebody is looking at this trade right now.
  */
-export async function checkOutcomes(userId: number, only?: number): Promise<CheckSummary> {
+export async function checkOutcomes(
+  userId: number,
+  only?: number,
+  /**
+   * Replace the trade's path numbers rather than only filling blanks. Asked
+   * for by a person, on one trade, from its page — never by the sweep,
+   * because a number typed by hand is a judgement this must not overrule
+   * on its own.
+   */
+  opts: { remeasure?: boolean } = {},
+): Promise<CheckSummary> {
   const store = storageFor(userId);
   const out: CheckSummary = {
     checked: 0,
@@ -373,12 +385,32 @@ export async function checkOutcomes(userId: number, only?: number): Promise<Chec
         ["postExitPeak", read.path.postExitPeak],
         ["postExitAdverse", read.path.postExitAdverse],
       ] as const) {
-        if (value != null && (t as any)[field] == null) {
+        const replacing = opts.remeasure === true && only === t.id;
+        if (value != null && ((t as any)[field] == null || (replacing && (t as any)[field] !== value))) {
           patch[field] = value;
           filled.push(field);
         }
       }
       if (filled.length) out.measured.push({ tradeId: t.id, symbol: t.symbol, fields: filled });
+      /*
+       * The marker says every path number on the trade is this method's.
+       * Filling the blank aftermath beside an MAE from the older reading
+       * does not make that MAE right, so the stamp goes on only when each
+       * number left on the trade is the one this read produced.
+       */
+      const fromThisRead = (
+        [
+          ["mae", read.path.mae],
+          ["mfe", read.path.mfe],
+          ["postExitPeak", read.path.postExitPeak],
+          ["postExitAdverse", read.path.postExitAdverse],
+        ] as const
+      ).every(([f, v]) => {
+        const final = f in patch ? patch[f] : (t as any)[f];
+        return final == null || final === v;
+      });
+      const anyNumber = [read.path.mae, read.path.mfe].some((v) => v != null);
+      if (fromThisRead && anyNumber && !t.pathMeasuredAt) patch.pathMeasuredAt = stamp;
 
       /*
        * Where the market disagrees with what is already recorded.
@@ -463,16 +495,59 @@ async function readTrade(
   const { from, to } = window;
 
   const plan = { direction: t.direction, stop: t.initialStop, target: t.initialTarget };
-  const coarse = intervalFor(to - from);
-  const read = await readCandlesAt(pair, coarse, from, to);
-  const bars = read.candles;
-
   const exitMs = t.exitTime ? new Date(t.exitTime).getTime() : null;
+  const edges = exitMs != null ? [from, exitMs] : [from];
+
+  /*
+   * The whole window — the plan's first touch and the aftermath — at a width
+   * that fits it, read from the START of the bar the entry fell in. Asked
+   * from the entry itself, a feed returns the first bar that opens after
+   * it, so the part of the entry bar inside the trade was never seen: a stop
+   * hit in the first hour of a four-hour bar went unnoticed. That bar and
+   * the exit's are then read at one minute (withFineEdges).
+   */
+  const coarse = intervalFor(to - from);
+  const coarseMs = barSpanMs(coarse);
+  const read = await readCandlesAt(pair, coarse, floorTo(from, coarseMs), to);
+  const whole = await finer(pair, coarse, read.candles, edges);
+  // Nothing from before the entry: the minute it fell in is the first bar.
+  const bars = whole.bars.filter((c) => c.t + (c.span ?? 0) > from);
+
   const path = pathExtremes(
     bars,
     { direction: t.direction, entryMs: from, exitMs, stop: t.initialStop },
     aftermathWindowMs(t),
   );
+
+  /*
+   * MAE and MFE on bars sized to the HOLD. The window above runs to now, so
+   * its width followed how long ago the trade was — a one-hour trade read a
+   * week later was measured on hourly bars, three weeks later on four-hour
+   * ones, inside which it might not have a single whole bar. The hold is
+   * read on its own at the width its own length calls for, edges at one
+   * minute, and written only when every part of it was read.
+   */
+  let holdComplete = whole.complete;
+  let holdCovered = read.coveredTo;
+  if (exitMs != null && t.status === "closed") {
+    const holdInterval = intervalFor(Math.max(exitMs - from, 60_000));
+    if (holdInterval !== coarse) {
+      const holdMs = barSpanMs(holdInterval);
+      try {
+        const holdRead = await readCandlesAt(pair, holdInterval, floorTo(from, holdMs), exitMs);
+        const hold = await finer(pair, holdInterval, holdRead.candles, edges);
+        const inHold = pathExtremes(hold.bars, { direction: t.direction, entryMs: from, exitMs, stop: t.initialStop });
+        path.mae = inHold.mae;
+        path.mfe = inHold.mfe;
+        holdComplete = hold.complete;
+        holdCovered = holdRead.coveredTo;
+      } catch {
+        // The hold could not be read at its own width. The excursions wait
+        // for another visit; the plan's verdict below does not depend on them.
+        holdComplete = false;
+      }
+    }
+  }
 
   /*
    * An excursion read off a window that stops early is not a small error, it
@@ -497,7 +572,9 @@ async function readTrade(
    */
   const running = t.status !== "closed";
   const heldTo = exitMs ?? to - grace;
-  if (running || read.coveredTo < heldTo) {
+  // An edge bar with no minutes to read it by is the old error in miniature:
+  // the figure is withheld rather than written from prices outside the hold.
+  if (running || holdCovered < heldTo || !holdComplete) {
     path.mae = null;
     path.mfe = null;
   }
@@ -537,6 +614,27 @@ async function readTrade(
       ? { verdict: touch.verdict, hitAt: new Date(touch.at).toISOString() }
       : null;
   return { settled, path };
+}
+
+/** `ms` rounded down to the start of the `span`-long bar it falls in. */
+const floorTo = (ms: number, span: number) => Math.floor(ms / span) * span;
+
+/**
+ * `bars` with the ones straddling an edge read at one minute. Already at one
+ * minute, there is nothing finer, and each bar is given its span as it is.
+ * A minute read that fails leaves the bar as it was, marked incomplete.
+ */
+async function finer(pair: PairRef, interval: Interval, bars: Candle[], edges: number[]) {
+  const span = barSpanMs(interval);
+  if (interval === "1m") return { bars: bars.map((c) => ({ ...c, span })), complete: true };
+  const fine = (
+    await Promise.all(
+      edges.map((e) =>
+        fetchCandlesAt(pair, "1m", floorTo(e, span), floorTo(e, span) + span - 1).catch(() => [] as Candle[]),
+      ),
+    )
+  ).flat();
+  return withFineEdges(bars, span, fine, edges);
 }
 
 const barSpanMs = (i: string) =>

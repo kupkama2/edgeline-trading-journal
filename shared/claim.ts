@@ -68,8 +68,10 @@ const within = (a: number, b: number, pct: number) =>
  * on a single round trip is just the move times the quantity.
  */
 function manualPnl(t: TradeWithTags): number | null {
+  // A scalp first: it is closed with no exit price by design, so the price
+  // check below used to return before its typed result was ever read.
+  if (t.status === "closed" && t.scalp) return t.netPnl ?? null;
   if (t.status !== "closed" || t.exitPrice == null) return null;
-  if (t.scalp) return t.netPnl ?? null;
   const qty = t.sizeUnit === "quote" ? (t.entryPrice > 0 ? t.size / t.entryPrice : 0) : t.size;
   const sign = t.direction === "short" ? -1 : 1;
   return sign * (t.exitPrice - t.entryPrice) * qty * (t.pointValue || 1);

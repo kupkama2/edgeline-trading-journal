@@ -152,6 +152,7 @@ ALTER TABLE trades ADD COLUMN IF NOT EXISTS funding DOUBLE PRECISION;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS funding_checked_at TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS external_id TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS claimed_at TEXT;
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS path_measured_at TEXT;
 -- A verdict on the entry, off by default: nothing recorded before it existed
 -- was tilt until somebody says so (or the migration below does).
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS tilt BOOLEAN NOT NULL DEFAULT FALSE;

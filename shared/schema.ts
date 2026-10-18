@@ -406,6 +406,13 @@ export const trades = pgTable("trades", {
    */
   claimedAt: text("claimed_at"),
   /**
+   * When the price feed last wrote this trade's MAE, MFE or aftermath, by
+   * the method that reads the hold's edges at one minute. Null for numbers
+   * typed by hand, or written by the older method that kept the exit bar
+   * whole — which the trade page offers to re-measure.
+   */
+  pathMeasuredAt: text("path_measured_at"),
+  /**
    * Green flags — JSON string[] of what went RIGHT ("Perfect Entry", "Let It
    * Run"). The positive counterpart to mistake tags, and sliced the same way
    * on Analysis so "perfect entry" earns an expectancy figure rather than a
