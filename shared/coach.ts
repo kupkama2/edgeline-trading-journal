@@ -175,7 +175,7 @@ export function reviewStyle(
     }
 
     /* ---- win rate vs payoff: the two-number sanity check ---- */
-    const rs = closed.map((t) => computeMetrics(t).actualR ?? 0);
+    const rs = closed.map((t) => computeMetrics(t).actualR).filter((r): r is number => r != null);
     const wins = rs.filter((r) => r > 0);
     const losses = rs.filter((r) => r <= 0);
     if (wins.length >= 3 && losses.length >= 3) {

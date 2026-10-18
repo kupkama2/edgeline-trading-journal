@@ -12,7 +12,7 @@
  * traded" matches the day the trader lived, not the UTC date of the venue.
  */
 import type { TradeWithTags } from "./schema";
-import { computeMetrics } from "./metrics";
+import { computeMetrics, isSettled, outcomeOf } from "./metrics";
 
 /** yyyy-MM-dd in local time — the canonical key for one trading day. */
 export function dayKey(d: Date): string {
@@ -67,14 +67,15 @@ export function summarizeDays(trades: TradeWithTags[]): Map<string, DaySummary> 
     const enteredOn = t.status === "pending" ? null : dayKeyOfIso(t.entryTime);
     if (enteredOn) get(enteredOn).entered += 1;
 
-    if (t.status === "closed" && t.exitPrice != null) {
+    if (isSettled(t)) {
       const closedOn = dayKeyOfIso(t.exitTime) ?? enteredOn;
       if (!closedOn) continue;
       const s = get(closedOn);
       const m = computeMetrics(t);
       s.closed += 1;
-      if ((m.actualR ?? 0) > 0) s.wins += 1;
-      else s.losses += 1;
+      const o = outcomeOf(m);
+      if (o === "win") s.wins += 1;
+      else if (o === "loss") s.losses += 1;
       s.totalR += m.actualR ?? 0;
       s.totalPnL += m.actualPnL ?? 0;
     }
@@ -94,10 +95,7 @@ export function tradesOnDay(
       dayKeyOfIso(t.entryTime) === day,
   );
   const closed = trades.filter(
-    (t) =>
-      t.status === "closed" &&
-      t.exitPrice != null &&
-      (dayKeyOfIso(t.exitTime) ?? dayKeyOfIso(t.entryTime)) === day,
+    (t) => isSettled(t) && (dayKeyOfIso(t.exitTime) ?? dayKeyOfIso(t.entryTime)) === day,
   );
   return { entered, closed };
 }

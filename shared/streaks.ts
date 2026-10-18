@@ -31,7 +31,10 @@ export function streaks(trades: TradeWithTags[]): Streaks {
     .sort((a, b) =>
       (a.exitTime ?? a.entryTime).localeCompare(b.exitTime ?? b.entryTime),
     )
-    .map((t) => computeMetrics(t).actualR ?? 0);
+    .map((t) => computeMetrics(t).actualR)
+    // A trade without R is neither a win nor a loss, so it neither extends a
+    // run nor breaks one.
+    .filter((r): r is number => r != null);
 
   let longestWin = 0;
   let longestLoss = 0;

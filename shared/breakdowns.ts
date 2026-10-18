@@ -13,7 +13,7 @@
  */
 import { CONFLUENCE_LABELS, confluenceBucket, confluencesOf, type ConfluenceBucket } from "./confluence";
 import type { MistakeTag, TradeWithTags } from "./schema";
-import { closedTrades, computeMetrics } from "./metrics";
+import { closedTrades, computeMetrics, outcomeOf } from "./metrics";
 import { summarizeDays } from "./daily";
 import { parseHighlights } from "./highlights";
 
@@ -27,6 +27,8 @@ export interface Slice {
   key: string;
   label: string;
   count: number;
+  /** Of `count`, the trades with an R — the denominator of the win rate and the expectancy. */
+  measured: number;
   wins: number;
   losses: number;
   winRate: number;
@@ -61,29 +63,33 @@ export function sliceBy(
     if (!raw) continue;
     const keys = Array.isArray(raw) ? raw : [raw];
     const m = computeMetrics(t);
-    const r = m.actualR ?? 0;
+    const o = outcomeOf(m);
 
     for (const { key, label } of keys) {
       let b = buckets.get(key);
       if (!b) {
         b = {
-          key, label, count: 0, wins: 0, losses: 0,
+          key, label, count: 0, measured: 0, wins: 0, losses: 0,
           winRate: 0, totalR: 0, totalPnL: 0, expectancyR: 0, totalFees: 0,
         };
         buckets.set(key, b);
       }
       b.count += 1;
-      if (r > 0) b.wins += 1;
-      else b.losses += 1;
-      b.totalR += r;
+      // Money for every trade; R, wins and losses only where there is an R.
+      if (o !== "unmeasured") {
+        b.measured += 1;
+        if (o === "win") b.wins += 1;
+        else b.losses += 1;
+        b.totalR += m.actualR as number;
+      }
       b.totalPnL += m.actualPnL ?? 0;
       b.totalFees += m.fees;
     }
   }
 
   for (const b of Array.from(buckets.values())) {
-    b.winRate = b.count ? b.wins / b.count : 0;
-    b.expectancyR = b.count ? b.totalR / b.count : 0;
+    b.winRate = b.measured ? b.wins / b.measured : 0;
+    b.expectancyR = b.measured ? b.totalR / b.measured : 0;
   }
   return Array.from(buckets.values());
 }

@@ -195,7 +195,8 @@ function bucketOf(
   rows: { m: ReturnType<typeof computeMetrics> }[],
   gradedTotal: number,
 ): GradeBucket {
-  const rs = rows.map((r) => r.m.actualR ?? 0);
+  // R figures over the trades that have one; a no-stop trade is not a 0R loss.
+  const rs = rows.map((r) => r.m.actualR).filter((x): x is number => x != null);
   const heats = rows.map((r) => r.m.maeR).filter((x): x is number => x != null);
   const sum = (a: number[]) => a.reduce((x, y) => x + y, 0);
   return {
@@ -204,9 +205,9 @@ function bucketOf(
     tone: meta.tone,
     count: rows.length,
     share: gradedTotal ? rows.length / gradedTotal : 0,
-    winRate: rows.length ? rs.filter((r) => r > 0).length / rows.length : 0,
+    winRate: rs.length ? rs.filter((r) => r > 0).length / rs.length : 0,
     totalR: sum(rs),
-    expectancyR: rows.length ? sum(rs) / rows.length : 0,
+    expectancyR: rs.length ? sum(rs) / rs.length : 0,
     avgHeatR: heats.length ? sum(heats) / heats.length : null,
     leftOnTableR: sum(rows.map((r) => Math.max(0, r.m.rLeftOnTable ?? 0))),
     missedPlanR: sum(
