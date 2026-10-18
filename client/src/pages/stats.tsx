@@ -24,6 +24,7 @@ import { BarChart3, Repeat } from "lucide-react";
 import { StyleSwitcher } from "@/components/style-switcher";
 import { DenomToggle } from "@/lib/denom";
 import { ChapterSwitch } from "@/lib/chapters";
+import { ReviewGate, useReviewPressure } from "@/components/review-debt";
 import { useStyleScopedTrades } from "@/lib/style-filter";
 import { useTrades } from "@/lib/data";
 import { closedTrades } from "@shared/breakdowns";
@@ -74,6 +75,16 @@ export default function Stats() {
   const { data: trades = [] } = useTrades();
   const scoped = useStyleScopedTrades(trades);
   const n = closedTrades(scoped).length;
+  const review = useReviewPressure();
+
+  if (review.shut) {
+    return (
+      <div className="space-y-5">
+        <h1 className="text-xl font-bold tracking-tight">Stats</h1>
+        <ReviewGate pressure={review} what="The stats" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-5">

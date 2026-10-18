@@ -1,6 +1,6 @@
 import type { Express } from "express";
 import type { Server } from "node:http";
-import { storageFor } from "./storage";
+import { accounts, storageFor } from "./storage";
 // Deliberately unscoped, and the one exception that proves the rule: the
 // allowlist is consulted before there is an account to scope to. It holds no
 // trade data, so the isolation guarantee is untouched.
@@ -75,6 +75,7 @@ import {
   sizeUnitEnum,
   insertAccountBalanceSchema,
   insertChapterSchema,
+  updateUserPrefsSchema,
   updateChapterSchema,
 } from "@shared/schema";
 import { normalizeCloseRead } from "@shared/close-read";
@@ -857,6 +858,22 @@ export async function registerRoutes(
   app.delete("/api/account-balances/:id", async (req, res) => {
     await store(req).deleteAccountBalance(Number(req.params.id));
     res.status(204).end();
+  });
+
+  /* -------------------------------- prefs -------------------------------- */
+  /*
+   * The person's own settings. Read and written for the signed-in account
+   * only — there is no id in the path, so there is nobody else's to ask for.
+   */
+  app.get("/api/prefs", async (req, res) => {
+    res.json(await accounts.prefs(req.userId!));
+  });
+
+  app.patch("/api/prefs", async (req, res) => {
+    const parsed = updateUserPrefsSchema.safeParse(req.body);
+    if (!parsed.success)
+      return res.status(400).json({ message: "Invalid settings", issues: parsed.error.issues });
+    res.json(await accounts.setPrefs(req.userId!, parsed.data));
   });
 
   /* ------------------------------- chapters ------------------------------ */

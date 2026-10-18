@@ -14,6 +14,7 @@ import {
   hyperliquidSymbols,
   accountBalances,
   chapters,
+  readPrefs,
 } from "@shared/schema";
 import type {
   InsertTrade,
@@ -37,6 +38,7 @@ import type {
   User,
   Invite,
   BinanceSymbolRow,
+  UserPrefs,
 } from "@shared/schema";
 import { DEMON_TAXONOMY, DEMON_LEGACY_ALIASES } from "@shared/demons";
 import { collapseToInstrument } from "@shared/binance";
@@ -370,6 +372,7 @@ CREATE TABLE IF NOT EXISTS users (
   created_at TEXT NOT NULL,
   last_login_at TEXT
 );
+ALTER TABLE users ADD COLUMN IF NOT EXISTS prefs TEXT;
 
 -- Every table that owns rows gains an owner. Left nullable on purpose: the
 -- rows that predate sign-in have no owner until the first Google account
@@ -696,6 +699,26 @@ export const accounts = {
   async owner(): Promise<User | undefined> {
     const [row] = await db.select().from(users).where(eq(users.isOwner, true));
     return row;
+  },
+
+  async prefs(id: number): Promise<UserPrefs> {
+    const [row] = await db.select({ prefs: users.prefs }).from(users).where(eq(users.id, id));
+    return readPrefs(row?.prefs);
+  },
+
+  /**
+   * Merge a change into the stored prefs. Turning enforcement ON stamps the
+   * moment, which is what decides which trades may close the record; any
+   * other change leaves the stamp alone.
+   */
+  async setPrefs(id: number, patch: Partial<Pick<UserPrefs, "reviewMode">>): Promise<UserPrefs> {
+    const current = await accounts.prefs(id);
+    const next: UserPrefs = { ...current, ...patch };
+    if (patch.reviewMode === "enforce" && current.reviewMode !== "enforce") {
+      next.reviewEnforcedSince = new Date().toISOString();
+    }
+    await db.update(users).set({ prefs: JSON.stringify(next) }).where(eq(users.id, id));
+    return next;
   },
 
   async touchLogin(id: number): Promise<void> {

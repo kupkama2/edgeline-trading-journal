@@ -18,6 +18,8 @@ import { BookOpen, Check, Eye, EyeOff, Pencil, Plus, RotateCcw, Trash2, X } from
 import { Textarea } from "@/components/ui/textarea";
 import { spanLabel, spanRange, useChapters, useDeleteChapter, useStartChapter } from "@/lib/chapters";
 import { inSpan } from "@shared/chapters";
+import { usePrefs, useSetPrefs } from "@/lib/prefs";
+import type { ReviewMode } from "@shared/review-pressure";
 import { localNow, toIso } from "@/components/trade-shared";
 import {
   useMistakeTags,
@@ -887,6 +889,8 @@ export default function Settings() {
 
       <PublicModeCard />
 
+      <ReviewDisciplineCard />
+
       <FreshStartCard />
 
       <StylesCard />
@@ -1092,6 +1096,74 @@ export default function Settings() {
  * is a date: from it on is the chapter every page shows; before it is kept
  * whole and reachable from the stats. See shared/chapters.ts for the rule.
  */
+/**
+ * How hard the journal pushes the review. On the user row, so the rule set
+ * on the laptop holds on the phone; see shared/review-pressure.ts.
+ */
+function ReviewDisciplineCard() {
+  const prefs = usePrefs();
+  const set = useSetPrefs();
+  const { toast } = useToast();
+  const MODES: { id: ReviewMode; label: string; says: string }[] = [
+    { id: "off", label: "Off", says: "No reminders. The Review tab is still there when you want it." },
+    {
+      id: "remind",
+      label: "Remind",
+      says: "A count on the Review tab and a banner on the journal whenever a finished day is not gone over — amber the day after, red once it is older.",
+    },
+    {
+      id: "enforce",
+      label: "Enforce",
+      says: "As Remind, and once a day is past the grace your record and your stats stay shut until it is reviewed. Logging trades and open positions are never blocked, and you can look for an hour once a day. Only trades that finish after you switch this on can shut anything.",
+    },
+  ];
+  const pick = async (id: ReviewMode) => {
+    try {
+      await set.mutateAsync({ reviewMode: id });
+    } catch (err: any) {
+      toast({ title: "Not saved", description: String(err?.message ?? err), variant: "destructive" });
+    }
+  };
+  const current = MODES.find((m) => m.id === prefs.reviewMode) ?? MODES[1];
+  return (
+    <Card className="border-card-border bg-card p-4 sm:p-5" data-testid="card-review-discipline">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="flex items-center gap-2 text-sm font-semibold tracking-tight">
+            <BookOpen className="h-4 w-4" />
+            Review discipline
+          </h2>
+          <p className="mt-0.5 max-w-prose text-[11px] leading-snug text-muted-foreground">{current.says}</p>
+          {prefs.reviewMode === "enforce" && prefs.reviewEnforcedSince && (
+            <p className="mt-1 text-[10px] text-muted-foreground" data-testid="text-enforced-since">
+              Enforced for trades finished since{" "}
+              {new Date(prefs.reviewEnforcedSince).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}.
+            </p>
+          )}
+        </div>
+        <div className="inline-flex shrink-0 rounded-lg border border-border bg-secondary/30 p-0.5" role="radiogroup" aria-label="Review discipline">
+          {MODES.map((m) => (
+            <button
+              key={m.id}
+              type="button"
+              role="radio"
+              aria-checked={prefs.reviewMode === m.id}
+              disabled={set.isPending}
+              onClick={() => pick(m.id)}
+              data-testid={`button-review-mode-${m.id}`}
+              className={`rounded-md px-3 py-1.5 text-[11px] font-medium transition-colors ${
+                prefs.reviewMode === m.id ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {m.label}
+            </button>
+          ))}
+        </div>
+      </div>
+    </Card>
+  );
+}
+
 function FreshStartCard() {
   const { spans, current } = useChapters();
   const { data: all = [] } = useAllTrades();

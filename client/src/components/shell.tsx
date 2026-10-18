@@ -13,6 +13,7 @@ import {
 import { XpChip, XpToaster } from "@/components/xp";
 import { useLayout, type LayoutVersion } from "@/lib/layout";
 import { usePublicMode } from "@/lib/public-mode";
+import { ReviewTabBadge } from "@/components/review-debt";
 import { CURRENT, spanLabel, spanRange, useChapters } from "@/lib/chapters";
 import { AccountMenu } from "@/components/account-menu";
 import {
@@ -266,7 +267,10 @@ export function Shell({ children }: { children: React.ReactNode }) {
               // /daily still resolves to the same page, so it must still
               // light the tab that replaced it.
               const active =
-                location === href || (href === "/calendar" && location === "/daily");
+                location === href ||
+                (href === "/calendar" && location === "/daily") ||
+                // A day's or a week's review is still the Review tab.
+                (href === "/review" && location.startsWith("/review/"));
               return (
                 <Link
                   key={href}
@@ -280,6 +284,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
                 >
                   <Icon className="h-3.5 w-3.5" />
                   <span className="hidden sm:inline">{label}</span>
+                  {href === "/review" && <ReviewTabBadge />}
                 </Link>
               );
             })}

@@ -7,6 +7,8 @@ import { CalendarCheck, Check, ChevronLeft, ChevronRight } from "lucide-react";
 import { useTrades } from "@/lib/data";
 import { dailyProgress, dayKey, isReviewed, weekKey } from "@shared/review";
 import { ReviewRow } from "@/components/review-row";
+import { useReviewPressure } from "@/components/review-debt";
+import { owedDayName } from "@shared/review-pressure";
 
 /**
  * The day, before you have forgotten it.
@@ -41,8 +43,14 @@ export default function DailyReview() {
   const [, params] = useRoute("/review/day/:day");
   const [, navigate] = useLocation();
   const { data: trades, isLoading } = useTrades();
-  const day = parseDay(params?.day);
+  // Keyed on the route's string: a fresh Date each render made the memo below
+  // recompute on every render.
+  const day = useMemo(() => parseDay(params?.day), [params?.day]);
   const p = useMemo(() => dailyProgress(trades ?? [], day), [trades, day]);
+  const { debt } = useReviewPressure();
+  // The next day still owed once this one is done, so a backlog is worked
+  // through in a row rather than hunted for.
+  const nextOwed = debt.days.find((d) => d.key !== p.key) ?? null;
 
   const go = (d: Date) => navigate(`/review/day/${dayKey(d)}`);
   const today = dayKey(new Date());
@@ -117,6 +125,16 @@ export default function DailyReview() {
             <span className="flex items-center gap-1 text-[11px] font-semibold text-emerald-400">
               <Check className="h-3.5 w-3.5" /> done
             </span>
+          )}
+          {p.done && nextOwed && (
+            <Button
+              size="sm"
+              className="h-7 shrink-0 text-[11px]"
+              onClick={() => navigate(`/review/day/${nextOwed.key}`)}
+              data-testid="button-next-owed-day"
+            >
+              Next: {owedDayName(nextOwed)} · {nextOwed.trades.length}
+            </Button>
           )}
           {/* The week this day sits in, one click away: the day is the habit,
               the week is where the pattern turns up. */}
