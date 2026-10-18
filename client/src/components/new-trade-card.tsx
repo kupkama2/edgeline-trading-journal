@@ -448,7 +448,15 @@ export function NewTradeCard({
   useEffect(() => {
     if (instrumentKey === "") return;
     const read = readUnit && readUnit.symbol === (v.symbol ?? "").trim().toUpperCase() ? readUnit.unit : null;
-    setSizeUnit(read ?? (instrumentKey === "unknown" ? "quote" : "base"));
+    /*
+     * An unrecognised ticker is usually a coin, sized in dollars — unless the
+     * journal has logged it before as a contract (a point value other than 1),
+     * or it is written like one (root plus month code). Defaulting those to
+     * dollars hid the contract-size box and saved "2 contracts" as $2.
+     */
+    const contractLike =
+      instrumentKey === "unknown" && ((remembered != null && remembered !== 1) || looksLikeFuturesContract(v.symbol));
+    setSizeUnit(read ?? (instrumentKey === "unknown" && !contractLike ? "quote" : "base"));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [instrumentKey]);
   const sized = useMemo(

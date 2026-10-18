@@ -428,9 +428,15 @@ function Candles({
    * draw a chart that is simply wrong. Declared before the drawing effect so
    * it runs first on the commit where both change.
    */
+  /** Bumped with every new set of bars, so a page fetched for the old one is dropped. */
+  const generationRef = useRef(0);
   useEffect(() => {
     olderRef.current = [];
     exhaustedRef.current = false;
+    generationRef.current += 1;
+    // A fetch still in flight belongs to the old timeframe; it must not hold
+    // the loader shut for the new one either.
+    loadingRef.current = false;
   }, [tradeId, interval]);
 
   /** Everything drawn: pages scrolled into, then the trade's own window. */
@@ -451,8 +457,12 @@ function Candles({
     const drawn = bars();
     if (drawn.length === 0) return;
     loadingRef.current = true;
+    const generation = generationRef.current;
     try {
       const page = await fetchCandlePage(tradeId, interval, drawn[0].t - 1);
+      // The timeframe (or the trade) changed while this was in flight:
+      // prepending it would draw the old bars over the new series.
+      if (generation !== generationRef.current) return;
       const older = (page.candles ?? []).filter((k) => k.t < drawn[0].t);
       if (older.length === 0) {
         exhaustedRef.current = true;
@@ -467,7 +477,7 @@ function Candles({
       // A failed page is a page you can ask for again by scrolling; there is
       // nothing to say and nothing to undo.
     } finally {
-      loadingRef.current = false;
+      if (generation === generationRef.current) loadingRef.current = false;
     }
   }
 
