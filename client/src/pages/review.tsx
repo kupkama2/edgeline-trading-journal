@@ -50,7 +50,8 @@ export default function Review() {
   const [, params] = useRoute("/review/:week");
   const [, navigate] = useLocation();
   const { data: trades, isLoading } = useTrades();
-  const week = parseWeek(params?.week);
+  // Keyed on the route's string, so the memo below can actually hit.
+  const week = useMemo(() => parseWeek(params?.week), [params?.week]);
   const p = useMemo(() => reviewProgress(trades ?? [], week), [trades, week]);
 
   const go = (d: Date) => navigate(`/review/${weekKey(d)}`);
@@ -93,7 +94,7 @@ export default function Review() {
             size="icon"
             className="h-8 w-8"
             disabled={weekKey(week) >= thisWeek}
-            onClick={() => go(new Date(week.getTime() + 7 * 24 * 60 * 60 * 1000))}
+            onClick={() => go(weekBefore(week, -1))}
             aria-label="The week after"
             data-testid="button-week-forward"
           >

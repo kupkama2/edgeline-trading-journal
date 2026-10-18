@@ -21,7 +21,16 @@ import { dayKey } from "./daily";
 
 export { dayKey };
 
-const DAY = 24 * 60 * 60 * 1000;
+/**
+ * `d` moved by whole calendar days, local. Never `+ n * 24h`: the day the
+ * clocks go back is 25 hours long, and a week ending in it ended an hour
+ * early, so a trade closed late that Sunday belonged to no week at all.
+ */
+export function addDays(d: Date, n: number): Date {
+  const s = new Date(d);
+  s.setDate(s.getDate() + n);
+  return s;
+}
 
 /** Monday 00:00 local, of the week containing `d`. */
 export function weekStart(d: Date = new Date()): Date {
@@ -47,7 +56,7 @@ export function weekKey(d: Date): string {
 
 export function weekLabel(d: Date): string {
   const from = weekStart(d);
-  const to = new Date(from.getTime() + 6 * DAY);
+  const to = addDays(from, 6);
   const fmt = (x: Date) => x.toLocaleDateString(undefined, { month: "short", day: "numeric" });
   return `${fmt(from)} – ${fmt(to)}`;
 }
@@ -81,8 +90,9 @@ const endedAt = (t: TradeWithTags) => t.exitTime ?? t.entryTime;
  * A miss is dated by its entry time, there being no exit to date it by.
  */
 export function tradesInWeek(trades: TradeWithTags[], d: Date): TradeWithTags[] {
-  const from = weekStart(d).getTime();
-  const to = from + 7 * DAY;
+  const start = weekStart(d);
+  const from = start.getTime();
+  const to = addDays(start, 7).getTime();
   return trades
     .filter((t) => {
       if (t.status !== "closed" && !isMiss(t)) return false;
@@ -116,7 +126,7 @@ export function tradesInWeek(trades: TradeWithTags[], d: Date): TradeWithTags[] 
 export function tradesOnDay(trades: TradeWithTags[], day: Date): TradeWithTags[] {
   const from = new Date(day);
   from.setHours(0, 0, 0, 0);
-  const to = from.getTime() + DAY;
+  const to = addDays(from, 1).getTime();
   return trades
     .filter((t) => {
       if (t.status !== "closed" && !isMiss(t)) return false;

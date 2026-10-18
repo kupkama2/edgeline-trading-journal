@@ -1,4 +1,6 @@
 import { useMemo, useState } from "react";
+import { weekKey } from "@shared/review";
+import { dayKey, dayKeyOfIso } from "@shared/daily";
 import {
   Area,
   Bar,
@@ -139,12 +141,8 @@ function EmptyChart({ msg }: { msg: string }) {
 
 /* --------------------------- weekly combat gate ------------------------- */
 
-function mondayOf(d: Date) {
-  const x = new Date(d);
-  const day = (x.getDay() + 6) % 7;
-  x.setDate(x.getDate() - day);
-  return x.toISOString().slice(0, 10);
-}
+/** The week's key — the same local Monday the review page and the server use. */
+const mondayOf = (d: Date) => weekKey(d);
 
 function WeeklyGate({
   leaderboard,
@@ -337,7 +335,9 @@ export default function Dashboard({ embedded = false }: { embedded?: boolean } =
   const calendar = useMemo(() => {
     const byDay: Record<string, number> = {};
     for (const t of closed) {
-      const day = (t.exitTime ?? "").slice(0, 10);
+      // The LOCAL day it closed, as every other page files it; a UTC slice put
+      // an evening trade in the Americas on tomorrow's cell.
+      const day = dayKeyOfIso(t.exitTime);
       if (!day) continue;
       byDay[day] = (byDay[day] ?? 0) + (computeMetrics(t).actualPnL ?? 0);
     }
@@ -351,7 +351,7 @@ export default function Dashboard({ embedded = false }: { embedded?: boolean } =
       for (let d = 0; d < 7; d++) {
         const cur = new Date(startMonday);
         cur.setDate(startMonday.getDate() + w * 7 + d);
-        const key = cur.toISOString().slice(0, 10);
+        const key = dayKey(cur);
         col.push({ day: key, value: key in byDay ? byDay[key] : null });
       }
       weeks.push(col);

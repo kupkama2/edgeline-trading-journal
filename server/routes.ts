@@ -1674,7 +1674,20 @@ export async function registerRoutes(
     const weekDate = weekStartInput
       ? startOfWeek(new Date(`${weekStartInput}T00:00:00`))
       : startOfWeek();
-    const key = weekStartKey(weekDate);
+    /*
+     * The person's own week, when the browser says where it starts and ends.
+     * This server's clock is UTC; theirs is not, and the review page files a
+     * trade by THEIR Monday. Accepted only as a well-formed window of about
+     * seven days (a DST week is an hour either way) on a yyyy-MM-dd key.
+     */
+    const from = typeof req.body?.from === "string" ? req.body.from : null;
+    const to = typeof req.body?.to === "string" ? req.body.to : null;
+    const span = from && to ? Date.parse(to) - Date.parse(from) : NaN;
+    const window =
+      weekStartInput && /^\d{4}-\d{2}-\d{2}$/.test(weekStartInput) && Math.abs(span - 7 * 86_400_000) <= 2 * 3_600_000
+        ? { from: new Date(from!).toISOString(), to: new Date(to!).toISOString(), key: weekStartInput }
+        : undefined;
+    const key = window?.key ?? weekStartKey(weekDate);
 
     const existing = (await store(req).listWeeklyReviews()).find(
       (r) => r.weekStart === key,
@@ -1688,7 +1701,7 @@ export async function registerRoutes(
       store(req).listMistakeTags(),
       store(req).listDailyNotes(),
     ]);
-    const bundle = buildInsightsBundle(trades, tags, weekDate, notes);
+    const bundle = buildInsightsBundle(trades, tags, weekDate, notes, window);
 
     // Without any writing there is nothing for this to read — per-trade
     // reflections and end-of-day reviews both count. Saying so beats spending

@@ -180,7 +180,8 @@ export function demonCountsInRange(
   const acc = new Map<number, number>();
   for (const t of chronologicalClosed(trades)) {
     const when = t.exitTime ?? t.entryTime;
-    if (when < fromIso || when > toIso) continue;
+    // [from, to): a trade at exactly Monday 00:00 is the new week's, not both.
+    if (when < fromIso || when >= toIso) continue;
     for (const id of t.mistakeTagIds) {
       acc.set(id, (acc.get(id) ?? 0) + 1);
     }

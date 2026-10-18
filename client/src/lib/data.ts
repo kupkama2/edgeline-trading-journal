@@ -519,11 +519,23 @@ export async function parseScreenshot(
   return json.result;
 }
 
+/**
+ * The week as this browser's clock sees it: local Monday 00:00 to the next.
+ * The server's own clock is UTC, so it is told rather than left to guess.
+ */
+function localWeek(key?: string): { from?: string; to?: string } {
+  if (!key || !/^\d{4}-\d{2}-\d{2}$/.test(key)) return {};
+  const [y, m, d] = key.split("-").map(Number);
+  const from = new Date(y, m - 1, d);
+  const to = new Date(y, m - 1, d + 7);
+  return { from: from.toISOString(), to: to.toISOString() };
+}
+
 /** Generate (or fetch the cached) AI reading of this week's notes vs its numbers. */
 export function useWeeklyInsights() {
   return useMutation({
     mutationFn: async (v: { weekStart?: string; force?: boolean } = {}) =>
-      (await apiRequest("POST", "/api/weekly-insights", v)).json() as Promise<{
+      (await apiRequest("POST", "/api/weekly-insights", { ...v, ...localWeek(v.weekStart) })).json() as Promise<{
         ok: boolean;
         cached?: boolean;
         weekStart: string;
