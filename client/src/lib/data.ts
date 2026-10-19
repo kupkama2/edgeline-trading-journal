@@ -24,6 +24,7 @@ import type {
 import type { InsightsBundle, WeeklyInsights } from "@shared/weekly-insights";
 import type { AccountBalance } from "@shared/schema";
 import type { Mark } from "@shared/marks";
+import type { Debrief } from "@shared/debrief";
 
 /** Every trade the account has, whatever chapter it falls in. */
 export function useAllTrades() {
@@ -90,6 +91,16 @@ export function useCheckOutcomes() {
       // Otherwise they stayed invisible until a reload, and an editor left
       // open could write the stale blanks back.
       if (res?.resolved?.length || res?.measured?.length || res?.funded?.length) invalidateTrades();
+    },
+  });
+}
+
+/** A day talked through, split onto its trades. Reads only; the page saves. */
+export function useDebrief() {
+  return useMutation({
+    mutationFn: async (v: { day: string; text: string; tradeIds: number[] }) => {
+      const res = await apiRequest("POST", "/api/debrief", v);
+      return ((await res.json()) as { debrief: Debrief }).debrief;
     },
   });
 }

@@ -7,6 +7,7 @@ import { CalendarCheck, Check, ChevronLeft, ChevronRight } from "lucide-react";
 import { useTrades } from "@/lib/data";
 import { dailyProgress, dayKey, isReviewed, weekKey } from "@shared/review";
 import { ReviewRow } from "@/components/review-row";
+import { DayDebrief } from "@/components/day-debrief";
 import { useReviewPressure } from "@/components/review-debt";
 import { owedDayName } from "@shared/review-pressure";
 
@@ -155,6 +156,9 @@ export default function DailyReview() {
           </p>
         )}
       </Card>
+
+      {/* Say it once for the whole day; it is filed onto the trades below. */}
+      {p.trades.length > 0 && <DayDebrief day={p.key} trades={p.trades} />}
 
       {p.trades.length === 0 ? (
         <Card className="border-card-border bg-card p-6 text-center">

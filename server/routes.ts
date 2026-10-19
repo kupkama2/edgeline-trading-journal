@@ -45,6 +45,7 @@ import { syncHyperliquid } from "./hl-sync";
 import { oneAtATime } from "./venue-sync";
 import { freshStartRefusal } from "@shared/chapters";
 import { normalizeSetupRead } from "@shared/setup-read";
+import { debriefTrades, normalizeDebrief } from "@shared/debrief";
 import { syncBinance, verifyKey } from "./binance-account";
 import { seal } from "./secrets";
 import { hlAsset, splitHlAsset, venueOfAccount } from "@shared/hyperliquid";
@@ -77,6 +78,7 @@ import {
   sizeUnitEnum,
   insertAccountBalanceSchema,
   insertChapterSchema,
+  debriefRequestSchema,
   updateUserPrefsSchema,
   updateChapterSchema,
 } from "@shared/schema";
@@ -94,6 +96,7 @@ import {
 import {
   FILL_LOG_PROMPT,
   HISTORY_PROMPT,
+  debriefPrompt,
   ORDERS_PROMPT,
   ordersPrompt,
   RATIONALE_PROMPT,
@@ -471,8 +474,18 @@ function perplexityAvailable(): boolean {
  * because a message like "credit balance is too low" is precisely what the
  * caller needs to see.
  */
-async function callLLM(systemPrompt: string, image?: { mediaType: string; data: string }) {
-  if (!ANTHROPIC_API_KEY) return callPerplexity(systemPrompt, image);
+/**
+ * `maxTokens` is the reply's budget on the Perplexity path. It was 256 for
+ * every text prompt, which fits a one-line JSON object and truncates
+ * anything longer mid-string — a week's insights, a day split onto its
+ * trades — into JSON that cannot be parsed.
+ */
+async function callLLM(
+  systemPrompt: string,
+  image?: { mediaType: string; data: string },
+  opts: { maxTokens?: number } = {},
+) {
+  if (!ANTHROPIC_API_KEY) return callPerplexity(systemPrompt, image, opts.maxTokens);
 
   try {
     return await callAnthropic(systemPrompt, image);
@@ -481,11 +494,11 @@ async function callLLM(systemPrompt: string, image?: { mediaType: string; data: 
     console.warn(
       `[ai] Anthropic failed, falling back to Perplexity: ${err?.message ?? err}`,
     );
-    return await callPerplexity(systemPrompt, image);
+    return await callPerplexity(systemPrompt, image, opts.maxTokens);
   }
 }
 
-async function callPerplexity(systemPrompt: string, image?: { mediaType: string; data: string }) {
+async function callPerplexity(systemPrompt: string, image?: { mediaType: string; data: string }, maxTokens?: number) {
   const content: any[] = [];
   if (image) {
     content.push({
@@ -513,7 +526,7 @@ async function callPerplexity(systemPrompt: string, image?: { mediaType: string;
     dispatcher: sandboxDispatcher(),
     body: JSON.stringify({
       model: MODEL,
-      max_tokens: image ? 1024 : 256,
+      max_tokens: maxTokens ?? (image ? 1024 : 256),
       // These prompts are pure vision/text extraction — web search adds latency,
       // cost and citation noise, and can bleed into the JSON output.
       disable_search: true,
@@ -1724,6 +1737,9 @@ export async function registerRoutes(
     try {
       const text = await callLLM(
         WEEKLY_INSIGHTS_PROMPT.replace("{{BUNDLE}}", JSON.stringify(bundle, null, 1)),
+        undefined,
+        // Four sections of prose do not fit the one-line default.
+        { maxTokens: INSIGHTS_TOKENS },
       );
       const insights = extractJson(text);
 
@@ -1942,6 +1958,38 @@ export async function registerRoutes(
     } catch (err: any) {
       console.error("read-close failed:", err?.message || err);
       res.status(502).json({ ok: false, message: "Could not read that note." });
+    }
+  });
+
+  const INSIGHTS_TOKENS = 3000;
+
+  /* ------------------------------- debrief ------------------------------ */
+  /*
+   * A day talked through, split onto its trades. Reads only: what is written
+   * is decided by the person on the page, which then saves through the
+   * ordinary trade and daily-note routes. The trades are the caller's list
+   * of the day's ids, checked against this account — a day's boundaries are
+   * the person's local ones, which this server does not know.
+   */
+  app.post("/api/debrief", async (req, res) => {
+    if (costly(req, res)) return;
+    const parsed = debriefRequestSchema.safeParse(req.body);
+    if (!parsed.success)
+      return res.status(400).json({ message: "Invalid request", issues: parsed.error.issues });
+    const { day, text, tradeIds } = parsed.data;
+    try {
+      const want = new Set(tradeIds);
+      const trades = (await store(req).listTrades())
+        .filter((t) => want.has(t.id))
+        .sort((a, b) => a.entryTime.localeCompare(b.entryTime));
+      const demons = await store(req).listMistakeTags();
+      const highlights = Array.from(new Set(HIGHLIGHT_TAXONOMY));
+      const prompt = debriefPrompt(text, day, debriefTrades(trades), demons.map((d) => d.name), highlights);
+      const json = extractJson(await callLLM(prompt, undefined, { maxTokens: 3000 }));
+      res.json({ ok: true, debrief: normalizeDebrief(json, text, trades, demons, highlights) });
+    } catch (err: any) {
+      console.error("debrief failed:", loggableError(err));
+      res.status(502).json({ ok: false, message: "Could not read that — try again, or review the trades one by one." });
     }
   });
 
