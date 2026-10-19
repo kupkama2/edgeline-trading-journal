@@ -170,9 +170,11 @@ export function buildInsightsBundle(
 
   const reflections: ReflectionEntry[] = inWeek
     .map((t) => {
-      // Both fields are the trader's own words; rationale is written before the
-      // trade and notes after, and a retrospective can live in either.
-      const note = [t.notes, t.rationale]
+      // All the trader's own words: rationale is written before the trade,
+      // notes after, and the review note when it is gone over — which is
+      // where a debrief files what was said. Leaving the review out meant the
+      // weekly read never saw a single review.
+      const note = [t.reviewNote, t.notes, t.rationale]
         .map((s) => (s ?? "").trim())
         .filter(Boolean)
         .join(" — ");

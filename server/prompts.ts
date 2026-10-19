@@ -364,3 +364,49 @@ Output ONLY this JSON object, no prose and no markdown fences:
 {"positions": [{"symbol": string, "direction": "long"|"short", "entryPrice": number|null, "exitPrice": number|null, "size": number|null, "sizeUnit": "base"|"quote"|null, "entryTime": string|null, "exitTime": string|null, "realizedPnl": number|null, "closed": boolean}], "fills": [{"symbol": string, "dir": string, "price": number|null, "size": number|null, "time": string|null, "closedPnl": number|null}]}
 
 If the image shows no history at all, return {"positions": [], "fills": []}.`;
+
+/**
+ * A day talked through, split onto the day's trades.
+ *
+ * The trades are given by reference (T1, T2…) with what the journal already
+ * knows about them, so the model's job is the part only reading can do:
+ * which sentences are about which trade, and what they say. The reply is
+ * checked in shared/debrief.ts — an unknown reference, or a mistake not on
+ * the list, does not get through.
+ */
+export function debriefPrompt(
+  text: string,
+  day: string,
+  trades: { ref: string; symbol: string; direction: string; status: string; entryPrice: number; exitPrice: number | null; pnl: number | null; r: number | null; at: string }[],
+  demons: string[],
+  highlights: string[],
+): string {
+  return `A trader is talking through one trading day (${day}) in their own words. Split what they say onto the day's trades and turn it into their journal's fields.
+
+The day's trades, as the journal has them:
+${JSON.stringify(trades, null, 1)}
+
+For EACH trade the text talks about, return an object in "trades":
+- ref: the trade's ref exactly ("T1"). Match by symbol first (case does not matter: "Pump" is PUMP, "bitcoin" is BTC), then by direction, time, or the result described. When the text says something about several trades at once ("lost both", "stops were too tight on both"), it is about each of them.
+- note: what the trader said about THIS trade, in their own words and first person — quote or lightly trim their sentences; do not summarise, rewrite or add advice. Include the parts that apply to all of the day's trades when they clearly apply to this one.
+- verdict: "well" only if they say they traded it well or it was a good trade done right; "tilt" only if they say it should not have been taken (revenge, boredom, FOMO, no setup); otherwise null. "It was an okay trade" is null.
+- exitReason, one of: "target", "stop" (original stop hit), "trailed", "breakeven", "discretion" (closed by hand), "invalidated", "time", "other" — or null if they do not say.
+- entryGrade: "early" | "perfect" | "late" | null. stopGrade: "tight" (taken out by noise, too close) | "good" | "wide" | null. exitGrade: "early" (left money on the table) | "perfect" | "late" (gave back a lot) | null — never for a trade stopped at its original stop.
+- demons: mistakes they admit for this trade, from this list only, exact spelling: ${JSON.stringify(demons)}
+- highlights: things done right they say for this trade, from this list only, exact spelling: ${JSON.stringify(highlights)}
+- noManagementOutcome: only if they say what price did afterwards with the plan left alone — "target_first", "stop_first", or "undetermined"; otherwise null.
+
+Also return:
+- lessons: the day's lessons and plans in their words, one short item each ("zoom out and stomach more drawdown", "re-enter on a sign of strength"). Empty if none.
+- unmatched: anything they describe as a trade they took that is NOT one of the day's trades above (a symbol not listed, "a third trade"), so the journal can say it is missing. Empty if none.
+
+Rules: use only what the text says — never infer a grade or a mistake from the numbers alone. Leave out a trade the text does not talk about rather than inventing a note for it.
+
+Output ONLY this JSON object, no prose and no markdown fences:
+{"trades": [{"ref": string, "note": string, "verdict": "well"|"tilt"|null, "exitReason": string|null, "entryGrade": string|null, "stopGrade": string|null, "exitGrade": string|null, "demons": string[], "highlights": string[], "noManagementOutcome": string|null}], "lessons": string[], "unmatched": string[]}
+
+The trader's words:
+"""
+${text.slice(0, 6000)}
+"""`;
+}

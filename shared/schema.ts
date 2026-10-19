@@ -1141,6 +1141,13 @@ export interface AnalyzeRationaleResult {
 
 export type ParseScreenshotRequest = z.infer<typeof parseScreenshotSchema>;
 
+/** A day talked through: the words, and which of the day's trades they may be about. */
+export const debriefRequestSchema = z.object({
+  day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  text: z.string().trim().min(10).max(8000),
+  tradeIds: z.array(z.number().int()).max(100),
+});
+
 /**
  * One row from an orders-table screenshot. Same shape the text importer emits,
  * so a screenshot and a paste feed the identical preview and commit path.
