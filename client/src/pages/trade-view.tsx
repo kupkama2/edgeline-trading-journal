@@ -1542,6 +1542,14 @@ export function TradeBody({
               value={
                 <span className="text-emerald-400" data-testid="view-targets">
                   {tps.map((x) => num(x)).join(" → ") || "—"}
+                  {trade.targetSource === "default" && (
+                    <span
+                      className="ml-1 text-[10px] text-muted-foreground"
+                      title="No target was set, so it is 1R. It follows the stop until you type one."
+                    >
+                      1R default
+                    </span>
+                  )}
                 </span>
               }
               /* Only when there is one. With several the figure is a JOINED

@@ -413,6 +413,13 @@ export const trades = pgTable("trades", {
    */
   pathMeasuredAt: text("path_measured_at"),
   /**
+   * "default" when initialTarget was filled in as 1R because none was given
+   * (shared/default-target.ts); null when it was set by a person or a venue.
+   * A default moves with the stop and the entry, and the plan's verdict is
+   * never settled against it.
+   */
+  targetSource: text("target_source"),
+  /**
    * Green flags — JSON string[] of what went RIGHT ("Perfect Entry", "Let It
    * Run"). The positive counterpart to mistake tags, and sliced the same way
    * on Analysis so "perfect entry" earns an expectancy figure rather than a
@@ -595,7 +602,12 @@ export const missingRisk = (v: {
   /** Nor does a scalp: its risk is a figure, not a level. */
   scalp?: boolean | null;
 }) =>
-  needsRisk(v.status) && !v.tilt && !v.scalp
+  /*
+   * The stop is what is owed. A target with no value is filled in as 1R on
+   * the way into the database (shared/default-target.ts), so only a trade
+   * with neither is missing its target — there is nothing to mirror.
+   */
+  needsRisk(v.status) && !v.tilt && !v.scalp && v.initialStop == null
     ? (["initialStop", "initialTarget"] as const).filter((f) => v[f] == null)
     : [];
 

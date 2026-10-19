@@ -1449,6 +1449,7 @@ export function NewTradeCard({
                       inputMode="decimal"
                       className="h-9 font-mono text-sm"
                       data-testid="input-initialTarget"
+                      placeholder="1R if blank"
                       value={(field.value as any) ?? ""}
                     />
                   </FormControl>

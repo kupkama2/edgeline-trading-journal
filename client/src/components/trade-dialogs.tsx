@@ -1051,6 +1051,11 @@ export function TradeEditor({
                   inputMode="decimal"
                   value={f.initialTarget ?? ""}
                   onChange={set("initialTarget")}
+                  placeholder={
+                    trade.targetSource === "default" && trade.initialTarget != null
+                      ? `1R · ${trade.initialTarget}`
+                      : "1R if blank"
+                  }
                   className="h-9 font-mono text-sm"
                   data-testid="input-edit-initialTarget"
                 />
