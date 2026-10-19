@@ -155,20 +155,6 @@ ALTER TABLE trades ADD COLUMN IF NOT EXISTS external_id TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS claimed_at TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS path_measured_at TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS target_source TEXT;
--- A target of 1R wherever there is a stop and none was given, marked so it
--- can be told from a real one. Idempotent: a row with a target is untouched.
-UPDATE trades
-   SET initial_target = ROUND((CASE WHEN direction = 'short'
-                                    THEN entry_price - ABS(entry_price - initial_stop)
-                                    ELSE entry_price + ABS(entry_price - initial_stop) END)::numeric, 10)::double precision,
-       target_source = 'default'
- WHERE initial_target IS NULL
-   AND initial_stop IS NOT NULL
-   AND initial_stop <> entry_price
-   AND status <> 'cancelled'
-   AND COALESCE(scalp, false) = false
-   AND (CASE WHEN direction = 'short' THEN initial_stop > entry_price ELSE initial_stop < entry_price END)
-   AND (CASE WHEN direction = 'short' THEN entry_price - ABS(entry_price - initial_stop) > 0 ELSE true END);
 -- A verdict on the entry, off by default: nothing recorded before it existed
 -- was tilt until somebody says so (or the migration below does).
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS tilt BOOLEAN NOT NULL DEFAULT FALSE;
@@ -551,6 +537,23 @@ BEGIN
       FOREIGN KEY (trade_id) REFERENCES trades (id) ON DELETE CASCADE;
   END IF;
 END $$;
+
+-- A target of 1R wherever there is a stop and none was given, marked so it
+-- can be told from a real one. Idempotent: a row with a target is untouched.
+-- Last, because it reads columns (scalp, among others) that the statements
+-- above add: on a fresh database they do not exist until then.
+UPDATE trades
+   SET initial_target = ROUND((CASE WHEN direction = 'short'
+                                    THEN entry_price - ABS(entry_price - initial_stop)
+                                    ELSE entry_price + ABS(entry_price - initial_stop) END)::numeric, 10)::double precision,
+       target_source = 'default'
+ WHERE initial_target IS NULL
+   AND initial_stop IS NOT NULL
+   AND initial_stop <> entry_price
+   AND status <> 'cancelled'
+   AND COALESCE(scalp, false) = false
+   AND (CASE WHEN direction = 'short' THEN initial_stop > entry_price ELSE initial_stop < entry_price END)
+   AND (CASE WHEN direction = 'short' THEN entry_price - ABS(entry_price - initial_stop) > 0 ELSE true END);
 `);
 
   await syncDemonTaxonomy();
