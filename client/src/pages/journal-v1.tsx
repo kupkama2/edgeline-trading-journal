@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import type { PositionRow } from "@shared/positions-read";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -163,6 +164,7 @@ export default function JournalV1() {
   // switching is instant and costs no round trip.
   const [sortBy, setSortBy] = useState<SortKey>("newest");
   const [importSeed, setImportSeed] = useState<ImportCandidate[] | null>(null);
+  const [positionsSeed, setPositionsSeed] = useState<PositionRow[] | null>(null);
   const [entryOpen, setEntryOpen] = useState(false);
   const [showClosed, setShowClosed] = useState(true);
   const [allClosed, setAllClosed] = useState(false);
@@ -277,6 +279,10 @@ export default function JournalV1() {
         <NewTradeCard
           onOrdersDetected={(rows) => {
             setImportSeed(rows);
+            setImporting(true);
+          }}
+          onPositionsDetected={(rows) => {
+            setPositionsSeed(rows);
             setImporting(true);
           }}
           onExpandedChange={setEntryOpen}
@@ -515,9 +521,11 @@ export default function JournalV1() {
       <ImportTradesDialog
         open={importing}
         seedRows={importSeed}
+        seedPositions={positionsSeed}
         onClose={() => {
           setImporting(false);
           setImportSeed(null);
+          setPositionsSeed(null);
         }}
       />
       <ResolveTradeDialog trade={resolving} onClose={() => setResolving(null)} />

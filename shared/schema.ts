@@ -1105,7 +1105,7 @@ export const parseScreenshotSchema = z.object({
    * far above anything the app produces, far below anything that hurts.
    */
   image: z.string().min(1).max(6_000_000),
-  kind: z.enum(["setup", "outcome", "orders", "close", "fills", "history"]),
+  kind: z.enum(["setup", "outcome", "orders", "close", "fills", "history", "positions"]),
   context: z
     .object({
       symbol: z.string().optional(),
@@ -1191,6 +1191,8 @@ export interface FillRowParseResult {
 export interface SetupParseResult {
   /** True when the image was a multi-row orders table rather than one trade. */
   looksLikeOrdersTable?: boolean;
+  /** Several open positions on a Positions tab: imported together. */
+  looksLikePositionsTab?: boolean;
   symbol: string | null;
   direction: "long" | "short" | null;
   entryPrice: number | null;

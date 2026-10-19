@@ -70,6 +70,7 @@ export function normalizeSetupRead(json: Record<string, unknown> | null | undefi
 
   return {
     looksLikeOrdersTable: j.looksLikeOrdersTable === true,
+    looksLikePositionsTab: j.looksLikePositionsTab === true,
     symbol: typeof j.symbol === "string" && j.symbol.trim() ? j.symbol.trim() : null,
     direction,
     entryPrice: entry,

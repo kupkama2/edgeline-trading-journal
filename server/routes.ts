@@ -96,6 +96,7 @@ import {
 import {
   FILL_LOG_PROMPT,
   HISTORY_PROMPT,
+  POSITIONS_PROMPT,
   debriefPrompt,
   ORDERS_PROMPT,
   ordersPrompt,
@@ -113,6 +114,8 @@ import {
   weekStartKey,
 } from "@shared/weekly-insights";
 import { z } from "zod";
+import { formatPricePair } from "@shared/price-pair";
+import { readPositionsTable } from "@shared/positions-read";
 
 
 /**
@@ -331,6 +334,34 @@ const importBodySchema = z.object({
       }),
     )
     .min(1),
+});
+
+/**
+ * Open positions confirmed off a venue's Positions tab — several at once,
+ * often one idea. Unlike the order importer these are live, so each must
+ * carry its stop; the target is optional and defaults to 1R in storage.
+ */
+const importPositionsBodySchema = z.object({
+  styleId: z.number().int().nullable().optional(),
+  account: z.string().trim().max(80).nullable().optional(),
+  /** The one thesis behind the batch, written to every trade in it. */
+  rationale: z.string().trim().max(4000).nullable().optional(),
+  entryTime: z.string().nullable().optional(),
+  venue: z.enum(["binance"]).optional(),
+  positions: z
+    .array(
+      z.object({
+        symbol: z.string().trim().min(1).max(40),
+        direction: directionEnum,
+        size: z.number().positive(),
+        sizeUnit: sizeUnitEnum.optional(),
+        entryPrice: z.number().positive(),
+        initialStop: z.number().positive(),
+        initialTarget: z.number().positive().nullable().optional(),
+      }),
+    )
+    .min(1)
+    .max(40),
 });
 
 /**
@@ -742,6 +773,70 @@ export async function registerRoutes(
     res.status(201).json({ imported: created.length, trades: created });
   });
 
+  /*
+   * A Positions tab, confirmed row by row. Each lands as an OPEN trade on the
+   * instrument the entry card would have chosen, with the book it was read
+   * off recorded as its price pair — "BTCUSDC" collapses to BTC for the
+   * statistics, but its prices are read from the USDC book it actually
+   * trades on. A row already open in the journal (same instrument, side and
+   * entry) is skipped, so importing the same tab twice does not double it.
+   */
+  app.post("/api/trades/import-positions", async (req, res) => {
+    const parsed = importPositionsBodySchema.safeParse(req.body);
+    if (!parsed.success)
+      return res.status(400).json({ message: "Invalid import", issues: parsed.error.issues });
+    const body = parsed.data;
+    for (const p of body.positions) {
+      const wrongSide = p.direction === "long" ? p.initialStop >= p.entryPrice : p.initialStop <= p.entryPrice;
+      if (wrongSide)
+        return res.status(400).json({ message: `${p.symbol}: the stop is not on the losing side of the entry` });
+    }
+    const cat = await ensureCatalogue().catch(() => []);
+    const existing = (await store(req).listTrades()).filter((t) => t.status === "open");
+    const entryTime = body.entryTime ?? new Date().toISOString();
+    const created = [];
+    const skipped: string[] = [];
+    for (const p of body.positions) {
+      const typed = p.symbol.toUpperCase().replace(/\s*PERP$/, "").trim();
+      const symbol = collapseToInstrument(normalizeSymbol(typed), cat);
+      const dupe = existing.some(
+        (t) =>
+          t.symbol === symbol &&
+          t.direction === p.direction &&
+          Math.abs(t.entryPrice - p.entryPrice) <= Math.abs(p.entryPrice) * 1e-6,
+      );
+      if (dupe) {
+        skipped.push(typed);
+        continue;
+      }
+      // Only a book the ticker would not lead to by itself: BTC reads the
+      // USDT perp by default, so a USDC position names its own.
+      const isPair = /(USDC|BUSD|FDUSD)$/.test(typed);
+      created.push(
+        await store(req).createTrade(
+          {
+            styleId: body.styleId ?? null,
+            symbol,
+            pointValue: pointValueFor(typed),
+            direction: p.direction,
+            size: p.size,
+            sizeUnit: p.sizeUnit ?? "quote",
+            entryPrice: p.entryPrice,
+            initialStop: p.initialStop,
+            initialTarget: p.initialTarget ?? null,
+            entryTime,
+            status: "open",
+            account: body.account || null,
+            rationale: body.rationale || null,
+            pricePair: isPair ? formatPricePair({ venue: "binance", market: "futures", symbol: typed }) : null,
+          } as any,
+          [],
+        ),
+      );
+    }
+    res.status(201).json({ imported: created.length, skipped, trades: created });
+  });
+
   app.delete("/api/trades/:id", async (req, res) => {
     await store(req).deleteTrade(Number(req.params.id));
     res.status(204).end();
@@ -815,7 +910,11 @@ export async function registerRoutes(
     try {
       // Futures first: the picker keeps the first row it sees per coin, and
       // the perp is the book these trades actually happen in.
-      const cat = (await ensureCatalogue()).filter((s) => s.status === "TRADING");
+      // Sorted, because the table has no order of its own: a row rewritten by
+      // the census moves in storage, and the list reshuffled with it.
+      const cat = (await ensureCatalogue())
+        .filter((s) => s.status === "TRADING")
+        .sort((a, b) => a.symbol.localeCompare(b.symbol));
       res.json([
         ...cat.filter((s) => s.market === "futures"),
         ...cat.filter((s) => s.market !== "futures"),
@@ -1803,7 +1902,9 @@ export async function registerRoutes(
                 ? FILL_LOG_PROMPT
                 : kind === "history"
                   ? HISTORY_PROMPT
-                  : outcomePrompt(context ?? {});
+                  : kind === "positions"
+                    ? POSITIONS_PROMPT
+                    : outcomePrompt(context ?? {});
       const text = await callLLM(prompt, { mediaType, data });
       const json = extractJson(text);
 
@@ -1830,8 +1931,20 @@ export async function registerRoutes(
         return res.json({
           ok: true,
           kind,
-          result: { orders: usable, skipped: rows.length - usable.length },
+          result: {
+            orders: usable,
+            skipped: rows.length - usable.length,
+            // A Positions tab handed to the orders reader: the dialog
+            // re-reads it with the positions reader instead.
+            isPositionsTab: json?.isPositionsTab === true,
+          },
         });
+      }
+
+      if (kind === "positions") {
+        const rows = Array.isArray(json?.positions) ? json.positions : [];
+        const positions = readPositionsTable(json);
+        return res.json({ ok: true, kind, result: { positions, skipped: rows.length - positions.length } });
       }
 
       if (kind === "fills") {

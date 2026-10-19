@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import type { PositionRow } from "@shared/positions-read";
 import { Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -297,6 +298,7 @@ export default function JournalV2() {
   const [resolving, setResolving] = useState<TradeWithTags | null>(null);
   const [filling, setFilling] = useState<{ trade: TradeWithTags; kind: "add" | "partial" } | null>(null);
   const [importSeed, setImportSeed] = useState<ImportCandidate[] | null>(null);
+  const [positionsSeed, setPositionsSeed] = useState<PositionRow[] | null>(null);
   const [entryOpen, setEntryOpen] = useState(false);
   const [scalpOpen, setScalpOpen] = useState(false);
   // Shut by default. The filters are how you ask the record a question, and
@@ -493,6 +495,10 @@ export default function JournalV2() {
               setImportSeed(rows);
               setImporting(true);
             }}
+            onPositionsDetected={(rows) => {
+              setPositionsSeed(rows);
+              setImporting(true);
+            }}
             onExpandedChange={setEntryOpen}
             narrow={sideBySide}
             compact
@@ -681,9 +687,11 @@ export default function JournalV2() {
       <ImportTradesDialog
         open={importing}
         seedRows={importSeed}
+        seedPositions={positionsSeed}
         onClose={() => {
           setImporting(false);
           setImportSeed(null);
+          setPositionsSeed(null);
         }}
       />
       <ResolveTradeDialog trade={resolving} onClose={() => setResolving(null)} />
