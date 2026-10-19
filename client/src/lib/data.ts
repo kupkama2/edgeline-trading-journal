@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import type { PositionRow } from "@shared/positions-read";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { chapterTrades } from "@shared/chapters";
 import { useChapters } from "./chapters";
@@ -298,6 +299,32 @@ export function useImportTrades() {
   });
 }
 
+/** Open positions off a Positions tab — live trades, each with its stop. */
+export function useImportPositions() {
+  return useMutation({
+    mutationFn: async (v: {
+      styleId?: number | null;
+      account?: string | null;
+      rationale?: string | null;
+      entryTime?: string | null;
+      positions: {
+        symbol: string;
+        direction: "long" | "short";
+        size: number;
+        sizeUnit: "base" | "quote";
+        entryPrice: number;
+        initialStop: number;
+        initialTarget?: number | null;
+      }[];
+    }) =>
+      (await apiRequest("POST", "/api/trades/import-positions", v)).json() as Promise<{
+        imported: number;
+        skipped: string[];
+      }>,
+    onSuccess: invalidateTrades,
+  });
+}
+
 /** Backfill from a broker CSV. Rows carrying an exit land as closed history. */
 export function useImportCsv() {
   return useMutation({
@@ -501,7 +528,12 @@ export async function parseScreenshot(
   image: string,
   kind: "orders",
   context?: Record<string, unknown>,
-): Promise<{ orders: OrderRowParseResult[]; skipped: number }>;
+): Promise<{ orders: OrderRowParseResult[]; skipped: number; isPositionsTab?: boolean }>;
+export async function parseScreenshot(
+  image: string,
+  kind: "positions",
+  context?: Record<string, unknown>,
+): Promise<{ positions: PositionRow[]; skipped: number }>;
 export async function parseScreenshot(
   image: string,
   kind: "setup",
@@ -529,7 +561,7 @@ export async function parseScreenshot(
 ): Promise<unknown>;
 export async function parseScreenshot(
   image: string,
-  kind: "setup" | "outcome" | "orders" | "close" | "fills" | "history",
+  kind: "setup" | "outcome" | "orders" | "close" | "fills" | "history" | "positions",
   context?: Record<string, unknown>,
 ): Promise<any> {
   const res = await apiRequest("POST", "/api/parse-screenshot", {

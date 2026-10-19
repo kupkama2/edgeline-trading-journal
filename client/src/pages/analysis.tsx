@@ -13,6 +13,7 @@ import { ExcursionChart } from "@/components/excursion-chart";
 import { EdgeCard } from "@/components/edge-card";
 import { CohortCard } from "@/components/cohort-card";
 import { SizeCard } from "@/components/size-card";
+import { FixedTargetCard } from "@/components/fixed-target-card";
 import { RDistributionChart } from "@/components/r-distribution";
 import { describeShape, rDistribution } from "@shared/distribution";
 import { setJumpDay } from "@/lib/jump";
@@ -439,6 +440,10 @@ export default function Analysis({ embedded = false }: { embedded?: boolean } = 
       {/* The third slice of the same trades: not what you did after the entry,
           but how much you had on when you did it. */}
       <SizeCard trades={scoped} />
+
+      {/* Not how you managed the exit, but whether one plain target would
+          have beaten it — and which. */}
+      <FixedTargetCard trades={scoped} />
 
       {/* ------------------------ MAE / MFE excursion ------------------------ */}
       <Card className="border-card-border bg-card p-4">

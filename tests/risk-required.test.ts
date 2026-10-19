@@ -33,9 +33,8 @@ describe("when a trade owes a stop and a target", () => {
   });
 
   it("names exactly what is absent, and nothing when the status excuses it", () => {
-    expect(missingRisk({ status: "open", initialStop: 90, initialTarget: null })).toEqual([
-      "initialTarget",
-    ]);
+    // A stop is enough: a missing target is filled in as 1R on the way in.
+    expect(missingRisk({ status: "open", initialStop: 90, initialTarget: null })).toEqual([]);
     expect(missingRisk({ status: "open" })).toEqual(["initialStop", "initialTarget"]);
     expect(missingRisk({ status: "cancelled" })).toEqual([]);
     expect(missingRisk({ status: "pending" })).toEqual([]);

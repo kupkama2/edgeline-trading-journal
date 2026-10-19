@@ -41,6 +41,7 @@ import type {
   UserPrefs,
 } from "@shared/schema";
 import { DEMON_TAXONOMY, DEMON_LEGACY_ALIASES } from "@shared/demons";
+import { targetFields } from "@shared/default-target";
 import { collapseToInstrument } from "@shared/binance";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
@@ -153,6 +154,7 @@ ALTER TABLE trades ADD COLUMN IF NOT EXISTS funding_checked_at TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS external_id TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS claimed_at TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS path_measured_at TEXT;
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS target_source TEXT;
 -- A verdict on the entry, off by default: nothing recorded before it existed
 -- was tilt until somebody says so (or the migration below does).
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS tilt BOOLEAN NOT NULL DEFAULT FALSE;
@@ -535,6 +537,23 @@ BEGIN
       FOREIGN KEY (trade_id) REFERENCES trades (id) ON DELETE CASCADE;
   END IF;
 END $$;
+
+-- A target of 1R wherever there is a stop and none was given, marked so it
+-- can be told from a real one. Idempotent: a row with a target is untouched.
+-- Last, because it reads columns (scalp, among others) that the statements
+-- above add: on a fresh database they do not exist until then.
+UPDATE trades
+   SET initial_target = ROUND((CASE WHEN direction = 'short'
+                                    THEN entry_price - ABS(entry_price - initial_stop)
+                                    ELSE entry_price + ABS(entry_price - initial_stop) END)::numeric, 10)::double precision,
+       target_source = 'default'
+ WHERE initial_target IS NULL
+   AND initial_stop IS NOT NULL
+   AND initial_stop <> entry_price
+   AND status <> 'cancelled'
+   AND COALESCE(scalp, false) = false
+   AND (CASE WHEN direction = 'short' THEN initial_stop > entry_price ELSE initial_stop < entry_price END)
+   AND (CASE WHEN direction = 'short' THEN entry_price - ABS(entry_price - initial_stop) > 0 ELSE true END);
 `);
 
   await syncDemonTaxonomy();
@@ -1269,9 +1288,12 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createTrade(t: InsertTrade, tagIds: number[] = []): Promise<TradeWithTags> {
+    // Every writer comes through here — the form, an import, a sync — so the
+    // 1R default is applied once, here, for all of them.
+    const withTarget = { ...(t as any), ...targetFields(t as any) };
     const [row] = await db
       .insert(trades)
-      .values({ ...(t as any), userId: this.userId })
+      .values({ ...withTarget, userId: this.userId })
       .returning();
     if (tagIds.length) await this.setTags(row.id, tagIds);
     return {
@@ -1287,6 +1309,15 @@ export class DatabaseStorage implements IStorage {
     t: UpdateTrade,
     tagIds?: number[],
   ): Promise<TradeWithTags | undefined> {
+    /*
+     * The 1R default, kept in step: judged on the row as it will be, so a
+     * patch that moves the stop moves a default target with it, and one that
+     * clears the target on a trade with a stop gets the default back.
+     */
+    if (Object.keys(t).length > 0 && ["initialStop", "initialTarget", "entryPrice", "direction", "status"].some((k) => k in t)) {
+      const [before] = await db.select().from(trades).where(and(eq(trades.id, id), this.owns(trades)));
+      if (before) t = { ...t, ...targetFields({ ...before, ...(t as any) }, t as any) } as UpdateTrade;
+    }
     // Drizzle throws on an empty SET clause, so a tags-only patch just reads.
     const [row] =
       Object.keys(t).length > 0

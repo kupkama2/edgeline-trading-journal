@@ -47,6 +47,7 @@ export const SETUP_PROMPT = `You are reading a screenshot to fill in a new trade
 - extraTargets: resting LIMIT close orders — a "Limit(4)" column, a tooltip, or a list of "Limit" rows with Reduce Only — are the planned scale-outs. Report their prices in extraTargets, nearest to the entry first. If no TP is set in the TP/SL column, the NEAREST limit close is the initialTarget and the rest are extraTargets.
 - Mark Price, Liq. Price, Margin, ROI % and the PnL figure are NEVER an entry, a stop or a target.
 - This view does not show WHEN the position was opened: entryTime is null unless a time is printed. The position is live: isClosed false, isResting false.
+- If the tab lists MORE THAN ONE open position, set looksLikePositionsTab true and describe the TOPMOST row in the other fields; they are imported together elsewhere. One position: false.
 
 (E) A crypto venue's OPEN ORDERS tab — a row per order that has NOT filled yet, with columns like Time, Symbol, Type, Side, Price, Amount, Filled, Reduce Only, Post Only, Trigger Conditions, TP/SL, TIF.
 - The ENTRY is a row whose Reduce Only is "No" and whose Side reads "Open Long"/"Open Short" or "Buy"/"Sell": that gives the direction. A row with Reduce Only "Yes" is a close order on an existing position, not an entry.
@@ -76,7 +77,7 @@ ALSO REPORT whether this image is an orders TABLE listing SEVERAL DIFFERENT trad
 Count orders, not rows. A single bracketed order occupies three rows in a working-orders table: the parent (Status "Working", Type "Limit") plus its Take Profit and Stop Loss children (Status "Inactive", opposite Side, same Qty and Symbol). That is ONE trade, so looksLikeOrdersTable is FALSE and you should report it as the single order it is — the parent's Limit Price is entryPrice, its Take Profit column (or the Take Profit child's price) is initialTarget, its Stop Loss column (or the Stop Loss child's price) is initialStop, and the parent's Side gives the direction.
 
 Respond with STRICT JSON only, no prose, no markdown fences:
-{"symbol": string|null, "direction": "long"|"short"|null, "entryPrice": number|null, "initialStop": number|null, "initialTarget": number|null, "extraTargets": number[]|null, "entryTime": string|null, "size": number|null, "sizeUnit": "base"|"quote"|null, "isResting": boolean, "isClosed": boolean, "exitPrice": number|null, "exitTime": string|null, "exitReason": "target"|"stop"|"trailed"|"breakeven"|"discretion"|"other"|null, "realizedPnl": number|null, "looksLikeOrdersTable": boolean}
+{"symbol": string|null, "direction": "long"|"short"|null, "entryPrice": number|null, "initialStop": number|null, "initialTarget": number|null, "extraTargets": number[]|null, "entryTime": string|null, "size": number|null, "sizeUnit": "base"|"quote"|null, "isResting": boolean, "isClosed": boolean, "exitPrice": number|null, "exitTime": string|null, "exitReason": "target"|"stop"|"trailed"|"breakeven"|"discretion"|"other"|null, "realizedPnl": number|null, "looksLikeOrdersTable": boolean, "looksLikePositionsTab": boolean}
 
 Rules:
 - Output ONLY the JSON object. Do not wrap it in markdown code fences, do not add explanations, citations or any prose before or after it.
@@ -138,12 +139,39 @@ Rules:
 - Ignore header rows, totals, and any row that is clearly a filled/closed position rather than a resting order.
 - STOP if the instruments are dated futures contracts (MNQU6, MBTQ6, ESZ5 — letters, a month letter, a year digit) AND the rows show filled quantities. That is a futures broker's execution log, not resting orders. Return {"orders": []}.
 - STOP if the table is an EXECUTION LOG rather than a list of resting orders — a "Filled Qty" column with non-zero values, "Remaining Qty" reading 0, an "Avg Fill Price" column with prices in it, or a tab reading "Filled". Those rows are history: they cannot open anything, and returning them as orders invents positions the trader already closed. Return {"orders": []} and nothing else.
+- STOP if the table lists OPEN POSITIONS rather than resting orders — a Binance "Positions" tab, with columns like Size, Entry Price, Break Even Price, Mark Price, Liq. Price, Margin Ratio, Margin, PNL (ROI %), "TP/SL for position" and a "Close All Positions" button. Those are live trades, not orders, and are read elsewhere. Return {"orders": [], "isPositionsTab": true} and nothing else.
 - entryPrice is the identity of an order: it is what lets a shape (C) dialog be matched to the row it brackets, so read it exactly, to every decimal shown.
 - Output ONLY this JSON object, no prose and no markdown fences:
 {"orders": [{"symbol": string|null, "direction": "long"|"short"|null, "size": number|null, "sizeUnit": "base"|"quote"|null, "entryPrice": number|null, "initialStop": number|null, "initialTarget": number|null, "entryTime": string|null}]}
 - Numbers must be plain JSON numbers: no currency symbols, no thousands separators.
 - If you cannot read a field, use null rather than guessing.
 - If the image shows no resting orders at all, return {"orders": []}.`;
+
+/**
+ * A venue's Positions tab: every open position on it, a row each.
+ *
+ * Transcription only. Which stop to use, what side a bare size means and
+ * whether a level is on the wrong side are decided in shared/positions-read.ts,
+ * where they are tested — so the model is asked for both stop columns as
+ * printed, not to choose between them.
+ */
+export const POSITIONS_PROMPT = `You are reading a screenshot of a trading venue's POSITIONS tab — the trader's currently open positions, one per row. Transcribe every row. Do not invent anything that is not on the screen.
+
+On Binance futures the columns are usually: Symbol (with a "Perp" badge and a leverage like "10x" beside or under it), Size, Entry Price, Break Even Price, Mark Price, Liq. Price, Margin Ratio, Margin, PNL (ROI %), Close All Positions, "TP/SL for position", and sometimes a second "TP/SL" column for orders resting on the position. A TP/SL cell reads like "84,262.8 / 80,539.2" — take profit first, stop loss second — and "-- / 80,539.2" when only one is set.
+
+For every row:
+- symbol: the ticker as printed, without the Perp badge or the leverage: "BTCUSDC", "ZECUSDT".
+- direction: read it from the row, in this order: (1) a printed word or badge — "Long", "Short", "Cross Long", a Side column; (2) the coloured stripe at the LEFT EDGE of the row — green is a long, red is a short; (3) the stop against the entry — a stop BELOW the entry protects a long, ABOVE protects a short. Null only when none of these is visible. The size's sign is reported separately below; do not let it override a printed word.
+- size: the Size number as printed, KEEPING its sign — Binance prints a short's size negative. No thousands separators.
+- sizeUnit: "quote" when the size is a currency amount ("3,028.28 USDT"), "base" when it is a coin count ("0.123 BTC").
+- entryPrice: the Entry Price, to every decimal shown. Not the break-even or the mark price.
+- positionTp / positionSl: the two numbers in "TP/SL for position" (take profit, stop loss); null for "--" or blank.
+- orderTp / orderSl: the two numbers in a separate "TP/SL" order column if there is one; otherwise null.
+- leverage: the number in "10x", or null.
+
+Output ONLY this JSON object, no prose and no markdown fences:
+{"positions": [{"symbol": string, "direction": "long"|"short"|null, "size": number|null, "sizeUnit": "base"|"quote"|null, "entryPrice": number|null, "positionTp": number|null, "positionSl": number|null, "orderTp": number|null, "orderSl": number|null, "leverage": number|null}]}
+Numbers must be plain JSON numbers. If you cannot read a field, use null rather than guessing. If there are no open positions, return {"positions": []}.`;
 
 /**
  * Reads a week of written reflections against the week's numbers.

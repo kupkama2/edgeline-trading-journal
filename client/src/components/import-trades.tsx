@@ -23,6 +23,8 @@ import {
 } from "@shared/import-parse";
 import { fileToDownscaledDataUrl, parseScreenshot, useImportTrades } from "@/lib/data";
 import { FillLogReview } from "@/components/import-fills";
+import { PositionsReview } from "@/components/import-positions";
+import type { PositionRow } from "@shared/positions-read";
 import type { LoggedFill } from "@shared/order-log";
 import type { FillRowParseResult } from "@shared/schema";
 import { useStyleFilter } from "@/lib/style-filter";
@@ -37,7 +39,7 @@ import { maskIfQuote } from "@shared/redact";
  * see how many positions could open, then add rationale one at a time.
  */
 
-type Source = "trades" | "tradingview" | "binance";
+type Source = "trades" | "tradingview" | "binance" | "positions";
 
 const SOURCES: { id: Source; title: string; detail: string }[] = [
   {
@@ -54,6 +56,11 @@ const SOURCES: { id: Source; title: string; detail: string }[] = [
     id: "binance",
     title: "Binance orders",
     detail: "Open orders or a TP/SL dialog. Becomes positions that could still open.",
+  },
+  {
+    id: "positions",
+    title: "Binance positions",
+    detail: "The Positions tab — several open at once. Becomes open trades, one per row.",
   },
 ];
 
@@ -98,11 +105,14 @@ export function ImportTradesDialog({
   open,
   onClose,
   seedRows,
+  seedPositions,
 }: {
   open: boolean;
   onClose: () => void;
   /** Rows already read from a screenshot elsewhere (a paste on the journal). */
   seedRows?: ImportCandidate[] | null;
+  /** Open positions already read off a Positions tab pasted elsewhere. */
+  seedPositions?: PositionRow[] | null;
 }) {
   const [text, setText] = useState("");
   // Rows read from a screenshot. Kept beside the pasted-text rows rather than
@@ -112,6 +122,9 @@ export function ImportTradesDialog({
   // A filled-order log, kept separately: it becomes completed trades with legs
   // rather than resting orders, so it has nothing to merge with above.
   const [logRows, setLogRows] = useState<LoggedFill[] | null>(null);
+  // Open positions off a Positions tab. Live trades with stops, not orders,
+  // so like the log they take over the window.
+  const [positionRows, setPositionRows] = useState<PositionRow[] | null>(null);
   // The last image scanned, so either reading can be asked for again without
   // making the trader find and re-paste the screenshot.
   const [lastShot, setLastShot] = useState<string | null>(null);
@@ -178,6 +191,12 @@ export function ImportTradesDialog({
       setExcluded({});
     }
   }, [open, seedRows]);
+  useEffect(() => {
+    if (open && seedPositions?.length) {
+      setSource("positions");
+      setPositionRows(seedPositions);
+    }
+  }, [open, seedPositions]);
 
   /**
    * Ctrl+V anywhere in the dialog reads a screenshot off the clipboard.
@@ -313,6 +332,10 @@ export function ImportTradesDialog({
        * question nobody asked.
        */
       const picked = sourceRef.current;
+      if (picked === "positions") {
+        await readPositions(dataUrl);
+        return;
+      }
       if (picked !== "tradingview" && picked !== "binance" && modeRef.current !== "orders") {
       const log = await parseScreenshot(dataUrl, "fills");
       // Told which it is, the verdict is not consulted: the trader is looking
@@ -337,6 +360,12 @@ export function ImportTradesDialog({
         "orders",
         picked === "binance" || picked === "tradingview" ? { venue: picked } : undefined,
       );
+      // A Positions tab, read by the orders reader: it said so rather than
+      // inventing orders, so read it again as what it is.
+      if (res.isPositionsTab) {
+        await readPositions(dataUrl);
+        return;
+      }
 
       // A bracketed order comes back as its parent plus two exit legs; listing
       // the legs would offer to import the take profit as a trade of its own.
@@ -389,6 +418,18 @@ export function ImportTradesDialog({
     }
   }
 
+  /** Read a Positions tab into the positions review. */
+  async function readPositions(dataUrl: string) {
+    const res = await parseScreenshot(dataUrl, "positions");
+    if (res.positions?.length) setPositionRows(res.positions);
+    else
+      toast({
+        title: "No open positions found in that image",
+        description: "Every row needs a symbol, a size and an entry price. Try a sharper screenshot of the Positions tab.",
+        variant: "destructive",
+      });
+  }
+
   async function commit() {
     if (!ready.length) return;
     try {
@@ -426,7 +467,11 @@ export function ImportTradesDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-sm">
             <ClipboardPaste className="h-4 w-4" />
-            {logRows ? "Trades from your order log" : "Import resting orders"}
+            {logRows
+              ? "Trades from your order log"
+              : positionRows
+                ? "Open positions"
+                : "Import resting orders"}
           </DialogTitle>
         </DialogHeader>
 
@@ -434,7 +479,16 @@ export function ImportTradesDialog({
             — completed trades with legs, not positions that might open — so it
             takes over the window rather than sharing it. The dropzone's other
             controls would all be about the wrong thing. */}
-        {logRows ? (
+        {positionRows ? (
+          <PositionsReview
+            positions={positionRows}
+            onDone={() => {
+              setPositionRows(null);
+              onClose();
+            }}
+            onBack={() => setPositionRows(null)}
+          />
+        ) : logRows ? (
           <div className="space-y-3">
             <FillLogReview
               fills={logRows}
@@ -462,7 +516,7 @@ export function ImportTradesDialog({
               that instantly is evidence they could simply have stated. */}
           <div className="space-y-1.5">
             <p className="text-[11px] text-muted-foreground">What are you importing?</p>
-            <div className="grid gap-1.5 sm:grid-cols-3">
+            <div className="grid gap-1.5 sm:grid-cols-2 lg:grid-cols-4">
               {SOURCES.map((sc) => (
                 <button
                   key={sc.id}
@@ -509,7 +563,11 @@ export function ImportTradesDialog({
               <Camera className="h-3.5 w-3.5" />
             )}
             {scanning
-              ? "Reading orders…"
+              ? source === "positions"
+                ? "Reading positions…"
+                : "Reading orders…"
+              : source === "positions"
+                ? "Drop or paste (Ctrl+V) a screenshot of your Positions tab"
               : shotRows.length
                 ? "Drop or paste another screen — a TP/SL dialog attaches to its order"
                 : "Drop or paste (Ctrl+V) a screenshot of your orders table"}

@@ -494,7 +494,13 @@ async function readTrade(
   if (!window) return { settled: null, path: blank };
   const { from, to } = window;
 
-  const plan = { direction: t.direction, stop: t.initialStop, target: t.initialTarget };
+  // A default 1R target is a placeholder, not a plan: with no target the
+  // verdict stays pending, so it is never settled against one.
+  const plan = {
+    direction: t.direction,
+    stop: t.initialStop,
+    target: t.targetSource === "default" ? null : t.initialTarget,
+  };
   const exitMs = t.exitTime ? new Date(t.exitTime).getTime() : null;
   const edges = exitMs != null ? [from, exitMs] : [from];
 

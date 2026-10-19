@@ -90,7 +90,8 @@ export function OwedCard({
                 {/* The two levels to set the alerts at — the errand itself,
                     rather than a description of the errand. */}
                 <span className="ml-auto shrink-0 font-mono text-[11px] text-muted-foreground">
-                  {trade.direction === "short" ? "▾" : "▴"} target {num(trade.initialTarget)} ·
+                  {trade.direction === "short" ? "▾" : "▴"} target {num(trade.initialTarget)}
+                  {trade.targetSource === "default" ? " (1R)" : ""} ·
                   stop {num(trade.initialStop)}
                 </span>
               </button>

@@ -1,4 +1,5 @@
 import { useAccountBalances } from "@/lib/data";
+import type { PositionRow } from "@shared/positions-read";
 import { toInstant } from "@shared/import-parse";
 import { fmtPercent, latestEquity, parseRiskBudget, riskPercent } from "@shared/equity";
 import { impliedFees } from "@shared/setup-read";
@@ -94,6 +95,7 @@ const priceOrNull = (v: unknown): number | null => {
 
 export function NewTradeCard({
   onOrdersDetected,
+  onPositionsDetected,
   onExpandedChange,
   defaultExpanded = false,
   compact = false,
@@ -101,6 +103,8 @@ export function NewTradeCard({
   narrow = false,
 }: {
   onOrdersDetected: (rows: ImportCandidate[]) => void;
+  /** Several open positions off a Positions tab, for the batch importer. */
+  onPositionsDetected?: (rows: PositionRow[]) => void;
   /** So the page can give the column back when the form is closed. */
   onExpandedChange?: (open: boolean) => void;
   /** Shut, it is one short button in a row of two rather than a full card. */
@@ -536,8 +540,25 @@ export function NewTradeCard({
        */
       const r = await parseScreenshot(dataUrl, "setup");
 
+      /*
+       * Several live positions on one Positions tab go to the batch importer,
+       * which lists them a row each. One position stays here: the setup read
+       * in hand already describes it.
+       */
+      const handOffPositions = async () => {
+        if (!onPositionsDetected) return false;
+        const read = await parseScreenshot(dataUrl, "positions").catch(() => null);
+        if ((read?.positions.length ?? 0) < 2) return false;
+        onPositionsDetected(read!.positions);
+        setImage(null);
+        setParsing(false);
+        return true;
+      };
+      if (r.looksLikePositionsTab && (await handOffPositions())) return;
+
       if (r.looksLikeOrdersTable) {
         const asOrders = await parseScreenshot(dataUrl, "orders").catch(() => null);
+        if (asOrders?.isPositionsTab && (await handOffPositions())) return;
         /*
          * Count trades, not rows. A working-orders table draws ONE bracketed
          * order as three rows — the parent plus its inactive take-profit and
@@ -1449,6 +1470,7 @@ export function NewTradeCard({
                       inputMode="decimal"
                       className="h-9 font-mono text-sm"
                       data-testid="input-initialTarget"
+                      placeholder="1R if blank"
                       value={(field.value as any) ?? ""}
                     />
                   </FormControl>

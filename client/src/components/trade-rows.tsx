@@ -132,6 +132,7 @@ export function OpenTradeRow({
                 .map((x) => num(x))
                 .join(" → ")}
             </span>
+            {t.targetSource === "default" && <span title="No target was set, so it is 1R"> (1R)</span>}
           </span>
           <span>R:R {num(rr, 1)}</span>
           {mark && standing && (
@@ -230,7 +231,8 @@ export function PendingTradeRow({
 }) {
   const updateTrade = useUpdateTrade();
   const { toast } = useToast();
-  const needsRisk = t.initialStop == null || t.initialTarget == null;
+  // The stop is what is owed; a missing target is filled in as 1R.
+  const needsRisk = t.initialStop == null;
   const needsRationale = !t.rationale?.trim();
 
   async function markFilled() {
@@ -241,7 +243,7 @@ export function PendingTradeRow({
       // The server enforces stop+target on the merged row, so this is the
       // authoritative check — surface its reason rather than pre-guessing.
       toast({
-        title: "Add a stop and target first",
+        title: "Add a stop first",
         description: String(err?.message ?? err).slice(0, 160),
         variant: "destructive",
       });

@@ -189,7 +189,7 @@ export function computeMetrics(t: Trade & { fills?: TradeFill[] }): TradeMetrics
   const costR = riskDollars > 0 ? costs / riskDollars : 0;
   let potentialR: number | null = null;
   if (safe && t.noManagementOutcome === "target_first") {
-    if (t.initialTarget != null) {
+    if (t.initialTarget != null && t.targetSource !== "default") {
       potentialR = (sign * (t.initialTarget - t.entryPrice)) / risk - costR;
     }
   } else if (t.noManagementOutcome === "stop_first") {

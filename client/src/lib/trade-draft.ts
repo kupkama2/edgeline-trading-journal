@@ -178,7 +178,9 @@ export function draftFromTrade(trade: TradeWithTags): TradeDraft {
       // Pending trades have no stop/target yet — String(null) would put the
       // literal text "null" in the field for the user to delete by hand.
       initialStop: str(trade.initialStop),
-      initialTarget: str(trade.initialTarget),
+      // A default 1R target loads as blank: it is shown as the placeholder,
+      // follows the stop on its own, and is replaced by anything typed.
+      initialTarget: trade.targetSource === "default" ? "" : str(trade.initialTarget),
       entryTime: toLocalInput(trade.entryTime),
       exitPrice: str(trade.exitPrice),
       exitTime: toLocalInput(trade.exitTime),
