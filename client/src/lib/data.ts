@@ -25,6 +25,7 @@ import type {
 import type { InsightsBundle, WeeklyInsights } from "@shared/weekly-insights";
 import type { AccountBalance } from "@shared/schema";
 import type { Mark } from "@shared/marks";
+import { withBrowserPerpMarks } from "./perp-marks";
 import type { Debrief } from "@shared/debrief";
 
 /** Every trade the account has, whatever chapter it falls in. */
@@ -816,6 +817,10 @@ export function useDeleteAccountBalance() {
 export function useMarks(enabled: boolean) {
   return useQuery<Record<number, Mark>>({
     queryKey: ["/api/marks"],
+    // A perp the server could not price live is asked of its own book from
+    // here; see withBrowserPerpMarks.
+    queryFn: async () =>
+      withBrowserPerpMarks((await (await apiRequest("GET", "/api/marks")).json()) as Record<number, Mark>),
     enabled,
     staleTime: 30_000,
     refetchInterval: enabled ? 60_000 : false,

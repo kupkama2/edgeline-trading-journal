@@ -92,7 +92,7 @@ describe("how a mark is labelled", () => {
 
   it("marks a perp priced off spot", () => {
     const note = markNote({ book: "spot" }, "Sep 18, 14:00");
-    expect(note.badge).toBe("spot");
+    expect(note.badge).toBe("spot price");
     expect(note.title).toMatch(/basis/);
   });
 

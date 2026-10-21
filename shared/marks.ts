@@ -37,6 +37,13 @@ export interface Mark {
    * presented as live is the one thing this journal must never do.
    */
   stale?: boolean;
+  /**
+   * The Binance perp this trade is in, when the server could not price it
+   * live — the browser asks that book itself (client/src/lib/perp-marks.ts).
+   */
+  perp?: string;
+  /** Priced by the browser from the perp's own book rather than by the server. */
+  fromBrowser?: boolean;
 }
 
 /**
@@ -52,7 +59,7 @@ export interface Mark {
  * the browser, not to this file.
  */
 export function markNote(
-  mark: Pick<Mark, "book" | "stale">,
+  mark: Pick<Mark, "book" | "stale" | "fromBrowser">,
   when: string,
 ): { badge: string | null; title: string } {
   if (mark.stale)
@@ -62,13 +69,20 @@ export function markNote(
     };
   if (mark.book === "spot")
     return {
-      badge: "spot",
+      // "spot price", not "spot": the word sits beside the trade, and on its
+      // own it reads as what the trade is rather than where its price came from.
+      badge: "spot price",
       title:
-        "Priced on the spot book — which for a perpetual is within basis of it, not its own print.",
+        "Priced on the spot book because the perpetual's own price could not be read — within basis of it, not its own print.",
     };
   // Live, from the book the position is actually in. Nothing to warn about,
   // so nothing is said — a badge on every row is a badge nobody reads.
-  return { badge: null, title: `Live — ${when}` };
+  return {
+    badge: null,
+    title: mark.fromBrowser
+      ? `Live from the perpetual's own book, read by this browser — ${when}`
+      : `Live — ${when}`,
+  };
 }
 
 export interface Standing {

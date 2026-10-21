@@ -158,12 +158,16 @@ describe.skipIf(!DB)("when nothing will quote the book", () => {
     const m = marks[ids.LIVEX];
     expect(m).toMatchObject({ price: 120, book: "perp", venue: "binance" });
     expect(m.stale).toBeFalsy();
+    // Live from its own book: nothing for the browser to ask.
+    expect(m.perp).toBeUndefined();
     expect(m.at).toBeGreaterThan(CUTOFF);
   });
 
   it("falls back to the last readable close, timed to the bar it came from", () => {
     const m = marks[ids.STRND0];
     expect(m).toMatchObject({ price: 110, book: "perp", venue: "binance", stale: true });
+    // And it names its book, so the browser can ask it from where it answers.
+    expect(m.perp).toBe("STRND0USDT");
     // The bar's close, not now: that is the last moment anybody can say the
     // price was true.
     expect(m.at).toBe(CUTOFF + 3600e3);
