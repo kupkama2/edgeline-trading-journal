@@ -1058,6 +1058,7 @@ export async function registerRoutes(
         venue: "binance" | "hyperliquid";
         book: "perp" | "spot";
         stale?: boolean;
+        perp?: string;
       }
     > = {};
 
@@ -1191,6 +1192,16 @@ export async function registerRoutes(
         book: pair!.market === "futures" ? "perp" : "spot",
         stale: !forming,
       };
+    }
+
+    /*
+     * A perp this server could not price live names its book, so the browser
+     * can ask for it. fapi refuses some hosts (a 451 to a US address) and not
+     * others, and the trader's own connection is very often one it answers.
+     */
+    for (const [id, sym] of Array.from(perpOf.entries())) {
+      const m = out[id];
+      if (m && (m.book !== "perp" || m.stale)) m.perp = sym;
     }
 
     res.json(out);
