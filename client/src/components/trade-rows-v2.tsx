@@ -35,6 +35,8 @@ import { computeMetrics, fmtAmount, fmtFees, fmtMoney, fmtR } from "@shared/metr
 import { tradeVerdict, isWin, type Verdict } from "@shared/verdict";
 import { markWhen, num } from "@/components/trade-shared";
 import { maskIfQuote } from "@shared/redact";
+import { MANAGED_LABEL, type ManagedWhy } from "@shared/managed";
+import { MajorityOutButton } from "@/components/majority-out";
 
 /* ============================== the word ============================== */
 
@@ -340,9 +342,12 @@ export function OpenTradeRowV2({
   onResolve,
   onAdd,
   onTake,
+  managed = null,
 }: {
   t: TradeWithTags;
   mark?: Mark | null;
+  /** Why it sits with the managed trades, when it does. */
+  managed?: ManagedWhy | null;
   /** The trade is open underneath this row, so the row is its header. */
   expanded?: boolean;
   onSelect: () => void;
@@ -433,6 +438,16 @@ export function OpenTradeRowV2({
               : `risk ${fmtAmount(left)}`}
       </span>
 
+      {managed && (
+        <span
+          className="shrink-0 rounded border border-emerald-500/30 px-1 text-[10px] text-emerald-400/90"
+          title={MANAGED_LABEL[managed].title}
+          data-testid={`row-v2-managed-${t.id}`}
+        >
+          {MANAGED_LABEL[managed].badge}
+        </span>
+      )}
+
       {standing?.crossedStop && (
         <span className="text-[10px] text-primary" data-testid={`row-v2-crossed-${t.id}`}>
           through the stop — still open?
@@ -481,6 +496,10 @@ export function OpenTradeRowV2({
         >
           <Minus className="mr-0.5 h-3 w-3" /> Take
         </Button>
+        {/* Offered where it can do something: to set the mark, or to take
+            back one you set. A trade managed by its own record has no mark
+            to toggle. */}
+        {(!managed || managed === "marked") && <MajorityOutButton trade={t} compact />}
         <Button
           type="button"
           variant="outline"

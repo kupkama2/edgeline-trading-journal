@@ -1,4 +1,5 @@
 import { useAccountBalances } from "@/lib/data";
+import { MajorityOutButton } from "@/components/majority-out";
 import { failed, reportFailure } from "@/lib/report";
 import { equityAt, fmtPercent, riskPercent } from "@shared/equity";
 /**
@@ -1032,6 +1033,7 @@ export function TradeBody({
               >
                 <Plus className="mr-1 h-3 w-3" /> Add
               </Button>
+              <MajorityOutButton trade={trade} />
               <Button
                 size="sm"
                 className="h-8 text-[11px]"
