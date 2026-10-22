@@ -86,7 +86,7 @@ export function CheckPreview({
           {plan && (
             <p className="leading-snug" data-testid="check-preview-plan">
               Left alone, the plan would have hit the <b>{PLAN[plan.verdict] ?? plan.verdict}</b> (
-              {new Date(plan.hitAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}).
+              {new Date(plan.hitAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", hourCycle: "h23", minute: "2-digit" })}).
               {kept && (
                 <span className="text-muted-foreground">
                   {" "}

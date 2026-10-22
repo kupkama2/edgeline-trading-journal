@@ -38,7 +38,7 @@ import {
   pointValueFor,
 } from "@shared/symbols";
 import { dropBracketLegs, type ImportCandidate } from "@shared/import-parse";
-import { Dropzone, EXIT_REASONS, RationaleTags, TimeField, localNow, num, parseTags, toIso } from "@/components/trade-shared";
+import { DateTime24, Dropzone, EXIT_REASONS, RationaleTags, TimeField, localNow, num, parseTags, toIso } from "@/components/trade-shared";
 import { EMPTY_GRADES, GradePicker, type GradeState } from "@/components/grade-picker";
 import { AccountPicker } from "@/components/trade-pickers";
 import { TradeOutcomeFields } from "@/components/trade-outcome";
@@ -1374,14 +1374,11 @@ export function NewTradeCard({
                   <FormLabel className="flex h-5 items-center text-[10px] uppercase tracking-wider text-muted-foreground">
                     Entry time
                   </FormLabel>
-                  <FormControl>
-                    <Input
-                      {...field}
-                      type="datetime-local"
-                      className="h-9 font-mono text-xs"
-                      data-testid="input-entry-time"
-                    />
-                  </FormControl>
+                  <DateTime24
+                    value={(field.value as string) ?? ""}
+                    onChange={field.onChange}
+                    testId="input-entry-time"
+                  />
                 </FormItem>
               )}
             />

@@ -156,7 +156,7 @@ export function OpenTradeRow({
             {new Date(t.entryTime).toLocaleString(undefined, {
               month: "short",
               day: "numeric",
-              hour: "2-digit",
+              hour: "2-digit", hourCycle: "h23",
               minute: "2-digit",
             })}
           </span>

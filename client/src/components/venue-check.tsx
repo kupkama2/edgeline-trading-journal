@@ -45,7 +45,7 @@ const GROUPS: { verdict: ReconRow["verdict"]; title: string; hint: string; icon:
 ];
 
 const when = (iso: string | null) =>
-  iso ? new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
+  iso ? new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", hourCycle: "h23", minute: "2-digit" }) : "—";
 
 function feesFor(v: VenuePosition): number | null {
   if (v.realizedPnl == null || v.entryPrice == null || v.exitPrice == null || v.size == null || v.sizeUnit !== "base") return null;

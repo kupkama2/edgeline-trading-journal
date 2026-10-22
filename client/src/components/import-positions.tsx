@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { DateTime24 } from "@/components/trade-shared";
 import { ArrowDownRight, ArrowUpRight, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -258,13 +259,7 @@ export function PositionsReview({
         </div>
         <div className="space-y-1">
           <p className="text-[11px] text-muted-foreground">Opened at</p>
-          <Input
-            type="datetime-local"
-            value={openedAt}
-            onChange={(e) => setOpenedAt(e.target.value)}
-            className="h-9 text-[11px]"
-            data-testid="input-positions-opened"
-          />
+          <DateTime24 value={openedAt} onChange={setOpenedAt} testId="input-positions-opened" />
         </div>
       </div>
       <div className="space-y-1">

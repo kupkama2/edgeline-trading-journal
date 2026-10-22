@@ -196,7 +196,7 @@ export function ImportCsvDialog({ open, onClose }: { open: boolean; onClose: () 
                           stop {r.initialStop ?? "—"} · exit {r.exitPrice ?? "—"}
                         </span>
                         <span className="ml-auto text-[10px] text-muted-foreground">
-                          {new Date(r.entryTime).toLocaleString()}
+                          {new Date(r.entryTime).toLocaleString(undefined, { hourCycle: "h23" })}
                         </span>
                       </div>
                     </Card>

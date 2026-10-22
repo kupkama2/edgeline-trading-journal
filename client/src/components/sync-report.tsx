@@ -115,7 +115,7 @@ export function SyncReportDialog({
                         {w.exitPrice != null ? ` → ${num(w.exitPrice)}` : " · open"}
                       </span>
                       <span className="ml-auto text-[10px] text-muted-foreground">
-                        {new Date(w.entryTime).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                        {new Date(w.entryTime).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", hourCycle: "h23", minute: "2-digit" })}
                       </span>
                     </button>
                   </li>
@@ -131,7 +131,7 @@ export function SyncReportDialog({
 }
 
 const when = (ms: number) =>
-  new Date(ms).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  new Date(ms).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", hourCycle: "h23", minute: "2-digit" });
 
 /**
  * What the venue's answer contained, market by market.

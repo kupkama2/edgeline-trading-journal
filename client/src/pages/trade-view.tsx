@@ -717,7 +717,7 @@ export function TradeBody({
     new Date(iso).toLocaleString(undefined, {
       month: "short",
       day: "numeric",
-      hour: "2-digit",
+      hour: "2-digit", hourCycle: "h23",
       minute: "2-digit",
     });
   const sizeText = `${maskIfQuote(trade.sizeUnit, num(trade.size))}${trade.sizeUnit === "quote" ? " USD" : ""}`;
@@ -1806,7 +1806,7 @@ export function TradeBody({
                         {new Date(f.time).toLocaleString(undefined, {
                           month: "short",
                           day: "numeric",
-                          hour: "2-digit",
+                          hour: "2-digit", hourCycle: "h23",
                           minute: "2-digit",
                         })}
                         {f.note ? ` · ${f.note}` : ""}
