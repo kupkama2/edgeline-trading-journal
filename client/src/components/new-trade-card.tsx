@@ -29,7 +29,6 @@ import { maskAmount } from "@shared/redact";
 import { useDemonGuard, useTiltGuard } from "@/components/daily-guard";
 import { fmtCountdown } from "@/components/tilt-meter";
 import { signalSentence, tiltSignals } from "@shared/tilt";
-import { CONFLUENCE_MIN, confluenceNudge } from "@shared/confluence";
 import {
   contractFor,
   exposureOf,
@@ -41,7 +40,7 @@ import {
 import { dropBracketLegs, type ImportCandidate } from "@shared/import-parse";
 import { Dropzone, EXIT_REASONS, RationaleTags, TimeField, localNow, num, parseTags, toIso } from "@/components/trade-shared";
 import { EMPTY_GRADES, GradePicker, type GradeState } from "@/components/grade-picker";
-import { AccountPicker, SetupTagPicker } from "@/components/trade-pickers";
+import { AccountPicker } from "@/components/trade-pickers";
 import { TradeOutcomeFields } from "@/components/trade-outcome";
 import { normalizeSetupTags } from "@shared/setups";
 import { splitSourceFromTags } from "@shared/sources";
@@ -292,7 +291,6 @@ export function NewTradeCard({
   // spelling. Free text underneath it all: no accounts table to administer.
   const [source, setSource] = useState("");
   /** Setups tapped as chips. Merged with whatever the rationale parser finds. */
-  const [setupTags, setSetupTags] = useState<string[]>([]);
   const knownSources = useMemo(() => {
     const s = new Set<string>();
     for (const t of allTrades) if (t.source?.trim()) s.add(t.source.trim());
@@ -767,7 +765,7 @@ export function NewTradeCard({
     // Chips first, so a setup you tapped deliberately outranks one the parser
     // guessed at; normalising the union means "cc" from the sentence and the
     // "61.8 Fib" chip collapse to one tag instead of two rows in the table.
-    rationaleTags = normalizeSetupTags([...setupTags, ...rationaleTags]);
+    rationaleTags = normalizeSetupTags(rationaleTags);
     // A source name typed as a tag is a source, not a setup — same promotion
     // the boot migration did once for history, applied at the door forever,
     // against this journal's own roster of sources.
@@ -917,7 +915,6 @@ export function NewTradeCard({
     setPostExitAdverse("");
     setNmo(null);
     setFees("");
-    setSetupTags([]);
     setPickedStyleId(null);
     setExtraTps([]);
     setReadUnit(null);
@@ -1168,23 +1165,6 @@ export function NewTradeCard({
                   The trade's one note. Start with the why — setup tags and the source come out of
                   it — and keep adding to it as you manage and close the trade. Once it is closed,
                   the grades and the rest are read from it.
-                </p>
-                <SetupTagPicker
-                  selected={setupTags}
-                  onToggle={(name) =>
-                    setSetupTags((cur) =>
-                      cur.includes(name) ? cur.filter((x) => x !== name) : [...cur, name],
-                    )
-                  }
-                  testIdPrefix="new-setup"
-                />
-                {/* One reason is a hunch, two is a setup. Counted off the
-                    chips here; the words get their tags on save. */}
-                <p
-                  className={`text-[10px] ${setupTags.length >= CONFLUENCE_MIN ? "text-emerald-500" : "text-amber-500"}`}
-                  data-testid="text-confluence"
-                >
-                  {confluenceNudge(setupTags.length)}
                 </p>
               </FormItem>
             )}

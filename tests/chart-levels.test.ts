@@ -39,20 +39,33 @@ describe("what the chart draws", () => {
     expect(l.map((x) => x.field)).toEqual(["entryPrice", "initialStop", "initialTarget"]);
   });
 
-  it("lets a closed trade's stop be corrected, but not a live one's from the trade page", () => {
+  it("lets a live trade's target be dragged from the trade page, and not its stop or its fill", () => {
     // On a live position, dragging the stop IS moving the stop — management,
     // which the stop card records with its time. Writing it to initialStop
-    // would restate every R the trade has.
+    // would restate every R the trade has. And the entry is a fill, not a plan.
     expect(at(chartLevels(base), "stop")?.field).toBeUndefined();
+    expect(at(chartLevels(base), "entry")?.field).toBeUndefined();
     expect(at(chartLevels(base), "target")?.field).toBe("initialTarget");
-    expect(at(chartLevels({ ...base, status: "closed", exitPrice: 120 }), "stop")?.field).toBe("initialStop");
+    // A resting order's entry is a plan, and is the one to drag.
+    expect(at(chartLevels({ ...base, status: "pending" }), "entry")?.field).toBe("entryPrice");
+  });
+
+  it("moves nothing on a closed trade from the trade page", () => {
+    // The bug: a drag is saved on release, so panning near the entry line of a
+    // closed trade rewrote the entry — and the P&L with it.
+    const closed = chartLevels({ ...base, status: "closed", exitPrice: 120 });
+    for (const label of ["entry", "stop", "target", "exit"]) expect(at(closed, label)?.field).toBeUndefined();
+  });
+
+  it("lets the editor drag every line, because there a drag only fills the form", () => {
+    const l = chartLevels({ ...base, status: "closed", exitPrice: 120 }, { initialStop: 90 });
+    expect(at(l, "entry")?.field).toBe("entryPrice");
+    expect(at(l, "stop")?.field).toBe("initialStop");
+    expect(at(l, "exit")?.field).toBe("exitPrice");
   });
 
   it("adds the exit once there is one", () => {
-    expect(at(chartLevels({ ...base, exitPrice: 121 }), "exit")).toMatchObject({
-      price: 121,
-      field: "exitPrice",
-    });
+    expect(at(chartLevels({ ...base, exitPrice: 121 }), "exit")).toMatchObject({ price: 121 });
   });
 
   it("has nothing to say about a scalp", () => {

@@ -1,4 +1,5 @@
 import { useAccountBalances } from "@/lib/data";
+import { CheckPreview, type CheckPreviewData } from "@/components/check-preview";
 import { NoteReadChips } from "@/components/note-read-chips";
 import { MajorityOutButton } from "@/components/majority-out";
 import { failed, reportFailure } from "@/lib/report";
@@ -792,74 +793,48 @@ export function TradeBody({
   });
   const checkTrade = useCheckTrade();
   const [confirmRemeasure, setConfirmRemeasure] = useState(false);
-  async function remeasure() {
+  /*
+   * Asking the market never writes on its own. The check runs as a preview;
+   * what it would change is shown field by field (CheckPreview) and written
+   * only on Apply. "Re-measure" is the same ask, allowed to replace path
+   * numbers already on the trade rather than only fill blanks.
+   */
+  const [marketPreview, setMarketPreview] = useState<CheckPreviewData | null>(null);
+  const [afterPreview, setAfterPreview] = useState<FieldChange[] | null>(null);
+  async function ask(remeasure: boolean) {
     setRechecking(true);
     try {
-      const res: any = await checkTrade.mutateAsync({ id: trade.id, remeasure: true });
-      const fields: string[] = (res?.measured ?? []).find((x: any) => x.tradeId === trade.id)?.fields ?? [];
-      toast(
-        fields.length
-          ? { title: "Re-measured", description: `${fields.join(", ")} replaced from the market's bars.` }
-          : res?.error
-            ? { title: "Couldn't re-measure", description: String(res.error).slice(0, 160), variant: "destructive" }
-            : { title: "Nothing replaced", description: "Either the market's bars give the numbers already on the trade, or it has no bars for this one yet." },
-      );
-    } catch (err) {
-      reportFailure("Re-measure", err);
-    } finally {
-      setRechecking(false);
-      setConfirmRemeasure(false);
-    }
-  }
-  async function recheck() {
-    setRechecking(true);
-    try {
-      const res: any = await checkTrade.mutateAsync(trade.id);
-      const settled = (res?.resolved ?? []).length > 0;
-      const measured = (res?.measured ?? []).length > 0;
-
-      /*
-       * A disagreement is a decision, not a notification. The market saying
-       * the trade went further than your record of it is the one result worth
-       * stopping for, so it opens the window rather than joining a toast that
-       * disappears in four seconds.
-       */
+      const res: any = await checkTrade.mutateAsync({ id: trade.id, remeasure, preview: true });
+      const plan = res?.plan?.tradeId === trade.id ? res.plan : null;
+      const proposed = res?.proposed?.tradeId === trade.id ? res.proposed : null;
+      // A hand-read extreme the market would extend is a separate decision,
+      // offered after this one.
       const mine = (res?.suggestions ?? []).find((x: any) => x.tradeId === trade.id);
-      if (mine?.changes?.length && !alreadyDismissed(trade.id, mine.changes)) {
-        setSuggestion(mine.changes);
+      const extend = mine?.changes?.length && !alreadyDismissed(trade.id, mine.changes) ? mine.changes : null;
+      if (proposed?.changes?.length) {
+        setAfterPreview(extend);
+        setMarketPreview({ proposed, plan });
         return;
       }
-
-      /*
-       * Everything the ask changed, said — and what the market thinks of the
-       * plan even where the trade's own answer stands, because that is usually
-       * the question. Funding moves the net P&L, so it is never done quietly.
-       */
-      const plan = res?.plan?.tradeId === trade.id ? res.plan : null;
-      const funded = (res?.funded ?? []).find((x: any) => x.tradeId === trade.id);
+      if (extend) {
+        setSuggestion(extend);
+        return;
+      }
       const said = { target_first: "the target first", stop_first: "the stop first" } as const;
-      const lines: string[] = [];
-      if (plan) {
-        const when = new Date(plan.hitAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
-        lines.push(`Left alone, the plan would have hit ${said[plan.verdict as keyof typeof said]} (${when}).`);
-        if (!plan.applied && plan.recorded && plan.recorded !== plan.verdict)
-          lines.push(`Your record says ${said[plan.recorded as keyof typeof said] ?? plan.recorded} — kept, since you set it; change it on the trade if the market is right.`);
-      }
-      if (measured) lines.push("MAE, MFE and what happened after your exit are filled in.");
-      if (funded) {
-        const delta = funded.funding - (funded.was ?? 0);
-        lines.push(
-          `Funding over the hold (est.): ${funded.funding >= 0 ? "+" : "−"}${fmtFees(funded.funding)} — net P&L ${delta >= 0 ? "up" : "down"} ${fmtFees(delta)}.`,
-        );
-      }
       toast(
-        lines.length
-          ? { title: settled ? "Settled from the market" : "Asked the market", description: lines.join(" ") }
+        plan
+          ? {
+              title: "Nothing to change",
+              description: `Left alone, the plan would have hit ${said[plan.verdict as keyof typeof said] ?? plan.verdict}${
+                plan.recorded && plan.recorded !== plan.verdict ? ` — your record says otherwise and is kept, since you set it` : ""
+              }. Everything else on the trade already matches the market.`,
+            }
           : {
-              title: "Nothing new yet",
+              title: res?.error ? "Couldn't reach the market" : "Nothing new yet",
               description:
                 res?.error ??
                 "The archive has not published far enough past this trade. It is worth asking again tomorrow.",
+              ...(res?.error ? { variant: "destructive" as const } : {}),
             },
       );
     } catch (err: any) {
@@ -870,8 +845,11 @@ export function TradeBody({
       });
     } finally {
       setRechecking(false);
+      setConfirmRemeasure(false);
     }
   }
+  const remeasure = () => ask(true);
+  const recheck = () => ask(false);
   const tps = [trade.initialTarget, ...parseExtraTargets(trade.extraTargets)].filter(
     (x): x is number => x != null,
   );
@@ -1449,7 +1427,7 @@ export function TradeBody({
           >
             <span className="text-muted-foreground">
               {confirmRemeasure
-                ? "This replaces MAE, MFE and the aftermath with what the market says now, including any you typed."
+                ? "Reads MAE, MFE and the aftermath again, allowed to replace what is there — you see every change before it is written."
                 : "These excursions were read by the older method, or typed in. The older reading could count prices from after your exit, and miss the start of the trade."}
             </span>
             <Button
@@ -1462,7 +1440,7 @@ export function TradeBody({
               data-testid="button-remeasure-trade"
             >
               {rechecking ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
-              {confirmRemeasure ? "Replace them" : "Re-measure"}
+              {confirmRemeasure ? "Read them again" : "Re-measure"}
             </Button>
             {confirmRemeasure && (
               <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-[11px]" onClick={() => setConfirmRemeasure(false)}>
@@ -1471,6 +1449,17 @@ export function TradeBody({
             )}
           </div>
         )}
+
+      <CheckPreview
+        trade={trade}
+        data={marketPreview}
+        onClose={(applied) => {
+          setMarketPreview(null);
+          if (applied) toast({ title: "Applied", description: "The market's answer is on the trade." });
+          if (afterPreview) setSuggestion(afterPreview);
+          setAfterPreview(null);
+        }}
+      />
 
       {suggestion && (
         <MarketSuggestion
@@ -1503,7 +1492,9 @@ export function TradeBody({
            * live while only its outcome is recorded.
            */
           onLevel={(field, price, done) => {
-            if (!done) return;
+            // A closed trade is a record: its lines are corrected in the
+            // editor, never by a drag here (chart-levels.ts).
+            if (!done || trade.status === "closed") return;
             updateTrade
               .mutateAsync({ id: trade.id, trade: { [field]: price } as any })
               .catch((err: any) =>

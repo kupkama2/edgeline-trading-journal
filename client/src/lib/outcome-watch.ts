@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { store } from "@/lib/scoped-storage";
 import { useCheckOutcomes } from "@/lib/data";
 import { useToast } from "@/hooks/use-toast";
+import { fmtFees } from "@shared/metrics";
 
 /**
  * Ask the market, when you open the journal.
@@ -65,6 +66,19 @@ export function useOutcomeWatch(enabled: boolean) {
       .then((res: any) => {
         const hits = res?.resolved ?? [];
         const measured = res?.measured ?? [];
+        /*
+         * Funding moves the net P&L, so it is never filled in without a word:
+         * which trades, and by how much, in a toast of its own.
+         */
+        const funded: { symbol: string; funding: number; was: number | null }[] = res?.funded ?? [];
+        if (funded.length) {
+          const moved = funded.reduce((s, f) => s + (f.funding - (f.was ?? 0)), 0);
+          const names = Array.from(new Set(funded.map((f) => f.symbol))).slice(0, 4).join(", ");
+          toast({
+            title: `Funding estimated on ${funded.length} trade${funded.length === 1 ? "" : "s"}`,
+            description: `${names}${funded.length > 4 ? "…" : ""} — net P&L ${moved >= 0 ? "up" : "down"} ${fmtFees(moved)} in all. Each trade shows its funding under the P&L.`,
+          });
+        }
         if (hits.length === 0) {
           // Nothing settled, but the path may still have been filled in —
           // worth a quieter word, because those numbers appearing on their

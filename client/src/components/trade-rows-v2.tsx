@@ -36,6 +36,7 @@ import { computeMetrics, fmtAmount, fmtFees, fmtMoney, fmtR } from "@shared/metr
 import { tradeVerdict, isWin, type Verdict } from "@shared/verdict";
 import { markWhen, num } from "@/components/trade-shared";
 import { maskIfQuote } from "@shared/redact";
+import { outcomeUnknown } from "@shared/aftermath";
 import { MANAGED_LABEL, type ManagedWhy } from "@shared/managed";
 import { MajorityOutButton } from "@/components/majority-out";
 
@@ -130,6 +131,16 @@ export function ClosedTradeRowV2({
         data-testid={`row-v2-symbol-${t.id}`}
       >
         {t.symbol}
+        {/* Faint on purpose: a question still open, not an alarm. Whether the
+            untouched plan hit the stop or the target first is what says if
+            managing it helped — and this trade does not know yet. */}
+        {!t.scalp && outcomeUnknown(t) && (
+          <span
+            className="ml-1 inline-block h-1.5 w-1.5 -translate-y-0.5 rounded-full bg-amber-500/50 align-middle"
+            title="Not known yet whether the untouched plan would have hit the stop or the target first — open the trade and ask the market."
+            data-testid={`row-v2-plan-unknown-${t.id}`}
+          />
+        )}
       </span>
 
       {/* A scalp is a result rather than a set of prices, so its R comes from

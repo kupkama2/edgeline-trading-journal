@@ -139,6 +139,12 @@ export interface CheckSummary {
    * question the asking was for.
    */
   plan?: { tradeId: number; verdict: "target_first" | "stop_first"; hitAt: string; recorded: string | null; applied: boolean };
+  /**
+   * In preview, for the trade asked about: what would be written, and the
+   * visible part of it as from → to. Nothing is written until the person
+   * applies it (POST /api/trades/:id/check/apply).
+   */
+  proposed?: { tradeId: number; patch: Record<string, unknown>; changes: { field: string; from: unknown; to: unknown }[] };
   /** Set when the price feed itself failed; the caller should say so quietly. */
   error?: string;
 }
@@ -239,6 +245,13 @@ export async function ensureCatalogue(
  *              request knows something the schedule does not, which is that
  *              somebody is looking at this trade right now.
  */
+/** Every field the market check may write — and so all that applying a preview may. */
+export const CHECK_FIELDS = [
+  "noManagementOutcome", "outcomeSource", "outcomeHitAt", "outcomeCheckedAt",
+  "mae", "mfe", "postExitPeak", "postExitAdverse", "pathMeasuredAt",
+  "funding", "fundingCheckedAt",
+] as const;
+
 export async function checkOutcomes(
   userId: number,
   only?: number,
@@ -248,7 +261,7 @@ export async function checkOutcomes(
    * because a number typed by hand is a judgement this must not overrule
    * on its own.
    */
-  opts: { remeasure?: boolean } = {},
+  opts: { remeasure?: boolean; preview?: boolean } = {},
 ): Promise<CheckSummary> {
   const store = storageFor(userId);
   const out: CheckSummary = {
@@ -492,7 +505,17 @@ export async function checkOutcomes(
         }
       }
 
-      if (Object.keys(patch).length) await store.updateTrade(t.id, patch as any);
+      if (opts.preview && only === t.id) {
+        // Bookkeeping is written with the rest but is not news.
+        const quiet = new Set(["outcomeCheckedAt", "fundingCheckedAt", "pathMeasuredAt", "outcomeSource", "outcomeHitAt"]);
+        out.proposed = {
+          tradeId: t.id,
+          patch,
+          changes: Object.entries(patch)
+            .filter(([f, v]) => !quiet.has(f) && (t as any)[f] !== v)
+            .map(([field, to]) => ({ field, from: (t as any)[field] ?? null, to })),
+        };
+      } else if (Object.keys(patch).length) await store.updateTrade(t.id, patch as any);
     } catch (err: any) {
       // One bad symbol must not abandon the rest of the run.
       out.error ??= String(err?.message ?? err);

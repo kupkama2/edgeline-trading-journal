@@ -31,7 +31,11 @@ describe.skipIf(!DB)("reading a trade's note", () => {
         calls++;
         const asked = JSON.parse(body || "{}").messages?.[0]?.content?.map((c: any) => c.text ?? "").join("") ?? "";
         const note = asked.split('"""')[1] ?? "";
-        const reply = /UPDATE/.test(note)
+        // The why, read for its setup tags.
+        const tagging = /jotted/.test(asked);
+        const reply = tagging
+          ? { tags: /severin's call/i.test(asked) ? ["Fib Retest", "Severin"] : ["VAH Rejection"] }
+          : /UPDATE/.test(note)
           ? { exitReason: null, entryGrade: null, stopGrade: "good", exitGrade: null, demons: [], highlights: [], noManagementOutcome: null }
           : { exitReason: "stop", entryGrade: null, stopGrade: "tight", exitGrade: null, demons: ["Stop too tight"], highlights: [], noManagementOutcome: null };
         res.setHeader("content-type", "application/json");
@@ -113,19 +117,53 @@ describe.skipIf(!DB)("reading a trade's note", () => {
     const open = await send("POST", "/api/trades", {
       trade: { symbol: "ETH", direction: "long", size: 1, sizeUnit: "base", entryPrice: 100, initialStop: 98, entryTime: "2026-10-22T09:00:00.000Z", status: "open", notes: "long the reclaim" },
     });
-    expect(open.noteReading).toBe(false);
+    // Tagging the why may start; reading the note may not, while it is open.
     expect(open.rationale).toBe("long the reclaim");
+    await new Promise((r) => setTimeout(r, 300));
+    expect((await send("GET", "/api/trades")).find((t: any) => t.id === open.id).stopGrade).toBeNull();
     const before = calls;
     const closed = await send("PATCH", `/api/trades/${open.id}`, {
       trade: { status: "closed", exitPrice: 98, exitTime: "2026-10-22T10:00:00.000Z", notes: "long the reclaim\n\nstopped, stop too tight" },
     });
     expect(closed.noteReading).toBe(true);
     // The read happens after the answer; give it a moment.
-    for (let i = 0; i < 40 && calls === before; i++) await new Promise((r) => setTimeout(r, 50));
-    await new Promise((r) => setTimeout(r, 200));
-    const after = (await send("GET", "/api/trades")).find((t: any) => t.id === open.id);
+    let after: any;
+    for (let i = 0; i < 60; i++) {
+      after = (await send("GET", "/api/trades")).find((t: any) => t.id === open.id);
+      if (after.stopGrade) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    void before;
     expect(after).toMatchObject({ stopGrade: "tight", exitReason: "stop" });
     expect(after.mistakeTagIds).toContain(demonId);
+  });
+  it("tags the why from the note, again when it changes, and finds a known source in it", async () => {
+    await send("POST", "/api/trades", {
+      trade: { symbol: "SOL", direction: "long", size: 1, sizeUnit: "base", entryPrice: 100, initialStop: 98, entryTime: "2026-10-22T08:00:00.000Z", status: "open", source: "Severin" },
+    });
+    const t = await send("POST", "/api/trades", {
+      trade: { symbol: "SOL", direction: "long", size: 1, sizeUnit: "base", entryPrice: 100, initialStop: 98, entryTime: "2026-10-22T09:00:00.000Z", status: "open", notes: "vah rejection" },
+    });
+    expect(t.noteReading).toBe(true);
+    const settle = async (pred: (x: any) => boolean) => {
+      for (let i = 0; i < 60; i++) {
+        const x = (await send("GET", "/api/trades")).find((y: any) => y.id === t.id);
+        if (pred(x)) return x;
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      return (await send("GET", "/api/trades")).find((y: any) => y.id === t.id);
+    };
+    expect(JSON.parse((await settle((x) => !!x.rationaleTags)).rationaleTags)).toEqual(["VAH Rejection"]);
+    // The why rewritten: tagged again, and the coach named in it becomes the source.
+    await send("PATCH", `/api/trades/${t.id}`, { trade: { notes: "fib retest, severin's call\n\nmanaging it" } });
+    const after = await settle((x) => x.rationaleTags?.includes("Fib"));
+    expect(after.source).toBe("Severin");
+    expect(JSON.parse(after.rationaleTags)).not.toContain("Severin");
+    // Adding below the why does not ask again.
+    const calls0 = calls;
+    await send("PATCH", `/api/trades/${t.id}`, { trade: { notes: "fib retest, severin's call\n\nmanaging it\n\nmoved stop" } });
+    await new Promise((r) => setTimeout(r, 300));
+    expect(calls).toBe(calls0);
   });
 });
 
