@@ -718,7 +718,8 @@ export function NewTradeCard({
   useEffect(() => {
     if (expanded) return;
     function onPaste(e: ClipboardEvent) {
-      if (document.querySelector('[role="dialog"]')) return;
+      // A trade window, or a trade open in the list, claims the paste first.
+      if (document.querySelector('[role="dialog"], [data-trade-open]')) return;
       const items = e.clipboardData?.items;
       if (!items) return;
       for (let i = 0; i < items.length; i++) {
