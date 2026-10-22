@@ -32,6 +32,7 @@ import {
   type PairRef,
 } from "@shared/binance";
 import { aftermathReadyAt, aftermathWindowMs, outcomeUnknown, pathIncomplete } from "@shared/aftermath";
+import { parseNoteRead } from "@shared/note-read";
 import type { TradeWithTags } from "@shared/schema";
 import { fetchCatalogue, intervalFor, lastListed, type Interval } from "./binance";
 import { fetchCandlesAt, pairForTradeAt, readCandlesAt } from "./candles";
@@ -129,8 +130,15 @@ export interface CheckSummary {
    * only extensions of an extreme qualify.
    */
   suggestions: TradeSuggestion[];
-  /** Trades whose funding over the hold was estimated this run. */
-  funded: { tradeId: number; symbol: string; funding: number; events: number }[];
+  /** Trades whose funding over the hold was estimated this run, and what it was before. */
+  funded: { tradeId: number; symbol: string; funding: number; events: number; was: number | null }[];
+  /**
+   * For a trade asked about by name: what the market says the untouched plan
+   * hit first, beside what the trade already records — said even when the
+   * record is kept, because "would my stop have been hit" is usually the
+   * question the asking was for.
+   */
+  plan?: { tradeId: number; verdict: "target_first" | "stop_first"; hitAt: string; recorded: string | null; applied: boolean };
   /** Set when the price feed itself failed; the caller should say so quietly. */
   error?: string;
 }
@@ -354,7 +362,25 @@ export async function checkOutcomes(
        * Here it cannot drift: whatever the reason a trade is being read, its
        * plan outcome is only written when nobody has given one.
        */
-      if (read.settled && outcomeUnknown(t)) {
+      /*
+       * An answer the AI read out of the note is a reading of words, and the
+       * market is a reading of prices: where the two differ, the prices win.
+       * One the trader gave by hand still stands.
+       */
+      const fromNote =
+        t.noManagementOutcome != null &&
+        parseNoteRead(t.noteRead)?.set.noManagementOutcome === t.noManagementOutcome;
+      const replaceable = outcomeUnknown(t) || fromNote;
+      if (only === t.id && read.settled) {
+        out.plan = {
+          tradeId: t.id,
+          verdict: read.settled.verdict,
+          hitAt: read.settled.hitAt,
+          recorded: t.noManagementOutcome ?? null,
+          applied: replaceable,
+        };
+      }
+      if (read.settled && replaceable) {
         patch.noManagementOutcome = read.settled.verdict;
         patch.outcomeSource = "auto";
         patch.outcomeHitAt = read.settled.hitAt;
@@ -456,9 +482,9 @@ export async function checkOutcomes(
           patch.fundingCheckedAt = stamp;
           // Only a figure over the whole hold; a partial one waits for the
           // missing month and is asked again on the next recheck.
-          if (f && f.events > 0 && f.complete) {
+          if (f && f.events > 0 && f.complete && (t.funding == null || Math.abs(t.funding - f.funding) >= 0.005)) {
             patch.funding = f.funding;
-            out.funded.push({ tradeId: t.id, symbol: t.symbol, funding: f.funding, events: f.events });
+            out.funded.push({ tradeId: t.id, symbol: t.symbol, funding: f.funding, events: f.events, was: t.funding ?? null });
           }
         } catch {
           // Funding refines the P&L; it is not the P&L. A venue that will

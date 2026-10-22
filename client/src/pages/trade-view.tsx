@@ -830,14 +830,31 @@ export function TradeBody({
         return;
       }
 
+      /*
+       * Everything the ask changed, said — and what the market thinks of the
+       * plan even where the trade's own answer stands, because that is usually
+       * the question. Funding moves the net P&L, so it is never done quietly.
+       */
+      const plan = res?.plan?.tradeId === trade.id ? res.plan : null;
+      const funded = (res?.funded ?? []).find((x: any) => x.tradeId === trade.id);
+      const said = { target_first: "the target first", stop_first: "the stop first" } as const;
+      const lines: string[] = [];
+      if (plan) {
+        const when = new Date(plan.hitAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+        lines.push(`Left alone, the plan would have hit ${said[plan.verdict as keyof typeof said]} (${when}).`);
+        if (!plan.applied && plan.recorded && plan.recorded !== plan.verdict)
+          lines.push(`Your record says ${said[plan.recorded as keyof typeof said] ?? plan.recorded} — kept, since you set it; change it on the trade if the market is right.`);
+      }
+      if (measured) lines.push("MAE, MFE and what happened after your exit are filled in.");
+      if (funded) {
+        const delta = funded.funding - (funded.was ?? 0);
+        lines.push(
+          `Funding over the hold (est.): ${funded.funding >= 0 ? "+" : "−"}${fmtFees(funded.funding)} — net P&L ${delta >= 0 ? "up" : "down"} ${fmtFees(delta)}.`,
+        );
+      }
       toast(
-        settled || measured
-          ? {
-              title: settled ? "Settled from the market" : "Price path filled in",
-              description: settled
-                ? "The plan's outcome is in, and the R beside it now means something."
-                : "MAE, MFE and what happened after your exit are on the trade now.",
-            }
+        lines.length
+          ? { title: settled ? "Settled from the market" : "Asked the market", description: lines.join(" ") }
           : {
               title: "Nothing new yet",
               description:
