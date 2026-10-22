@@ -548,7 +548,9 @@ export default function TradeView({ under = "/" }: { under?: string }) {
           which silently costs it its focus trap and its Escape handler. */}
       <Dialog open onOpenChange={(o) => !o && close()}>
         <DialogContent
-          className="max-h-[90vh] max-w-4xl overflow-y-auto"
+          /* Narrower while a form is open: four columns of prices at the
+             reading width made every box twice the width of its number. */
+          className={`max-h-[90vh] overflow-y-auto ${isNew || editing ? "max-w-3xl" : "max-w-4xl"}`}
           onInteractOutside={(e) => innerOpen && e.preventDefault()}
           /* Always declined here; the listener below owns Escape. Sharing the
              key with the primitive lost a race: closing a stacked dialog
@@ -715,7 +717,7 @@ export function TradeBody({
     new Date(iso).toLocaleString(undefined, {
       month: "short",
       day: "numeric",
-      hour: "2-digit",
+      hour: "2-digit", hourCycle: "h23",
       minute: "2-digit",
     });
   const sizeText = `${maskIfQuote(trade.sizeUnit, num(trade.size))}${trade.sizeUnit === "quote" ? " USD" : ""}`;
@@ -1804,7 +1806,7 @@ export function TradeBody({
                         {new Date(f.time).toLocaleString(undefined, {
                           month: "short",
                           day: "numeric",
-                          hour: "2-digit",
+                          hour: "2-digit", hourCycle: "h23",
                           minute: "2-digit",
                         })}
                         {f.note ? ` · ${f.note}` : ""}

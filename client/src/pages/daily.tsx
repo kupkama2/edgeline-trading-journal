@@ -139,7 +139,7 @@ export default function Daily() {
 
   function stampTime() {
     const now = new Date().toLocaleTimeString(undefined, {
-      hour: "2-digit",
+      hour: "2-digit", hourCycle: "h23",
       minute: "2-digit",
     });
     const sep = draft.trim().length ? "\n\n" : "";

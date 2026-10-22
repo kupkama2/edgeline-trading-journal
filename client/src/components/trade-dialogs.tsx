@@ -45,7 +45,7 @@ import { ClipboardList, Image as ImageIcon, Layers, LineChart, NotebookPen } fro
 import { AverageCloseSolver } from "@/components/average-close";
 import { useCloseCardPaste } from "@/lib/close-paste";
 import { computeMetrics, fmtFees, fmtMoney, fmtR, EXIT_REASON_LABELS } from "@shared/metrics";
-import { Dropzone, EXIT_REASONS, FormSection, LABEL_ROW, RationaleTags, TimeField, localNow, num, parseTags, toIso, toLocalInput } from "@/components/trade-shared";
+import { DateTime24, Dropzone, EXIT_REASONS, FormSection, LABEL_ROW, RationaleTags, TimeField, localNow, num, parseTags, toIso, toLocalInput } from "@/components/trade-shared";
 import { EMPTY_GRADES, GradePicker, type GradeState } from "@/components/grade-picker";
 import {
   TradeOutcomeFields,
@@ -646,15 +646,19 @@ export function TradeEditor({
   ) => (
     <div className="space-y-1">
       <label className={`${LABEL_ROW} text-[10px] uppercase tracking-wider text-muted-foreground`}>{label}</label>
+      {type === "datetime-local" ? (
+        <DateTime24 value={f[key] ?? ""} onChange={(v) => setF((p) => ({ ...p, [key]: v }))} testId={`input-edit-${key}`} />
+      ) : (
       <Input
         type={type}
         step={type === "number" ? "any" : undefined}
         inputMode={type === "number" ? "decimal" : undefined}
         value={f[key] ?? ""}
         onChange={set(key)}
-        className={`h-8 ${type === "datetime-local" ? "font-mono text-xs" : "font-mono text-sm"}`}
+        className="h-8 font-mono text-sm"
         data-testid={`input-edit-${key}`}
       />
+      )}
     </div>
   );
 
@@ -909,7 +913,6 @@ export function TradeEditor({
               testId="section-edit-chart"
               tone="extra"
               collapsible
-              defaultOpen={false}
               summary="the candles, with your levels on them"
             >
               <Suspense fallback={<div className="h-40 animate-pulse rounded-md bg-secondary/30" />}>
@@ -1382,7 +1385,7 @@ export function TradeEditor({
                           {new Date(fl.time).toLocaleString(undefined, {
                             month: "short",
                             day: "numeric",
-                            hour: "2-digit",
+                            hour: "2-digit", hourCycle: "h23",
                             minute: "2-digit",
                           })}
                         </span>

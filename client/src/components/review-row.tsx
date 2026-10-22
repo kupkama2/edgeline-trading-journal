@@ -164,7 +164,7 @@ export function ReviewRow({
 
   const when = new Date(t.exitTime ?? t.entryTime).toLocaleDateString(undefined, {
     weekday: "short",
-    hour: "2-digit",
+    hour: "2-digit", hourCycle: "h23",
     minute: "2-digit",
   });
 

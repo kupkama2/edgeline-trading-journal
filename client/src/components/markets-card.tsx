@@ -210,7 +210,7 @@ export function MarketsCard() {
           )}
           {hl?.catalogueAt && (
             <p className="text-[10px] leading-snug text-muted-foreground" data-testid="markets-hl-fetched">
-              list written {new Date(hl.catalogueAt).toLocaleString()}
+              list written {new Date(hl.catalogueAt).toLocaleString(undefined, { hourCycle: "h23" })}
             </p>
           )}
         </div>

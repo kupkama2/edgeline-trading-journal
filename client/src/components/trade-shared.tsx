@@ -77,7 +77,7 @@ export const markWhen = (at: number) =>
   new Date(at).toLocaleString(undefined, {
     month: "short",
     day: "numeric",
-    hour: "2-digit",
+    hour: "2-digit", hourCycle: "h23",
     minute: "2-digit",
   });
 
@@ -127,6 +127,76 @@ export function toLocalInput(iso: string | null | undefined) {
  */
 export const LABEL_ROW = "flex h-5 items-center";
 
+/** "14:30" from "1430", "9:5", "14.30" — or null while it is not a time yet. */
+export function parseTime24(raw: string): string | null {
+  const m = raw.trim().match(/^(\d{1,2})[:.h]?(\d{2})$/);
+  if (!m) return null;
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  if (h > 23 || min > 59) return null;
+  return `${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
+}
+
+/**
+ * A date and a 24-hour time, as one value in datetime-local's shape
+ * ("2026-10-22T14:30").
+ *
+ * The browser draws a datetime-local box in the computer's locale, and a page
+ * cannot ask it for a 24-hour clock — on an English system it is AM/PM, every
+ * time. So the date keeps the native picker (which has no clock in it) and
+ * the time is typed: "14:30", or "1430" and it is tidied on the way out.
+ */
+export function DateTime24({
+  value,
+  onChange,
+  testId,
+  className = "",
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  testId: string;
+  className?: string;
+}) {
+  const [date, time] = (value ?? "").split("T");
+  const [typing, setTyping] = useState<string | null>(null);
+  const shown = typing ?? (time ?? "").slice(0, 5);
+  const today = () => localNow().slice(0, 10);
+  return (
+    <div className={`flex min-w-0 gap-1 ${className}`}>
+      <Input
+        type="date"
+        value={date ?? ""}
+        onChange={(e) => onChange(e.target.value ? `${e.target.value}T${parseTime24(shown) ?? "00:00"}` : "")}
+        className="h-8 min-w-0 flex-1 px-2 font-mono text-[11px]"
+        data-testid={testId}
+      />
+      <Input
+        value={shown}
+        onChange={(e) => {
+          const raw = e.target.value.replace(/[^\d:.h]/g, "").slice(0, 5);
+          setTyping(raw);
+          // "143" is on its way to "1430": a bare number waits for its fourth
+          // digit (or for the box to be left) before it counts as a time.
+          const t = parseTime24(raw);
+          if (t && (raw.length >= 4 || /[:.h]/.test(raw))) onChange(`${date || today()}T${t}`);
+        }}
+        onBlur={() => {
+          const t = typing != null ? parseTime24(typing) : null;
+          if (t) onChange(`${date || today()}T${t}`);
+          setTyping(null);
+        }}
+        placeholder="HH:mm"
+        inputMode="numeric"
+        aria-label="Time, 24-hour"
+        className={`h-8 w-[4.25rem] shrink-0 px-2 text-center font-mono text-[11px] ${
+          typing != null && typing !== "" && !parseTime24(typing) ? "border-amber-500/60" : ""
+        }`}
+        data-testid={`${testId}-time`}
+      />
+    </div>
+  );
+}
+
 export function TimeField({
   label,
   value,
@@ -154,13 +224,7 @@ export function TimeField({
           Now
         </button>
       </div>
-      <Input
-        type="datetime-local"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="h-9 font-mono text-xs"
-        data-testid={testId}
-      />
+      <DateTime24 value={value} onChange={onChange} testId={testId} />
     </div>
   );
 }
@@ -201,6 +265,7 @@ export function Dropzone({
   onFile,
   onClear,
   testId,
+  compact = false,
 }: {
   label: string;
   hint: string;
@@ -209,6 +274,8 @@ export function Dropzone({
   onFile: (f: File) => void;
   onClear: () => void;
   testId: string;
+  /** One line rather than a panel: for a form where the screenshot is optional. */
+  compact?: boolean;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -301,13 +368,27 @@ export function Dropzone({
         if (e.key === "Enter" || e.key === " ") inputRef.current?.click();
       }}
       data-testid={testId}
-      className={`flex cursor-pointer flex-col items-center justify-center gap-1.5 rounded-lg border border-dashed px-4 py-6 text-center transition-colors ${
-        over ? "border-primary bg-primary/5" : "border-border hover:border-primary/50 hover:bg-secondary/40"
-      }`}
+      className={
+        compact
+          ? `flex cursor-pointer items-center gap-2 rounded-md border border-dashed px-3 py-2 text-left transition-colors ${
+              over ? "border-primary bg-primary/5" : "border-border/70 hover:border-primary/50 hover:bg-secondary/40"
+            }`
+          : `flex cursor-pointer flex-col items-center justify-center gap-1.5 rounded-lg border border-dashed px-4 py-6 text-center transition-colors ${
+              over ? "border-primary bg-primary/5" : "border-border hover:border-primary/50 hover:bg-secondary/40"
+            }`
+      }
     >
-      <Camera className="h-5 w-5 text-muted-foreground" />
-      <p className="text-xs font-medium">{label}</p>
-      <p className="text-[11px] leading-snug text-muted-foreground">{hint} You can also press Ctrl+V (or Cmd+V) anywhere here to paste from your clipboard.</p>
+      <Camera className={compact ? "h-4 w-4 shrink-0 text-muted-foreground" : "h-5 w-5 text-muted-foreground"} />
+      {compact ? (
+        <p className="min-w-0 truncate text-[11px] text-muted-foreground">
+          <span className="font-medium text-foreground">{label}</span> · {hint} Or paste with Ctrl+V.
+        </p>
+      ) : (
+        <>
+          <p className="text-xs font-medium">{label}</p>
+          <p className="text-[11px] leading-snug text-muted-foreground">{hint} You can also press Ctrl+V (or Cmd+V) anywhere here to paste from your clipboard.</p>
+        </>
+      )}
       <input
         ref={inputRef}
         type="file"

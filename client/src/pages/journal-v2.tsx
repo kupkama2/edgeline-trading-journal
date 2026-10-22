@@ -1,4 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
+import { useCloseCardPaste } from "@/lib/close-paste";
+import { saysAnythingAboutClose, type CloseCard } from "@shared/close-card";
+import { useToast } from "@/hooks/use-toast";
 import type { PositionRow } from "@shared/positions-read";
 import { Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
@@ -326,8 +329,40 @@ export default function JournalV2() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const toggleTrade = (t: TradeWithTags) => {
     setEditingId(null);
+    setPastedCard(null);
     setOpenId((cur) => (cur === t.id ? null : t.id));
   };
+
+  /*
+   * A screenshot pasted while a trade is open belongs to that trade, not to
+   * a new one. The trade's gallery keeps the picture (its own listener), and
+   * this reads it the way the trade window does: a fills table or a position
+   * card that says how the trade ended opens the editor with the exit filled
+   * in. Only with nothing open — or the new-trade form opened on purpose —
+   * does a paste start a new trade (NewTradeCard stands down otherwise).
+   */
+  const { toast: pasteToast } = useToast();
+  const [pastedCard, setPastedCard] = useState<CloseCard | null>(null);
+  const expandedTrade = openId != null ? (trades ?? []).find((t) => t.id === openId) ?? null : null;
+  useCloseCardPaste({
+    trade: expandedTrade,
+    enabled: expandedTrade != null && editingId == null && !entryOpen,
+    onCard: (c) => {
+      if (!expandedTrade) return;
+      if (!saysAnythingAboutClose(c)) {
+        if (expandedTrade.status !== "closed")
+          pasteToast({
+            title: `Attached to ${expandedTrade.symbol}`,
+            description: "Nothing in it to close the trade with — a fills table or a position card is what gets read.",
+          });
+        return;
+      }
+      setPastedCard(c);
+      setEditingId(expandedTrade.id);
+    },
+    onError: (message) =>
+      pasteToast({ title: "Couldn't read that screenshot", description: message, variant: "destructive" }),
+  });
 
   /*
    * Folding it away without finding the row again: a click anywhere outside
@@ -451,7 +486,14 @@ export default function JournalV2() {
         {editingId === t.id ? (
           /* Cancel returns to the trade rather than closing the panel, which
              is the right destination: you came from the trade. */
-          <TradeEditor trade={t} card={null} onClose={() => setEditingId(null)} />
+          <TradeEditor
+            trade={t}
+            card={pastedCard}
+            onClose={() => {
+              setEditingId(null);
+              setPastedCard(null);
+            }}
+          />
         ) : (
           <TradeBody
             trade={t}

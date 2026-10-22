@@ -20,7 +20,7 @@ import { spanLabel, spanRange, useChapters, useDeleteChapter, useStartChapter } 
 import { inSpan } from "@shared/chapters";
 import { usePrefs, useSetPrefs } from "@/lib/prefs";
 import type { ReviewMode } from "@shared/review-pressure";
-import { localNow, toIso } from "@/components/trade-shared";
+import { DateTime24, localNow, toIso } from "@/components/trade-shared";
 import {
   useMistakeTags,
   useCreateTag,
@@ -1191,7 +1191,7 @@ function ReviewDisciplineCard() {
           {prefs.reviewMode === "enforce" && prefs.reviewEnforcedSince && (
             <p className="mt-1 text-[10px] text-muted-foreground" data-testid="text-enforced-since">
               Enforced for trades finished since{" "}
-              {new Date(prefs.reviewEnforcedSince).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}.
+              {new Date(prefs.reviewEnforcedSince).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", hourCycle: "h23", minute: "2-digit" })}.
             </p>
           )}
         </div>
@@ -1283,7 +1283,7 @@ function FreshStartCard() {
           <div className="grid gap-2 sm:grid-cols-2">
             <label className="space-y-1 text-[11px] text-muted-foreground">
               <span>From</span>
-              <Input type="datetime-local" value={when} onChange={(e) => setWhen(e.target.value)} className="h-8 font-mono text-xs" data-testid="input-fresh-start-when" />
+              <DateTime24 value={when} onChange={setWhen} testId="input-fresh-start-when" />
             </label>
             <label className="space-y-1 text-[11px] text-muted-foreground">
               <span>Name (optional)</span>
