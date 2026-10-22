@@ -1109,8 +1109,9 @@ export function NewTradeCard({
       <div className="mt-3" />
       <Dropzone
         testId="dropzone-setup"
-        label="Drop entry screenshot"
-        hint="Chart with entry, stop and target — parsed automatically. Optional."
+        label="Drop a chart screenshot"
+        hint="entry, stop and target are read from it."
+        compact
         image={image}
         busy={parsing}
         onFile={handleFile}
@@ -1145,99 +1146,6 @@ export function NewTradeCard({
           }}
           className="mt-4 space-y-4"
         >
-          <FormField
-            control={form.control}
-            name="rationale"
-            render={({ field }) => (
-              <FormItem className="space-y-1">
-                <FormLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                  Note
-                </FormLabel>
-                <FormControl>
-                  <Textarea
-                    {...field}
-                    placeholder="vah, 786 retest, bla bla…"
-                    className="min-h-[60px] text-sm"
-                    data-testid="input-rationale"
-                  />
-                </FormControl>
-                <p className="text-[10px] leading-snug text-muted-foreground">
-                  Start with the why, then keep adding as you manage and close it. Tags, source and
-                  grades are read from it.
-                </p>
-              </FormItem>
-            )}
-          />
-
-
-          {styles.length > 0 && (
-            <div className="space-y-1" data-testid="section-style-picker">
-              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                Style
-              </p>
-              <div className="flex flex-wrap gap-1.5">
-                {styles.map((s) => {
-                  const on = s.id === styleId;
-                  const c = styleColor(s.color);
-                  return (
-                    <button
-                      key={s.id}
-                      type="button"
-                      onClick={() => setPickedStyleId(s.id)}
-                      data-testid={`chip-style-${s.id}`}
-                      aria-pressed={on}
-                      className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] leading-tight transition-colors ${
-                        on
-                          ? c.chip
-                          : "border-border text-muted-foreground hover:border-primary/40 hover:text-foreground"
-                      }`}
-                    >
-                      <span className={`h-1.5 w-1.5 rounded-full ${c.dot}`} />
-                      {s.name}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          <div className="flex flex-wrap gap-4">
-            <div className="space-y-1" data-testid="section-account-picker">
-              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                Account
-              </p>
-              <AccountPicker value={account} onChange={setAccount} known={knownAccounts} />
-            </div>
-            {/* Whose call it was. Usually said in the rationale and pulled
-                out from there; the picker is one click away for when the
-                name is not one the journal knows yet. */}
-            {showSource || source.trim() ? (
-              <div className="space-y-1" data-testid="section-source-picker">
-                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                  Source
-                </p>
-                <AccountPicker
-                  value={source}
-                  onChange={setSource}
-                  known={knownSources}
-                  testIdPrefix="source"
-                  placeholder="e.g. Daniel, Severin, CBS, UB"
-                  emptyLabel="My own idea"
-                  newLabel="+ New source…"
-                />
-              </div>
-            ) : (
-              <button
-                type="button"
-                onClick={() => setShowSource(true)}
-                className="self-end pb-2 text-[10px] text-muted-foreground underline decoration-dotted underline-offset-2 hover:text-foreground"
-                data-testid="button-show-source"
-              >
-                + whose call
-              </button>
-            )}
-          </div>
-
           <div className={`grid gap-3 ${narrow ? "grid-cols-2" : "grid-cols-2 sm:grid-cols-4"}`}>
             <FormField
               control={form.control}
@@ -1325,26 +1233,41 @@ export function NewTradeCard({
               name={"size" as any}
               render={({ field }) => (
                 <FormItem className="space-y-1">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-1.5">
-                      <FormLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                        Size
-                      </FormLabel>
-                      {sizeMode === "auto" && Number(riskOverride) > 0 && (
+                  {/*
+                   * Two ways to say how big the trade is, in one field: the
+                   * size, or the dollars it risks — the size is then solved
+                   * from the entry and the stop. Whichever you type, the
+                   * other is the line underneath.
+                   */}
+                  <div className="flex h-5 items-center justify-between gap-1">
+                    <div className="flex rounded-md bg-secondary/40 p-0.5" role="tablist">
+                      {(
+                        [
+                          ["manual", "Size"],
+                          ["auto", "Risk $"],
+                        ] as const
+                      ).map(([m, label]) => (
                         <button
+                          key={m}
                           type="button"
+                          role="tab"
+                          aria-selected={sizeMode === m}
                           onClick={() => {
-                            setSizeMode("manual");
-                            setRiskOverride("");
+                            if (m === sizeMode) return;
+                            setSizeMode(m);
+                            if (m === "manual") setRiskOverride("");
+                            else setRiskOverride(store.get(RISK_BUDGET_KEY) ?? (preview?.riskDollars ? String(Math.round(preview.riskDollars)) : ""));
                           }}
-                          data-testid="button-size-mode"
-                          title="Size is being solved from the risk you typed. Click to set it by hand again."
-                          className="rounded-full bg-primary/15 px-1.5 py-0.5 text-[9px] text-primary transition-colors"
+                          className={`rounded px-1.5 text-[10px] uppercase leading-4 tracking-wider transition-colors ${
+                            sizeMode === m ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+                          }`}
+                          data-testid={m === "auto" ? "button-size-mode" : "button-size-mode-size"}
                         >
-                          from {fmtAmount(Number(riskOverride), 0)} risk
+                          {label}
                         </button>
-                      )}
+                      ))}
                     </div>
+                    {sizeMode === "manual" && (
                     <div className="flex gap-0.5">
                       {(["base", "quote"] as const).map((u) => {
                         // A futures contract has no notional sizing — you buy
@@ -1374,7 +1297,21 @@ export function NewTradeCard({
                         );
                       })}
                     </div>
+                    )}
                   </div>
+                  {sizeMode === "auto" ? (
+                    <Input
+                      value={riskOverride}
+                      onChange={(e) => {
+                        setRiskOverride(e.target.value);
+                        if (e.target.value.trim() !== "") store.set(RISK_BUDGET_KEY, e.target.value);
+                      }}
+                      placeholder={store.get(RISK_BUDGET_KEY) ?? "300"}
+                      inputMode="decimal"
+                      className="h-9 font-mono text-sm"
+                      data-testid="input-risk-budget"
+                    />
+                  ) : (
                   <FormControl>
                     <Input
                       {...field}
@@ -1392,13 +1329,58 @@ export function NewTradeCard({
                       data-testid="input-size"
                     />
                   </FormControl>
+                  )}
                   <FormMessage className="text-[10px]" />
-                  {sizeReadout && (
+                  {/* The other half of the pair, worked out. */}
+                  {sizeMode === "auto" ? (
+                    sized ? (
+                      <p className="font-mono text-[10px] text-muted-foreground" data-testid="text-sized-from-risk">
+                        ={" "}
+                        <span className="text-foreground">
+                          {sized.sizeUnit === "base"
+                            ? `${sized.size} ${isFutures ? (sized.size === 1 ? "contract" : "contracts") : "units"}`
+                            : fmtAmount(sized.size, 0)}
+                        </span>
+                        {sized.sizeUnit === "base" && sized.size > 0 && isFutures && <> · risks {fmtAmount(sized.actualRiskDollars, 0)}</>}
+                        {sized.sizeUnit === "base" && sized.size === 0 && (
+                          <span className="text-amber-500" data-testid="text-stop-too-far">
+                            {" "}— stop too far: 1 contract risks {fmtAmount(sized.perUnitRisk, 0)}
+                          </span>
+                        )}
+                      </p>
+                    ) : (
+                      <p className="text-[10px] text-muted-foreground">size follows from entry and stop</p>
+                    )
+                  ) : preview ? (
+                    <p className="font-mono text-[10px] text-muted-foreground" data-testid="text-derived-risk">
+                      risk <span className="text-foreground">{fmtAmount(preview.riskDollars, 0)}</span>
+                      {sizeReadout && <> · {maskAmount() ?? sizeReadout}</>}
+                      {spec && <> · {spec.label}</>}
+                    </p>
+                  ) : sizeReadout ? (
                     <p className="font-mono text-[10px] text-muted-foreground" data-testid="text-size-readout">
-                      {/* A notional in dollars says how big the account is. */}
                       {maskAmount() ?? sizeReadout}
                     </p>
-                  )}
+                  ) : null}
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name="entryTime"
+              render={({ field }) => (
+                <FormItem className="space-y-1">
+                  <FormLabel className="flex h-5 items-center text-[10px] uppercase tracking-wider text-muted-foreground">
+                    Entry time
+                  </FormLabel>
+                  <FormControl>
+                    <Input
+                      {...field}
+                      type="datetime-local"
+                      className="h-9 font-mono text-xs"
+                      data-testid="input-entry-time"
+                    />
+                  </FormControl>
                 </FormItem>
               )}
             />
@@ -1494,8 +1476,9 @@ export function NewTradeCard({
                 prices are two numbers to subtract; a risk leg nearly as long
                 as the reward leg is a trade you want to notice BEFORE you take
                 it rather than in the review afterwards. */}
-            <div className="col-span-2">
+            <div className={narrow ? "col-span-2" : "col-span-2 sm:col-span-4"}>
               <LevelLadder
+                bare
                 direction={v.direction}
                 entry={priceOrNull(v.entryPrice)}
                 stop={priceOrNull(v.initialStop)}
@@ -1504,113 +1487,7 @@ export function NewTradeCard({
               />
             </div>
 
-            {/* What this position costs, filled in from what you typed. The
-                box is editable, and typing in it flips the arithmetic round to
-                solve for size instead — the exception, for when the budget is
-                the fixed thing rather than the position. */}
-            <div className="col-span-2 flex flex-wrap items-center gap-2 rounded-md border border-border/60 bg-secondary/20 px-2.5 py-1.5">
-              <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                Risk $
-              </span>
-              <div className="relative">
-                <Input
-                  value={
-                    riskOverride !== ""
-                      ? riskOverride
-                      : preview?.riskDollars != null
-                        ? String(Math.round(preview.riskDollars))
-                        : ""
-                  }
-                  onChange={(e) => {
-                    setRiskOverride(e.target.value);
-                    setSizeMode(e.target.value.trim() === "" ? "manual" : "auto");
-                    if (e.target.value.trim() !== "") {
-                      store.set(RISK_BUDGET_KEY, e.target.value);
-                    }
-                  }}
-                  placeholder={store.get(RISK_BUDGET_KEY) ?? "300"}
-                  inputMode="decimal"
-                  className={`h-7 w-24 font-mono text-[11px] ${
-                    riskOverride !== "" ? "border-primary/50 text-primary" : ""
-                  }`}
-                  data-testid="input-risk-budget"
-                />
-                {riskOverride !== "" && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setRiskOverride("");
-                      setSizeMode("manual");
-                    }}
-                    aria-label="Back to reading the risk off the size"
-                    data-testid="button-clear-risk-override"
-                    className="absolute right-1 top-1/2 -translate-y-1/2 rounded px-1 text-[11px] leading-none text-muted-foreground hover:text-foreground"
-                  >
-                    ×
-                  </button>
-                )}
-              </div>
 
-              {sizeMode === "auto" && sized ? (
-                <span
-                  className="font-mono text-[11px] text-muted-foreground"
-                  data-testid="text-sized-from-risk"
-                >
-                  &rarr;{" "}
-                  <span className="text-foreground">
-                    {sized.sizeUnit === "base"
-                      ? `${sized.size} ${sized.size === 1 ? "contract" : "contracts"}`
-                      : fmtAmount(sized.size, 0)}
-                  </span>
-                  {sized.sizeUnit === "base" && sized.size > 0 && (
-                    <> · risks {fmtAmount(sized.actualRiskDollars, 0)}</>
-                  )}
-                </span>
-              ) : preview ? (
-                <span
-                  className="font-mono text-[11px] text-muted-foreground"
-                  data-testid="text-derived-risk"
-                >
-                  R:R{" "}
-                  <span className={preview.rr >= 2 ? "text-emerald-400" : "text-foreground"}>
-                    {num(preview.rr, 1)}
-                  </span>
-                  {preview.exposure && <> · {preview.exposure}</>}
-                  {spec && <> · {spec.label}</>}
-                </span>
-              ) : (
-                <span className="text-[10px] text-muted-foreground">
-                  fills in from the contract, entry, stop and size
-                </span>
-              )}
-
-              {sizeMode === "auto" && sized?.sizeUnit === "base" && sized.size === 0 && (
-                <span className="text-[10px] text-amber-500" data-testid="text-stop-too-far">
-                  stop too far for this budget — even 1 contract risks{" "}
-                  {fmtAmount(sized.perUnitRisk, 0)}
-                </span>
-              )}
-            </div>
-
-            <FormField
-              control={form.control}
-              name="entryTime"
-              render={({ field }) => (
-                <FormItem className="col-span-2 space-y-1">
-                  <FormLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                    Entry time
-                  </FormLabel>
-                  <FormControl>
-                    <Input
-                      {...field}
-                      type="datetime-local"
-                      className="h-9 font-mono text-xs"
-                      data-testid="input-entry-time"
-                    />
-                  </FormControl>
-                </FormItem>
-              )}
-            />
 
             {/*
                 The levels and the direction disagreeing.
@@ -1628,7 +1505,7 @@ export function NewTradeCard({
             */}
             {(levelConflict || directionMismatch) && (
               <div
-                className="col-span-2 flex items-start gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/5 px-2.5 py-1.5 text-[11px] leading-snug text-amber-500"
+                className={`${narrow ? "col-span-2" : "col-span-2 sm:col-span-4"} flex items-start gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/5 px-2.5 py-1.5 text-[11px] leading-snug text-amber-500`}
                 data-testid="warning-direction"
               >
                 <Ban className="mt-px h-3 w-3 shrink-0" />
@@ -1648,7 +1525,7 @@ export function NewTradeCard({
               if (inside !== false) return null;
               return (
                 <div
-                  className="col-span-2 flex items-center gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/5 px-2.5 py-1.5 text-[11px] text-amber-500"
+                  className={`${narrow ? "col-span-2" : "col-span-2 sm:col-span-4"} flex items-center gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/5 px-2.5 py-1.5 text-[11px] text-amber-500`}
                   data-testid="warning-session-window"
                 >
                   <Clock3 className="h-3 w-3 shrink-0" />
@@ -1658,6 +1535,101 @@ export function NewTradeCard({
                 </div>
               );
             })()}
+          </div>
+
+          <FormField
+            control={form.control}
+            name="rationale"
+            render={({ field }) => (
+              <FormItem className="space-y-1">
+                <FormLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  Note
+                </FormLabel>
+                <FormControl>
+                  <Textarea
+                    {...field}
+                    placeholder="vah, 786 retest, bla bla…"
+                    className="min-h-[60px] text-sm"
+                    data-testid="input-rationale"
+                  />
+                </FormControl>
+                <p className="text-[10px] leading-snug text-muted-foreground">
+                  Start with the why, then keep adding as you manage and close it. Tags, source and
+                  grades are read from it.
+                </p>
+              </FormItem>
+            )}
+          />
+
+          {/* Where it ran and which book it belongs to: one row. */}
+          <div className="flex flex-wrap items-end gap-x-5 gap-y-3">
+          {styles.length > 0 && (
+            <div className="space-y-1" data-testid="section-style-picker">
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                Style
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {styles.map((s) => {
+                  const on = s.id === styleId;
+                  const c = styleColor(s.color);
+                  return (
+                    <button
+                      key={s.id}
+                      type="button"
+                      onClick={() => setPickedStyleId(s.id)}
+                      data-testid={`chip-style-${s.id}`}
+                      aria-pressed={on}
+                      className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] leading-tight transition-colors ${
+                        on
+                          ? c.chip
+                          : "border-border text-muted-foreground hover:border-primary/40 hover:text-foreground"
+                      }`}
+                    >
+                      <span className={`h-1.5 w-1.5 rounded-full ${c.dot}`} />
+                      {s.name}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          <div className="flex flex-wrap gap-4">
+            <div className="space-y-1" data-testid="section-account-picker">
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                Account
+              </p>
+              <AccountPicker value={account} onChange={setAccount} known={knownAccounts} />
+            </div>
+            {/* Whose call it was. Usually said in the rationale and pulled
+                out from there; the picker is one click away for when the
+                name is not one the journal knows yet. */}
+            {showSource || source.trim() ? (
+              <div className="space-y-1" data-testid="section-source-picker">
+                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  Source
+                </p>
+                <AccountPicker
+                  value={source}
+                  onChange={setSource}
+                  known={knownSources}
+                  testIdPrefix="source"
+                  placeholder="e.g. Daniel, Severin, CBS, UB"
+                  emptyLabel="My own idea"
+                  newLabel="+ New source…"
+                />
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setShowSource(true)}
+                className="self-end pb-2 text-[10px] text-muted-foreground underline decoration-dotted underline-offset-2 hover:text-foreground"
+                data-testid="button-show-source"
+              >
+                + whose call
+              </button>
+            )}
+          </div>
           </div>
 
           {closedMode && (

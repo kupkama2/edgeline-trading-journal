@@ -376,6 +376,44 @@ export function TradeOutcomeFields(p: OutcomeFieldsProps) {
             postExitAdverse={numOrNull(p.postExitAdverse)}
           />
         )}
+        {/* What the plan would have done if left alone — a fact about the
+            market once the trade is over, so it is logged here with the exit
+            rather than read out of the note. "Ask the market" can fill it. */}
+        {path.after && (
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1" data-testid={`group-${p.testPrefix}-nmo`}>
+            <span className={LABEL} title="If you had left the stop and target untouched, which would price have reached first?">
+              Untouched plan hit
+            </span>
+            <div className="flex rounded-md bg-secondary/40 p-0.5">
+              {(
+                [
+                  ["target_first", "Target first"],
+                  ["stop_first", "Stop first"],
+                  ["undetermined", "Neither yet"],
+                ] as const
+              ).map(([id, label]) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => p.setNmo(p.nmo === id ? null : id)}
+                  aria-pressed={p.nmo === id}
+                  className={`rounded px-2 py-0.5 text-[11px] transition-colors ${
+                    p.nmo === id
+                      ? id === "target_first"
+                        ? "bg-emerald-500/15 text-emerald-400"
+                        : id === "stop_first"
+                          ? "bg-primary/15 text-primary"
+                          : "bg-card text-foreground"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                  data-testid={`button-${p.testPrefix}-nmo-${id}`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
         {stopRead && (
           <p
             className={`text-[11px] leading-snug ${

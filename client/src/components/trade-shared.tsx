@@ -158,7 +158,7 @@ export function TimeField({
         type="datetime-local"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="h-9 font-mono text-xs"
+        className="h-8 px-2 font-mono text-[11px]"
         data-testid={testId}
       />
     </div>
@@ -201,6 +201,7 @@ export function Dropzone({
   onFile,
   onClear,
   testId,
+  compact = false,
 }: {
   label: string;
   hint: string;
@@ -209,6 +210,8 @@ export function Dropzone({
   onFile: (f: File) => void;
   onClear: () => void;
   testId: string;
+  /** One line rather than a panel: for a form where the screenshot is optional. */
+  compact?: boolean;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -301,13 +304,27 @@ export function Dropzone({
         if (e.key === "Enter" || e.key === " ") inputRef.current?.click();
       }}
       data-testid={testId}
-      className={`flex cursor-pointer flex-col items-center justify-center gap-1.5 rounded-lg border border-dashed px-4 py-6 text-center transition-colors ${
-        over ? "border-primary bg-primary/5" : "border-border hover:border-primary/50 hover:bg-secondary/40"
-      }`}
+      className={
+        compact
+          ? `flex cursor-pointer items-center gap-2 rounded-md border border-dashed px-3 py-2 text-left transition-colors ${
+              over ? "border-primary bg-primary/5" : "border-border/70 hover:border-primary/50 hover:bg-secondary/40"
+            }`
+          : `flex cursor-pointer flex-col items-center justify-center gap-1.5 rounded-lg border border-dashed px-4 py-6 text-center transition-colors ${
+              over ? "border-primary bg-primary/5" : "border-border hover:border-primary/50 hover:bg-secondary/40"
+            }`
+      }
     >
-      <Camera className="h-5 w-5 text-muted-foreground" />
-      <p className="text-xs font-medium">{label}</p>
-      <p className="text-[11px] leading-snug text-muted-foreground">{hint} You can also press Ctrl+V (or Cmd+V) anywhere here to paste from your clipboard.</p>
+      <Camera className={compact ? "h-4 w-4 shrink-0 text-muted-foreground" : "h-5 w-5 text-muted-foreground"} />
+      {compact ? (
+        <p className="min-w-0 truncate text-[11px] text-muted-foreground">
+          <span className="font-medium text-foreground">{label}</span> · {hint} Or paste with Ctrl+V.
+        </p>
+      ) : (
+        <>
+          <p className="text-xs font-medium">{label}</p>
+          <p className="text-[11px] leading-snug text-muted-foreground">{hint} You can also press Ctrl+V (or Cmd+V) anywhere here to paste from your clipboard.</p>
+        </>
+      )}
       <input
         ref={inputRef}
         type="file"

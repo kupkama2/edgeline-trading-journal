@@ -652,7 +652,7 @@ export function TradeEditor({
         inputMode={type === "number" ? "decimal" : undefined}
         value={f[key] ?? ""}
         onChange={set(key)}
-        className={`h-8 ${type === "datetime-local" ? "font-mono text-xs" : "font-mono text-sm"}`}
+        className={`h-8 ${type === "datetime-local" ? "px-2 font-mono text-[11px]" : "font-mono text-sm"}`}
         data-testid={`input-edit-${key}`}
       />
     </div>
@@ -909,7 +909,6 @@ export function TradeEditor({
               testId="section-edit-chart"
               tone="extra"
               collapsible
-              defaultOpen={false}
               summary="the candles, with your levels on them"
             >
               <Suspense fallback={<div className="h-40 animate-pulse rounded-md bg-secondary/30" />}>
