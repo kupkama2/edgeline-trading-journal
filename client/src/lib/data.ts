@@ -255,11 +255,22 @@ export function useSaveDailyNote() {
 const invalidateTrades = () =>
   queryClient.invalidateQueries({ queryKey: ["/api/trades"] });
 
+/*
+ * A save that left a closed trade with a new or changed note starts a read of
+ * it on the server, in the background (shared/note-read.ts). The answer says
+ * so, and the trades are looked at again once it has had time to land.
+ */
+const NOTE_READ_LOOKS_MS = [4_000, 10_000];
+function afterSave(res: any) {
+  invalidateTrades();
+  if (res?.noteReading) for (const ms of NOTE_READ_LOOKS_MS) setTimeout(invalidateTrades, ms);
+}
+
 export function useCreateTrade() {
   return useMutation({
     mutationFn: async (v: { trade: InsertTrade; mistakeTagIds?: number[] }) =>
       (await apiRequest("POST", "/api/trades", v)).json(),
-    onSuccess: invalidateTrades,
+    onSuccess: afterSave,
   });
 }
 
@@ -276,7 +287,7 @@ export function useUpdateTrade() {
           mistakeTagIds: v.mistakeTagIds,
         })
       ).json(),
-    onSuccess: invalidateTrades,
+    onSuccess: afterSave,
   });
 }
 

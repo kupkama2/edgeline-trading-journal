@@ -170,14 +170,10 @@ export function buildInsightsBundle(
 
   const reflections: ReflectionEntry[] = inWeek
     .map((t) => {
-      // All the trader's own words: rationale is written before the trade,
-      // notes after, and the review note when it is gone over — which is
-      // where a debrief files what was said. Leaving the review out meant the
-      // weekly read never saw a single review.
-      const note = [t.reviewNote, t.notes, t.rationale]
-        .map((s) => (s ?? "").trim())
-        .filter(Boolean)
-        .join(" — ");
+      // All the trader's own words: the one note (shared/notes.ts), which
+      // opens with the why and carries everything after it. A trade logged
+      // before the note was one keeps its why on its own.
+      const note = (t.notes ?? "").trim() || (t.rationale ?? "").trim();
       return { t, note };
     })
     .filter((x) => x.note.length > 0)

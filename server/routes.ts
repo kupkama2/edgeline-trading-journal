@@ -84,7 +84,7 @@ import {
 } from "@shared/schema";
 import { normalizeCloseRead } from "@shared/close-read";
 import { exclusiveVerdict } from "@shared/well-traded";
-import { HIGHLIGHT_TAXONOMY } from "@shared/highlights";
+import { HIGHLIGHT_TAXONOMY, parseHighlights } from "@shared/highlights";
 import {
   contractFor,
   lastPointValueFor,
@@ -271,11 +271,11 @@ function closeNotePrompt(
   highlights: string[],
 ): string {
   const n = (v: number | null | undefined) => (v == null ? "unknown" : String(v));
-  return `You are reading a trader's own note about how a trade ended, and turning it into their journal's fields.
+  return `You are reading a trader's own note on one trade, and turning it into their journal's fields. The note was written over the life of the trade — why they took it, how they managed it, how it ended, and sometimes a later look back. Where a later line changes an earlier one ("UPDATE: actually…"), the later line wins.
 
 The trade: ${ctx.direction} from ${n(ctx.entryPrice)}, stop ${n(ctx.initialStop)}, target ${n(ctx.initialTarget)}, exited at ${n(ctx.exitPrice)}.
 
-Return ONLY a JSON object with exactly these keys: exitReason, entryGrade, stopGrade, exitGrade, demons, highlights, noManagementOutcome. Use null (or [] for the lists) for anything the note does not say. The note is the source; never infer a value from the numbers alone.
+Return ONLY a JSON object with exactly these keys: exitReason, entryGrade, stopGrade, exitGrade, demons, highlights, noManagementOutcome, verdict. Use null (or [] for the lists) for anything the note does not say. The note is the source; never infer a value from the numbers alone.
 
 exitReason, one of:
 - "target": the planned target was hit.
@@ -294,6 +294,7 @@ exitGrade: "early" (left money on the table), "perfect", or "late" (gave back a 
 demons: mistakes the trader admits to, from this list only, exact spelling: ${JSON.stringify(demons)}
 highlights: things done right that the note says, from this list only, exact spelling: ${JSON.stringify(highlights)}
 noManagementOutcome: only if the note says what price did afterwards with the plan left untouched — "target_first", "stop_first", or "undetermined".
+verdict: "well" only if the note says the trade was executed well — waited for it, sized it right, managed it to plan — whatever the result; "tilt" only if it says the trade should not have been taken at all — revenge, boredom, FOMO, out of plan. Otherwise null.
 
 The note:
 """
@@ -636,9 +637,8 @@ export async function registerRoutes(
       // tell apart from the instrument.
       contract: isContract ? typed : null,
     };
-    res.status(201).json(
-      await store(req).createTrade(exclusiveVerdict(trade), parsed.data.mistakeTagIds ?? []),
-    );
+    const created = await store(req).createTrade(exclusiveVerdict(trade), parsed.data.mistakeTagIds ?? []);
+    res.status(201).json({ ...created, noteReading: readNoteLater(req, created) });
   });
 
   app.patch("/api/trades/:id", async (req, res) => {
@@ -737,7 +737,7 @@ export async function registerRoutes(
       parsed.data.mistakeTagIds,
     );
     if (!updated) return res.status(404).json({ message: "Trade not found" });
-    res.json(updated);
+    res.json({ ...updated, noteReading: readNoteLater(req, updated) });
   });
 
   /**
@@ -2079,9 +2079,29 @@ export async function registerRoutes(
    * save, on request, and for the week before its insights are written. See
    * shared/note-read.ts for what a re-read may replace and what it may not.
    */
+  /*
+   * After a save: a closed trade whose note is new or changed since it was
+   * last read is read now, in the background, so the save itself does not
+   * wait on a model. The answer tells the client to look again shortly. A
+   * read skipped here (the spend guard, a failure) is caught by the weekly pass.
+   */
+  function readNoteLater(req: any, t: TradeWithTags): boolean {
+    if (!noteNeedsRead(t) || !req.userId || overSpendLimit(req.userId)) return false;
+    void (async () => {
+      try {
+        const fresh = await store(req).getTrade(t.id);
+        if (fresh && noteNeedsRead(fresh)) await readNoteOf(req, fresh, await store(req).listMistakeTags());
+      } catch (err) {
+        console.error("read-note failed:", loggableError(err));
+      }
+    })();
+    return true;
+  }
+
   async function readNoteOf(req: any, t: TradeWithTags, demons: { id: number; name: string }[]) {
-    const text = t.reviewNote?.trim();
+    const text = t.notes?.trim();
     if (!text) return null;
+    const extra = parseHighlights(t.highlights);
     const prompt = closeNotePrompt(
       text,
       {
@@ -2092,9 +2112,9 @@ export async function registerRoutes(
         exitPrice: t.exitPrice,
       },
       demons.map((d) => d.name),
-      Array.from(HIGHLIGHT_TAXONOMY),
+      Array.from(new Set([...HIGHLIGHT_TAXONOMY, ...extra])),
     );
-    const read = normalizeCloseRead(extractJson(await callLLM(prompt)), demons, []);
+    const read = normalizeCloseRead(extractJson(await callLLM(prompt)), demons, extra);
     const { patch, mistakeTagIds } = applyNoteRead(t, read, new Date().toISOString());
     const trade = await store(req).updateTrade(t.id, patch as UpdateTrade, mistakeTagIds);
     return { read, trade };
@@ -2105,7 +2125,8 @@ export async function registerRoutes(
     const t = await store(req).getTrade(Number(req.params.id));
     if (!t) return res.status(404).json({ message: "Trade not found" });
     // Asked by name, it reads even an unchanged note: that is what the button is for.
-    if (!t.reviewNote?.trim()) return res.json({ ok: true, read: null, trade: t });
+    // But not an open trade's: that note is still being written.
+    if (!t.notes?.trim() || t.status !== "closed") return res.json({ ok: true, read: null, trade: t });
     try {
       const out = await readNoteOf(req, t, await store(req).listMistakeTags());
       res.json({ ok: true, ...out });

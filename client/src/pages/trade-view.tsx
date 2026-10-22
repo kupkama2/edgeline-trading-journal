@@ -1,4 +1,5 @@
 import { useAccountBalances } from "@/lib/data";
+import { NoteReadChips } from "@/components/note-read-chips";
 import { MajorityOutButton } from "@/components/majority-out";
 import { failed, reportFailure } from "@/lib/report";
 import { equityAt, fmtPercent, riskPercent } from "@shared/equity";
@@ -1802,47 +1803,8 @@ export function TradeBody({
             </>
           )}
 
-          {(trade.mistakeTagIds.length > 0 || highlights.length > 0) && (
-            <div className="mt-4 space-y-2">
-              {trade.mistakeTagIds.length > 0 && (
-                <div>
-                  <p className="mb-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
-                    Demons
-                  </p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {trade.mistakeTagIds.map((tid) => (
-                      <Badge
-                        key={tid}
-                        variant="outline"
-                        className="border-primary/40 text-[10px] font-normal text-primary"
-                      >
-                        {tagNames[tid] ?? "?"}
-                      </Badge>
-                    ))}
-                  </div>
-                </div>
-              )}
-              {highlights.length > 0 && (
-                <div data-testid="view-highlights">
-                  <p className="mb-1.5 flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
-                    <Sparkles className="h-3 w-3 text-emerald-400" />
-                    What went right
-                  </p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {highlights.map((h) => (
-                      <Badge
-                        key={h}
-                        variant="outline"
-                        className="border-emerald-500/40 text-[10px] font-normal text-emerald-400"
-                      >
-                        {h}
-                      </Badge>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
+          {/* Demons and green flags live with the note they are read from
+              (NoteReadChips, below), where they can be corrected. */}
         </Card>
       </div>
 
@@ -1851,24 +1813,19 @@ export function TradeBody({
           meant the trade with nothing written on it — the one worth writing on
           — was the one with nowhere to write. */}
       <Card className="border-card-border bg-card p-4">
+        {/* The trade's one note (shared/notes.ts): the why first, then the
+            management, the exit and anything seen later. Once it is closed,
+            the answers below are read out of it. */}
         <Words
-          label="Rationale"
-          value={trade.rationale}
-          field="rationale"
+          label="Note"
+          value={trade.notes}
+          field="notes"
           trade={trade}
-          placeholder="Why you took it. Double-click to write it."
+          placeholder="Why you took it, then how you managed it and how it ended. Double-click to write."
         >
           <RationaleTags tags={parseTags(trade.rationaleTags)} />
         </Words>
-        <div className="mt-3">
-          <Words
-            label="Notes"
-            value={trade.notes}
-            field="notes"
-            trade={trade}
-            placeholder="What you want to remember. Double-click to write it."
-          />
-        </div>
+        <NoteReadChips trade={trade} extraHighlights={highlights} />
       </Card>
 
       {/* ---------------------------- the charts ---------------------------- */}

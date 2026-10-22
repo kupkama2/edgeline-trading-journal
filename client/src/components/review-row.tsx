@@ -1,4 +1,5 @@
-import { Suspense, lazy, useState } from "react";
+import { Suspense, lazy, useEffect, useState } from "react";
+import { noteHash, parseNoteRead } from "@shared/note-read";
 import { useLocation } from "wouter";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -58,7 +59,8 @@ export function ReviewRow({
   const update = useUpdateTrade();
   const { data: demons = [] } = useMistakeTags();
   const { toast } = useToast();
-  const [note, setNote] = useState(t.reviewNote ?? "");
+  // The trade's one note (shared/notes.ts): the second look is added to it.
+  const [note, setNote] = useState(t.notes ?? "");
   const [reading, setReading] = useState(false);
   const [read, setRead] = useState<string | null>(null);
   const [showChart, setShowChart] = useState(chartOpen);
@@ -108,12 +110,12 @@ export function ReviewRow({
    * because the read is a suggestion made from one sentence and what you put
    * there deliberately outranks it.
    */
-  async function readIt(justSaved = false) {
-    if (!t.reviewNote?.trim() && !note.trim()) return;
+  async function readIt() {
+    if (!t.notes?.trim() && !note.trim()) return;
     setReading(true);
     try {
       // The note as saved is what gets read, so an unsaved edit is saved first.
-      if (!justSaved && note.trim() !== (t.reviewNote ?? "").trim()) await write({ reviewNote: note.trim() || null });
+      if (note.trim() !== (t.notes ?? "").trim()) await write({ notes: note.trim() || null });
       const r = await readTradeNote(t.id);
       if (!r) {
         toast({ title: "Couldn't read that", description: "The note is saved either way." });
@@ -125,15 +127,38 @@ export function ReviewRow({
     }
   }
 
+  // When the background read lands, the line says what it made of the note.
+  useEffect(() => {
+    if (!read?.startsWith("reading")) return;
+    const rec = parseNoteRead(t.noteRead);
+    if (!rec || rec.hash !== noteHash(t.notes ?? "")) return;
+    const s = rec.set;
+    const said = closeReadSummary(
+      {
+        exitReason: s.exitReason ?? null,
+        entryGrade: s.entryGrade ?? null,
+        stopGrade: s.stopGrade ?? null,
+        exitGrade: s.exitGrade ?? null,
+        noManagementOutcome: s.noManagementOutcome ?? null,
+        demonIds: s.demonIds,
+        highlights: s.highlights ?? [],
+        verdict: s.verdict ?? null,
+      },
+      demons,
+    );
+    setRead(said || "read — nothing new to place");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [t.noteRead]);
+
   /** The note is the work; the stamp only records that the work happened. */
   async function mark() {
-    const changed = note.trim() !== "" && note.trim() !== (t.reviewNote ?? "").trim();
+    const changed = note.trim() !== "" && note.trim() !== (t.notes ?? "").trim();
     await write({
-      reviewNote: note.trim() || null,
+      notes: note.trim() || null,
       reviewedAt: done ? null : new Date().toISOString(),
     });
-    // A new or changed note is read straight away; an unchanged one already was.
-    if (changed) void readIt(true);
+    // The server reads a closed trade's changed note on its own; say so.
+    if (changed && t.status === "closed") setRead("reading the note — the grades follow in a moment");
   }
 
   const when = new Date(t.exitTime ?? t.entryTime).toLocaleDateString(undefined, {
@@ -215,17 +240,6 @@ export function ReviewRow({
         </button>
       )}
 
-      {(t.rationale?.trim() || t.notes?.trim()) && (
-        <p
-          className={`mt-1.5 text-[11px] leading-snug ${
-            miss ? "text-foreground/90" : "text-muted-foreground"
-          }`}
-        >
-          {t.rationale?.trim() && <span className="text-foreground">{t.rationale.trim()}</span>}
-          {t.rationale?.trim() && t.notes?.trim() && " · "}
-          {t.notes?.trim()}
-        </p>
-      )}
 
       {/*
         The chart, with the plan still drawn on it.
@@ -340,9 +354,9 @@ export function ReviewRow({
           placeholder={
             miss
               ? "Was passing it right? What would have had to be different?"
-              : "What do you see now that you could not see then?"
+              : "The trade's note — add what you see now that you could not see then."
           }
-          className="min-h-[52px] flex-1 basis-64 text-xs"
+          className="min-h-[72px] flex-1 basis-64 text-xs"
           data-testid={`input-review-note-${t.id}`}
         />
         <Button
