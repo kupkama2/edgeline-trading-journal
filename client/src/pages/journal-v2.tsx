@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { PositionRow } from "@shared/positions-read";
 import { Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
@@ -328,6 +328,38 @@ export default function JournalV2() {
     setEditingId(null);
     setOpenId((cur) => (cur === t.id ? null : t.id));
   };
+
+  /*
+   * Folding it away without finding the row again: a click anywhere outside
+   * the open trade, or Esc. Not while the full editor is open — a stray click
+   * should not throw away an edit — and not for a click inside something the
+   * trade itself opened on top of the page (a dialog, a dropdown, a toast),
+   * which renders outside it but belongs to it.
+   */
+  useEffect(() => {
+    if (openId == null || editingId != null || filling || resolving) return;
+    const OVERLAY =
+      '[role="dialog"], [role="alertdialog"], [role="listbox"], [role="menu"], [data-radix-popper-content-wrapper], [data-sonner-toaster], ol[tabindex="-1"]';
+    const onDown = (e: MouseEvent) => {
+      const el = e.target as Element | null;
+      if (!el?.closest) return;
+      if (el.closest(`[data-trade-open="${openId}"]`) || el.closest(OVERLAY)) return;
+      setOpenId(null);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      const el = document.activeElement;
+      // Esc in a text box belongs to the box.
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || (el as HTMLElement).isContentEditable)) return;
+      setOpenId(null);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [openId, editingId, filling, resolving]);
   const [showClosed, setShowClosed] = useState(true);
   const [allDays, setAllDays] = useState(false);
 
@@ -384,7 +416,7 @@ export default function JournalV2() {
    * opens.
    */
   const openRow = (t: TradeWithTags, why: ManagedWhy | null = null) => (
-    <div key={t.id}>
+    <div key={t.id} data-trade-open={openId === t.id ? t.id : undefined}>
       <OpenTradeRowV2
         t={t}
         mark={marks?.[t.id] ?? null}
@@ -676,7 +708,7 @@ export default function JournalV2() {
                     </div>
                     <div className="mt-1 space-y-0.5">
                       {g.trades.map((t) => (
-                        <div key={t.id}>
+                        <div key={t.id} data-trade-open={openId === t.id ? t.id : undefined}>
                           <ClosedTradeRowV2
                             t={t}
                             expanded={openId === t.id}
