@@ -40,6 +40,7 @@ import { ResolveTradeDialog } from "@/components/resolve-trade";
 import type { ImportCandidate } from "@shared/import-parse";
 import { NewTradeCard } from "@/components/new-trade-card";
 import { ClosedTradeRowV2, OpenTradeRowV2 } from "@/components/trade-rows-v2";
+import { splitOpen, type ManagedWhy } from "@shared/managed";
 import { TradeBody } from "@/pages/trade-view";
 import { TradeEditor } from "@/components/trade-dialogs";
 import { PendingTradeRow } from "@/components/trade-rows";
@@ -347,6 +348,8 @@ export default function JournalV2() {
         .sort((a, b) => b.entryTime.localeCompare(a.entryTime)),
     [scoped],
   );
+  // The ones that want a decision first; majority out or risk off below them.
+  const { toManage, managed } = useMemo(() => splitOpen(open), [open]);
   const pending = useMemo(() => scoped.filter((t) => t.status === "pending"), [scoped]);
   const closed = useMemo(() => scoped.filter((t) => t.status === "closed"), [scoped]);
   const days = useMemo(() => groupByDay(closed), [closed]);
@@ -380,6 +383,26 @@ export default function JournalV2() {
    * as the next item in the list — the same gesture the log card makes when it
    * opens.
    */
+  const openRow = (t: TradeWithTags, why: ManagedWhy | null = null) => (
+    <div key={t.id}>
+      <OpenTradeRowV2
+        t={t}
+        mark={marks?.[t.id] ?? null}
+        managed={why}
+        expanded={openId === t.id}
+        onSelect={() => toggleTrade(t)}
+        onEdit={() => {
+          setOpenId(t.id);
+          setEditingId(t.id);
+        }}
+        onResolve={() => setResolving(t)}
+        onAdd={() => setFilling({ trade: t, kind: "add" })}
+        onTake={() => setFilling({ trade: t, kind: "partial" })}
+      />
+      {panel(t)}
+    </div>
+  );
+
   const panel = (t: TradeWithTags) =>
     openId !== t.id ? null : (
       <div
@@ -539,24 +562,27 @@ export default function JournalV2() {
             <p className="px-3 py-2 text-xs text-muted-foreground">Nothing open.</p>
           ) : (
             <div className="space-y-1.5">
-              {open.map((t) => (
-                <div key={t.id}>
-                  <OpenTradeRowV2
-                    t={t}
-                    mark={marks?.[t.id] ?? null}
-                    expanded={openId === t.id}
-                    onSelect={() => toggleTrade(t)}
-                    onEdit={() => {
-                      setOpenId(t.id);
-                      setEditingId(t.id);
-                    }}
-                    onResolve={() => setResolving(t)}
-                    onAdd={() => setFilling({ trade: t, kind: "add" })}
-                    onTake={() => setFilling({ trade: t, kind: "partial" })}
-                  />
-                  {panel(t)}
-                </div>
-              ))}
+              {toManage.map((t) => openRow(t))}
+              {toManage.length === 0 && (
+                <p className="px-3 py-1.5 text-xs text-muted-foreground" data-testid="text-nothing-to-manage">
+                  Nothing left to manage — every open trade is majority out or risk off.
+                </p>
+              )}
+            </div>
+          )}
+          {/* Lower down, not gone: still open, still in the risk figure above,
+              one click from the trade. */}
+          {managed.length > 0 && (
+            <div className="space-y-1.5 pt-1" data-testid="section-open-managed">
+              <div className="flex items-baseline justify-between px-0.5">
+                <h3 className="text-[11px] font-medium text-muted-foreground">Managed</h3>
+                <span className="font-mono text-[10px] text-muted-foreground" data-testid="text-managed-count">
+                  {managed.length} running · majority out or risk off
+                </span>
+              </div>
+              <div className="space-y-1.5 opacity-80 transition-opacity hover:opacity-100">
+                {managed.map(({ t, why }) => openRow(t, why))}
+              </div>
             </div>
           )}
         </div>

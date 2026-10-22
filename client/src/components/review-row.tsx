@@ -16,7 +16,7 @@ import {
   Star,
   Zap,
 } from "lucide-react";
-import { useMistakeTags, useTradeImages, useUpdateTrade, readCloseNote } from "@/lib/data";
+import { useMistakeTags, useTradeImages, useUpdateTrade, readTradeNote } from "@/lib/data";
 import { computeMetrics, fmtMoney, fmtR, EXIT_REASON_LABELS } from "@shared/metrics";
 import { closeReadSummary } from "@shared/close-read";
 import { exclusiveVerdict } from "@shared/well-traded";
@@ -108,43 +108,18 @@ export function ReviewRow({
    * because the read is a suggestion made from one sentence and what you put
    * there deliberately outranks it.
    */
-  async function readIt() {
-    const text = note.trim();
-    if (!text) return;
+  async function readIt(justSaved = false) {
+    if (!t.reviewNote?.trim() && !note.trim()) return;
     setReading(true);
     try {
-      const r = await readCloseNote(text, {
-        direction: t.direction === "short" ? "short" : "long",
-        entryPrice: t.entryPrice,
-        initialStop: t.initialStop,
-        initialTarget: t.initialTarget,
-        exitPrice: t.exitPrice,
-      });
+      // The note as saved is what gets read, so an unsaved edit is saved first.
+      if (!justSaved && note.trim() !== (t.reviewNote ?? "").trim()) await write({ reviewNote: note.trim() || null });
+      const r = await readTradeNote(t.id);
       if (!r) {
         toast({ title: "Couldn't read that", description: "The note is saved either way." });
         return;
       }
-      const patch: Record<string, unknown> = {};
-      if (r.entryGrade && !t.entryGrade) patch.entryGrade = r.entryGrade;
-      if (r.stopGrade && !t.stopGrade) patch.stopGrade = r.stopGrade;
-      if (r.exitGrade && !t.exitGrade) patch.exitGrade = r.exitGrade;
-      if (r.exitReason && !t.exitReason) patch.exitReason = r.exitReason;
-      const tags = Array.from(new Set([...t.mistakeTagIds, ...r.demonIds]));
-      const newTags = tags.length !== t.mistakeTagIds.length;
-      const said = closeReadSummary(r, demons);
-      setRead(said || "nothing it could place");
-      if (Object.keys(patch).length > 0 || newTags) {
-        await update
-          .mutateAsync({
-            id: t.id,
-            trade: patch as UpdateTrade,
-            // Undefined rather than the unchanged list: the route takes the
-            // absence as "leave the demons alone", and sending them back
-            // unchanged is a write that can only lose a race.
-            mistakeTagIds: newTags ? tags : undefined,
-          })
-          .catch(() => setRead("read it, but couldn't save what it found"));
-      }
+      setRead(closeReadSummary(r, demons) || "nothing it could place");
     } finally {
       setReading(false);
     }
@@ -152,10 +127,13 @@ export function ReviewRow({
 
   /** The note is the work; the stamp only records that the work happened. */
   async function mark() {
+    const changed = note.trim() !== "" && note.trim() !== (t.reviewNote ?? "").trim();
     await write({
       reviewNote: note.trim() || null,
       reviewedAt: done ? null : new Date().toISOString(),
     });
+    // A new or changed note is read straight away; an unchanged one already was.
+    if (changed) void readIt(true);
   }
 
   const when = new Date(t.exitTime ?? t.entryTime).toLocaleDateString(undefined, {

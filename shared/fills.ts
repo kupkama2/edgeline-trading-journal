@@ -22,7 +22,7 @@ import { parseExtraTargets, type Trade, type TradeFill } from "./schema";
 export type TradeWithFills = Trade & { fills?: TradeFill[] };
 
 /** Convert a size in the trade's unit into base units (contracts/coins). */
-function baseQty(size: number, unit: string, price: number): number {
+export function baseQty(size: number, unit: string, price: number): number {
   if (unit === "quote") return price > 0 ? size / price : 0;
   return size;
 }

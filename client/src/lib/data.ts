@@ -578,7 +578,7 @@ export async function parseScreenshot(
  * The week as this browser's clock sees it: local Monday 00:00 to the next.
  * The server's own clock is UTC, so it is told rather than left to guess.
  */
-function localWeek(key?: string): { from?: string; to?: string } {
+export function localWeek(key?: string): { from?: string; to?: string } {
   if (!key || !/^\d{4}-\d{2}-\d{2}$/.test(key)) return {};
   const [y, m, d] = key.split("-").map(Number);
   const from = new Date(y, m - 1, d);
@@ -598,9 +598,35 @@ export function useWeeklyInsights() {
         insights?: WeeklyInsights;
         message?: string;
       }>,
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: ["/api/weekly-reviews"] }),
+    // Generating reads the week's changed notes first, which writes trades.
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/weekly-reviews"] });
+      invalidateTrades();
+    },
   });
+}
+
+/**
+ * Read a trade's saved review note into its fields, on the server, where a
+ * re-read can tell what the last read set from what you set (shared/note-read.ts).
+ */
+export async function readTradeNote(id: number): Promise<CloseRead | null> {
+  try {
+    const res = await apiRequest("POST", `/api/trades/${id}/read-note`);
+    const json = await res.json();
+    await invalidateTrades();
+    return json?.ok && json.read ? (json.read as CloseRead) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Every note written or changed since it was last read, in one window or overall. */
+export async function readStaleNotes(window?: { from: string; to: string }) {
+  const res = await apiRequest("POST", "/api/notes/read", window ?? {});
+  const json = await res.json();
+  await invalidateTrades();
+  return json as { ok: boolean; read: number; failed: number; left: number };
 }
 
 /** "What happened", read into the close form's fields. Null when it could not be read. */
