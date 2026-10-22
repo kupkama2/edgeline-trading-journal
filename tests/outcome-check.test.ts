@@ -236,6 +236,21 @@ describe.skipIf(!DB)("settling parked trades against the feed", () => {
     expect((await store.getTrade(t.id)).noManagementOutcome).toBe("stop_first");
   });
 
+  it("writes nothing in preview, and says what it would write", async () => {
+    const t = await closedTrade({ symbol: "AAA", exitTime: ago(2), mae: null, mfe: null });
+    const res = await (checkOutcomes as any)(userId, t.id, { preview: true });
+    const after = await store.getTrade(t.id);
+    expect(after.noManagementOutcome).toBeNull();
+    expect(after.mae).toBeNull();
+    expect(res.proposed.tradeId).toBe(t.id);
+    const fields = res.proposed.changes.map((c: any) => c.field);
+    expect(fields).toEqual(expect.arrayContaining(["noManagementOutcome", "mae", "mfe"]));
+    expect(res.proposed.changes.find((c: any) => c.field === "noManagementOutcome")).toMatchObject({ from: null, to: "target_first" });
+    // Bookkeeping rides along in the patch but is not listed as a change.
+    expect(fields).not.toContain("outcomeCheckedAt");
+    expect(res.proposed.patch.outcomeCheckedAt).toBeTruthy();
+  });
+
   it("lets the market replace an answer that was only read out of the note", async () => {
     const t = await closedTrade({ symbol: "AAA", noManagementOutcome: "stop_first", exitTime: ago(2) });
     await store.updateTrade(t.id, {

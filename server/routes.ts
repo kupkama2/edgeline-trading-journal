@@ -22,7 +22,7 @@ function store(req: { userId?: number }) {
   return storageFor(req.userId);
 }
 import { ProxyAgent, fetch as undiciFetch } from "undici";
-import { checkOutcomes, ensureCatalogue } from "./outcomes";
+import { CHECK_FIELDS, checkOutcomes, ensureCatalogue } from "./outcomes";
 import {
   feedStatus,
   fetchCandles,
@@ -890,7 +890,35 @@ export async function registerRoutes(
     const id = Number(req.params.id);
     const trade = await store(req).getTrade(id);
     if (!trade) return res.status(404).json({ message: "Trade not found" });
-    res.json(await checkOutcomes((req as any).userId, id, { remeasure: req.body?.remeasure === true }));
+    res.json(
+      await checkOutcomes((req as any).userId, id, {
+        remeasure: req.body?.remeasure === true,
+        preview: req.body?.preview === true,
+      }),
+    );
+  });
+
+  /*
+   * A preview, applied as shown. Only the fields the market check itself
+   * writes are taken, and they go straight to storage — not through the
+   * trade route, whose rules about a trade's own fields have nothing to say
+   * here and are not what the person agreed to.
+   */
+  app.post("/api/trades/:id/check/apply", async (req, res) => {
+    const id = Number(req.params.id);
+    const trade = await store(req).getTrade(id);
+    if (!trade) return res.status(404).json({ message: "Trade not found" });
+    const body = req.body?.patch && typeof req.body.patch === "object" ? req.body.patch : {};
+    const patch: Record<string, unknown> = {};
+    for (const f of CHECK_FIELDS) {
+      if (!(f in body)) continue;
+      const v = body[f];
+      const ok = v === null || typeof v === "number" ? Number.isFinite(v ?? 0) : typeof v === "string" && v.length < 64;
+      if (!ok) return res.status(400).json({ message: `Bad value for ${f}` });
+      patch[f] = v;
+    }
+    if (!Object.keys(patch).length) return res.json(trade);
+    res.json(await store(req).updateTrade(id, patch as any));
   });
 
   app.post("/api/outcomes/check", async (req, res) => {

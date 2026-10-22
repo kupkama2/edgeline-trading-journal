@@ -67,9 +67,14 @@ export function useTrades() {
  */
 export function useCheckTrade() {
   return useMutation({
-    mutationFn: async (v: number | { id: number; remeasure?: boolean }) => {
-      const { id, remeasure } = typeof v === "number" ? { id: v, remeasure: false } : v;
-      return (await apiRequest("POST", `/api/trades/${id}/check`, remeasure ? { remeasure: true } : {})).json();
+    mutationFn: async (v: number | { id: number; remeasure?: boolean; preview?: boolean }) => {
+      const { id, remeasure, preview } = typeof v === "number" ? { id: v, remeasure: false, preview: false } : v;
+      return (
+        await apiRequest("POST", `/api/trades/${id}/check`, {
+          ...(remeasure ? { remeasure: true } : {}),
+          ...(preview ? { preview: true } : {}),
+        })
+      ).json();
     },
     onSuccess: (_res, v) => {
       const id = typeof v === "number" ? v : v.id;
@@ -82,6 +87,13 @@ export function useCheckTrade() {
       });
     },
   });
+}
+
+/** Write a market-check preview exactly as it was shown (see checkOutcomes' `proposed`). */
+export async function applyCheck(id: number, patch: Record<string, unknown>) {
+  const res = await apiRequest("POST", `/api/trades/${id}/check/apply`, { patch });
+  await invalidateTrades();
+  return res.json();
 }
 
 export function useCheckOutcomes() {
