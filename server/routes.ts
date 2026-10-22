@@ -117,6 +117,8 @@ import { z } from "zod";
 import { formatPricePair } from "@shared/price-pair";
 import { readPositionsTable } from "@shared/positions-read";
 import { applyNoteRead, noteNeedsRead } from "@shared/note-read";
+import { normalizeSetupTags } from "@shared/setups";
+import { splitSourceFromTags } from "@shared/sources";
 
 
 /**
@@ -638,7 +640,10 @@ export async function registerRoutes(
       contract: isContract ? typed : null,
     };
     const created = await store(req).createTrade(exclusiveVerdict(trade), parsed.data.mistakeTagIds ?? []);
-    res.status(201).json({ ...created, noteReading: readNoteLater(req, created) });
+    // The entry card tags the why itself before saving; anything else that
+    // creates a trade with a why and no tags gets them here.
+    const tagging = created.rationaleTags ? false : tagLater(req, created, null);
+    res.status(201).json({ ...created, noteReading: readNoteLater(req, created) || tagging });
   });
 
   app.patch("/api/trades/:id", async (req, res) => {
@@ -737,7 +742,8 @@ export async function registerRoutes(
       parsed.data.mistakeTagIds,
     );
     if (!updated) return res.status(404).json({ message: "Trade not found" });
-    res.json({ ...updated, noteReading: readNoteLater(req, updated) });
+    const tagging = tagLater(req, updated, existing.rationale);
+    res.json({ ...updated, noteReading: readNoteLater(req, updated) || tagging });
   });
 
   /**
@@ -2113,6 +2119,36 @@ export async function registerRoutes(
    * wait on a model. The answer tells the client to look again shortly. A
    * read skipped here (the spend guard, a failure) is caught by the weekly pass.
    */
+  /*
+   * Setup tags, from the why (the note's first paragraph): read again in the
+   * background whenever the why is new or has changed, so a note edited
+   * anywhere keeps its tags in step. A known source named in it ("Severin's
+   * call") becomes the source, as the entry card has always done.
+   */
+  function tagLater(req: any, t: TradeWithTags, beforeWhy: string | null | undefined): boolean {
+    const why = t.rationale?.trim();
+    if (!why || why === (beforeWhy ?? "").trim() || !req.userId || overSpendLimit(req.userId)) return false;
+    void (async () => {
+      try {
+        const json = extractJson(await callLLM(RATIONALE_PROMPT.replace("{{TEXT}}", why.slice(0, 500))));
+        const raw = Array.isArray(json?.tags) ? json.tags.filter((x: any) => typeof x === "string") : [];
+        const all = await store(req).listTrades();
+        const sources = Array.from(new Set(all.map((x) => x.source?.trim()).filter(Boolean) as string[]));
+        const split = splitSourceFromTags(normalizeSetupTags(raw), sources, t.source ?? null);
+        const fresh = await store(req).getTrade(t.id);
+        // Only if the why is still the one that was read.
+        if (!fresh || fresh.rationale?.trim() !== why) return;
+        await store(req).updateTrade(t.id, {
+          rationaleTags: split.tags.length ? JSON.stringify(split.tags) : null,
+          ...(split.source !== (fresh.source ?? null) ? { source: split.source } : {}),
+        } as any);
+      } catch (err) {
+        console.error("tagging failed:", loggableError(err));
+      }
+    })();
+    return true;
+  }
+
   function readNoteLater(req: any, t: TradeWithTags): boolean {
     if (!noteNeedsRead(t) || !req.userId || overSpendLimit(req.userId)) return false;
     void (async () => {

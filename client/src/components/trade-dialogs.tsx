@@ -22,7 +22,7 @@ import { useAccountSettings, useMistakeTags, useUpdateTrade, useAddTradeImage, a
 } from "@/lib/data";
 import { suggestFees } from "@shared/fees";
 import { knownHighlights, parseHighlights, serializeHighlights } from "@shared/highlights";
-import { AccountPicker, HighlightPicker, SetupTagPicker } from "@/components/trade-pickers";
+import { AccountPicker } from "@/components/trade-pickers";
 import { normalizeSetupTags } from "@shared/setups";
 import { splitSourceFromTags } from "@shared/sources";
 import { conflictWarning, directionWarning, readDirection } from "@shared/direction";
@@ -1447,40 +1447,8 @@ export function TradeEditor({
                 : "Read into the grades and the rest once the trade is closed — until then, keep adding to it."}
             </p>
 
-            <div className="space-y-1">
-              <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                Rationale tags (comma separated)
-              </label>
-              <Input
-                value={f.rationaleTags ?? ""}
-                onChange={set("rationaleTags")}
-                placeholder="VAH Rejection, Fib Retest"
-                className="h-9 text-sm"
-                data-testid="input-edit-rationale-tags"
-              />
-              {/* Same chips as the entry card, writing into the same list — a
-                  setup you can tap when logging must be tappable when
-                  correcting, or the correction path quietly re-introduces the
-                  spellings the chips exist to prevent. */}
-              <SetupTagPicker
-                selected={(f.rationaleTags ?? "").split(",").map((x) => x.trim()).filter(Boolean)}
-                onToggle={(name) =>
-                  setF((p) => {
-                    const cur = (p.rationaleTags ?? "")
-                      .split(",")
-                      .map((x) => x.trim())
-                      .filter(Boolean);
-                    const has = cur.some((x) => x.toLowerCase() === name.toLowerCase());
-                    const next = has
-                      ? cur.filter((x) => x.toLowerCase() !== name.toLowerCase())
-                      : [...cur, name];
-                    return { ...p, rationaleTags: next.join(", ") };
-                  })
-                }
-                testIdPrefix="edit-setup"
-              />
-            </div>
-
+            {/* Setup tags come out of the note's first paragraph (the why),
+                on save; they show on the trade beside it. */}
             </FormSection>
 
             {/* Attach here too, not only from the read-only detail view: Edit
