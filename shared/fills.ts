@@ -391,3 +391,63 @@ export function residualFromAverage(t: TradeWithFills, average: number): Residua
   );
   return { price: Number(price.toFixed(dp)), problem: null };
 }
+
+/* ------------------------- a fill from the new totals ------------------------- */
+
+/**
+ * The fill implied by what the venue shows AFTER it, rather than the fill.
+ *
+ * Mid-trade, the position panel says the new size and the new average entry;
+ * the individual fills are three screens away and there may have been
+ * several. One add at the implied price moves the ledger to exactly those
+ * totals, which is all the ledger needs — the R, the average and every
+ * partial after it come out the same as if each fill had been typed.
+ *
+ * The same for profit taken: the size left and the profit booked imply how
+ * much came off and where.
+ *
+ * Sizes are in `unit`. A USD size is read against the AVERAGE entry — the
+ * cost of what is on — so it means the same before and after a move in price.
+ */
+export type FromTotals =
+  | { ok: true; kind: "add" | "partial"; price: number; size: number; qty: number }
+  | { ok: false; problem: string };
+
+const qtyOf = (size: number, unit: "base" | "quote", at: number) => (unit === "quote" ? size / at : size);
+const sizeIn = (qty: number, unit: string, price: number) => (unit === "quote" ? qty * price : qty);
+
+export function addFromTotals(
+  t: TradeWithFills,
+  totals: { size: number; avgEntry: number },
+  unit: "base" | "quote" = t.sizeUnit === "quote" ? "quote" : "base",
+): FromTotals {
+  const { size, avgEntry } = totals;
+  if (!(size > 0) || !(avgEntry > 0)) return { ok: false, problem: "Enter the new total size and the new average entry." };
+  const led = positionLedger(t);
+  const now = qtyOf(size, unit, avgEntry);
+  const added = now - led.openQty;
+  if (added <= 1e-12) return { ok: false, problem: "That is no bigger than what is on now — nothing was added." };
+  const price = (avgEntry * now - led.avgEntry * led.openQty) / added;
+  if (!(price > 0) || !Number.isFinite(price))
+    return { ok: false, problem: "Those two do not add up: no price for the added size gives that average." };
+  return { ok: true, kind: "add", price, size: sizeIn(added, t.sizeUnit, price), qty: added };
+}
+
+export function partialFromTotals(
+  t: TradeWithFills,
+  totals: { size: number; booked: number },
+  unit: "base" | "quote" = t.sizeUnit === "quote" ? "quote" : "base",
+): FromTotals {
+  const { size, booked } = totals;
+  if (!(size >= 0) || !Number.isFinite(booked)) return { ok: false, problem: "Enter the size left and the profit booked." };
+  const led = positionLedger(t);
+  const left = qtyOf(size, unit, led.avgEntry);
+  const closed = led.openQty - left;
+  if (left <= 1e-12) return { ok: false, problem: "Nothing left is the whole position — close the trade instead." };
+  if (closed <= 1e-12) return { ok: false, problem: "That is no smaller than what is on now — nothing was taken." };
+  const sign = t.direction === "short" ? -1 : 1;
+  const price = led.avgEntry + booked / (sign * closed * (t.pointValue ?? 1));
+  if (!(price > 0) || !Number.isFinite(price))
+    return { ok: false, problem: "That profit on that size would mean a price below zero — check the two numbers." };
+  return { ok: true, kind: "partial", price, size: sizeIn(closed, t.sizeUnit, price), qty: closed };
+}
