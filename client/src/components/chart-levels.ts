@@ -113,10 +113,24 @@ export function chartLevels(trade: TradeWithTags, draft?: LevelDraft): Level[] {
    * being corrected after the fact are where the plan's own stop is edited.
    */
   const live_ = trade.status === "open" || trade.status === "pending";
-  const stopField: LevelField | undefined = managed || (live_ && !editing) ? undefined : "initialStop";
+  /*
+   * Outside the editor a drag is saved on release, and every figure on the
+   * trade is computed from these lines — so outside it, a line is draggable
+   * only where moving it is a decision being made now. A closed trade is a
+   * record: none of its lines move from the chart, or panning to see where
+   * price went next quietly rewrote the entry (and the P&L with it). An open
+   * trade's entry is a fill, not a plan. A resting order's entry, and a
+   * target still in play, can be dragged. In the editor every line can,
+   * because there a drag only fills the form and nothing is saved until Save.
+   */
+  const record = trade.status === "closed" && !editing;
+  const entryField: LevelField | undefined = editing || trade.status === "pending" ? "entryPrice" : undefined;
+  const targetField: LevelField | undefined = record ? undefined : "initialTarget";
+  const exitField: LevelField | undefined = editing ? "exitPrice" : undefined;
+  const stopField: LevelField | undefined = managed || record || (live_ && !editing) ? undefined : "initialStop";
   return [
     ...(entry != null
-      ? [{ price: entry, label: "entry", color: "entry", dashed: false, field: "entryPrice" as const }]
+      ? [{ price: entry, label: "entry", color: "entry", dashed: false, field: entryField }]
       : []),
     ...(stop != null
       ? [{ price: stop, label: "stop", color: "stop", dashed: true, field: stopField }]
@@ -125,7 +139,7 @@ export function chartLevels(trade: TradeWithTags, draft?: LevelDraft): Level[] {
       ? [{ price: trade.initialStop!, label: "was", color: "stop", dashed: true, faint: true }]
       : []),
     ...(target != null
-      ? [{ price: target, label: "target", color: "target", dashed: true, field: "initialTarget" as const }]
+      ? [{ price: target, label: "target", color: "target", dashed: true, field: targetField }]
       : []),
     ...tps.map((p: number, i: number) => ({
       price: p,
@@ -134,7 +148,7 @@ export function chartLevels(trade: TradeWithTags, draft?: LevelDraft): Level[] {
       dashed: true,
     })),
     ...(exit != null
-      ? [{ price: exit, label: "exit", color: "exit", dashed: false, field: "exitPrice" as const }]
+      ? [{ price: exit, label: "exit", color: "exit", dashed: false, field: exitField }]
       : []),
   ];
 }

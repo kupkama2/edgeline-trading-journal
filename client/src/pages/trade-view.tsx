@@ -1503,7 +1503,9 @@ export function TradeBody({
            * live while only its outcome is recorded.
            */
           onLevel={(field, price, done) => {
-            if (!done) return;
+            // A closed trade is a record: its lines are corrected in the
+            // editor, never by a drag here (chart-levels.ts).
+            if (!done || trade.status === "closed") return;
             updateTrade
               .mutateAsync({ id: trade.id, trade: { [field]: price } as any })
               .catch((err: any) =>
