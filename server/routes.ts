@@ -56,7 +56,7 @@ import {
   type Candle,
 } from "@shared/binance";
 import Anthropic from "@anthropic-ai/sdk";
-import type { AccountSettings } from "@shared/schema";
+import type { AccountSettings, TradeWithTags, UpdateTrade } from "@shared/schema";
 import {
   insertTradeSchema,
   updateTradeSchema,
@@ -116,6 +116,7 @@ import {
 import { z } from "zod";
 import { formatPricePair } from "@shared/price-pair";
 import { readPositionsTable } from "@shared/positions-read";
+import { applyNoteRead, noteNeedsRead } from "@shared/note-read";
 
 
 /**
@@ -132,6 +133,8 @@ import { readPositionsTable } from "@shared/positions-read";
  * this is a spend guard, not a security control, and a restart resetting it is
  * not worth a table.
  */
+/** Notes read in one go — a week's worth, without one request running for minutes. */
+const MAX_NOTE_READS = 25;
 const SPEND_WINDOW_MS = 60_000;
 const SPEND_MAX = 30;
 const spend = new Map<number, number[]>();
@@ -1822,6 +1825,15 @@ export async function registerRoutes(
       return res.json({ ok: true, cached: true, weekStart: key, insights: JSON.parse(existing.insights) });
     }
 
+    /*
+     * The week's notes first: anything written or changed since it was last
+     * read is read now, so the grades and demons the insights count are the
+     * ones the notes actually say. A failed read leaves the note as it was.
+     */
+    const weekFrom = window?.from ?? weekDate.toISOString();
+    const weekTo = window?.to ?? new Date(weekDate.getTime() + 7 * 86_400_000).toISOString();
+    const notesRead = await readStaleNotes(req, { from: weekFrom, to: weekTo }).catch(() => null);
+
     const [trades, tags, notes] = await Promise.all([
       store(req).listTrades(),
       store(req).listMistakeTags(),
@@ -1854,7 +1866,7 @@ export async function registerRoutes(
       const insights = extractJson(text);
 
       await store(req).upsertWeeklyInsights(key, JSON.stringify(insights));
-      res.json({ ok: true, cached: false, weekStart: key, bundle, insights });
+      res.json({ ok: true, cached: false, weekStart: key, bundle, insights, notesRead });
     } catch (err: any) {
       console.error("weekly-insights failed:", err?.message || err);
       res.status(502).json({
@@ -2062,6 +2074,77 @@ export async function registerRoutes(
    * normalizeCloseRead keeps only what the journal actually has — the
    * trader's own demon list, the real grades, the real exit reasons.
    */
+  /*
+   * A trade's review note, read into its grades, exit reason and demons — on
+   * save, on request, and for the week before its insights are written. See
+   * shared/note-read.ts for what a re-read may replace and what it may not.
+   */
+  async function readNoteOf(req: any, t: TradeWithTags, demons: { id: number; name: string }[]) {
+    const text = t.reviewNote?.trim();
+    if (!text) return null;
+    const prompt = closeNotePrompt(
+      text,
+      {
+        direction: t.direction === "short" ? "short" : "long",
+        entryPrice: t.entryPrice,
+        initialStop: t.initialStop,
+        initialTarget: t.initialTarget,
+        exitPrice: t.exitPrice,
+      },
+      demons.map((d) => d.name),
+      Array.from(HIGHLIGHT_TAXONOMY),
+    );
+    const read = normalizeCloseRead(extractJson(await callLLM(prompt)), demons, []);
+    const { patch, mistakeTagIds } = applyNoteRead(t, read, new Date().toISOString());
+    const trade = await store(req).updateTrade(t.id, patch as UpdateTrade, mistakeTagIds);
+    return { read, trade };
+  }
+
+  app.post("/api/trades/:id/read-note", async (req, res) => {
+    if (costly(req, res)) return;
+    const t = await store(req).getTrade(Number(req.params.id));
+    if (!t) return res.status(404).json({ message: "Trade not found" });
+    // Asked by name, it reads even an unchanged note: that is what the button is for.
+    if (!t.reviewNote?.trim()) return res.json({ ok: true, read: null, trade: t });
+    try {
+      const out = await readNoteOf(req, t, await store(req).listMistakeTags());
+      res.json({ ok: true, ...out });
+    } catch (err) {
+      console.error("read-note failed:", loggableError(err));
+      res.status(502).json({ ok: false, message: "Could not read that note. It is saved either way." });
+    }
+  });
+
+  /** Every note written or changed since it was last read — the week's, or all of them. */
+  async function readStaleNotes(req: any, window?: { from: string; to: string }) {
+    const [trades, demons] = await Promise.all([store(req).listTrades(), store(req).listMistakeTags()]);
+    const due = trades.filter(
+      (t) =>
+        t.status === "closed" &&
+        noteNeedsRead(t) &&
+        (!window || ((t.exitTime ?? t.entryTime) >= window.from && (t.exitTime ?? t.entryTime) < window.to)),
+    );
+    let read = 0;
+    let failed = 0;
+    for (const t of due.slice(0, MAX_NOTE_READS)) {
+      try {
+        await readNoteOf(req, t, demons);
+        read++;
+      } catch (err) {
+        failed++;
+        console.error("read-note failed:", loggableError(err));
+      }
+    }
+    return { read, failed, left: Math.max(0, due.length - MAX_NOTE_READS) };
+  }
+
+  app.post("/api/notes/read", async (req, res) => {
+    if (costly(req, res)) return;
+    const from = typeof req.body?.from === "string" ? req.body.from : null;
+    const to = typeof req.body?.to === "string" ? req.body.to : null;
+    res.json({ ok: true, ...(await readStaleNotes(req, from && to ? { from, to } : undefined)) });
+  });
+
   app.post("/api/read-close", async (req, res) => {
     if (costly(req, res)) return;
     const parsed = readCloseSchema.safeParse(req.body);

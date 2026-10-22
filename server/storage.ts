@@ -156,6 +156,7 @@ ALTER TABLE trades ADD COLUMN IF NOT EXISTS claimed_at TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS path_measured_at TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS target_source TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS managed_at TEXT;
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS note_read TEXT;
 -- A verdict on the entry, off by default: nothing recorded before it existed
 -- was tilt until somebody says so (or the migration below does).
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS tilt BOOLEAN NOT NULL DEFAULT FALSE;

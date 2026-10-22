@@ -9,7 +9,8 @@ import {
   buildInsightsBundle,
   type WeeklyInsights,
 } from "@shared/weekly-insights";
-import { useDailyNotes, useWeeklyInsights, useWeeklyReviews } from "@/lib/data";
+import { localWeek, readStaleNotes, useDailyNotes, useWeeklyInsights, useWeeklyReviews } from "@/lib/data";
+import { noteNeedsRead } from "@shared/note-read";
 
 /**
  * The written half of the weekly review.
@@ -47,6 +48,39 @@ export function WeeklyInsightsCard({
     [trades, tags, dailyNotes],
   );
   const hasMaterial = bundle.reflectionCount > 0 || bundle.dayNotes.length > 0;
+
+  /*
+   * Notes this week written or changed since the AI last read them. Generating
+   * the insights reads them first; this is for the week already generated,
+   * when a note was edited afterwards.
+   */
+  const week = useMemo(() => localWeek(bundle.weekStart), [bundle.weekStart]);
+  const unread = useMemo(
+    () =>
+      trades.filter((t) => {
+        const at = t.exitTime ?? t.entryTime;
+        return t.status === "closed" && noteNeedsRead(t) && week.from && week.to && at >= week.from && at < week.to;
+      }).length,
+    [trades, week],
+  );
+  const [readingNotes, setReadingNotes] = useState(false);
+  async function readNotes() {
+    if (!week.from || !week.to) return;
+    setReadingNotes(true);
+    try {
+      const r = await readStaleNotes({ from: week.from, to: week.to });
+      toast({
+        title: `Read ${r.read} ${r.read === 1 ? "note" : "notes"}`,
+        description: r.failed
+          ? `${r.failed} could not be read — they are saved as written.`
+          : "Grades, exit reasons and demons updated where the notes say so. Anything you set by hand is left alone.",
+      });
+    } catch (err: any) {
+      toast({ title: "Couldn't read the notes", description: String(err?.message ?? err).slice(0, 160), variant: "destructive" });
+    } finally {
+      setReadingNotes(false);
+    }
+  }
 
   // A previously generated week survives a reload without re-spending a call.
   const stored = useMemo(() => {
@@ -127,6 +161,19 @@ export function WeeklyInsightsCard({
                   .join(" · ") + " this week."
               : "Write on a trade or in the daily page and this has something to read."}
           </p>
+          {unread > 0 && (
+            <button
+              type="button"
+              onClick={() => void readNotes()}
+              disabled={readingNotes}
+              className="mt-1 inline-flex items-center gap-1 text-left text-[11px] text-primary hover:underline disabled:opacity-60"
+              data-testid="button-read-changed-notes"
+            >
+              {readingNotes && <Loader2 className="h-3 w-3 animate-spin" />}
+              {unread} {unread === 1 ? "note" : "notes"} written or changed since the last read — read{" "}
+              {unread === 1 ? "it" : "them"} now
+            </button>
+          )}
         </div>
         <Button
           size="sm"

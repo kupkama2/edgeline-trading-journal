@@ -426,6 +426,12 @@ export const trades = pgTable("trades", {
    */
   managedAt: text("managed_at"),
   /**
+   * What the last AI read of the review note set, and a fingerprint of the
+   * text it read (JSON NoteReadRecord, shared/note-read.ts). Lets a changed
+   * note be read again and replace only what the read itself had written.
+   */
+  noteRead: text("note_read"),
+  /**
    * Green flags — JSON string[] of what went RIGHT ("Perfect Entry", "Let It
    * Run"). The positive counterpart to mistake tags, and sliced the same way
    * on Analysis so "perfect entry" earns an expectancy figure rather than a
