@@ -116,6 +116,11 @@ export function FixedTargetCard({ trades }: { trades: TradeWithTags[] }) {
                       </td>
                       <td className={`py-1.5 pr-2 ${short ? "text-red-400" : ""}`}>
                         {pct(r.winRate)} <span className="text-muted-foreground">({pct(r.breakEvenWinRate)})</span>
+                        {/* A rate over the decided trades only: "100%" of four,
+                            with ten undecided, must say it is four. */}
+                        {undecided(r) > 0 && (
+                          <span className="ml-1 font-sans text-[10px] text-muted-foreground">of {r.decided}</span>
+                        )}
                       </td>
                       <td className={`py-1.5 pr-2 text-right ${r.totalR >= 0 ? "text-emerald-400" : "text-red-400"}`}>
                         {fmtR(r.totalR, 1)}
