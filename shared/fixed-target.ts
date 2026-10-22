@@ -72,13 +72,20 @@ export function replay(t: TradeWithTags): Replay | null {
   const costR = m.riskDollars > 0 ? (m.fees - m.funding) / m.riskDollars : 0;
   const base = { tradeId: t.id, costR, riskDollars: m.riskDollars, actualR: m.actualR };
 
+  /*
+   * Stopped out: the exit is at (or, with slippage, past) the original stop,
+   * or the trade says so. That is the stop being hit, whatever the bars
+   * show — a feed read off another book, or a bar that bottoms a tick above
+   * the stop, records an MAE short of it, and taking that at its word turned
+   * every stop-out followed by a bounce into a win at the low rungs.
+   * Everything the trade reached came before the exit that ended it.
+   */
+  const endedAtStop = exitR <= -0.95 || t.exitReason === "stop";
+  if (endedAtStop) return { ...base, reach: heldBest, stopAfter: true, ambiguousUpTo: null };
+
   if (heldWorst <= -1 + EPS) {
-    // The stop was touched while you held. Ending there means everything
-    // reached came before it; slippage can put the fill past the stop.
-    const endedAtStop = exitR <= -0.95;
-    return endedAtStop
-      ? { ...base, reach: heldBest, stopAfter: true, ambiguousUpTo: null }
-      : { ...base, reach: heldBest, stopAfter: true, ambiguousUpTo: heldBest };
+    // The stop was touched and the trade carried on: which came first is not on record.
+    return { ...base, reach: heldBest, stopAfter: true, ambiguousUpTo: heldBest };
   }
 
   const after = t.postExitPeak != null ? Math.max(0, r(t.postExitPeak)) : 0;

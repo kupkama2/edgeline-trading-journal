@@ -1,4 +1,6 @@
 import { useAccountBalances } from "@/lib/data";
+import { Textarea } from "@/components/ui/textarea";
+import { joinNote, whyOf } from "@shared/notes";
 import type { PositionRow } from "@shared/positions-read";
 import { toInstant } from "@shared/import-parse";
 import { fmtPercent, latestEquity, parseRiskBudget, riskPercent } from "@shared/equity";
@@ -753,7 +755,10 @@ export function NewTradeCard({
   const onSubmit = form.handleSubmit(async (values) => {
     const data = setupFormSchema.parse(values);
     let rationaleTags: string[] = [];
-    const rationale = data.rationale?.trim() || "";
+    // The box is the trade's one note; its first paragraph is the why, and
+    // the why is what the setup tags are read from.
+    const note = data.rationale?.trim() || "";
+    const rationale = whyOf(note) ?? "";
     if (rationale) {
       setAnalyzingRationale(true);
       rationaleTags = await analyzeRationale(rationale);
@@ -836,9 +841,8 @@ export function NewTradeCard({
         // the trade record it produces, and chart replay lives in Tradesly /
         // Edgewonk. The column stays nullable so this can be revisited.
         setupScreenshot: null,
-        // The close note is the post-mortem: same column, written at the close.
-        notes: loggingClosed && closeNote.trim() ? closeNote.trim() : data.notes || null,
-        rationale: rationale || null,
+        // The one note. The why is derived from it on the server.
+        notes: joinNote(note, data.notes, closeNote),
         rationaleTags: rationaleTags.length ? JSON.stringify(rationaleTags) : null,
         playbook: playbookJson,
         ...(loggingClosed
@@ -846,7 +850,8 @@ export function NewTradeCard({
               status: "closed" as const,
               exitPrice: Number(exitPrice),
               exitTime: toIso(exitTime),
-              exitReason: (exitReason as any) ?? "other",
+              // Unpicked is empty, not "other": the note is read into it once saved.
+              exitReason: (exitReason as any) ?? null,
               mae: mae.trim() && isFinite(Number(mae)) ? Number(mae) : null,
               mfe: mfe.trim() && isFinite(Number(mfe)) ? Number(mfe) : null,
               postExitPeak:
@@ -1149,19 +1154,20 @@ export function NewTradeCard({
             render={({ field }) => (
               <FormItem className="space-y-1">
                 <FormLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                  Quick rationale
+                  Note
                 </FormLabel>
                 <FormControl>
-                  <Input
+                  <Textarea
                     {...field}
                     placeholder="vah, 786 retest, bla bla…"
-                    className="h-9 text-sm"
+                    className="min-h-[60px] text-sm"
                     data-testid="input-rationale"
                   />
                 </FormControl>
                 <p className="text-[10px] leading-snug text-muted-foreground">
-                  Type it however you'd say it — the setup, the why, whose call it was. Tags and
-                  the source get pulled out on save.
+                  The trade's one note. Start with the why — setup tags and the source come out of
+                  it — and keep adding to it as you manage and close the trade. Once it is closed,
+                  the grades and the rest are read from it.
                 </p>
                 <SetupTagPicker
                   selected={setupTags}
@@ -1720,8 +1726,6 @@ export function NewTradeCard({
                 setHighlights={setHighlights}
                 extraHighlights={knownHighlights(allTrades)}
                 testPrefix="new"
-                note={closeNote}
-                setNote={setCloseNote}
                 autoPath={!isFutures}
                 onReading={setReadingClose}
                 wellTraded={wellTraded}

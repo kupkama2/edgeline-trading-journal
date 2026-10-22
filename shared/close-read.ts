@@ -32,6 +32,8 @@ export interface CloseRead {
   /** Canonical spellings, from the taxonomy or the journal's own extras. */
   highlights: string[];
   noManagementOutcome: string | null;
+  /** The note's own verdict on the trade, when it gives one: traded well, or tilt. */
+  verdict?: "well" | "poorly" | "tilt" | null;
 }
 
 export const EMPTY_CLOSE_READ: CloseRead = {
@@ -42,6 +44,7 @@ export const EMPTY_CLOSE_READ: CloseRead = {
   demonIds: [],
   highlights: [],
   noManagementOutcome: null,
+  verdict: null,
 };
 
 /** Ways a model says "closed by hand" that are not the enum's word for it. */
@@ -110,7 +113,9 @@ export function normalizeCloseRead(
 
   const noManagementOutcome = oneOf(j.noManagementOutcome, noManagementOutcomeEnum.options);
 
-  return { exitReason, entryGrade, stopGrade, exitGrade, demonIds, highlights, noManagementOutcome };
+  const verdict = oneOf(j.verdict, ["well", "poorly", "tilt"]) as "well" | "poorly" | "tilt" | null;
+
+  return { exitReason, entryGrade, stopGrade, exitGrade, demonIds, highlights, noManagementOutcome, verdict };
 }
 
 export function closeReadEmpty(r: CloseRead): boolean {
@@ -121,7 +126,8 @@ export function closeReadEmpty(r: CloseRead): boolean {
     r.exitGrade == null &&
     r.demonIds.length === 0 &&
     r.highlights.length === 0 &&
-    r.noManagementOutcome == null
+    r.noManagementOutcome == null &&
+    r.verdict == null
   );
 }
 
@@ -148,5 +154,6 @@ export function closeReadSummary(r: CloseRead, demons: { id: number; name: strin
   }
   parts.push(...r.highlights);
   if (r.noManagementOutcome) parts.push(NMO_LABELS[r.noManagementOutcome] ?? r.noManagementOutcome);
+  if (r.verdict) parts.push(r.verdict === "well" ? "traded well" : r.verdict === "poorly" ? "traded poorly" : "tilt");
   return parts.join(" · ");
 }

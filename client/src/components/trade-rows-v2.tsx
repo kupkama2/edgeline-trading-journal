@@ -23,6 +23,7 @@ import {
   Plus,
   Skull,
   Star,
+  ThumbsDown,
   X,
   Zap,
 } from "lucide-react";
@@ -207,6 +208,25 @@ export function ClosedTradeRowV2({
             <Star className={`h-3 w-3 ${t.wellTraded ? "fill-current" : ""}`} />
           </Button>
         )}
+        <Button
+          size="icon"
+          variant="ghost"
+          className={`h-6 w-6 ${t.tradedPoorly ? "text-orange-400" : "text-muted-foreground hover:text-orange-400"}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            update.mutate({ id: t.id, trade: { tradedPoorly: !t.tradedPoorly } }, { onError: failed("Traded poorly") });
+          }}
+          aria-label={t.tradedPoorly ? "Not traded poorly after all" : "Mark as traded poorly"}
+          aria-pressed={t.tradedPoorly === true}
+          title={
+            t.tradedPoorly
+              ? "Traded poorly — click to take it back"
+              : "Mark as traded poorly: chased it, sized it wrong, managed it badly"
+          }
+          data-testid={`button-v2-poorly-${t.id}`}
+        >
+          <ThumbsDown className={`h-3 w-3 ${t.tradedPoorly ? "fill-current" : ""}`} />
+        </Button>
         {/* The third verdict, on how the trade was RECORDED rather than on how
             it was taken or run. It belongs beside the other two because it is
             reached for in the same moment — going back over a day's rows and

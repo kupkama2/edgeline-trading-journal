@@ -42,6 +42,7 @@ import type {
 } from "@shared/schema";
 import { DEMON_TAXONOMY, DEMON_LEGACY_ALIASES } from "@shared/demons";
 import { targetFields } from "@shared/default-target";
+import { noteFields } from "@shared/notes";
 import { collapseToInstrument } from "@shared/binance";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
@@ -163,6 +164,7 @@ ALTER TABLE trades ADD COLUMN IF NOT EXISTS tilt BOOLEAN NOT NULL DEFAULT FALSE;
 -- The opposite verdict, off by default: nothing already logged was marked
 -- well traded, and nobody wants a streak they did not earn.
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS well_traded BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS traded_poorly BOOLEAN NOT NULL DEFAULT FALSE;
 -- Recorded as a result rather than as prices: the scalp log's three words.
 -- Off and null everywhere else, so every trade already logged is untouched.
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS scalp BOOLEAN NOT NULL DEFAULT FALSE;
@@ -539,6 +541,21 @@ BEGIN
       FOREIGN KEY (trade_id) REFERENCES trades (id) ON DELETE CASCADE;
   END IF;
 END $$;
+
+-- One note per trade (shared/notes.ts): the why, the close note and the
+-- review note, joined in that order into notes, nothing dropped. Each piece is
+-- added only when the note does not already hold it, and the review note is
+-- emptied once moved, so a second run finds nothing to do.
+UPDATE trades
+   SET notes = NULLIF(concat_ws(E'\n\n',
+         CASE WHEN btrim(COALESCE(rationale, '')) <> '' AND strpos(COALESCE(notes, ''), btrim(rationale)) = 0
+              THEN btrim(rationale) END,
+         NULLIF(btrim(COALESCE(notes, '')), ''),
+         CASE WHEN btrim(COALESCE(review_note, '')) <> '' AND strpos(COALESCE(notes, ''), btrim(review_note)) = 0
+              THEN btrim(review_note) END), ''),
+       review_note = NULL
+ WHERE btrim(COALESCE(review_note, '')) <> ''
+    OR (btrim(COALESCE(rationale, '')) <> '' AND strpos(COALESCE(notes, ''), btrim(rationale)) = 0);
 
 -- A target of 1R wherever there is a stop and none was given, marked so it
 -- can be told from a real one. Idempotent: a row with a target is untouched.
@@ -1292,7 +1309,7 @@ export class DatabaseStorage implements IStorage {
   async createTrade(t: InsertTrade, tagIds: number[] = []): Promise<TradeWithTags> {
     // Every writer comes through here — the form, an import, a sync — so the
     // 1R default is applied once, here, for all of them.
-    const withTarget = { ...(t as any), ...targetFields(t as any) };
+    const withTarget = { ...(t as any), ...targetFields(t as any), ...noteFields(t as any) };
     const [row] = await db
       .insert(trades)
       .values({ ...withTarget, userId: this.userId })
@@ -1316,9 +1333,13 @@ export class DatabaseStorage implements IStorage {
      * patch that moves the stop moves a default target with it, and one that
      * clears the target on a trade with a stop gets the default back.
      */
-    if (Object.keys(t).length > 0 && ["initialStop", "initialTarget", "entryPrice", "direction", "status"].some((k) => k in t)) {
+    const touchesTarget = ["initialStop", "initialTarget", "entryPrice", "direction", "status"].some((k) => k in t);
+    // The one note, with the why derived from it (shared/notes.ts).
+    const touchesNote = ["notes", "rationale", "reviewNote"].some((k) => k in t);
+    if (Object.keys(t).length > 0 && (touchesTarget || touchesNote)) {
       const [before] = await db.select().from(trades).where(and(eq(trades.id, id), this.owns(trades)));
-      if (before) t = { ...t, ...targetFields({ ...before, ...(t as any) }, t as any) } as UpdateTrade;
+      if (before && touchesTarget) t = { ...t, ...targetFields({ ...before, ...(t as any) }, t as any) } as UpdateTrade;
+      if (before && touchesNote) t = { ...t, ...noteFields(t as any, before) } as UpdateTrade;
     }
     // Drizzle throws on an empty SET clause, so a tags-only patch just reads.
     const [row] =

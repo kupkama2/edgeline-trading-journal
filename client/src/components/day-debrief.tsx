@@ -9,7 +9,7 @@ import { useDailyNotes, useDebrief, useMistakeTags, useSaveDailyNote, useUpdateT
 import { failed } from "@/lib/report";
 import { gradeLabel } from "@shared/grades";
 import { EXIT_REASON_LABELS, fmtMoney, fmtR, computeMetrics } from "@shared/metrics";
-import { parseHighlights, serializeHighlights } from "@shared/highlights";
+import { joinNote } from "@shared/notes";
 import { mergeDayNote, type Debrief } from "@shared/debrief";
 import type { TradeWithTags } from "@shared/schema";
 
@@ -61,33 +61,14 @@ export function DayDebrief({ day, trades }: { day: string; trades: TradeWithTags
         if (!t) continue;
         const note = (notesFor[e.tradeId] ?? e.note).trim();
         if (!note) continue;
-        const r = e.read;
         /*
-         * Only blanks are filled. A grade or reason already on the trade was
-         * chosen on purpose, and a paragraph about the whole day is not a
-         * reason to overrule it. Mistakes and highlights are added to, never
-         * taken away.
+         * The words go onto the trade's one note, and the note is read from
+         * there like any other edit of it (shared/note-read.ts): what you set
+         * by hand stays, what an earlier read set follows the note.
          */
-        const patch: Record<string, unknown> = {
-          reviewNote: t.reviewNote?.trim() && !t.reviewNote.includes(note) ? `${t.reviewNote.trim()}\n\n${note}` : note,
-          reviewedAt: new Date().toISOString(),
-        };
-        if (r.exitReason && (!t.exitReason || t.exitReason === "other")) patch.exitReason = r.exitReason;
-        if (r.entryGrade && !t.entryGrade) patch.entryGrade = r.entryGrade;
-        if (r.stopGrade && !t.stopGrade) patch.stopGrade = r.stopGrade;
-        if (r.exitGrade && !t.exitGrade) patch.exitGrade = r.exitGrade;
-        if (r.noManagementOutcome && !t.noManagementOutcome) patch.noManagementOutcome = r.noManagementOutcome;
-        if (r.highlights.length) {
-          const merged = Array.from(new Set([...parseHighlights(t.highlights), ...r.highlights]));
-          patch.highlights = serializeHighlights(merged);
-        }
-        if (e.verdict === "tilt" && !t.tilt && !t.wellTraded) patch.tilt = true;
-        if (e.verdict === "well" && !t.tilt && !t.wellTraded) patch.wellTraded = true;
-        const newTags = r.demonIds.filter((id) => !t.mistakeTagIds.includes(id));
         await update.mutateAsync({
           id: t.id,
-          trade: patch as any,
-          ...(newTags.length ? { mistakeTagIds: [...t.mistakeTagIds, ...newTags] } : {}),
+          trade: { notes: joinNote(t.notes, note), reviewedAt: new Date().toISOString() } as any,
         });
         filed++;
       }

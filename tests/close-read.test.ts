@@ -34,7 +34,14 @@ describe("reading a close note", () => {
       demonIds: [1, 2],
       highlights: ["Cut It Fast", "Let It Run"],
       noManagementOutcome: "target_first",
+      verdict: null,
     });
+  });
+
+  it("takes a verdict only when it is one of the two it knows", () => {
+    expect(normalizeCloseRead({ verdict: "well" }, []).verdict).toBe("well");
+    expect(normalizeCloseRead({ verdict: "TILT" }, []).verdict).toBe("tilt");
+    expect(normalizeCloseRead({ verdict: "great" }, []).verdict).toBeNull();
   });
 
   it("drops what the journal does not have, rather than inventing it", () => {

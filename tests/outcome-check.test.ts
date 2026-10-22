@@ -228,6 +228,27 @@ describe.skipIf(!DB)("settling parked trades against the feed", () => {
     expect(after.outcomeSource).toBeNull();
   });
 
+  it("says what the market makes of the plan when asked by name, without overruling you", async () => {
+    // "Would my stop have been hit" is the question the button is pressed for.
+    const t = await closedTrade({ symbol: "AAA", noManagementOutcome: "stop_first", exitTime: ago(2) });
+    const res = await (checkOutcomes as any)(userId, t.id);
+    expect(res.plan).toMatchObject({ tradeId: t.id, verdict: "target_first", recorded: "stop_first", applied: false });
+    expect((await store.getTrade(t.id)).noManagementOutcome).toBe("stop_first");
+  });
+
+  it("lets the market replace an answer that was only read out of the note", async () => {
+    const t = await closedTrade({ symbol: "AAA", noManagementOutcome: "stop_first", exitTime: ago(2) });
+    await store.updateTrade(t.id, {
+      notes: "it would have stopped me",
+      noteRead: JSON.stringify({ hash: "x", at: "2026-10-01", set: { demonIds: [], noManagementOutcome: "stop_first" } }),
+    });
+    const res = await (checkOutcomes as any)(userId, t.id);
+    expect(res.plan).toMatchObject({ verdict: "target_first", applied: true });
+    const after = await store.getTrade(t.id);
+    expect(after.noManagementOutcome).toBe("target_first");
+    expect(after.outcomeSource).toBe("auto");
+  });
+
   it("fills in the path where the trade has nothing", async () => {
     // The stub's one bar runs 100 -> high 131, low 99. Held bars give MAE/MFE.
     const t = await closedTrade({ symbol: "AAA", exitTime: ago(2.5) });

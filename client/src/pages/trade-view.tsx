@@ -1,4 +1,5 @@
 import { useAccountBalances } from "@/lib/data";
+import { NoteReadChips } from "@/components/note-read-chips";
 import { MajorityOutButton } from "@/components/majority-out";
 import { failed, reportFailure } from "@/lib/report";
 import { equityAt, fmtPercent, riskPercent } from "@shared/equity";
@@ -25,7 +26,7 @@ import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
+import { ThumbsDown,
   ArrowDownRight,
   ArrowLeft,
   ArrowUpRight,
@@ -829,14 +830,31 @@ export function TradeBody({
         return;
       }
 
+      /*
+       * Everything the ask changed, said — and what the market thinks of the
+       * plan even where the trade's own answer stands, because that is usually
+       * the question. Funding moves the net P&L, so it is never done quietly.
+       */
+      const plan = res?.plan?.tradeId === trade.id ? res.plan : null;
+      const funded = (res?.funded ?? []).find((x: any) => x.tradeId === trade.id);
+      const said = { target_first: "the target first", stop_first: "the stop first" } as const;
+      const lines: string[] = [];
+      if (plan) {
+        const when = new Date(plan.hitAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+        lines.push(`Left alone, the plan would have hit ${said[plan.verdict as keyof typeof said]} (${when}).`);
+        if (!plan.applied && plan.recorded && plan.recorded !== plan.verdict)
+          lines.push(`Your record says ${said[plan.recorded as keyof typeof said] ?? plan.recorded} — kept, since you set it; change it on the trade if the market is right.`);
+      }
+      if (measured) lines.push("MAE, MFE and what happened after your exit are filled in.");
+      if (funded) {
+        const delta = funded.funding - (funded.was ?? 0);
+        lines.push(
+          `Funding over the hold (est.): ${funded.funding >= 0 ? "+" : "−"}${fmtFees(funded.funding)} — net P&L ${delta >= 0 ? "up" : "down"} ${fmtFees(delta)}.`,
+        );
+      }
       toast(
-        settled || measured
-          ? {
-              title: settled ? "Settled from the market" : "Price path filled in",
-              description: settled
-                ? "The plan's outcome is in, and the R beside it now means something."
-                : "MAE, MFE and what happened after your exit are on the trade now.",
-            }
+        lines.length
+          ? { title: settled ? "Settled from the market" : "Asked the market", description: lines.join(" ") }
           : {
               title: "Nothing new yet",
               description:
@@ -959,6 +977,27 @@ export function TradeBody({
             {trade.wellTraded && "well traded"}
           </button>
         )}
+        <button
+          type="button"
+          onClick={() =>
+            updateTrade.mutate({ id: trade.id, trade: { tradedPoorly: !trade.tradedPoorly } }, { onError: failed("Traded poorly") })
+          }
+          aria-pressed={trade.tradedPoorly === true}
+          title={
+            trade.tradedPoorly
+              ? "Traded poorly — click to take it back"
+              : "Mark as traded poorly: chased it, sized it wrong, managed it badly. Whatever it paid."
+          }
+          className={`flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] transition-colors ${
+            trade.tradedPoorly
+              ? "border-orange-500/50 bg-orange-500/10 text-orange-400"
+              : "border-border text-muted-foreground hover:border-orange-500/50 hover:text-orange-400"
+          }`}
+          data-testid="button-view-poorly"
+        >
+          <ThumbsDown className={`h-3 w-3 ${trade.tradedPoorly ? "fill-current" : ""}`} />
+          {trade.tradedPoorly && "traded poorly"}
+        </button>
         {/*
           Scalp, after the fact.
           A scalp is a way of RECORDING a trade, not a kind of trade, so which
@@ -1802,47 +1841,8 @@ export function TradeBody({
             </>
           )}
 
-          {(trade.mistakeTagIds.length > 0 || highlights.length > 0) && (
-            <div className="mt-4 space-y-2">
-              {trade.mistakeTagIds.length > 0 && (
-                <div>
-                  <p className="mb-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
-                    Demons
-                  </p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {trade.mistakeTagIds.map((tid) => (
-                      <Badge
-                        key={tid}
-                        variant="outline"
-                        className="border-primary/40 text-[10px] font-normal text-primary"
-                      >
-                        {tagNames[tid] ?? "?"}
-                      </Badge>
-                    ))}
-                  </div>
-                </div>
-              )}
-              {highlights.length > 0 && (
-                <div data-testid="view-highlights">
-                  <p className="mb-1.5 flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
-                    <Sparkles className="h-3 w-3 text-emerald-400" />
-                    What went right
-                  </p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {highlights.map((h) => (
-                      <Badge
-                        key={h}
-                        variant="outline"
-                        className="border-emerald-500/40 text-[10px] font-normal text-emerald-400"
-                      >
-                        {h}
-                      </Badge>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
+          {/* Demons and green flags live with the note they are read from
+              (NoteReadChips, below), where they can be corrected. */}
         </Card>
       </div>
 
@@ -1851,24 +1851,19 @@ export function TradeBody({
           meant the trade with nothing written on it — the one worth writing on
           — was the one with nowhere to write. */}
       <Card className="border-card-border bg-card p-4">
+        {/* The trade's one note (shared/notes.ts): the why first, then the
+            management, the exit and anything seen later. Once it is closed,
+            the answers below are read out of it. */}
         <Words
-          label="Rationale"
-          value={trade.rationale}
-          field="rationale"
+          label="Note"
+          value={trade.notes}
+          field="notes"
           trade={trade}
-          placeholder="Why you took it. Double-click to write it."
+          placeholder="Why you took it, then how you managed it and how it ended. Double-click to write."
         >
           <RationaleTags tags={parseTags(trade.rationaleTags)} />
         </Words>
-        <div className="mt-3">
-          <Words
-            label="Notes"
-            value={trade.notes}
-            field="notes"
-            trade={trade}
-            placeholder="What you want to remember. Double-click to write it."
-          />
-        </div>
+        <NoteReadChips trade={trade} extraHighlights={highlights} />
       </Card>
 
       {/* ---------------------------- the charts ---------------------------- */}

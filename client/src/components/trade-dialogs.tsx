@@ -571,7 +571,6 @@ export function TradeEditor({
         postExitPeak: numOrNull(g.postExitPeak ?? ""),
         postExitAdverse: numOrNull(g.postExitAdverse ?? ""),
         noManagementOutcome: (d.nmo as any) ?? null,
-        rationale: (g.rationale ?? "").trim() || null,
         rationaleTags: tagsOf.tags.length ? JSON.stringify(tagsOf.tags) : null,
         notes: (g.notes ?? "").trim() || null,
         account: d.account.trim() || null,
@@ -1227,10 +1226,6 @@ export function TradeEditor({
               setHighlights={setHighlights}
               extraHighlights={knownHighlights(allTrades)}
               testPrefix="edit"
-              /* The note IS the trade's notes: one box, written at the close,
-                 read into the fields. */
-              note={f.notes ?? ""}
-              setNote={(v: string) => setF((p) => ({ ...p, notes: v }))}
               autoPath={!trade.contract}
               onReading={setReadingClose}
               wellTraded={wellTraded}
@@ -1431,22 +1426,26 @@ export function TradeEditor({
 
             <FormSection
               icon={NotebookPen}
-              title="Why you took it"
-              hint="the part only you can fill in"
+              title="Note"
+              hint="one note for the whole trade — the why, the management, the exit"
               testId="section-edit-why"
               tone="plan"
             >
-            <div className="space-y-1">
-              <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                Rationale
-              </label>
-              <Input
-                value={f.rationale ?? ""}
-                onChange={set("rationale")}
-                className="h-9 text-sm"
-                data-testid="input-edit-rationale"
-              />
-            </div>
+            {/* The trade's one note (shared/notes.ts). Its first paragraph is
+                the why; once the trade is closed the grades, the exit reason,
+                the demons and green flags are read out of it. */}
+            <Textarea
+              value={f.notes ?? ""}
+              onChange={set("notes")}
+              placeholder={"Why you took it — first line.\n\nThen what you did as it ran, how it ended, and anything you see later."}
+              className="min-h-[120px] text-sm"
+              data-testid="input-edit-notes"
+            />
+            <p className="text-[10px] leading-snug text-muted-foreground">
+              {lifecycle === "closed"
+                ? "Saved changes are read into the grades, the exit reason, demons and green flags. Anything you set by hand on the trade stays."
+                : "Read into the grades and the rest once the trade is closed — until then, keep adding to it."}
+            </p>
 
             <div className="space-y-1">
               <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
@@ -1482,17 +1481,6 @@ export function TradeEditor({
               />
             </div>
 
-            {/* Once there is an exit, the notes box lives in the close
-                section as "what happened"; before that it is just notes. */}
-            {!(f.exitPrice ?? "").trim() && (
-              <Textarea
-                value={f.notes ?? ""}
-                onChange={set("notes")}
-                placeholder="Notes"
-                className="min-h-[60px] text-xs"
-                data-testid="input-edit-notes"
-              />
-            )}
             </FormSection>
 
             {/* Attach here too, not only from the read-only detail view: Edit

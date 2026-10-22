@@ -38,6 +38,16 @@ describe("which level a trade reached first", () => {
     expect(outcomeAt(p, 1.5)).toBe("loss");
   });
 
+  it("counts a stop-out as the stop being hit even when the bars stop a tick short of it", () => {
+    // Stopped at 90; the feed's low was 90.4, and price bounced to 115 afterwards.
+    const p = replay(t({ mfe: 105, mae: 90.4, exitPrice: 90, exitReason: "stop", postExitPeak: 115, postExitAdverse: 89 }))!;
+    expect(outcomeAt(p, 0.5)).toBe("win");
+    expect(outcomeAt(p, 1)).toBe("loss");
+    // Marked as stopped, the same — even with a fill a little inside the stop.
+    const q = replay(t({ mfe: 103, mae: 91, exitPrice: 90.8, exitReason: "stop", postExitPeak: 120 }))!;
+    expect(outcomeAt(q, 1)).toBe("loss");
+  });
+
   it("does not guess the order when the stop was touched and the trade carried on", () => {
     // Dipped through the stop, ran to +2R, exited at +1.5R.
     const p = replay(t({ mfe: 120, mae: 88, exitPrice: 115 }))!;

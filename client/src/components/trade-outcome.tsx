@@ -23,21 +23,14 @@
  * that you could not.
  */
 import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
-import { EXIT_REASON_LABELS, EXIT_TIMING_MEANINGFUL_R, exitTimingVerdict } from "@shared/metrics";
-import { gradeLabel } from "@shared/grades";
-import { EXIT_REASONS, FormSection, LABEL_ROW, TimeField } from "@/components/trade-shared";
-import { GradePicker, type GradeState } from "@/components/grade-picker";
-import { HighlightPicker } from "@/components/trade-pickers";
+import { EXIT_TIMING_MEANINGFUL_R } from "@shared/metrics";
+import { FormSection, LABEL_ROW, TimeField } from "@/components/trade-shared";
+import type { GradeState } from "@/components/grade-picker";
 import type { MistakeTag } from "@shared/schema";
 
 import { LevelLabel, PathBands } from "@/components/levels";
-import { Activity, Gavel, Loader2, LogOut, Star } from "lucide-react";
+import { Activity, LogOut } from "lucide-react";
 import { aftermathWindowMs } from "@shared/aftermath";
-import { useState, useRef } from "react";
-import { Textarea } from "@/components/ui/textarea";
-import { readCloseNote } from "@/lib/data";
-import { closeReadSummary } from "@shared/close-read";
 
 const LABEL = "text-[10px] uppercase tracking-wider text-muted-foreground";
 
@@ -206,31 +199,8 @@ export function resolveLifecycle(
 }
 
 export function TradeOutcomeFields(p: OutcomeFieldsProps) {
-  const { priced, explained } = outcomeStage(p.exitPrice, p.exitReason);
+  const { priced } = outcomeStage(p.exitPrice, p.exitReason);
   const path = pathQuestions(p.exitPrice, p.live === true);
-
-  /**
-   * The arithmetic reading of this exit, from the form's own fields.
-   *
-   * Both legs clamp at zero: MFE below the exit or a post-exit peak on the
-   * wrong side mean "that cost was nothing", never negative. Null legs stay
-   * null — an unmeasured leg is not a zero-cost leg, and the verdict function
-   * knows the difference.
-   */
-  const timingRead = (() => {
-    if (!p.timing) return null;
-    const { direction, entryPrice, initialStop } = p.timing;
-    const exit = Number(p.exitPrice);
-    if (entryPrice == null || initialStop == null || !isFinite(exit)) return null;
-    const risk = Math.abs(entryPrice - initialStop);
-    if (!(risk > 0)) return null;
-    const sign = direction === "short" ? -1 : 1;
-    const leg = (raw: string) => {
-      const v = Number(raw);
-      return raw.trim() !== "" && isFinite(v) ? Math.max(0, (sign * (v - exit)) / risk) : null;
-    };
-    return exitTimingVerdict(leg(p.mfe), leg(p.postExitPeak));
-  })();
 
   /**
    * What the stop did, said at the moment of logging.
@@ -272,116 +242,13 @@ export function TradeOutcomeFields(p: OutcomeFieldsProps) {
   })();
 
   /*
-   * Whether "your read" has been answered, and what it says.
-   *
-   * The exit axis does not apply to a stop-out — a trade that hit its stop
-   * never went near its target, so an ungraded exit there is a question that
-   * does not arise, not one you skipped. Folding on "all three answered"
-   * would leave every stopped-out trade permanently open on a question it
-   * cannot be asked; axisApplies is the same rule the statistics use.
-   */
-  const wantsExitGrade = p.exitReason !== "stop";
-  const graded =
-    p.grades.entry != null &&
-    p.grades.stop != null &&
-    (!wantsExitGrade || p.grades.exit != null);
-  const gradeSummary = (() => {
-    const said = (
-      [
-        ["entry", p.grades.entry],
-        ["stop", p.grades.stop],
-        ["exit", wantsExitGrade ? p.grades.exit : null],
-      ] as const
-    )
-      .map(([axis, g]) => (g ? `${axis} ${gradeLabel(axis, g)?.toLowerCase()}` : null))
-      .filter(Boolean);
-    const extras = [
-      p.demonIds.length ? `${p.demonIds.length} demon${p.demonIds.length === 1 ? "" : "s"}` : null,
-      p.highlights.length ? `${p.highlights.length} green flag${p.highlights.length === 1 ? "" : "s"}` : null,
-    ].filter(Boolean);
-    return [...said, ...extras].join(" · ") || "not graded yet";
-  })();
-
-  const toggleDemon = (id: number) =>
-    p.setDemonIds(
-      p.demonIds.includes(id) ? p.demonIds.filter((x) => x !== id) : [...p.demonIds, id],
-    );
-
-  /*
-   * The note, and what was read off it.
-   *
-   * Read when the box is left, never on every keystroke, and only when the
-   * text changed since the last read. What comes back is applied on top of
-   * what is already picked — a reading fills blanks and adds, it does not
-   * silently un-pick a demon you ticked by hand — and one line says what
-   * it made of the words, in the pickers' own vocabulary, so a wrong
-   * reading is a visible one.
-   */
-  const hasNote = p.setNote != null;
-  const [reading, setReading] = useState(false);
-  const [readOf, setReadOf] = useState<string | null>(null);
-  const [readLine, setReadLine] = useState<string | null>(null);
-  const [readFailed, setReadFailed] = useState(false);
-  const [adjust, setAdjust] = useState(false);
-  /*
    * The four prices are named by direction. "Highest" is the best a long
    * saw and the worst a short did; a form that says "fell to" on a short
    * has the sign backwards, and the sign is the whole question.
    */
-  /** The newest props, for work that finishes after a later render. */
-  const latest = useRef(p);
-  latest.current = p;
   const short = p.timing?.direction === "short";
   const hi = short ? "highest" : "lowest";
   const lo = short ? "lowest" : "highest";
-
-  async function readNote() {
-    const text = (p.note ?? "").trim();
-    if (!text || text === readOf || reading) return;
-    // What was picked when the read began, to tell afterwards what the person
-    // changed by hand while it ran — a pick made then wins over the read.
-    const before = { grades: p.grades, exitReason: p.exitReason, nmo: p.nmo };
-    setReading(true);
-    setReadFailed(false);
-    p.onReading?.(true);
-    const read = await readCloseNote(text, {
-      direction: p.timing?.direction ?? "long",
-      entryPrice: p.timing?.entryPrice ?? null,
-      initialStop: p.timing?.initialStop ?? null,
-      initialTarget: p.timing?.initialTarget ?? null,
-      exitPrice: numOrNull(p.exitPrice),
-      highlights: p.extraHighlights ?? [],
-    });
-    setReading(false);
-    p.onReading?.(false);
-    setReadOf(text);
-    if (!read) {
-      setReadFailed(true);
-      setReadLine(null);
-      setAdjust(true);
-      return;
-    }
-    /*
-     * Against the LATEST values. `p` here is the render this read started
-     * in, about a second ago; writing its grades back reverted anything
-     * picked while the read was running — which is exactly when "adjust"
-     * gets clicked.
-     */
-    const now = latest.current;
-    const kept = <T,>(was: T, is: T, read: T | null | undefined) => (is !== was ? is : (read ?? is));
-    if (read.exitReason && now.exitReason === before.exitReason) now.setExitReason(read.exitReason);
-    now.setGrades({
-      entry: kept(before.grades.entry, now.grades.entry, read.entryGrade),
-      stop: kept(before.grades.stop, now.grades.stop, read.stopGrade),
-      exit: kept(before.grades.exit, now.grades.exit, read.exitGrade),
-    });
-    if (read.demonIds.length) now.setDemonIds(Array.from(new Set([...now.demonIds, ...read.demonIds])));
-    if (read.highlights.length) now.setHighlights(Array.from(new Set([...now.highlights, ...read.highlights])));
-    if (read.noManagementOutcome && now.nmo === before.nmo) now.setNmo(read.noManagementOutcome);
-    const line = closeReadSummary(read, p.demons);
-    setReadLine(line);
-    if (!line) setAdjust(true);
-  }
 
   return (
     <div className="space-y-5" data-testid={`section-outcome-${p.testPrefix}`}>
@@ -458,198 +325,9 @@ export function TradeOutcomeFields(p: OutcomeFieldsProps) {
       {p.exitExtra}
       </FormSection>
 
-      {/* ---- what happened, and what you make of it ---- */}
-      {priced && (
-        <FormSection
-          icon={Gavel}
-          title="What happened"
-          hint={hasNote ? "in your words — it gets read into the fields" : "how it ended, and what you make of it"}
-          testId={`section-${p.testPrefix}-read`}
-          tone="read"
-        >
-        <>
-          {/* The verdict on the execution, next to the words that justify
-              it. Never about the result — a trade can be executed perfectly
-              and lose, and that is the one most worth marking. */}
-          {p.setWellTraded && !p.tilt && (
-            <button
-              type="button"
-              onClick={() => p.setWellTraded?.(!p.wellTraded)}
-              aria-pressed={p.wellTraded === true}
-              className={`flex w-full items-center gap-2 rounded-md border px-2.5 py-2 text-left transition-colors ${
-                p.wellTraded
-                  ? "border-amber-500/50 bg-amber-500/10 text-amber-400"
-                  : "border-border text-muted-foreground hover:border-amber-500/40 hover:text-foreground"
-              }`}
-              data-testid={`button-${p.testPrefix}-well-traded`}
-            >
-              <Star className={`h-4 w-4 shrink-0 ${p.wellTraded ? "fill-current" : ""}`} />
-              <span className="min-w-0 text-[11px] leading-snug">
-                <span className="font-semibold">
-                  {p.wellTraded ? "Traded it well" : "Was it traded well?"}
-                </span>{" "}
-                — waited for it, sized it, left it alone. Nothing to do with whether it paid.
-              </span>
-            </button>
-          )}
-
-          {hasNote && (
-            <div className="space-y-1.5">
-              <Textarea
-                value={p.note ?? ""}
-                onChange={(e) => p.setNote?.(e.target.value)}
-                onBlur={() => void readNote()}
-                placeholder="stopped on the wick, then it ran to target without me — moved my stop up too early"
-                className="min-h-[72px] text-sm"
-                data-testid={`input-${p.testPrefix}-note`}
-              />
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
-                {reading ? (
-                  <span
-                    className="flex items-center gap-1 text-muted-foreground"
-                    data-testid={`text-${p.testPrefix}-reading`}
-                  >
-                    <Loader2 className="h-3 w-3 animate-spin" /> reading…
-                  </span>
-                ) : readFailed ? (
-                  <span className="text-amber-500" data-testid={`text-${p.testPrefix}-read-failed`}>
-                    Couldn't read that — pick below.
-                  </span>
-                ) : readLine != null ? (
-                  <span className="text-muted-foreground" data-testid={`text-${p.testPrefix}-read-line`}>
-                    {readLine ? (
-                      <>
-                        Read as: <span className="font-medium text-foreground">{readLine}</span>
-                      </>
-                    ) : (
-                      "Nothing to pull out of that — pick below."
-                    )}
-                  </span>
-                ) : (
-                  <span className="text-muted-foreground">
-                    Say what you did and why. It is read when you leave the box.
-                  </span>
-                )}
-                <button
-                  type="button"
-                  onClick={() => setAdjust((a) => !a)}
-                  aria-expanded={adjust}
-                  className="ml-auto text-muted-foreground underline decoration-dotted underline-offset-2 hover:text-foreground"
-                  data-testid={`button-${p.testPrefix}-adjust`}
-                >
-                  {adjust ? "hide the pickers" : "adjust"}
-                </button>
-              </div>
-            </div>
-          )}
-
-          {(adjust || !hasNote) && (
-            <>
-          <div>
-            <p className={`mb-1.5 ${LABEL}`}>How did it end?</p>
-            <div className="flex flex-wrap gap-1.5">
-              {EXIT_REASONS.map((r) => (
-                <Button
-                  key={r}
-                  type="button"
-                  size="sm"
-                  variant={p.exitReason === r ? "default" : "outline"}
-                  className="h-8 text-[11px]"
-                  onClick={() => {
-                    if (p.exitReason === r) p.setExitReason(null);
-                    else if (p.onPickReason) p.onPickReason(r);
-                    else p.setExitReason(r);
-                  }}
-                  data-testid={`button-${p.testPrefix}-exit-${r}`}
-                >
-                  {EXIT_REASON_LABELS[r]}
-                </Button>
-              ))}
-            </div>
-          </div>
-
-          {/* What the numbers say, right where the grade is picked. The grade
-              stays yours — but a post-exit run typed into MFE flips "early"
-              into "late", and the cheapest moment to catch that is while both
-              answers are on the same screen. */}
-          {timingRead && (
-            <p
-              className={`rounded-md border px-2.5 py-1.5 text-[11px] leading-snug ${
-                timingRead.verdict === "clean"
-                  ? "border-emerald-500/30 bg-emerald-500/5 text-emerald-400"
-                  : "border-amber-500/30 bg-amber-500/5 text-amber-500"
-              }`}
-              data-testid={`text-${p.testPrefix}-timing-read`}
-            >
-              {timingRead.verdict === "early" &&
-                `Numbers read this exit as EARLY — it ran another ${timingRead.leftBehindR!.toFixed(1)}R after you left${
-                  (timingRead.giveBackR ?? 0) > 0.05
-                    ? ` (and ${timingRead.giveBackR!.toFixed(1)}R was given back before it)`
-                    : ""
-                }.`}
-              {timingRead.verdict === "late" &&
-                `Numbers read this exit as LATE — it reached ${timingRead.giveBackR!.toFixed(1)}R above your exit while you were in and came back.`}
-              {timingRead.verdict === "clean" &&
-                "Numbers read this exit as clean — nothing meaningful given back or left behind."}
-              {timingRead.verdict !== "clean" &&
-                p.grades.exit != null &&
-                p.grades.exit !== timingRead.verdict && (
-                  <span className="font-semibold">
-                    {" "}Your grade says {gradeLabel("exit", p.grades.exit)?.toLowerCase()} — one of
-                    the two is wrong.
-                  </span>
-                )}
-            </p>
-          )}
-
-          <GradePicker
-            value={p.grades}
-            onChange={p.setGrades}
-            testPrefix={`grade-${p.testPrefix}`}
-            exitReason={p.exitReason}
-          />
-
-          <div>
-            <p className={`mb-1.5 ${LABEL}`}>Demons on this trade</p>
-            <div className="flex flex-wrap gap-1.5">
-              {p.demons.map((d) => {
-                const on = p.demonIds.includes(d.id);
-                return (
-                  <button
-                    key={d.id}
-                    type="button"
-                    onClick={() => toggleDemon(d.id)}
-                    data-testid={`chip-${p.testPrefix}-demon-${d.id}`}
-                    className={`rounded-full border px-2.5 py-1 text-[11px] leading-tight transition-colors ${
-                      on
-                        ? "border-primary/60 bg-primary/15 text-primary"
-                        : "border-border text-muted-foreground hover:border-primary/40 hover:text-foreground"
-                    }`}
-                  >
-                    {d.name}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          <HighlightPicker
-            selected={p.highlights}
-            onToggle={(h) =>
-              p.setHighlights(
-                p.highlights.includes(h)
-                  ? p.highlights.filter((x) => x !== h)
-                  : [...p.highlights, h],
-              )
-            }
-            extra={(p.extraHighlights ?? []).filter((h) => !p.highlights.includes(h))}
-            testIdPrefix={`highlight-${p.testPrefix}`}
-          />
-            </>
-          )}
-        </>
-        </FormSection>
-      )}
+      {/* What happened, how it was graded, the demons and green flags: all
+          read from the trade's one note once it is closed (shared/note-read.ts),
+          and corrected on the trade itself. Nothing to pick here. */}
 
       {path.held && (
         <FormSection
@@ -820,36 +498,6 @@ export function TradeOutcomeFields(p: OutcomeFieldsProps) {
             )}
           </div>
 
-          {/* Which level the untouched plan would have reached first is a
-              question about a finished trade. On a running one it has not
-              happened yet, and answering it early would be a forecast getting
-              stored as a fact. */}
-          {path.after && (
-          <div>
-            <p className={`mb-1.5 ${LABEL}`}>Untouched plan would have hit…</p>
-            <div className="flex flex-wrap gap-1.5">
-              {(
-                [
-                  ["target_first", "Target first"],
-                  ["stop_first", "Stop first"],
-                  ["undetermined", "Undetermined"],
-                ] as const
-              ).map(([id, label]) => (
-                <Button
-                  key={id}
-                  type="button"
-                  size="sm"
-                  variant={p.nmo === id ? "default" : "outline"}
-                  className="h-8 text-[11px]"
-                  onClick={() => p.setNmo(p.nmo === id ? null : id)}
-                  data-testid={`button-${p.testPrefix}-nmo-${id}`}
-                >
-                  {label}
-                </Button>
-              ))}
-            </div>
-          </div>
-          )}
         </>
         </FormSection>
       )}
