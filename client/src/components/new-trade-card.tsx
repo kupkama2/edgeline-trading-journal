@@ -38,9 +38,9 @@ import {
   pointValueFor,
 } from "@shared/symbols";
 import { dropBracketLegs, type ImportCandidate } from "@shared/import-parse";
-import { DateTime24, Dropzone, EXIT_REASONS, RationaleTags, TimeField, localNow, num, parseTags, toIso } from "@/components/trade-shared";
+import { DateTime24, Dropzone, EXIT_REASONS, RationaleTags, Segmented, TimeField, localNow, num, parseTags, toIso } from "@/components/trade-shared";
 import { EMPTY_GRADES, GradePicker, type GradeState } from "@/components/grade-picker";
-import { AccountPicker } from "@/components/trade-pickers";
+import { AccountPicker, StylePicker } from "@/components/trade-pickers";
 import { TradeOutcomeFields } from "@/components/trade-outcome";
 import { normalizeSetupTags } from "@shared/setups";
 import { splitSourceFromTags } from "@shared/sources";
@@ -1062,38 +1062,30 @@ export function NewTradeCard({
               write down, and neither was reachable before: everything was
               born open, so a pending order had to be logged as live and a
               finished trade had to be created and then closed as two acts. */}
-          {(
-            [
-              { id: "pending", label: "Waiting to fill", icon: Clock3 },
-              { id: "open", label: "Open", icon: ArrowUpRight },
-              { id: "closed", label: "Closed", icon: CheckCircle2 },
-            ] as const
-          ).map(({ id, label, icon: Icon }) => (
-            <Button
-              key={id}
-              type="button"
-              size="sm"
-              variant={lifecycle === id ? "default" : "outline"}
-              className="h-7 gap-1.5 px-2 text-[11px]"
-              onClick={() => {
-                setLifecycle(id);
-                setAutoClosed(false);
-              }}
-              data-testid={`button-lifecycle-${id}`}
-              aria-pressed={lifecycle === id}
-            >
-              <Icon className="h-3.5 w-3.5" />
-              {label}
-            </Button>
-          ))}
+          <Segmented
+            size="sm"
+            value={lifecycle}
+            onChange={(id) => {
+              setLifecycle(id);
+              setAutoClosed(false);
+            }}
+            ariaLabel="Trade state"
+            options={[
+              { id: "pending", label: <><Clock3 className="h-3.5 w-3.5" />Waiting to fill</>, testId: "button-lifecycle-pending" },
+              { id: "open", label: <><ArrowUpRight className="h-3.5 w-3.5" />Open</>, testId: "button-lifecycle-open" },
+              { id: "closed", label: <><CheckCircle2 className="h-3.5 w-3.5" />Closed</>, testId: "button-lifecycle-closed" },
+            ]}
+          />
           {/* Tilt: this one should not be taken, or should not have been.
               Logged to be counted, never measured — stop, target and
               playbook stop being asked for, and it goes to the tilt book. */}
           <Button
             type="button"
             size="sm"
-            variant={tiltMode ? "destructive" : "outline"}
-            className="h-7 gap-1.5 px-2 text-[11px]"
+            variant="ghost"
+            className={`h-7 gap-1.5 px-2 text-[11px] ${
+              tiltMode ? "bg-red-500/15 text-red-400 hover:text-red-400" : "text-muted-foreground hover:text-foreground"
+            }`}
             onClick={() => setTiltMode((t) => !t)}
             data-testid="button-tilt-mode"
             aria-pressed={tiltMode}
@@ -1196,35 +1188,19 @@ export function NewTradeCard({
                       </span>
                     )}
                   </div>
-                  <div className="flex gap-1.5">
-                    {(["long", "short"] as const).map((d) => (
-                      <Button
-                        key={d}
-                        type="button"
-                        size="sm"
-                        variant={field.value === d ? "default" : "outline"}
-                        className={`h-9 min-w-0 flex-1 gap-1 px-1.5 text-xs capitalize ${
-                          field.value === d
-                            ? d === "long"
-                              ? "bg-emerald-600 text-white hover:bg-emerald-600/90"
-                              : "bg-primary text-primary-foreground"
-                            : ""
-                        }`}
-                        onClick={() => {
-                          setDirectionPicked(true);
-                          field.onChange(d);
-                        }}
-                        data-testid={`button-direction-${d}`}
-                      >
-                        {d === "long" ? (
-                          <ArrowUpRight className="h-3.5 w-3.5" />
-                        ) : (
-                          <ArrowDownRight className="h-3.5 w-3.5" />
-                        )}
-                        {d}
-                      </Button>
-                    ))}
-                  </div>
+                  <Segmented
+                    className="h-9"
+                    value={field.value as "long" | "short"}
+                    onChange={(d) => {
+                      setDirectionPicked(true);
+                      field.onChange(d);
+                    }}
+                    ariaLabel="Direction"
+                    options={[
+                      { id: "long", label: <><ArrowUpRight className="h-3.5 w-3.5" />Long</>, tone: "text-emerald-400", testId: "button-direction-long" },
+                      { id: "short", label: <><ArrowDownRight className="h-3.5 w-3.5" />Short</>, tone: "text-red-400", testId: "button-direction-short" },
+                    ]}
+                  />
                 </FormItem>
               )}
             />
@@ -1241,63 +1217,41 @@ export function NewTradeCard({
                    * other is the line underneath.
                    */}
                   <div className="flex h-5 items-center justify-between gap-1">
-                    <div className="flex rounded-md bg-secondary/40 p-0.5" role="tablist">
-                      {(
-                        [
-                          ["manual", "Size"],
-                          ["auto", "Risk $"],
-                        ] as const
-                      ).map(([m, label]) => (
-                        <button
-                          key={m}
-                          type="button"
-                          role="tab"
-                          aria-selected={sizeMode === m}
-                          onClick={() => {
-                            if (m === sizeMode) return;
-                            setSizeMode(m);
-                            if (m === "manual") setRiskOverride("");
-                            else setRiskOverride(store.get(RISK_BUDGET_KEY) ?? (preview?.riskDollars ? String(Math.round(preview.riskDollars)) : ""));
-                          }}
-                          className={`rounded px-1.5 text-[10px] uppercase leading-4 tracking-wider transition-colors ${
-                            sizeMode === m ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
-                          }`}
-                          data-testid={m === "auto" ? "button-size-mode" : "button-size-mode-size"}
-                        >
-                          {label}
-                        </button>
-                      ))}
-                    </div>
+                    <Segmented
+                      size="xs"
+                      value={sizeMode}
+                      onChange={(m) => {
+                        if (m === sizeMode) return;
+                        setSizeMode(m);
+                        if (m === "manual") setRiskOverride("");
+                        else setRiskOverride(store.get(RISK_BUDGET_KEY) ?? (preview?.riskDollars ? String(Math.round(preview.riskDollars)) : ""));
+                      }}
+                      ariaLabel="Size by"
+                      options={[
+                        { id: "manual", label: "Size", testId: "button-size-mode-size" },
+                        { id: "auto", label: "Risk $", testId: "button-size-mode" },
+                      ]}
+                    />
                     {sizeMode === "manual" && (
-                    <div className="flex gap-0.5">
-                      {(["base", "quote"] as const).map((u) => {
-                        // A futures contract has no notional sizing — you buy
-                        // 2 contracts, never "$2 of MNQ". Offering it produced
-                        // a real but meaningless 1R of $0.
-                        const disabled = u === "quote" && isFutures;
-                        return (
-                          <button
-                            key={u}
-                            type="button"
-                            disabled={disabled}
-                            title={
-                              disabled ? "Futures are sized in contracts" : undefined
-                            }
-                            onClick={() => !disabled && setSizeUnit(u)}
-                            data-testid={`button-size-unit-${u}`}
-                            className={`rounded px-1.5 py-0.5 text-[9px] uppercase tracking-wider transition-colors ${
-                              disabled
-                                ? "cursor-not-allowed text-muted-foreground/30"
-                                : sizeUnit === u
-                                  ? "bg-primary/15 text-primary"
-                                  : "text-muted-foreground hover:text-foreground"
-                            }`}
-                          >
-                            {u === "base" ? (isFutures ? "contracts" : "units") : "usd"}
-                          </button>
-                        );
-                      })}
-                    </div>
+                    // A futures contract has no notional sizing — you buy 2
+                    // contracts, never "$2 of MNQ". Offering it produced a
+                    // real but meaningless 1R of $0.
+                    <Segmented
+                      size="xs"
+                      value={sizeUnit}
+                      onChange={setSizeUnit}
+                      ariaLabel="Size in"
+                      options={[
+                        { id: "base", label: isFutures ? "contracts" : "units", testId: "button-size-unit-base" },
+                        {
+                          id: "quote",
+                          label: "usd",
+                          disabled: isFutures,
+                          title: isFutures ? "Futures are sized in contracts" : undefined,
+                          testId: "button-size-unit-quote",
+                        },
+                      ]}
+                    />
                     )}
                   </div>
                   {sizeMode === "auto" ? (
@@ -1378,6 +1332,7 @@ export function NewTradeCard({
                     value={(field.value as string) ?? ""}
                     onChange={field.onChange}
                     testId="input-entry-time"
+                    className="h-9"
                   />
                 </FormItem>
               )}
@@ -1566,29 +1521,7 @@ export function NewTradeCard({
               <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
                 Style
               </p>
-              <div className="flex flex-wrap gap-1.5">
-                {styles.map((s) => {
-                  const on = s.id === styleId;
-                  const c = styleColor(s.color);
-                  return (
-                    <button
-                      key={s.id}
-                      type="button"
-                      onClick={() => setPickedStyleId(s.id)}
-                      data-testid={`chip-style-${s.id}`}
-                      aria-pressed={on}
-                      className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] leading-tight transition-colors ${
-                        on
-                          ? c.chip
-                          : "border-border text-muted-foreground hover:border-primary/40 hover:text-foreground"
-                      }`}
-                    >
-                      <span className={`h-1.5 w-1.5 rounded-full ${c.dot}`} />
-                      {s.name}
-                    </button>
-                  );
-                })}
-              </div>
+              <StylePicker styles={styles} value={styleId} onChange={(id) => id != null && setPickedStyleId(id)} />
             </div>
           )}
 

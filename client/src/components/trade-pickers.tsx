@@ -14,6 +14,8 @@ import {
 import { Sparkles } from "lucide-react";
 import { HIGHLIGHT_TAXONOMY } from "@shared/highlights";
 import { SETUP_TAGS } from "@shared/setups";
+import type { TradingStyle } from "@shared/schema";
+import { styleColor } from "@/lib/style-filter";
 
 const NEW_ACCOUNT = "__new__";
 const NO_ACCOUNT = "__none__";
@@ -35,6 +37,7 @@ export function AccountPicker({
   placeholder = "e.g. Apex eval, Binance Futures",
   emptyLabel = "No account",
   newLabel = "+ New account…",
+  size = "h-9 w-56 max-w-full",
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -45,6 +48,8 @@ export function AccountPicker({
   placeholder?: string;
   emptyLabel?: string;
   newLabel?: string;
+  /** Height and width of the box, so a form with h-8 fields can match it. */
+  size?: string;
 }) {
   // Typing mode is sticky while the box is non-empty, so a half-typed name
   // isn't yanked away the moment it matches nothing.
@@ -62,7 +67,7 @@ export function AccountPicker({
           value={value}
           onChange={(e) => onChange(e.target.value)}
           placeholder={placeholder}
-          className="h-9 w-56 max-w-full text-xs"
+          className={`${size} text-xs`}
           data-testid={`input-${testIdPrefix}`}
         />
         {known.length > 0 && (
@@ -92,7 +97,7 @@ export function AccountPicker({
         } else onChange(v === NO_ACCOUNT ? "" : v);
       }}
     >
-      <SelectTrigger className="h-9 w-56 max-w-full text-xs" data-testid={`select-${testIdPrefix}`}>
+      <SelectTrigger className={`${size} text-xs`} data-testid={`select-${testIdPrefix}`}>
         <SelectValue placeholder={emptyLabel} />
       </SelectTrigger>
       <SelectContent>
@@ -107,6 +112,54 @@ export function AccountPicker({
         <SelectItem value={NEW_ACCOUNT} className="text-xs text-primary">
           {newLabel}
         </SelectItem>
+      </SelectContent>
+    </Select>
+  );
+}
+
+/**
+ * Which book the trade belongs to, as a dropdown like the account and the
+ * source beside it. The style's colour rides along as a dot, so the choice
+ * reads the same here as on the filter bar.
+ */
+export function StylePicker({
+  styles,
+  value,
+  onChange,
+  allowNone = false,
+  testIdPrefix = "style",
+  size = "h-9 w-56 max-w-full",
+}: {
+  styles: TradingStyle[];
+  value: number | null;
+  onChange: (id: number | null) => void;
+  /** A saved trade can legitimately belong to no book; a new one always gets one. */
+  allowNone?: boolean;
+  testIdPrefix?: string;
+  size?: string;
+}) {
+  return (
+    <Select
+      value={value == null ? NO_ACCOUNT : String(value)}
+      onValueChange={(v) => onChange(v === NO_ACCOUNT ? null : Number(v))}
+    >
+      <SelectTrigger className={`${size} text-xs`} data-testid={`select-${testIdPrefix}`}>
+        <SelectValue placeholder="Unassigned" />
+      </SelectTrigger>
+      <SelectContent>
+        {allowNone && (
+          <SelectItem value={NO_ACCOUNT} className="text-xs text-muted-foreground">
+            Unassigned
+          </SelectItem>
+        )}
+        {styles.map((s) => (
+          <SelectItem key={s.id} value={String(s.id)} className="text-xs" data-testid={`option-${testIdPrefix}-${s.id}`}>
+            <span className="flex items-center gap-2">
+              <span className={`h-2 w-2 shrink-0 rounded-full ${styleColor(s.color).dot}`} />
+              {s.name}
+            </span>
+          </SelectItem>
+        ))}
       </SelectContent>
     </Select>
   );

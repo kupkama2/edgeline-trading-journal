@@ -4,10 +4,13 @@
  * the journal page so the entry card, the dialogs and the row lists can share
  * them without importing each other.
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
+import { Calendar } from "@/components/ui/calendar";
 import { Input } from "@/components/ui/input";
-import { Camera, ChevronDown, Clock, Loader2, X, type LucideIcon } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { cn } from "@/lib/utils";
+import { CalendarDays, Camera, ChevronDown, Clock, Loader2, X, type LucideIcon } from "lucide-react";
 
 /* ============================== helpers ============================== */
 
@@ -146,6 +149,24 @@ export function parseTime24(raw: string): string | null {
  * time. So the date keeps the native picker (which has no clock in it) and
  * the time is typed: "14:30", or "1430" and it is tidied on the way out.
  */
+/** "2026-10-19" → "19 Oct 2026": day first, month in words, never ambiguous. */
+function fmtDay(ymd: string): string {
+  const [y, m, d] = ymd.split("-").map(Number);
+  if (!y || !m || !d) return ymd;
+  return new Date(y, m - 1, d).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+}
+
+const ymdOf = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+/**
+ * A date and a 24-hour time in one box.
+ *
+ * The browser's own datetime picker follows the OS locale, which means AM/PM
+ * and mm/dd/yyyy for a lot of people who think in neither. So the date is a
+ * calendar behind a button, written "19 Oct 2026", and the time is typed:
+ * 14:30, 1430 and 14.30 all mean the same thing.
+ */
 export function DateTime24({
   value,
   onChange,
@@ -159,18 +180,63 @@ export function DateTime24({
 }) {
   const [date, time] = (value ?? "").split("T");
   const [typing, setTyping] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
   const shown = typing ?? (time ?? "").slice(0, 5);
   const today = () => localNow().slice(0, 10);
+  const bad = typing != null && typing !== "" && !parseTime24(typing);
+  const picked = date ? new Date(`${date}T00:00`) : undefined;
   return (
-    <div className={`flex min-w-0 gap-1 ${className}`}>
-      <Input
-        type="date"
-        value={date ?? ""}
-        onChange={(e) => onChange(e.target.value ? `${e.target.value}T${parseTime24(shown) ?? "00:00"}` : "")}
-        className="h-8 min-w-0 flex-1 px-2 font-mono text-[11px]"
-        data-testid={testId}
-      />
-      <Input
+    <div
+      className={cn(
+        "flex h-8 min-w-0 items-center rounded-md border bg-background transition-colors focus-within:border-ring/50",
+        bad ? "border-amber-500/60" : "border-input",
+        className,
+      )}
+    >
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            className="flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-l-md pl-2 pr-1 text-left font-mono text-xs outline-none hover:bg-secondary/40 focus-visible:bg-secondary/40"
+            data-testid={testId}
+          >
+            <CalendarDays className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <span className={`truncate ${date ? "" : "text-muted-foreground"}`}>{date ? fmtDay(date) : "Date"}</span>
+          </button>
+        </PopoverTrigger>
+        <PopoverContent className="w-auto p-0" align="start">
+          <Calendar
+            mode="single"
+            selected={picked}
+            defaultMonth={picked}
+            weekStartsOn={1}
+            onSelect={(d) => {
+              if (!d) return;
+              onChange(`${ymdOf(d)}T${parseTime24(shown) ?? "00:00"}`);
+              setOpen(false);
+            }}
+            initialFocus
+          />
+          {value && (
+            <div className="flex justify-end border-t border-border px-2 py-1.5">
+              <button
+                type="button"
+                onClick={() => {
+                  onChange("");
+                  setTyping(null);
+                  setOpen(false);
+                }}
+                className="text-[11px] text-muted-foreground hover:text-foreground"
+                data-testid={`${testId}-clear`}
+              >
+                Clear
+              </button>
+            </div>
+          )}
+        </PopoverContent>
+      </Popover>
+      <span className="h-4 w-px shrink-0 bg-border" />
+      <input
         value={shown}
         onChange={(e) => {
           const raw = e.target.value.replace(/[^\d:.h]/g, "").slice(0, 5);
@@ -188,11 +254,85 @@ export function DateTime24({
         placeholder="HH:mm"
         inputMode="numeric"
         aria-label="Time, 24-hour"
-        className={`h-8 w-[4.25rem] shrink-0 px-2 text-center font-mono text-[11px] ${
-          typing != null && typing !== "" && !parseTime24(typing) ? "border-amber-500/60" : ""
-        }`}
+        className="h-full w-[3.25rem] shrink-0 rounded-r-md bg-transparent px-1.5 text-center font-mono text-xs outline-none placeholder:text-muted-foreground/60"
         data-testid={`${testId}-time`}
       />
+    </div>
+  );
+}
+
+/**
+ * Two or three mutually exclusive answers, side by side.
+ *
+ * The one switch every form in the app uses — direction, size units, the
+ * untouched plan — so they all look like the trade-state switch in the
+ * editor's header instead of each inventing its own buttons. The chosen
+ * option is lifted out of the track; a tone tints it when the answer has a
+ * colour of its own (long is green, short is red).
+ */
+export interface SegmentOption<T extends string> {
+  id: T;
+  label: ReactNode;
+  title?: string;
+  /** Text colour of the option while chosen. */
+  tone?: string;
+  disabled?: boolean;
+  testId?: string;
+}
+
+const SEG = {
+  md: { track: "flex h-8 w-full", item: "flex-1 gap-1 px-2 text-xs font-medium" },
+  sm: { track: "inline-flex h-7", item: "gap-1 px-2 text-[11px]" },
+  xs: { track: "inline-flex", item: "px-1.5 text-[9px] uppercase leading-4 tracking-wider" },
+} as const;
+
+export function Segmented<T extends string>({
+  value,
+  onChange,
+  options,
+  size = "md",
+  className = "",
+  ariaLabel,
+  testId,
+}: {
+  value: T | null;
+  onChange: (v: T) => void;
+  options: readonly SegmentOption<T>[];
+  size?: keyof typeof SEG;
+  className?: string;
+  ariaLabel?: string;
+  testId?: string;
+}) {
+  return (
+    <div
+      role="group"
+      aria-label={ariaLabel}
+      className={cn(SEG[size].track, "min-w-0 items-stretch gap-0.5 rounded-md border border-border/60 bg-secondary/40 p-0.5", className)}
+      data-testid={testId}
+    >
+      {options.map((o) => {
+        const on = value === o.id;
+        return (
+          <button
+            key={o.id}
+            type="button"
+            disabled={o.disabled}
+            title={o.title}
+            aria-pressed={on}
+            onClick={() => !o.disabled && onChange(o.id)}
+            data-testid={o.testId}
+            className={`flex min-w-0 items-center justify-center whitespace-nowrap rounded-[5px] outline-none transition-colors focus-visible:ring-1 focus-visible:ring-ring/50 ${SEG[size].item} ${
+              o.disabled
+                ? "cursor-not-allowed text-muted-foreground/30"
+                : on
+                  ? `bg-background shadow-sm ${o.tone ?? "text-foreground"}`
+                  : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {o.label}
+          </button>
+        );
+      })}
     </div>
   );
 }

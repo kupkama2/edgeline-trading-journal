@@ -24,7 +24,7 @@
  */
 import { Input } from "@/components/ui/input";
 import { EXIT_TIMING_MEANINGFUL_R } from "@shared/metrics";
-import { FormSection, LABEL_ROW, TimeField } from "@/components/trade-shared";
+import { FormSection, LABEL_ROW, Segmented, TimeField } from "@/components/trade-shared";
 import type { GradeState } from "@/components/grade-picker";
 import type { MistakeTag } from "@shared/schema";
 
@@ -384,34 +384,18 @@ export function TradeOutcomeFields(p: OutcomeFieldsProps) {
             <span className={LABEL} title="If you had left the stop and target untouched, which would price have reached first?">
               Untouched plan hit
             </span>
-            <div className="flex rounded-md bg-secondary/40 p-0.5">
-              {(
-                [
-                  ["target_first", "Target first"],
-                  ["stop_first", "Stop first"],
-                  ["undetermined", "Neither yet"],
-                ] as const
-              ).map(([id, label]) => (
-                <button
-                  key={id}
-                  type="button"
-                  onClick={() => p.setNmo(p.nmo === id ? null : id)}
-                  aria-pressed={p.nmo === id}
-                  className={`rounded px-2 py-0.5 text-[11px] transition-colors ${
-                    p.nmo === id
-                      ? id === "target_first"
-                        ? "bg-emerald-500/15 text-emerald-400"
-                        : id === "stop_first"
-                          ? "bg-primary/15 text-primary"
-                          : "bg-card text-foreground"
-                      : "text-muted-foreground hover:text-foreground"
-                  }`}
-                  data-testid={`button-${p.testPrefix}-nmo-${id}`}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
+            {/* Clicking the chosen answer again takes it back: "I don't know" is an answer too. */}
+            <Segmented
+              size="sm"
+              value={p.nmo as "target_first" | "stop_first" | "undetermined" | null}
+              onChange={(id) => p.setNmo(p.nmo === id ? null : id)}
+              ariaLabel="Untouched plan hit"
+              options={[
+                { id: "target_first", label: "Target first", tone: "text-emerald-400", testId: `button-${p.testPrefix}-nmo-target_first` },
+                { id: "stop_first", label: "Stop first", tone: "text-red-400", testId: `button-${p.testPrefix}-nmo-stop_first` },
+                { id: "undetermined", label: "Neither yet", testId: `button-${p.testPrefix}-nmo-undetermined` },
+              ]}
+            />
           </div>
         )}
         {stopRead && (

@@ -15,19 +15,18 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowUpRight, Ban, CheckCircle2, Clock3, Loader2, Minus, Pencil, Plus, Trash2 } from "lucide-react";
+import { ArrowDownRight, ArrowUpRight, Ban, CheckCircle2, Clock3, Loader2, Minus, Pencil, Plus, Trash2 } from "lucide-react";
 import { useAccountSettings, useMistakeTags, useUpdateTrade, useAddTradeImage, archiveDataUrl, parseScreenshot, fileToDownscaledDataUrl,
   useAddFill,
   useTradeImages,
 } from "@/lib/data";
 import { suggestFees } from "@shared/fees";
 import { knownHighlights, parseHighlights, serializeHighlights } from "@shared/highlights";
-import { AccountPicker } from "@/components/trade-pickers";
+import { AccountPicker, StylePicker } from "@/components/trade-pickers";
 import { normalizeSetupTags } from "@shared/setups";
 import { splitSourceFromTags } from "@shared/sources";
 import { conflictWarning, directionWarning, readDirection } from "@shared/direction";
 import { useDeleteFill, useStyles, useTrades } from "@/lib/data";
-import { styleColor } from "@/lib/style-filter";
 import { collapseFills, positionLedger } from "@shared/fills";
 import { TradeImageGallery } from "@/components/trade-images";
 /*
@@ -45,7 +44,7 @@ import { ClipboardList, Image as ImageIcon, Layers, LineChart, NotebookPen } fro
 import { AverageCloseSolver } from "@/components/average-close";
 import { useCloseCardPaste } from "@/lib/close-paste";
 import { computeMetrics, fmtFees, fmtMoney, fmtR, EXIT_REASON_LABELS } from "@shared/metrics";
-import { DateTime24, Dropzone, EXIT_REASONS, FormSection, LABEL_ROW, RationaleTags, TimeField, localNow, num, parseTags, toIso, toLocalInput } from "@/components/trade-shared";
+import { DateTime24, Dropzone, EXIT_REASONS, FormSection, LABEL_ROW, Segmented, RationaleTags, TimeField, localNow, num, parseTags, toIso, toLocalInput } from "@/components/trade-shared";
 import { EMPTY_GRADES, GradePicker, type GradeState } from "@/components/grade-picker";
 import {
   TradeOutcomeFields,
@@ -973,58 +972,39 @@ export function TradeEditor({
                 <label className={`${LABEL_ROW} text-[10px] uppercase tracking-wider text-muted-foreground`}>
                   Direction
                 </label>
-                <div className="flex gap-1.5">
-                  {(["long", "short"] as const).map((d) => (
-                    <Button
-                      key={d}
-                      type="button"
-                      size="sm"
-                      variant={direction === d ? "default" : "outline"}
-                      className={`h-8 min-w-0 flex-1 gap-1 px-1.5 text-xs capitalize ${
-                        direction === d && d === "long"
-                          ? "bg-emerald-600 text-white hover:bg-emerald-600/90"
-                          : ""
-                      }`}
-                      onClick={() => setDirection(d)}
-                      data-testid={`button-edit-direction-${d}`}
-                    >
-                      {d}
-                    </Button>
-                  ))}
-                </div>
+                <Segmented
+                  value={direction}
+                  onChange={setDirection}
+                  ariaLabel="Direction"
+                  options={[
+                    { id: "long", label: <><ArrowUpRight className="h-3.5 w-3.5" />Long</>, tone: "text-emerald-400", testId: "button-edit-direction-long" },
+                    { id: "short", label: <><ArrowDownRight className="h-3.5 w-3.5" />Short</>, tone: "text-red-400", testId: "button-edit-direction-short" },
+                  ]}
+                />
               </div>
               <div className="space-y-1">
                 <div className={`${LABEL_ROW} justify-between`}>
                   <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
                     Size
                   </label>
-                  <div className="flex gap-0.5">
-                    {(["base", "quote"] as const).map((u) => {
-                      // A futures contract has no notional sizing; offering it
-                      // there produces a real but meaningless 1R.
-                      const disabled = u === "quote" && (trade.pointValue ?? 1) !== 1;
-                      return (
-                        <button
-                          key={u}
-                          type="button"
-                          disabled={disabled}
-                          title={disabled ? "Futures are sized in contracts" : undefined}
-                          onClick={() => !disabled && setSizeUnit(u)}
-                          data-testid={`button-edit-size-unit-${u}`}
-                          aria-pressed={sizeUnit === u}
-                          className={`rounded px-1.5 py-0.5 text-[9px] uppercase tracking-wider transition-colors ${
-                            disabled
-                              ? "cursor-not-allowed text-muted-foreground/30"
-                              : sizeUnit === u
-                                ? "bg-primary/15 text-primary"
-                                : "text-muted-foreground hover:text-foreground"
-                          }`}
-                        >
-                          {u === "base" ? "units" : "usd"}
-                        </button>
-                      );
-                    })}
-                  </div>
+                  {/* A futures contract has no notional sizing; offering it
+                      there produces a real but meaningless 1R. */}
+                  <Segmented
+                    size="xs"
+                    value={sizeUnit}
+                    onChange={setSizeUnit}
+                    ariaLabel="Size in"
+                    options={[
+                      { id: "base", label: "units", testId: "button-edit-size-unit-base" },
+                      {
+                        id: "quote",
+                        label: "usd",
+                        disabled: (trade.pointValue ?? 1) !== 1,
+                        title: (trade.pointValue ?? 1) !== 1 ? "Futures are sized in contracts" : undefined,
+                        testId: "button-edit-size-unit-quote",
+                      },
+                    ]}
+                  />
                 </div>
                 <Input
                   type="number"
@@ -1143,6 +1123,7 @@ export function TradeEditor({
                   onChange={setAccount}
                   known={knownAccounts}
                   testIdPrefix="edit-account"
+                  size="h-8 w-full"
                 />
               </div>
               <div className="space-y-1">
@@ -1157,48 +1138,22 @@ export function TradeEditor({
                   placeholder="e.g. Daniel, Severin, CBS, UB"
                   emptyLabel="My own idea"
                   newLabel="+ New source…"
+                  size="h-8 w-full"
                 />
               </div>
               {styles.length > 0 && (
-                <div className="col-span-2 space-y-1" data-testid="section-edit-style">
+                <div className="space-y-1" data-testid="section-edit-style">
                   <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
                     Style
                   </label>
-                  <div className="flex flex-wrap gap-1">
-                    {styles.map((s) => {
-                      const on = s.id === styleId;
-                      const c = styleColor(s.color);
-                      return (
-                        <button
-                          key={s.id}
-                          type="button"
-                          /* Tapping the active one clears it: a trade can
-                             legitimately belong to no book. */
-                          onClick={() => setStyleId(on ? null : s.id)}
-                          aria-pressed={on}
-                          data-testid={`chip-edit-style-${s.id}`}
-                          className={`flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] leading-tight transition-colors ${
-                            on
-                              ? c.chip
-                              : "border-border text-muted-foreground hover:border-primary/40 hover:text-foreground"
-                          }`}
-                        >
-                          <span className={`h-1.5 w-1.5 rounded-full ${c.dot}`} />
-                          {s.name}
-                        </button>
-                      );
-                    })}
-                    {styleId != null && (
-                      <button
-                        type="button"
-                        onClick={() => setStyleId(null)}
-                        className="rounded-full border border-border px-2 py-1 text-[10px] text-muted-foreground transition-colors hover:text-foreground"
-                        data-testid="button-edit-style-clear"
-                      >
-                        unassigned
-                      </button>
-                    )}
-                  </div>
+                  <StylePicker
+                    styles={styles}
+                    value={styleId}
+                    onChange={setStyleId}
+                    allowNone
+                    testIdPrefix="edit-style"
+                    size="h-8 w-full"
+                  />
                 </div>
               )}
             </div>
@@ -1326,8 +1281,8 @@ export function TradeEditor({
                   <Button
                     type="button"
                     size="sm"
-                    variant="outline"
-                    className="h-7 gap-1.5 px-2 text-[11px]"
+                    variant="ghost"
+                    className="h-7 gap-1.5 px-2 text-[11px] text-muted-foreground hover:text-foreground"
                     onClick={() => setFillKind("partial")}
                     data-testid="button-edit-log-partial"
                   >
@@ -1337,8 +1292,8 @@ export function TradeEditor({
                   <Button
                     type="button"
                     size="sm"
-                    variant="outline"
-                    className="h-7 gap-1.5 px-2 text-[11px]"
+                    variant="ghost"
+                    className="h-7 gap-1.5 px-2 text-[11px] text-muted-foreground hover:text-foreground"
                     onClick={() => setFillKind("add")}
                     data-testid="button-edit-log-add"
                   >
