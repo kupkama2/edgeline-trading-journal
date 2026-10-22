@@ -12,7 +12,9 @@ import { useToast } from "@/hooks/use-toast";
 import { Loader2, Minus, Plus } from "lucide-react";
 import { parseExtraTargets, type TradeWithTags } from "@shared/schema";
 import {
+  addFromTotals,
   convertFillSize,
+  partialFromTotals,
   fillOutsideTrade,
   positionLedger,
   suggestPartialSize,
@@ -59,6 +61,15 @@ export function FillForm({
   // The unit the size is TYPED in. Storage stays in the trade's own unit;
   // crossing over just converts at the fill price on the way out.
   const [fillUnit, setFillUnit] = useState<"base" | "quote">("base");
+  /*
+   * How the fill is described. "totals" is what the venue shows after it —
+   * the new size and average, or the size left and the profit booked — and
+   * the fill is worked out from that (shared/fills.ts, addFromTotals). "fill"
+   * is the fill itself, price and size, for when that is what you have.
+   */
+  const [mode, setMode] = useState<"totals" | "fill">("totals");
+  const [totalSize, setTotalSize] = useState("");
+  const [second, setSecond] = useState("");
   const { toast } = useToast();
   const addFill = useAddFill();
 
@@ -79,15 +90,25 @@ export function FillForm({
     trade && size.trim()
       ? convertFillSize(Number(size), fillUnit, tradeUnit, Number(price))
       : null;
+  const fromTotals =
+    trade && mode === "totals" && totalSize.trim() && second.trim() && isFinite(Number(totalSize)) && isFinite(Number(second))
+      ? kind === "add"
+        ? addFromTotals(trade, { size: Number(totalSize), avgEntry: Number(second) }, fillUnit)
+        : partialFromTotals(trade, { size: Number(totalSize), booked: Number(second) }, fillUnit)
+      : null;
   // Both numbers have to BE numbers before this counts as a fill. Checking
   // finiteness here rather than only inside `problem` is what keeps the save
   // button disabled on "abc" — a non-numeric price used to sail through to
   // the server and come back as a validation error.
   const priceNum = Number(price);
   const parsed =
-    trade && price.trim() && isFinite(priceNum) && priceNum > 0 && effSize != null && effSize > 0
-      ? { kind, price: priceNum, size: effSize }
-      : null;
+    mode === "totals"
+      ? fromTotals?.ok
+        ? { kind, price: fromTotals.price, size: fromTotals.size }
+        : null
+      : trade && price.trim() && isFinite(priceNum) && priceNum > 0 && effSize != null && effSize > 0
+        ? { kind, price: priceNum, size: effSize }
+        : null;
   const problem = trade && parsed ? validateFill(trade, parsed) : null;
   // A separate, softer channel: nothing downstream breaks on a mistimed fill,
   // so this points rather than blocks.
@@ -107,6 +128,8 @@ export function FillForm({
     setPrice("");
     setSize("");
     setNote("");
+    setTotalSize("");
+    setSecond("");
   }
 
   async function save() {
@@ -196,8 +219,10 @@ export function FillForm({
             </div>
             <div>
               <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Still on</p>
+              {/* The ledger counts coins; a USD trade reads it back in USD, at
+                  the average entry — the same terms the size was given in. */}
               <p data-testid="fill-open-qty">
-                {maskIfQuote(trade.sizeUnit, num(led.openQty))}
+                {maskIfQuote(trade.sizeUnit, num(trade.sizeUnit === "quote" ? led.openQty * led.avgEntry : led.openQty))}
                 <span className="ml-0.5 text-muted-foreground">{trade.sizeUnit === "quote" ? "USD" : "ct"}</span>
               </p>
             </div>
@@ -209,6 +234,96 @@ export function FillForm({
             </div>
           </div>
 
+          <div className="flex gap-1 text-[10px]" role="tablist">
+            {(
+              [
+                ["totals", kind === "add" ? "New size & average" : "Size left & profit"],
+                ["fill", "One fill: price & size"],
+              ] as const
+            ).map(([m, label]) => (
+              <button
+                key={m}
+                type="button"
+                role="tab"
+                aria-selected={mode === m}
+                onClick={() => setMode(m)}
+                className={`rounded px-2 py-1 transition-colors ${
+                  mode === m ? "bg-primary/15 text-primary" : "text-muted-foreground hover:text-foreground"
+                }`}
+                data-testid={`button-fill-mode-${m}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {mode === "totals" ? (
+            <div className="space-y-2">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-1.5">
+                    <Label className="text-[11px]">{kind === "add" ? "New total size" : "Size left"}</Label>
+                    {canSwitchUnit && (
+                      <div className="flex gap-0.5">
+                        {(["base", "quote"] as const).map((u) => (
+                          <button
+                            key={u}
+                            type="button"
+                            onClick={() => setFillUnit(u)}
+                            aria-pressed={fillUnit === u}
+                            className={`rounded px-1 py-0.5 text-[9px] uppercase tracking-wider transition-colors ${
+                              fillUnit === u ? "bg-primary/15 text-primary" : "text-muted-foreground hover:text-foreground"
+                            }`}
+                            data-testid={`button-totals-unit-${u}`}
+                          >
+                            {u === "base" ? "units" : "usd"}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <Input
+                    value={totalSize}
+                    onChange={(e) => setTotalSize(e.target.value)}
+                    inputMode="decimal"
+                    placeholder={num(fillUnit === "quote" ? led.openQty * led.avgEntry : led.openQty)}
+                    className="h-9 font-mono text-sm"
+                    data-testid="input-fill-total-size"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-[11px]">{kind === "add" ? "New average entry" : "Profit booked ($)"}</Label>
+                  <Input
+                    value={second}
+                    onChange={(e) => setSecond(e.target.value)}
+                    inputMode="decimal"
+                    placeholder={kind === "add" ? num(led.avgEntry) : "e.g. 250"}
+                    className="h-9 font-mono text-sm"
+                    data-testid="input-fill-second"
+                  />
+                </div>
+              </div>
+              <p className="text-[10px] leading-snug text-muted-foreground">
+                {kind === "add"
+                  ? "As the position panel shows it now. One add or several, it is logged as one at the price that gives that average."
+                  : "The profit on the piece you took, before fees. A loss is a minus."}
+                {fillUnit === "quote" &&
+                  " A USD size here is valued at your average entry. If the venue's USD figure is at the current price instead, switch to units."}
+              </p>
+              {fromTotals?.ok && (
+                <p className="font-mono text-[11px]" data-testid="fill-from-totals">
+                  = {kind === "add" ? "added" : "took"}{" "}
+                  {maskIfQuote(trade.sizeUnit, num(fromTotals.qty))} {(trade.pointValue ?? 1) === 1 ? "units" : "ct"} at{" "}
+                  {num(fromTotals.price)}
+                </p>
+              )}
+              {fromTotals && !fromTotals.ok && (
+                <p className="text-[11px] leading-snug text-amber-500" data-testid="fill-from-totals-problem">
+                  {fromTotals.problem}
+                </p>
+              )}
+            </div>
+          ) : (
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
               <Label className="text-[11px]">Price</Label>
@@ -271,7 +386,9 @@ export function FillForm({
             </div>
           </div>
 
-          {fillUnit !== tradeUnit && effSize != null && (
+          )}
+
+          {mode === "fill" && fillUnit !== tradeUnit && effSize != null && (
             <p className="font-mono text-[10px] text-muted-foreground" data-testid="fill-converted">
               = {maskIfQuote(tradeUnit, num(effSize))} {tradeUnit === "quote" ? "USD" : "units"} at this price
             </p>
