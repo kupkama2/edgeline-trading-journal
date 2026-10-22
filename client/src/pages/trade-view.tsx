@@ -26,7 +26,7 @@ import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
+import { ThumbsDown,
   ArrowDownRight,
   ArrowLeft,
   ArrowUpRight,
@@ -977,6 +977,27 @@ export function TradeBody({
             {trade.wellTraded && "well traded"}
           </button>
         )}
+        <button
+          type="button"
+          onClick={() =>
+            updateTrade.mutate({ id: trade.id, trade: { tradedPoorly: !trade.tradedPoorly } }, { onError: failed("Traded poorly") })
+          }
+          aria-pressed={trade.tradedPoorly === true}
+          title={
+            trade.tradedPoorly
+              ? "Traded poorly — click to take it back"
+              : "Mark as traded poorly: chased it, sized it wrong, managed it badly. Whatever it paid."
+          }
+          className={`flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] transition-colors ${
+            trade.tradedPoorly
+              ? "border-orange-500/50 bg-orange-500/10 text-orange-400"
+              : "border-border text-muted-foreground hover:border-orange-500/50 hover:text-orange-400"
+          }`}
+          data-testid="button-view-poorly"
+        >
+          <ThumbsDown className={`h-3 w-3 ${trade.tradedPoorly ? "fill-current" : ""}`} />
+          {trade.tradedPoorly && "traded poorly"}
+        </button>
         {/*
           Scalp, after the fact.
           A scalp is a way of RECORDING a trade, not a kind of trade, so which

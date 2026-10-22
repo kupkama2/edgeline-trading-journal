@@ -106,13 +106,17 @@ export function NoteReadChips({ trade, extraHighlights = [] }: { trade: TradeWit
         })}
         <Pick
           label="Verdict"
-          value={trade.tilt ? "Tilt" : trade.wellTraded ? "Traded well" : null}
-          read={set?.verdict != null && set.verdict === (trade.tilt ? "tilt" : trade.wellTraded ? "well" : null)}
+          value={trade.tilt ? "Tilt" : trade.wellTraded ? "Traded well" : trade.tradedPoorly ? "Traded poorly" : null}
+          read={
+            set?.verdict != null &&
+            set.verdict === (trade.tilt ? "tilt" : trade.wellTraded ? "well" : trade.tradedPoorly ? "poorly" : null)
+          }
           options={[
             { id: "well", label: "Traded well" },
+            { id: "poorly", label: "Traded poorly" },
             { id: "tilt", label: "Tilt" },
           ]}
-          onPick={(id) => save({ wellTraded: id === "well", tilt: id === "tilt" })}
+          onPick={(id) => save({ wellTraded: id === "well", tradedPoorly: id === "poorly", tilt: id === "tilt" })}
           testId="chip-note-verdict"
         />
       </div>

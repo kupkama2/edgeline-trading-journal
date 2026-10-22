@@ -35,7 +35,7 @@ describe("what counts as traded well", () => {
   });
 
   it("clears the other verdict when either is set", () => {
-    expect(exclusiveVerdict({ wellTraded: true })).toEqual({ wellTraded: true, tilt: false });
+    expect(exclusiveVerdict({ wellTraded: true })).toEqual({ wellTraded: true, tilt: false, tradedPoorly: false });
     expect(exclusiveVerdict({ tilt: true })).toEqual({ tilt: true, wellTraded: false });
     // Turning one OFF says nothing about the other, and a patch about
     // something else entirely is left alone.

@@ -15,6 +15,7 @@ import {
   Skull,
   Sparkles,
   Star,
+  ThumbsDown,
   Zap,
 } from "lucide-react";
 import { useMistakeTags, useTradeImages, useUpdateTrade, readTradeNote } from "@/lib/data";
@@ -94,8 +95,8 @@ export function ReviewRow({
    * already set clears it: the second press of a toggle is how somebody takes
    * back a judgement they made too fast.
    */
-  const verdict = (field: "wellTraded" | "tilt") => {
-    const on = field === "tilt" ? t.tilt : t.wellTraded;
+  const verdict = (field: "wellTraded" | "tradedPoorly" | "tilt") => {
+    const on = t[field] === true;
     void write(exclusiveVerdict({ [field]: !on } as any));
   };
 
@@ -292,6 +293,21 @@ export function ReviewRow({
         >
           <Star className={`mr-1 h-3 w-3 ${t.wellTraded ? "fill-current" : ""}`} />
           Traded well
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className={`h-7 text-[11px] ${
+            t.tradedPoorly ? "border-orange-500/60 bg-orange-500/10 text-orange-400" : "text-muted-foreground"
+          }`}
+          disabled={update.isPending}
+          onClick={() => verdict("tradedPoorly")}
+          aria-pressed={Boolean(t.tradedPoorly)}
+          data-testid={`button-review-poorly-${t.id}`}
+        >
+          <ThumbsDown className={`mr-1 h-3 w-3 ${t.tradedPoorly ? "fill-current" : ""}`} />
+          Traded poorly
         </Button>
         <Button
           type="button"

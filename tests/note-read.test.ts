@@ -102,3 +102,10 @@ describe("reading a note into the trade", () => {
     expect("tilt" in r.patch).toBe(false);
   });
 });
+
+describe("traded poorly", () => {
+  it("is read like the other verdicts, and is never beside traded well", () => {
+    const r = applyNoteRead({ notes: "chased it", wellTraded: false, mistakeTagIds: [] } as any, { ...read(), verdict: "poorly" } as any, AT);
+    expect(r.patch).toMatchObject({ tradedPoorly: true, wellTraded: false, tilt: false });
+  });
+});

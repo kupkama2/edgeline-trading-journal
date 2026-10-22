@@ -26,7 +26,7 @@ import { parseHighlights, serializeHighlights } from "./highlights";
 
 export const NOTE_FIELDS = ["entryGrade", "stopGrade", "exitGrade", "exitReason", "noManagementOutcome"] as const;
 type Field = (typeof NOTE_FIELDS)[number];
-type Verdict = "well" | "tilt";
+type Verdict = "well" | "poorly" | "tilt";
 
 export interface NoteReadRecord {
   /** Fingerprint of the note as read. */
@@ -64,6 +64,7 @@ type Graded = { [K in Field]?: string | null } & {
   noteRead?: string | null;
   highlights?: string | null;
   wellTraded?: boolean | null;
+  tradedPoorly?: boolean | null;
   tilt?: boolean | null;
   mistakeTagIds: number[];
 };
@@ -76,7 +77,8 @@ export function noteNeedsRead(t: Graded): boolean {
   return parseNoteRead(t.noteRead)?.hash !== noteHash(note);
 }
 
-const verdictOf = (t: Graded): Verdict | null => (t.tilt ? "tilt" : t.wellTraded ? "well" : null);
+const verdictOf = (t: Graded): Verdict | null =>
+  t.tilt ? "tilt" : t.wellTraded ? "well" : t.tradedPoorly ? "poorly" : null;
 
 /** Drop what the last read added to a list, keep what you added, add what this read finds. */
 function mergeList<T>(now: T[], earlier: T[], found: T[]): { next: T[]; added: T[] } {
@@ -99,6 +101,7 @@ export function applyNoteRead(
     noteRead: string;
     highlights?: string | null;
     wellTraded?: boolean;
+    tradedPoorly?: boolean;
     tilt?: boolean;
   };
   mistakeTagIds: number[] | undefined;
@@ -130,6 +133,7 @@ export function applyNoteRead(
     const nextV = read.verdict ?? null;
     if (nextV !== nowV) {
       patch.wellTraded = nextV === "well";
+      patch.tradedPoorly = nextV === "poorly";
       patch.tilt = nextV === "tilt";
     }
     if (nextV) set.verdict = nextV;

@@ -224,6 +224,14 @@ export const trades = pgTable("trades", {
    * exclusive; see exclusiveVerdict in shared/well-traded.ts.
    */
   wellTraded: boolean("well_traded").notNull().default(false),
+  /**
+   * The other answer to the same question: the execution was poor — chased
+   * it, sized it wrong, managed it badly — whatever it paid. Never true
+   * beside wellTraded (shared/well-traded.ts, exclusiveVerdict). Tilt is a
+   * separate verdict on whether it should have been taken at all, and can
+   * stand beside this one.
+   */
+  tradedPoorly: boolean("traded_poorly").notNull().default(false),
   /*
    * Recorded as a RESULT rather than as prices.
    *

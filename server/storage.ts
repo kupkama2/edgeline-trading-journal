@@ -164,6 +164,7 @@ ALTER TABLE trades ADD COLUMN IF NOT EXISTS tilt BOOLEAN NOT NULL DEFAULT FALSE;
 -- The opposite verdict, off by default: nothing already logged was marked
 -- well traded, and nobody wants a streak they did not earn.
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS well_traded BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS traded_poorly BOOLEAN NOT NULL DEFAULT FALSE;
 -- Recorded as a result rather than as prices: the scalp log's three words.
 -- Off and null everywhere else, so every trade already logged is untouched.
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS scalp BOOLEAN NOT NULL DEFAULT FALSE;

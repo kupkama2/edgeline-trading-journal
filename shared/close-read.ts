@@ -33,7 +33,7 @@ export interface CloseRead {
   highlights: string[];
   noManagementOutcome: string | null;
   /** The note's own verdict on the trade, when it gives one: traded well, or tilt. */
-  verdict?: "well" | "tilt" | null;
+  verdict?: "well" | "poorly" | "tilt" | null;
 }
 
 export const EMPTY_CLOSE_READ: CloseRead = {
@@ -113,7 +113,7 @@ export function normalizeCloseRead(
 
   const noManagementOutcome = oneOf(j.noManagementOutcome, noManagementOutcomeEnum.options);
 
-  const verdict = oneOf(j.verdict, ["well", "tilt"]) as "well" | "tilt" | null;
+  const verdict = oneOf(j.verdict, ["well", "poorly", "tilt"]) as "well" | "poorly" | "tilt" | null;
 
   return { exitReason, entryGrade, stopGrade, exitGrade, demonIds, highlights, noManagementOutcome, verdict };
 }
@@ -154,6 +154,6 @@ export function closeReadSummary(r: CloseRead, demons: { id: number; name: strin
   }
   parts.push(...r.highlights);
   if (r.noManagementOutcome) parts.push(NMO_LABELS[r.noManagementOutcome] ?? r.noManagementOutcome);
-  if (r.verdict) parts.push(r.verdict === "well" ? "traded well" : "tilt");
+  if (r.verdict) parts.push(r.verdict === "well" ? "traded well" : r.verdict === "poorly" ? "traded poorly" : "tilt");
   return parts.join(" · ");
 }

@@ -46,11 +46,17 @@ export function isWellTraded(t: { wellTraded?: boolean | null; tilt?: boolean | 
  * at the door on both create and edit, because a row carrying both is a
  * question the rest of the journal has no answer for.
  */
-export function exclusiveVerdict<T extends { tilt?: boolean | null; wellTraded?: boolean | null }>(
-  patch: T,
-): T {
-  if (patch.wellTraded === true && patch.tilt !== false) return { ...patch, tilt: false };
-  if (patch.tilt === true && patch.wellTraded !== false) return { ...patch, wellTraded: false };
+export function exclusiveVerdict<
+  T extends { tilt?: boolean | null; wellTraded?: boolean | null; tradedPoorly?: boolean | null },
+>(patch: T): T {
+  // Traded well rules out both of the others; poorly and tilt can stand together.
+  if (patch.wellTraded === true) {
+    const out = { ...patch };
+    if (patch.tilt !== false) out.tilt = false;
+    if (patch.tradedPoorly !== false) out.tradedPoorly = false;
+    return out;
+  }
+  if ((patch.tilt === true || patch.tradedPoorly === true) && patch.wellTraded !== false) return { ...patch, wellTraded: false };
   return patch;
 }
 

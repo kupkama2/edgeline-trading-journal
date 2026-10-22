@@ -294,7 +294,7 @@ exitGrade: "early" (left money on the table), "perfect", or "late" (gave back a 
 demons: mistakes the trader admits to, from this list only, exact spelling: ${JSON.stringify(demons)}
 highlights: things done right that the note says, from this list only, exact spelling: ${JSON.stringify(highlights)}
 noManagementOutcome: only if the note says what price did afterwards with the plan left untouched — "target_first", "stop_first", or "undetermined".
-verdict: "well" only if the note says the trade was executed well — waited for it, sized it right, managed it to plan — whatever the result; "tilt" only if it says the trade should not have been taken at all — revenge, boredom, FOMO, out of plan. Otherwise null.
+verdict: "well" only if the note says the trade was executed well — waited for it, sized it right, managed it to plan — whatever the result; "poorly" only if it says the execution was poor — chased it, sized it wrong, mismanaged it — whatever the result; "tilt" only if it says the trade should not have been taken at all — revenge, boredom, FOMO, out of plan. Otherwise null.
 
 The note:
 """
