@@ -488,6 +488,8 @@ export function TradeEditor({
       fees: numOrNull(f.fees ?? ""),
     } as any);
   }, [trade, f, direction, nmo]);
+  // An open trade has no result yet; a row of dashes beside Save says nothing.
+  const showFigures = previewMetrics != null && (previewMetrics.actualPnL != null || previewMetrics.actualR != null);
 
   const sameIds = (a: number[], b: number[]) =>
     a.length === b.length && [...a].sort().every((x, i) => x === [...b].sort()[i]);
@@ -631,7 +633,7 @@ export function TradeEditor({
         inputMode="decimal"
         value={f[key] ?? ""}
         onChange={set(key)}
-        className="h-9 font-mono text-sm"
+        className="h-8 font-mono text-sm"
         data-testid={`input-edit-${key}`}
       />
     </div>
@@ -643,14 +645,14 @@ export function TradeEditor({
     type: "number" | "text" | "datetime-local" = "number",
   ) => (
     <div className="space-y-1">
-      <label className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</label>
+      <label className={`${LABEL_ROW} text-[10px] uppercase tracking-wider text-muted-foreground`}>{label}</label>
       <Input
         type={type}
         step={type === "number" ? "any" : undefined}
         inputMode={type === "number" ? "decimal" : undefined}
         value={f[key] ?? ""}
         onChange={set(key)}
-        className={`h-9 ${type === "datetime-local" ? "font-mono text-xs" : "font-mono text-sm"}`}
+        className={`h-8 ${type === "datetime-local" ? "font-mono text-xs" : "font-mono text-sm"}`}
         data-testid={`input-edit-${key}`}
       />
     </div>
@@ -893,7 +895,7 @@ export function TradeEditor({
         )}
 
         {trade && (
-          <div className="space-y-5">
+          <div className="space-y-3">
             {/* The chart first, open, exactly as the trade's own page shows
                 it. Editing is where the levels get corrected, and correcting
                 a stop against a chart you cannot see is guesswork. It draws
@@ -902,10 +904,13 @@ export function TradeEditor({
                 anything the venues cannot price. */}
             <FormSection
               icon={LineChart}
-              title="Price chart"
-              hint="the candles behind these numbers"
+              title="Chart"
+              hint="the candles behind these numbers — drag a line to fill its field"
               testId="section-edit-chart"
               tone="extra"
+              collapsible
+              defaultOpen={false}
+              summary="the candles, with your levels on them"
             >
               <Suspense fallback={<div className="h-40 animate-pulse rounded-md bg-secondary/30" />}>
                 <TradeChart
@@ -937,7 +942,7 @@ export function TradeEditor({
 
             <FormSection
               icon={ClipboardList}
-              title="The setup"
+              title="Setup"
               hint="what you planned, and what you put on"
               testId="section-edit-setup"
               tone="plan"
@@ -947,7 +952,7 @@ export function TradeEditor({
                 each need about a hundred pixels; the dialog is 896px wide and
                 was spending half of it on nothing. Two on a phone, three from
                 the tablet breakpoint up. */}
-            <div className="grid grid-cols-2 gap-x-3 gap-y-2.5 [&>*]:min-w-0 sm:grid-cols-3">
+            <div className="grid grid-cols-2 gap-x-3 gap-y-2.5 [&>*]:min-w-0 sm:grid-cols-4">
               <div className="min-w-0 space-y-1">
                 <label className={`${LABEL_ROW} text-[10px] uppercase tracking-wider text-muted-foreground`}>
                   Symbol
@@ -958,11 +963,11 @@ export function TradeEditor({
                   trades={allTrades}
                   venue={venueOfAccount(account)}
                   testId="input-edit-symbol"
-                  className="h-9 font-mono text-sm"
+                  className="h-8 font-mono text-sm"
                 />
               </div>
               <div className="min-w-0 space-y-1">
-                <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                <label className={`${LABEL_ROW} text-[10px] uppercase tracking-wider text-muted-foreground`}>
                   Direction
                 </label>
                 <div className="flex gap-1.5">
@@ -972,7 +977,7 @@ export function TradeEditor({
                       type="button"
                       size="sm"
                       variant={direction === d ? "default" : "outline"}
-                      className={`h-9 min-w-0 flex-1 gap-1 px-1.5 text-xs capitalize ${
+                      className={`h-8 min-w-0 flex-1 gap-1 px-1.5 text-xs capitalize ${
                         direction === d && d === "long"
                           ? "bg-emerald-600 text-white hover:bg-emerald-600/90"
                           : ""
@@ -1024,10 +1029,11 @@ export function TradeEditor({
                   inputMode="decimal"
                   value={f.size ?? ""}
                   onChange={set("size")}
-                  className="h-9 font-mono text-sm"
+                  className="h-8 font-mono text-sm"
                   data-testid="input-edit-size"
                 />
               </div>
+              {field("entryTime", "Entry time", "datetime-local")}
               {levelField("entryPrice", "entry")}
               {levelField("initialStop", "stop")}
               <div className="space-y-1">
@@ -1055,7 +1061,7 @@ export function TradeEditor({
                       ? `1R · ${trade.initialTarget}`
                       : "1R if blank"
                   }
-                  className="h-9 font-mono text-sm"
+                  className="h-8 font-mono text-sm"
                   data-testid="input-edit-initialTarget"
                 />
               </div>
@@ -1102,7 +1108,7 @@ export function TradeEditor({
               */}
               {(levelConflict || directionMismatch) && (
                 <div
-                  className="col-span-2 flex items-start gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/5 px-2.5 py-1.5 text-[11px] leading-snug text-amber-500 sm:col-span-3"
+                  className="col-span-2 flex items-start gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/5 px-2.5 py-1.5 text-[11px] leading-snug text-amber-500 sm:col-span-4"
                   data-testid="warning-edit-direction"
                 >
                   <Ban className="mt-px h-3 w-3 shrink-0" />
@@ -1114,8 +1120,9 @@ export function TradeEditor({
                   reward leg three times the length of the risk leg is a fact
                   you see before you have finished reading it. Spans the grid
                   because it is about the fields either side of it. */}
-              <div className="col-span-2 sm:col-span-3">
+              <div className="col-span-2 sm:col-span-4">
                 <LevelLadder
+                  bare
                   direction={direction}
                   entry={numOrNull(f.entryPrice ?? "")}
                   stop={numOrNull(f.initialStop ?? "")}
@@ -1124,7 +1131,6 @@ export function TradeEditor({
                   exit={numOrNull(f.exitPrice ?? "")}
                 />
               </div>
-              {field("entryTime", "Entry time", "datetime-local")}
               <div className="space-y-1">
                 <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
                   Account
@@ -1151,11 +1157,11 @@ export function TradeEditor({
                 />
               </div>
               {styles.length > 0 && (
-                <div className="col-span-2 space-y-1 sm:col-span-3" data-testid="section-edit-style">
+                <div className="col-span-2 space-y-1" data-testid="section-edit-style">
                   <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
                     Style
                   </label>
-                  <div className="flex flex-wrap gap-1.5">
+                  <div className="flex flex-wrap gap-1">
                     {styles.map((s) => {
                       const on = s.id === styleId;
                       const c = styleColor(s.color);
@@ -1168,7 +1174,7 @@ export function TradeEditor({
                           onClick={() => setStyleId(on ? null : s.id)}
                           aria-pressed={on}
                           data-testid={`chip-edit-style-${s.id}`}
-                          className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] leading-tight transition-colors ${
+                          className={`flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] leading-tight transition-colors ${
                             on
                               ? c.chip
                               : "border-border text-muted-foreground hover:border-primary/40 hover:text-foreground"
@@ -1193,6 +1199,33 @@ export function TradeEditor({
                 </div>
               )}
             </div>
+            </FormSection>
+
+            <FormSection
+              icon={NotebookPen}
+              title="Note"
+              hint="one note for the whole trade — the why, the management, the exit"
+              testId="section-edit-why"
+              tone="plan"
+            >
+            {/* The trade's one note (shared/notes.ts). Its first paragraph is
+                the why; once the trade is closed the grades, the exit reason,
+                the demons and green flags are read out of it. */}
+            <Textarea
+              value={f.notes ?? ""}
+              onChange={set("notes")}
+              placeholder={"Why you took it — first line. Then how you managed it, how it ended, and anything you see later."}
+              className="min-h-[72px] text-sm"
+              data-testid="input-edit-notes"
+            />
+            <p className="text-[10px] leading-snug text-muted-foreground">
+              {lifecycle === "closed"
+                ? "Read into the grades, exit reason, demons and flags when saved. What you set by hand stays."
+                : "Read into the grades and the rest once the trade is closed."}
+            </p>
+
+            {/* Setup tags come out of the note's first paragraph (the why),
+                on save; they show on the trade beside it. */}
             </FormSection>
 
             {/* The same questions the entry card asks when logging a
@@ -1269,7 +1302,7 @@ export function TradeEditor({
                 step in front of it. */}
             <FormSection
               icon={Layers}
-              title="Partials and adds"
+              title="Partials & adds"
               hint="scaling in and out"
               testId="section-edit-fills"
               tone="extra"
@@ -1424,32 +1457,7 @@ export function TradeEditor({
             )}
 
 
-            <FormSection
-              icon={NotebookPen}
-              title="Note"
-              hint="one note for the whole trade — the why, the management, the exit"
-              testId="section-edit-why"
-              tone="plan"
-            >
-            {/* The trade's one note (shared/notes.ts). Its first paragraph is
-                the why; once the trade is closed the grades, the exit reason,
-                the demons and green flags are read out of it. */}
-            <Textarea
-              value={f.notes ?? ""}
-              onChange={set("notes")}
-              placeholder={"Why you took it — first line.\n\nThen what you did as it ran, how it ended, and anything you see later."}
-              className="min-h-[120px] text-sm"
-              data-testid="input-edit-notes"
-            />
-            <p className="text-[10px] leading-snug text-muted-foreground">
-              {lifecycle === "closed"
-                ? "Saved changes are read into the grades, the exit reason, demons and green flags. Anything you set by hand on the trade stays."
-                : "Read into the grades and the rest once the trade is closed — until then, keep adding to it."}
-            </p>
 
-            {/* Setup tags come out of the note's first paragraph (the why),
-                on save; they show on the trade beside it. */}
-            </FormSection>
 
             {/* Attach here too, not only from the read-only detail view: Edit
                 is where you reach to change a trade, and a screenshot added to
@@ -1504,80 +1512,52 @@ export function TradeEditor({
               className="sticky bottom-0 z-20 -mx-4 border-t border-border/70 bg-card/95 px-4 pb-3 pt-2 backdrop-blur sm:-mx-5 sm:px-5"
               data-testid="bar-edit-footer"
             >
-            {previewMetrics && (
-              /* The strip keeps its own tint inside the footer that pins them
-                 both; it no longer does any pinning of its own. The comment
-                 that used to live here described an offset that is gone with
-                 the second sticky context — kept only as far as it still
-                 scroll container clips away rather than painting over the
-                 heading. */
-              <div className="mb-2">
-              <div
-                className="grid grid-cols-2 gap-2 rounded-md border border-border/60 bg-secondary/30 p-2.5 text-center font-mono text-xs shadow-sm sm:grid-cols-4"
-                data-testid="edit-preview-metrics"
-              >
-                {/* P&L leads. R is this journal's unit, but the broker's
-                    statement is in dollars, and the fastest way to know a
-                    trade was logged correctly is that this figure matches the
-                    one on the exchange. */}
-                <div>
-                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                    {previewMetrics.fees > 0 ? "Net P&L" : "P&L"}
-                  </p>
-                  <p
-                    className={`text-sm font-semibold ${
-                      (previewMetrics.actualPnL ?? 0) >= 0 ? "text-emerald-400" : "text-primary"
-                    }`}
-                    data-testid="edit-preview-pnl"
-                  >
-                    {previewMetrics.actualPnL != null ? fmtMoney(previewMetrics.actualPnL) : "—"}
-                  </p>
-                  {previewMetrics.fees > 0 && (
-                    <p className="text-[10px] text-muted-foreground">
-                      {fmtMoney(previewMetrics.grossPnL)} gross
-                    </p>
-                  )}
-                </div>
-                <div>
-                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Actual</p>
-                  <p
-                    className={
-                      (previewMetrics.actualR ?? 0) >= 0 ? "text-emerald-400" : "text-primary"
-                    }
-                  >
-                    {fmtR(previewMetrics.actualR)}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">No-mgmt</p>
-                  <p>{fmtR(previewMetrics.potentialR)}</p>
-                </div>
-                <div>
-                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Capture</p>
-                  <p>
-                    {previewMetrics.captureRatioClipped != null
-                      ? `${Math.round(previewMetrics.captureRatioClipped * 100)}%`
-                      : "—"}
-                  </p>
-                </div>
-              </div>
-              </div>
-            )}
             {/* The editor is long enough that the fields you correct most
                 often — the exit, the reason, the note — leave Save below the
                 fold, and an edit you cannot finish without hunting for the
                 button is an edit that gets abandoned half-made. */}
-            <div className="flex gap-2" data-testid="bar-edit-save">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-2" data-testid="bar-edit-save">
+              {/* What the edit makes of the trade, in one line beside Save:
+                  P&L first, because the fastest check that a trade was logged
+                  right is that this matches the venue. */}
+              {showFigures && (
+                <div
+                  className="flex min-w-0 basis-full flex-wrap items-baseline gap-x-3 gap-y-0.5 font-mono text-[11px] text-muted-foreground sm:flex-1 sm:basis-auto"
+                  data-testid="edit-preview-metrics"
+                >
+                  <span>
+                    {previewMetrics.fees > 0 ? "net " : ""}
+                    <span
+                      className={`text-sm font-semibold ${
+                        (previewMetrics.actualPnL ?? 0) >= 0 ? "text-emerald-400" : "text-primary"
+                      }`}
+                      data-testid="edit-preview-pnl"
+                    >
+                      {previewMetrics.actualPnL != null ? fmtMoney(previewMetrics.actualPnL) : "—"}
+                    </span>
+                  </span>
+                  <span className={(previewMetrics.actualR ?? 0) >= 0 ? "text-emerald-400" : "text-primary"}>
+                    {fmtR(previewMetrics.actualR)}
+                  </span>
+                  <span title="What the untouched plan would have made">no-mgmt {fmtR(previewMetrics.potentialR)}</span>
+                  <span title="How much of the best price while in you kept">
+                    capture{" "}
+                    {previewMetrics.captureRatioClipped != null
+                      ? `${Math.round(previewMetrics.captureRatioClipped * 100)}%`
+                      : "—"}
+                  </span>
+                </div>
+              )}
               <Button
                 variant="outline"
-                className="h-10 text-xs font-semibold"
+                className="h-9 text-xs font-semibold"
                 onClick={onClose}
                 data-testid="button-edit-cancel"
               >
                 Cancel
               </Button>
               <Button
-                className="h-10 flex-1 text-xs font-semibold"
+                className={`h-9 flex-1 text-xs font-semibold ${showFigures ? "sm:flex-none sm:px-6" : ""}`}
                 onClick={save}
                 disabled={updateTrade.isPending || readingClose}
                 data-testid="button-edit-save"
