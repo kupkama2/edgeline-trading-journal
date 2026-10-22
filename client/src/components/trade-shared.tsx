@@ -348,15 +348,15 @@ export function Dropzone({
  */
 export type SectionTone = "plan" | "exit" | "path" | "read" | "extra";
 
-const TONE: Record<SectionTone, { badge: string; edge: string; head: string }> = {
-  /* The plan is what YOU drew, so it borrows the entry level's neutral. */
-  plan: { badge: "bg-foreground/10 text-foreground/75", edge: "border-card-border", head: "bg-secondary/30" },
-  exit: { badge: "bg-sky-500/15 text-sky-400", edge: "border-sky-500/25", head: "bg-sky-500/[0.06]" },
-  path: { badge: "bg-amber-500/15 text-amber-400", edge: "border-amber-500/25", head: "bg-amber-500/[0.06]" },
-  read: { badge: "bg-violet-500/15 text-violet-400", edge: "border-violet-500/25", head: "bg-violet-500/[0.06]" },
-  /* Attachments, fills, the chart: things hung off the trade rather than
-     questions about it. Deliberately quiet so the four questions stay louder. */
-  extra: { badge: "bg-secondary text-muted-foreground", edge: "border-card-border", head: "bg-secondary/20" },
+/* The colour lives in the icon now, and the icon is the only colour a
+   section carries: four tinted boxes stacked up read as four forms, and a
+   write-up is one. */
+const TONE: Record<SectionTone, string> = {
+  plan: "text-foreground/60",
+  exit: "text-sky-400",
+  path: "text-amber-400",
+  read: "text-violet-400",
+  extra: "text-muted-foreground",
 };
 
 export function FormSection({
@@ -386,42 +386,42 @@ export function FormSection({
   aside?: React.ReactNode;
 }) {
   const [open, setOpen] = useState(defaultOpen);
-  const t = TONE[tone];
   const shut = collapsible && !open;
 
+  /*
+   * A label, not a card. The sections used to be boxes with tinted header
+   * bars and a hint line each, which is most of why a write-up ran to a
+   * screen and a half: the chrome around six numbers was taller than the
+   * numbers. Now a section is a small coloured label over its fields, with a
+   * hairline above it; the hint is the label's tooltip, and a folded section
+   * still says what is inside it.
+   */
   const heading = (
     <>
-      <span
-        className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md ${t.badge}`}
-      >
-        <Icon className="h-3.5 w-3.5" />
-      </span>
-      <span className="text-sm font-semibold tracking-tight">{title}</span>
-      {/*
-        While open, the hint says what the question is for. While shut, the
-        summary says what the answer currently is — which is the only thing
-        that makes folding a section safe rather than a way to forget it.
-      */}
-      <span className="min-w-0 truncate text-[10px] text-muted-foreground">
-        {shut ? (summary ?? hint) : hint}
-      </span>
+      <Icon className={`h-3.5 w-3.5 shrink-0 ${TONE[tone]}`} />
+      <span className="whitespace-nowrap text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{title}</span>
+      {/* The summary is a convenience; on a phone the row is for the title and its buttons. */}
+      {shut && (summary ?? hint) && (
+        <span className="hidden min-w-0 truncate text-[10px] text-muted-foreground/80 sm:inline">{summary ?? hint}</span>
+      )}
     </>
   );
 
   return (
     <section
-      className={`overflow-hidden rounded-xl border ${t.edge} bg-card/30`}
+      className="border-t border-border/50 pt-3 first:border-t-0 first:pt-0"
       data-testid={testId}
       data-open={collapsible ? (open ? "true" : "false") : undefined}
+      title={hint}
     >
-      <div className={`flex items-center gap-x-2.5 px-3 py-2 ${t.head}`}>
+      <div className="flex min-h-[22px] items-center gap-x-2">
         {collapsible ? (
           <button
             type="button"
             onClick={() => setOpen((o) => !o)}
             aria-expanded={open}
             data-testid={testId ? `${testId}-toggle` : undefined}
-            className="flex min-w-0 flex-1 items-center gap-x-2.5 text-left"
+            className="flex min-w-0 flex-1 items-center gap-x-2 text-left"
           >
             {heading}
             <ChevronDown
@@ -431,11 +431,12 @@ export function FormSection({
             />
           </button>
         ) : (
-          <div className="flex min-w-0 flex-1 items-center gap-x-2.5">{heading}</div>
+          <div className="flex min-w-0 flex-1 items-center gap-x-2">{heading}</div>
         )}
         {aside && <div className="flex shrink-0 items-center gap-1.5">{aside}</div>}
       </div>
-      {children && !shut && <div className="space-y-3 px-3 pb-3 pt-3">{children}</div>}
+      {children && !shut && <div className="mt-2 space-y-2.5">{children}</div>}
     </section>
   );
 }
+

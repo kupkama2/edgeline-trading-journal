@@ -29,7 +29,7 @@ import type { GradeState } from "@/components/grade-picker";
 import type { MistakeTag } from "@shared/schema";
 
 import { LevelLabel, PathBands } from "@/components/levels";
-import { Activity, LogOut } from "lucide-react";
+import { LogOut } from "lucide-react";
 import { aftermathWindowMs } from "@shared/aftermath";
 
 const LABEL = "text-[10px] uppercase tracking-wider text-muted-foreground";
@@ -250,263 +250,151 @@ export function TradeOutcomeFields(p: OutcomeFieldsProps) {
   const hi = short ? "highest" : "lowest";
   const lo = short ? "lowest" : "highest";
 
+  /** A price box with a coloured label, the same everywhere in this block. */
+  const box = (kind: Parameters<typeof LevelLabel>[0]["kind"], text: string, value: string, set: (v: string) => void, id: string, title?: string) => (
+    <div className="min-w-0 space-y-1" title={title}>
+      <LevelLabel kind={kind} text={text} />
+      <Input
+        type="number"
+        step="any"
+        inputMode="decimal"
+        value={value}
+        onChange={(e) => set(e.target.value)}
+        className="h-8 font-mono text-sm"
+        data-testid={`input-${p.testPrefix}-${id}`}
+      />
+    </div>
+  );
+
+  /*
+   * One block, read left to right: where you got out, then how far price
+   * went against you and with you while you held. Once there is an exit,
+   * what it cost and what it did after you were out sit in the row under it.
+   * The explanations that used to run under each box live in the labels'
+   * tooltips — the boxes are the same four questions every time.
+   */
   return (
-    <div className="space-y-5" data-testid={`section-outcome-${p.testPrefix}`}>
+    <div className="space-y-3" data-testid={`section-outcome-${p.testPrefix}`}>
       <FormSection
         icon={LogOut}
-        title="The exit"
-        hint="where and when you got out, and what it cost"
+        title={priced ? "Exit & price path" : "Exit & price so far"}
+        hint={
+          priced
+            ? "where you got out, and how far price went either way while you held and after"
+            : "type an exit price to close it; the high and low so far are worth writing down now"
+        }
         testId={`section-${p.testPrefix}-exit`}
         tone="exit"
       >
-      {/*
-        Labels stay to one line, and the row is aligned from the top.
-        "Fees $ (both sides · optional — R and P&L go net)" was a sentence in
-        a label slot: at this width it wrapped to three lines and pushed its
-        own input a row and a half below the two beside it, so three fields
-        that belong together read as a broken layout. What it had to say is
-        worth saying — it just belongs under the field rather than above it,
-        where its length costs nothing.
-      */}
-      <div className="grid grid-cols-2 items-start gap-3 sm:grid-cols-3">
-        <div className="space-y-1">
-          {/* The fourth decision, marked like the other three. */}
-          <LevelLabel kind="exit" text="Exit price" />
-          <Input
-            type="number"
-            step="any"
-            inputMode="decimal"
-            value={p.exitPrice}
-            onChange={(e) => p.setExitPrice(e.target.value)}
-            className="h-9 font-mono text-sm"
-            data-testid={`input-${p.testPrefix}-exit-price`}
-          />
-        </div>
-        <TimeField
-          label="Exit time"
-          value={p.exitTime}
-          onChange={p.setExitTime}
-          testId={`input-${p.testPrefix}-exit-time`}
-        />
-        {priced && (
-          <div className="space-y-1">
-            <label className={`${LABEL} ${LABEL_ROW}`}>Fees</label>
+        <div className="grid grid-cols-2 items-start gap-x-3 gap-y-2.5 sm:grid-cols-4" data-testid={`section-${p.testPrefix}-path`}>
+          <div className="min-w-0 space-y-1">
+            <LevelLabel kind="exit" text="Exit price" />
             <Input
               type="number"
               step="any"
               inputMode="decimal"
-              value={p.fees}
-              onChange={(e) => p.setFees(e.target.value)}
-              className="h-9 font-mono text-sm"
-              data-testid={`input-${p.testPrefix}-fees`}
+              value={p.exitPrice}
+              onChange={(e) => p.setExitPrice(e.target.value)}
+              className="h-8 font-mono text-sm"
+              data-testid={`input-${p.testPrefix}-exit-price`}
             />
-            <p className="text-[10px] leading-snug text-muted-foreground">
-              Both sides, in dollars. Optional — R and P&amp;L go net of it.
-            </p>
-            {!!p.feeChips?.length && (
-              <div className="flex flex-wrap gap-1.5 pt-1">
-                {p.feeChips.map((c) => (
-                  <button
-                    key={c.label}
-                    type="button"
-                    onClick={() => p.setFees(String(c.amount))}
-                    className="rounded-full border border-border px-2 py-0.5 text-[10px] text-muted-foreground hover:border-primary/40 hover:text-foreground"
-                    data-testid={`chip-${p.testPrefix}-fee-${c.label}`}
-                  >
-                    {c.label}
-                  </button>
-                ))}
-              </div>
-            )}
           </div>
-        )}
-      </div>
-
-      {p.exitExtra}
-      </FormSection>
-
-      {/* What happened, how it was graded, the demons and green flags: all
-          read from the trade's one note once it is closed (shared/note-read.ts),
-          and corrected on the trade itself. Nothing to pick here. */}
-
-      {path.held && (
-        <FormSection
-          icon={Activity}
-          title={priced ? "What price did" : "What price has done"}
-          hint={
-            priced
-              ? "how far it went with you, and how far without you"
-              : "how far it has gone either way, so far"
-          }
-          testId={`section-${p.testPrefix}-path`}
-          tone="path"
-        >
-        <>
-          {/*
-            Four prices, two questions, one row.
-
-            They were two stacked grids with a caption between them and a
-            three-line explainer under each of the bottom pair — around 260px
-            of form for four numbers. The split is real and worth keeping (in
-            the trade is what you lived through, after the exit is what you
-            missed), so it survives as two labelled boxes side by side rather
-            than as two rows: same grouping, half the height, and the pairing
-            is now something you SEE instead of something a caption asserts.
-
-            Adverse left, favourable right, in both boxes — the same way round
-            as the bands below and as every R in the app.
-          */}
-          {p.autoPath && priced && (
-            <p className="text-[10px] leading-snug text-muted-foreground" data-testid={`text-${p.testPrefix}-auto-path`}>
-              Left blank, the archive fills these in. The two on the left as soon as it has the
-              day; the two on the right{" "}
-              {p.entryTime
-                ? `about ${fmtWindow(aftermathWindowMs({ entryTime: p.entryTime, exitTime: p.exitTime }))} after the exit`
-                : "once the move after your exit has had time to happen"}
-              , because a number written minutes after you left would be this trade's final answer
-              about the next two days. Type them to say it yourself.
-            </p>
+          <TimeField
+            label="Exit time"
+            value={p.exitTime}
+            onChange={p.setExitTime}
+            testId={`input-${p.testPrefix}-exit-time`}
+          />
+          {path.held && (
+            <>
+              {box("mae", `${priced ? "Worst while in" : "Worst so far"} · ${hi}`, p.mae, p.setMae, "mae", "How far it went against you while you held — MAE.")}
+              {box("mfe", `${priced ? "Best while in" : "Best so far"} · ${lo}`, p.mfe, p.setMfe, "mfe", "How far it went your way while you held — MFE.")}
+            </>
           )}
-          <div className={`grid gap-2.5 ${path.after ? "sm:grid-cols-2" : ""}`}>
-            {[
-              {
-                key: "in" as const,
-                /* Past tense only once it is past. On a running trade this is
-                   a live reading, and calling it "while you were in" reads as
-                   a question about a trade that is over. */
-                title: priced ? "While you were in" : "So far, in the trade",
-                left: {
-                  kind: "mae" as const,
-                  text: `${priced ? "Worst while in" : "Worst so far"} · ${hi}`,
-                  value: p.mae,
-                  set: p.setMae,
-                  id: "mae",
-                },
-                right: {
-                  kind: "mfe" as const,
-                  text: `${priced ? "Best while in" : "Best so far"} · ${lo}`,
-                  value: p.mfe,
-                  set: p.setMfe,
-                  id: "mfe",
-                },
-              },
-              // What happened after the exit needs an exit to be after.
-              ...(path.after
-                ? [
-                    {
-                      key: "after" as const,
-                      title: "Once you were out",
-                      // Two questions about the trade you were no longer in:
-                      // did it turn (the exit saved you), and did it keep
-                      // going your way (the exit cost you). Both, always —
-                      // a form that only asks one can only ever conclude
-                      // one thing.
-                      left: {
-                        kind: "fellAfter" as const,
-                        text: `Turned against you · ${hi}`,
-                        value: p.postExitAdverse,
-                        set: p.setPostExitAdverse,
-                        id: "post-exit-adverse",
-                      },
-                      right: {
-                        kind: "ranAfter" as const,
-                        text: `Kept going your way · ${lo}`,
-                        value: p.postExitPeak,
-                        set: p.setPostExitPeak,
-                        id: "post-exit-peak",
-                      },
-                    },
-                  ]
-                : []),
-            ].map((group) => (
-              <div
-                key={group.key}
-                className="space-y-1.5 rounded-lg border border-border/60 bg-secondary/20 px-2.5 py-2"
-                data-testid={`group-${p.testPrefix}-path-${group.key}`}
-              >
-                <p className={LABEL}>{group.title}</p>
-                <div className="grid grid-cols-2 gap-2.5">
-                  {[group.left, group.right].map((fld) => (
-                    <div key={fld.id} className="space-y-1">
-                      <LevelLabel kind={fld.kind} text={fld.text} />
-                      <Input
-                        type="number"
-                        step="any"
-                        inputMode="decimal"
-                        value={fld.value}
-                        onChange={(e) => fld.set(e.target.value)}
-                        className="h-9 font-mono text-sm"
-                        data-testid={`input-${p.testPrefix}-${fld.id}`}
-                      />
-                    </div>
-                  ))}
-                </div>
+          {priced && (
+            <>
+              {/* Last on a phone, so the after-exit pair sits under the in-trade pair. */}
+              <div className="order-last min-w-0 space-y-1 sm:order-none" title="Both sides, in dollars. R and P&L go net of it.">
+                <label className={`${LABEL} ${LABEL_ROW}`}>Fees</label>
+                <Input
+                  type="number"
+                  step="any"
+                  inputMode="decimal"
+                  value={p.fees}
+                  onChange={(e) => p.setFees(e.target.value)}
+                  className="h-8 font-mono text-sm"
+                  data-testid={`input-${p.testPrefix}-fees`}
+                />
+                {!!p.feeChips?.length && (
+                  <div className="flex flex-wrap gap-1 pt-0.5">
+                    {p.feeChips.map((c) => (
+                      <button
+                        key={c.label}
+                        type="button"
+                        onClick={() => p.setFees(String(c.amount))}
+                        className="rounded-full border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground hover:border-primary/40 hover:text-foreground"
+                        data-testid={`chip-${p.testPrefix}-fee-${c.label}`}
+                      >
+                        {c.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
-            ))}
-          </div>
+              <span className="hidden sm:block" />
+              {box(
+                "fellAfter",
+                "After: against",
+                p.postExitAdverse,
+                p.setPostExitAdverse,
+                "post-exit-adverse",
+                `Once you were out: how far it turned against you (the ${hi} price). On a stop-out, what the stop saved you.`,
+              )}
+              {box(
+                "ranAfter",
+                "After: your way",
+                p.postExitPeak,
+                p.setPostExitPeak,
+                "post-exit-peak",
+                `Once you were out: how far it kept going your way (the ${lo} price), before the stop level broke. What leaving cost you.`,
+              )}
+            </>
+          )}
+        </div>
 
-          {/* The pair on the right is the half a journal usually never asks
-              for, so it gets the one line of explanation the four boxes no
-              longer carry each. Both directions, deliberately: a form that
-              only ever asks how much further it ran can only ever conclude
-              "hold longer". */}
-          <p className="text-[10px] leading-snug text-muted-foreground">
-            {priced ? (
-              <>
-                After you were out, both ways — one prices what leaving cost you, the other what
-                it saved you. On a stop-out, "turned against you" is what the stop was worth.
-              </>
-            ) : (
-              <>
-                Worth writing down now rather than reconstructing later — the high and the low
-                this position has seen are what decide whether the exit was early or late, and
-                they are hardest to recover once the chart has moved on.
-              </>
-            )}
+        {p.exitExtra}
+
+        {path.held && (
+          <PathBands
+            direction={p.timing?.direction ?? "long"}
+            entry={p.timing?.entryPrice ?? null}
+            stop={p.timing?.initialStop ?? null}
+            exit={numOrNull(p.exitPrice)}
+            mae={numOrNull(p.mae)}
+            mfe={numOrNull(p.mfe)}
+            postExitPeak={numOrNull(p.postExitPeak)}
+            postExitAdverse={numOrNull(p.postExitAdverse)}
+          />
+        )}
+        {stopRead && (
+          <p
+            className={`text-[11px] leading-snug ${
+              stopRead.tone === "good" ? "text-emerald-500" : stopRead.tone === "bad" ? "text-amber-500" : "text-muted-foreground"
+            }`}
+            data-testid={`text-${p.testPrefix}-stop-read`}
+          >
+            {stopRead.text}
           </p>
-
-          <div className="space-y-1">
-            {/* The two ranges on one axis, which is where the comparison
-                lives: "it did most of its work after I left" and "I sat
-                through the whole move and took the middle" are different
-                problems with different fixes, and four numbers in four boxes
-                say neither out loud. */}
-            <PathBands
-              direction={p.timing?.direction ?? "long"}
-              entry={p.timing?.entryPrice ?? null}
-              stop={p.timing?.initialStop ?? null}
-              exit={numOrNull(p.exitPrice)}
-              mae={numOrNull(p.mae)}
-              mfe={numOrNull(p.mfe)}
-              postExitPeak={numOrNull(p.postExitPeak)}
-              postExitAdverse={numOrNull(p.postExitAdverse)}
-            />
-
-            {stopRead && (
-              <p
-                className={`pt-0.5 text-[11px] leading-snug ${
-                  stopRead.tone === "good"
-                    ? "text-emerald-500"
-                    : stopRead.tone === "bad"
-                      ? "text-amber-500"
-                      : "text-muted-foreground"
-                }`}
-                data-testid={`text-${p.testPrefix}-stop-read`}
-              >
-                {stopRead.text}
-              </p>
-            )}
-          </div>
-
-        </>
-        </FormSection>
-      )}
-
-      {!priced && (
-        <p className="text-[10px] leading-snug text-muted-foreground">
-          Put in an exit price to record how it ended.
-        </p>
-      )}
+        )}
+        {p.autoPath && priced && (
+          <p className="text-[10px] text-muted-foreground" data-testid={`text-${p.testPrefix}-auto-path`}>
+            Blank path prices are filled from the market
+            {p.entryTime
+              ? ` — the after-exit pair about ${fmtWindow(aftermathWindowMs({ entryTime: p.entryTime, exitTime: p.exitTime }))} after the exit.`
+              : "."}
+          </p>
+        )}
+      </FormSection>
     </div>
   );
 }

@@ -1162,9 +1162,8 @@ export function NewTradeCard({
                   />
                 </FormControl>
                 <p className="text-[10px] leading-snug text-muted-foreground">
-                  The trade's one note. Start with the why — setup tags and the source come out of
-                  it — and keep adding to it as you manage and close the trade. Once it is closed,
-                  the grades and the rest are read from it.
+                  Start with the why, then keep adding as you manage and close it. Tags, source and
+                  grades are read from it.
                 </p>
               </FormItem>
             )}
