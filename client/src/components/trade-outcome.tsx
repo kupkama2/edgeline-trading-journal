@@ -24,7 +24,8 @@
  */
 import { Input } from "@/components/ui/input";
 import { EXIT_TIMING_MEANINGFUL_R } from "@shared/metrics";
-import { FormSection, LABEL_ROW, Segmented, TimeField } from "@/components/trade-shared";
+import { FormSection, LABEL_ROW, TimeField } from "@/components/trade-shared";
+import { PlanHitButtons, type PlanHit } from "@/components/plan-hit";
 import type { GradeState } from "@/components/grade-picker";
 import type { MistakeTag } from "@shared/schema";
 
@@ -380,21 +381,15 @@ export function TradeOutcomeFields(p: OutcomeFieldsProps) {
             market once the trade is over, so it is logged here with the exit
             rather than read out of the note. "Ask the market" can fill it. */}
         {path.after && (
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1" data-testid={`group-${p.testPrefix}-nmo`}>
+          <div className="space-y-1" data-testid={`group-${p.testPrefix}-nmo`}>
             <span className={LABEL} title="If you had left the stop and target untouched, which would price have reached first?">
-              Untouched plan hit
+              Without management, it hit first
             </span>
             {/* Clicking the chosen answer again takes it back: "I don't know" is an answer too. */}
-            <Segmented
-              size="sm"
-              value={p.nmo as "target_first" | "stop_first" | "undetermined" | null}
-              onChange={(id) => p.setNmo(p.nmo === id ? null : id)}
-              ariaLabel="Untouched plan hit"
-              options={[
-                { id: "target_first", label: "Target first", tone: "text-emerald-400", testId: `button-${p.testPrefix}-nmo-target_first` },
-                { id: "stop_first", label: "Stop first", tone: "text-red-400", testId: `button-${p.testPrefix}-nmo-stop_first` },
-                { id: "undetermined", label: "Neither yet", testId: `button-${p.testPrefix}-nmo-undetermined` },
-              ]}
+            <PlanHitButtons
+              value={p.nmo as PlanHit | null}
+              onPick={(id) => p.setNmo(p.nmo === id ? null : id)}
+              testPrefix={`${p.testPrefix}-nmo`}
             />
           </div>
         )}
