@@ -211,9 +211,9 @@ describe("whether the page is narrowed at all", () => {
 });
 
 describe("the book: plan, tilt, or both", () => {
-  // A tilt trade is a verdict on the entry. The default view is the plan —
-  // every headline number runs without them — and the tilt book is one
-  // toggle away, never hidden, never averaged in by accident.
+  // A tilt trade is a verdict on the entry, not a way out of the numbers: it
+  // is shown and counted by default, and the plan alone or the tilt book
+  // alone is one toggle away.
   const mixed = [
     { id: 1, styleId: 1, account: null, tilt: false },
     { id: 2, styleId: 1, account: null, tilt: true },
@@ -221,19 +221,19 @@ describe("the book: plan, tilt, or both", () => {
   ] as any[];
   const ids = (xs: any[]) => xs.map((t) => t.id);
 
-  it("shows the plan by default, which is every trade not marked tilt", () => {
-    expect(ids(filterByScope(mixed, EMPTY_SCOPE))).toEqual([1, 3]);
-    expect(ids(filterByScope(mixed, { ...EMPTY_SCOPE, book: "plan" }))).toEqual([1, 3]);
-  });
-
-  it("shows only the tilt book, or both, when asked", () => {
-    expect(ids(filterByScope(mixed, { ...EMPTY_SCOPE, book: "tilt" }))).toEqual([2]);
+  it("shows everything by default, tilt included", () => {
+    expect(ids(filterByScope(mixed, EMPTY_SCOPE))).toEqual([1, 2, 3]);
     expect(ids(filterByScope(mixed, { ...EMPTY_SCOPE, book: "both" }))).toEqual([1, 2, 3]);
   });
 
-  it("counts as narrowed only when looking at the tilt book alone", () => {
+  it("shows only the plan, or only the tilt book, when asked", () => {
+    expect(ids(filterByScope(mixed, { ...EMPTY_SCOPE, book: "plan" }))).toEqual([1, 3]);
+    expect(ids(filterByScope(mixed, { ...EMPTY_SCOPE, book: "tilt" }))).toEqual([2]);
+  });
+
+  it("counts as narrowed when looking at either book alone", () => {
     expect(scopeActive({ ...EMPTY_SCOPE, book: "tilt" })).toBe(true);
+    expect(scopeActive({ ...EMPTY_SCOPE, book: "plan" })).toBe(true);
     expect(scopeActive({ ...EMPTY_SCOPE, book: "both" })).toBe(false);
-    expect(scopeActive({ ...EMPTY_SCOPE, book: "plan" })).toBe(false);
   });
 });

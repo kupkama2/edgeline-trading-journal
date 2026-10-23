@@ -443,7 +443,7 @@ export function ClosedTradeRow({
           <Badge
             variant="outline"
             className="shrink-0 border-primary/50 text-[10px] text-primary"
-            title="Should not have been taken. In the tilt book, out of every number."
+            title="Should not have been taken. Counted, and tallied in the tilt book."
             data-testid={`badge-tilt-${t.id}`}
           >
             <Skull className="mr-1 h-3 w-3" />

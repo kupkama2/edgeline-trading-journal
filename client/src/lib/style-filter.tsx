@@ -28,10 +28,11 @@ const LEGACY_STYLE_KEY = "edgeline.activeStyleId";
 const LEGACY_ACCOUNT_KEY = "edgeline.activeAccount";
 
 /**
- * Which trades a page is about. The plan is the default: every headline
- * number runs on the trades that were the plan, and the tilt book — the
- * trades that should not have been taken — is one toggle away, never
- * averaged in by accident. See shared/tilt.ts.
+ * Which trades a page is about. Everything is the default, tilt included:
+ * a tilt trade is real money won or lost, and a record that leaves it out
+ * looks better than the account does. The plan alone — the trades that were
+ * not tilt — and the tilt book alone are each one toggle away. See
+ * shared/tilt.ts.
  */
 export type Book = "plan" | "tilt" | "both";
 
@@ -49,7 +50,7 @@ export interface Scope {
    * a prop eval is still showing the log, not a subset of it.
    */
   evaluationAccounts?: string[];
-  /** Absent means the plan. */
+  /** Absent means both books — everything. */
   book?: Book;
 }
 
@@ -57,15 +58,16 @@ export const EMPTY_SCOPE: Scope = { styleIds: [], accounts: [], sources: [] };
 
 /**
  * Any axis narrowed at all — the page is showing a subset, not the log.
- * The plan is what the log means by default, so only the tilt book alone
- * counts as narrowed; "both" is the whole record.
+ * "Both" is what the log means by default, so either book on its own
+ * counts as narrowed.
  */
 export function scopeActive(scope: Scope): boolean {
   return (
     scope.styleIds.length > 0 ||
     scope.accounts.length > 0 ||
     scope.sources.length > 0 ||
-    scope.book === "tilt"
+    scope.book === "tilt" ||
+    scope.book === "plan"
   );
 }
 
@@ -115,13 +117,13 @@ const StyleCtx = createContext<{
   clearSources: () => {},
   activeSource: null,
   evaluationAccounts: [],
-  book: "plan",
+  book: "both",
   setBook: () => {},
 });
 
 function readBook(): Book {
   const raw = store.get(BOOK_KEY);
-  return raw === "tilt" || raw === "both" ? raw : "plan";
+  return raw === "tilt" || raw === "plan" ? raw : "both";
 }
 
 function readList<T>(key: string, parse: (raw: string) => T | null): T[] {
@@ -196,7 +198,7 @@ export function StyleFilterProvider({ children }: { children: React.ReactNode })
   }, [sources]);
 
   useEffect(() => {
-    if (book === "plan") store.remove(BOOK_KEY);
+    if (book === "both") store.remove(BOOK_KEY);
     else store.set(BOOK_KEY, book);
   }, [book]);
 
@@ -273,9 +275,9 @@ export function filterByScope<
   },
 >(trades: T[], scope: Scope): T[] {
   let out = trades;
-  // The plan by default. A row from before the flag existed carries none,
+  // Everything by default. A row from before the flag existed carries none,
   // and was never tilt.
-  const book = scope.book ?? "plan";
+  const book = scope.book ?? "both";
   if (book === "plan") out = out.filter((t) => t.tilt !== true);
   else if (book === "tilt") out = out.filter((t) => t.tilt === true);
   if (scope.styleIds.length) {

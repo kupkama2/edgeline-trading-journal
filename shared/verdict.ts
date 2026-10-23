@@ -5,7 +5,7 @@
  * of it is never "what was the capture ratio" — it is "was that one of mine?"
  * Four answers cover it:
  *
- *   tilt    it should not have been taken. Out of every number, and the only
+ *   tilt    it should not have been taken. Counted like any trade, and the only
  *           verdict that overrides the rest: whether a trade you should not
  *           have taken happened to pay is not information, it is noise, and
  *           printing "win" on it would teach exactly the wrong lesson.

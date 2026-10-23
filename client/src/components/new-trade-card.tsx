@@ -1089,7 +1089,7 @@ export function NewTradeCard({
             onClick={() => setTiltMode((t) => !t)}
             data-testid="button-tilt-mode"
             aria-pressed={tiltMode}
-            title="A tilt trade: counted in the tilt book, out of every number"
+            title="A tilt trade: shown and counted like any other, and tallied in the tilt book"
           >
             <Skull className="h-3.5 w-3.5" />
             Tilt
@@ -1715,7 +1715,7 @@ export function NewTradeCard({
                 </ul>
               )}
               {tiltMode && (
-                <p>No stop, target or playbook needed. It goes to the tilt book and stays out of every number.</p>
+                <p>No stop, target or playbook needed. It is counted like any other trade and tallied in the tilt book.</p>
               )}
               {tiltStrict && !tiltGuard.locked && !tiltMode && (
                 <label className="flex flex-wrap items-center gap-2">
