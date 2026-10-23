@@ -534,6 +534,8 @@ export default function TradeView({ under = "/" }: { under?: string }) {
       const tag = el?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
       if (el instanceof HTMLElement && el.isContentEditable) return;
+      // A calendar, a dropdown or a menu floating over the form closes first.
+      if (el?.closest("[data-radix-popper-content-wrapper]")) return;
       closeRef.current();
     };
     document.addEventListener("keydown", onKey, true);

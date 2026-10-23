@@ -199,5 +199,7 @@ describe.skipIf(!DB)("when nothing will quote the book", () => {
     await fetch(`${base}/api/markets/refresh`, { method: "POST" });
     await fetch(`${base}/api/marks`);
     expect(klineCalls).toBeGreaterThan(before);
-  });
+    // The refresh re-reads every venue; on a slow CI network that alone can
+    // outlast the default five seconds.
+  }, 30_000);
 });

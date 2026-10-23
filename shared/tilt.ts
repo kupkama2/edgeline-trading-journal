@@ -3,11 +3,11 @@
  * when the next one is coming.
  *
  * A tilt trade is a verdict on the entry, never on the outcome. It stays in
- * the journal — the day happened — and stays out of the plan book, so every
- * headline number runs on the trades that were the plan. The point is not
- * to hide the damage; the tilt book is one toggle away, and the cost of it
- * is reported on its own. The point is that ten in-and-out trades taken on
- * somebody else's rhythm must not become the sample the plan is judged by.
+ * the journal and in every number — the day happened, and the money moved —
+ * so the headline figures are what the account did, not what the plan did.
+ * The plan book (everything but tilt) and the tilt book are each one toggle
+ * away, and the tilt cost is reported on its own, for when the question is
+ * how the plan does without the trades that should not have been taken.
  *
  * The meter is the other half. Marking a trade tilt afterwards is honest and
  * late. The meter reads the day as it is being logged and fills a segment

@@ -55,7 +55,7 @@ const VERDICT_TONE: Record<Verdict, string> = {
 };
 
 const VERDICT_TITLE: Record<Verdict, string> = {
-  tilt: "Should not have been taken. Out of every number.",
+  tilt: "Should not have been taken. Counted, and tallied in the tilt book.",
   great: "Traded well: waited for it, sized it, left it alone. Whatever it paid.",
   win: "Made money.",
   loss: "Lost money.",
