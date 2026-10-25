@@ -237,7 +237,7 @@ function PublicChip() {
 /**
  * A reminder that the past is on screen.
  *
- * The chapter switch lives on the stats page, but what it chooses follows
+ * The chapter switch lives on the stats page and the calendar, but what it chooses follows
  * you to every page until you leave, and a journal quietly showing last
  * quarter's record as if it were this one is the exact confusion a fresh
  * start exists to end. Shown the whole time an older chapter, or all of

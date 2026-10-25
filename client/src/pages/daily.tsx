@@ -19,6 +19,7 @@ import { useStyleScopedTrades } from "@/lib/style-filter";
 import { takeJumpDay } from "@/lib/jump";
 import { useLocation } from "wouter";
 import { StyleSwitcher } from "@/components/style-switcher";
+import { CURRENT, ChapterSwitch, useChapters } from "@/lib/chapters";
 import { dayKey, monthGrid, summarizeDays, tradesOnDay } from "@shared/daily";
 import {
   METRIC_LABELS,
@@ -56,6 +57,10 @@ export default function Daily() {
   const { data: notes = [] } = useDailyNotes();
   const save = useSaveDailyNote();
   const [, navigate] = useLocation();
+  // An older chapter is looked at here or on Stats, and left behind with the
+  // page — the journal and its guards always go back to the current one.
+  const { setView: setChapterView } = useChapters();
+  useEffect(() => () => setChapterView(CURRENT), [setChapterView]);
   // Which zoom the left panel is at, and which figure its cells carry.
   const [period, setPeriod] = useState<Period>("day");
   const [metric, setMetric] = useState<PeriodMetric>("pnl");
@@ -191,7 +196,10 @@ export default function Daily() {
             One file per day. Dump anything, any time — the numbers fill themselves in.
           </p>
         </div>
-        <StyleSwitcher />
+        <div className="flex flex-wrap items-center gap-2">
+          <ChapterSwitch />
+          <StyleSwitcher />
+        </div>
       </div>
 
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">

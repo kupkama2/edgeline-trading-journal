@@ -22,7 +22,7 @@ export { CURRENT, spanLabel, type Chapter, type ChapterSpan, type ChapterView };
  * The rule is in shared/chapters.ts; this holds the chapters and the choice.
  * The choice is deliberately NOT remembered: a fresh start means the slate
  * is clean every time the journal is opened, and looking back is something
- * you do on purpose, from the stats, and leave behind when you navigate away
+ * you do on purpose, from the stats or the calendar, and leave behind when you navigate away
  * or reload. There is a chip in the header the whole time it is on.
  */
 const Ctx = createContext<{
@@ -103,7 +103,7 @@ export function spanRange(span: ChapterSpan): string {
 }
 
 /**
- * The one switch, on the stats page.
+ * The one switch, on the stats page and the calendar.
  *
  * Newest chapter first, then the record before any fresh start, then
  * everything at once. Absent until there has been a fresh start: a journal
@@ -120,7 +120,7 @@ export function ChapterSwitch() {
     <Select value={value} onValueChange={pick}>
       <SelectTrigger
         className="h-8 w-auto gap-1.5 text-xs"
-        aria-label="Which chapter the stats cover"
+        aria-label="Which chapter to show"
         data-testid="select-chapter"
       >
         <BookOpen className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />

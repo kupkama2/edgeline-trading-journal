@@ -110,8 +110,8 @@ export default function Stats() {
             varies — so flipping card by card would let two cards on the same
             screen answer in different units. */}
         <div className="flex flex-wrap items-center gap-2">
-          {/* Which chapter. Only here: every other page shows the current
-              one, and the choice made here follows you until you leave. */}
+          {/* Which chapter. Here and on the calendar: every other page shows
+              the current one, and the choice lasts until you leave. */}
           <ChapterSwitch />
           <DenomToggle />
           <StyleSwitcher />
