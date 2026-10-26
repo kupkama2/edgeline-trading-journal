@@ -13,6 +13,7 @@ import {
   binanceSymbols,
   hyperliquidSymbols,
   accountBalances,
+  terminalLog,
   chapters,
   readPrefs,
 } from "@shared/schema";
@@ -30,6 +31,7 @@ import type {
   TradeImage,
   TradeFill,
   AccountSettings,
+  TerminalLogRow,
   UpsertAccountSettings,
   AccountBalance,
   InsertAccountBalance,
@@ -258,6 +260,20 @@ CREATE TABLE IF NOT EXISTS account_settings (
 ALTER TABLE account_settings ADD COLUMN IF NOT EXISTS wallet TEXT;
 ALTER TABLE account_settings ADD COLUMN IF NOT EXISTS binance_key TEXT;
 ALTER TABLE account_settings ADD COLUMN IF NOT EXISTS binance_secret TEXT;
+ALTER TABLE account_settings ADD COLUMN IF NOT EXISTS binance_env TEXT NOT NULL DEFAULT 'live';
+ALTER TABLE account_settings ADD COLUMN IF NOT EXISTS binance_trade BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS terminal TEXT;
+CREATE TABLE IF NOT EXISTS terminal_log (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL,
+  at TEXT NOT NULL,
+  account TEXT NOT NULL,
+  action TEXT NOT NULL,
+  trade_id INTEGER,
+  request TEXT,
+  response TEXT,
+  ok BOOLEAN NOT NULL
+);
 CREATE TABLE IF NOT EXISTS account_balances (
   id SERIAL PRIMARY KEY,
   user_id INTEGER NOT NULL,
@@ -1474,7 +1490,14 @@ export class DatabaseStorage implements IStorage {
           // The route has already sealed the secret and checked the key's
           // permissions by the time it gets here; null on the key clears both.
           ...(s.binanceKey !== undefined
-            ? { binanceKey: s.binanceKey, binanceSecret: s.binanceKey ? (s.binanceSecret ?? null) : null }
+            ? {
+                binanceKey: s.binanceKey,
+                binanceSecret: s.binanceKey ? (s.binanceSecret ?? null) : null,
+                // A new key brings its own venue and permission; clearing
+                // the key puts both back to the harmless defaults.
+                binanceEnv: s.binanceKey ? (s.binanceEnv ?? "live") : "live",
+                binanceTrade: s.binanceKey ? (s.binanceTrade ?? false) : false,
+              }
             : {}),
         })
         .where(eq(accountSettings.id, existing.id))
@@ -1492,6 +1515,8 @@ export class DatabaseStorage implements IStorage {
         wallet: s.wallet ?? null,
         binanceKey: s.binanceKey ?? null,
         binanceSecret: s.binanceKey ? (s.binanceSecret ?? null) : null,
+        binanceEnv: s.binanceKey ? (s.binanceEnv ?? "live") : "live",
+        binanceTrade: s.binanceKey ? (s.binanceTrade ?? false) : false,
         userId: this.userId,
       })
       .returning();
@@ -1567,6 +1592,24 @@ export class DatabaseStorage implements IStorage {
 
   async deleteChapter(id: number): Promise<void> {
     await db.delete(chapters).where(and(eq(chapters.id, id), this.owns(chapters)));
+  }
+
+  /** Every trade the terminal sent and is still responsible for reading back. */
+  async listTerminalTrades(): Promise<TradeWithTags[]> {
+    return (await this.listTrades()).filter((t) => t.terminal && t.status !== "cancelled");
+  }
+
+  async logTerminal(row: Omit<typeof terminalLog.$inferInsert, "userId" | "id">): Promise<void> {
+    await db.insert(terminalLog).values({ ...row, userId: this.userId });
+  }
+
+  async listTerminalLog(limit = 50): Promise<TerminalLogRow[]> {
+    return db
+      .select()
+      .from(terminalLog)
+      .where(this.owns(terminalLog))
+      .orderBy(desc(terminalLog.id))
+      .limit(limit);
   }
 
   async tradeByExternalId(externalId: string): Promise<TradeWithTags | undefined> {

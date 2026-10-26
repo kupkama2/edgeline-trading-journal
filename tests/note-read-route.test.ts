@@ -130,7 +130,9 @@ describe.skipIf(!DB)("reading a trade's note", () => {
     let after: any;
     for (let i = 0; i < 60; i++) {
       after = (await send("GET", "/api/trades")).find((t: any) => t.id === open.id);
-      if (after.stopGrade) break;
+      // The grade and the demons land in separate writes; wait for both, or
+      // the assertion below races the second one.
+      if (after.stopGrade && after.mistakeTagIds?.includes(demonId)) break;
       await new Promise((r) => setTimeout(r, 50));
     }
     void before;

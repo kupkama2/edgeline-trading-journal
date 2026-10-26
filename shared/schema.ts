@@ -407,6 +407,12 @@ export const trades = pgTable("trades", {
    */
   externalId: text("external_id"),
   /**
+   * The orders behind a trade the terminal sent — JSON, see
+   * shared/terminal.ts. Only the terminal writes it, and only trades that
+   * carry it are read back from the venue by it.
+   */
+  terminal: text("terminal"),
+  /**
    * When a venue sync recognised this hand-logged trade as one of its own
    * (see shared/claim.ts). Null for a trade the sync created, or never saw.
    * A claimed trade's entry and size are the person's, and stay theirs on
@@ -877,7 +883,36 @@ export const accountSettings = pgTable("account_settings", {
    */
   binanceKey: text("binance_key"),
   binanceSecret: text("binance_secret"),
+  /**
+   * Which Binance the key belongs to. The testnet is a separate venue with
+   * its own keys and play money; a key for one is nonsense on the other.
+   */
+  binanceEnv: text("binance_env").notNull().default("live"), // 'live' | 'testnet'
+  /**
+   * Whether the key may place orders. Off, the key is held to the read-only
+   * rules; on, to the trading rules (shared/terminal.ts), which are stricter
+   * about everything except trading.
+   */
+  binanceTrade: boolean("binance_trade").notNull().default(false),
 });
+
+/**
+ * What the terminal did, one row per call to the venue that could move money:
+ * who, when, which account, what was asked, what came back. Appended, never
+ * edited — the record of a mistake is the only way to work out what it was.
+ */
+export const terminalLog = pgTable("terminal_log", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull(),
+  at: text("at").notNull(),
+  account: text("account").notNull(),
+  action: text("action").notNull(),
+  tradeId: integer("trade_id"),
+  request: text("request"),
+  response: text("response"),
+  ok: boolean("ok").notNull(),
+});
+export type TerminalLogRow = typeof terminalLog.$inferSelect;
 
 /**
  * What an account was worth, when.
@@ -951,6 +986,9 @@ export const upsertAccountSettingsSchema = z.object({
    */
   binanceKey: z.string().min(16).max(128).nullable().optional(),
   binanceSecret: z.string().min(16).max(128).optional(),
+  /** Sent with a key; ignored without one. */
+  binanceEnv: z.enum(["live", "testnet"]).optional(),
+  binanceTrade: z.boolean().optional(),
 });
 
 /** Move every trade from one account onto another — an eval that got funded. */

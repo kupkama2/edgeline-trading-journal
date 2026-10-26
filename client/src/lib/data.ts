@@ -264,7 +264,7 @@ export function useSaveDailyNote() {
   });
 }
 
-const invalidateTrades = () =>
+export const invalidateTrades = () =>
   queryClient.invalidateQueries({ queryKey: ["/api/trades"] });
 
 /*
