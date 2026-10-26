@@ -135,9 +135,10 @@ describe("what a plan becomes on the wire", () => {
 
   it("splits several targets by quantity and lets the last one close what is left", () => {
     const o = ordersForPlan({ ...long, targets: [81000, 82000, 83000] }, BTC, "0.050", "edg-3");
+    // No reduceOnly anywhere: hedge mode refuses it on an order that names its side.
     expect(o.targets.map((t) => [t.stopPrice, t.quantity ?? null, t.closePosition ?? null, t.reduceOnly ?? null])).toEqual([
-      ["81000.0", "0.016", null, "true"],
-      ["82000.0", "0.016", null, "true"],
+      ["81000.0", "0.016", null, null],
+      ["82000.0", "0.016", null, null],
       ["83000.0", null, "true", null],
     ]);
   });
@@ -151,6 +152,12 @@ describe("which keys may trade", () => {
     expect(tradingKeyRefusal({ ...base, enableInternalTransfer: true })).toMatch(/transfer/);
     expect(tradingKeyRefusal({ ...base, enableFutures: false })).toMatch(/cannot trade futures/);
     expect(tradingKeyRefusal({ ...base, ipRestrict: false })).toMatch(/any IP/);
+  });
+
+  it("lets an unlocked key through only when the server was told to", () => {
+    expect(tradingKeyRefusal({ ...base, ipRestrict: false }, true)).toBeNull();
+    // The other rules still hold with the override.
+    expect(tradingKeyRefusal({ ...base, ipRestrict: false, enableWithdrawals: true }, true)).toMatch(/withdraw/);
   });
 });
 

@@ -1780,6 +1780,9 @@ export async function registerRoutes(
       if (!verdict.ok) return res.status(400).json({ message: verdict.reason });
       data.binanceEnv = env;
       data.binanceTrade = trades;
+      // The venue's word, kept so the terminal can say when a live trading
+      // key is not locked to an IP. Null where nobody asked (read-only, testnet).
+      data.binanceIpLocked = trades && env === "live" ? (verdict.restrictions?.ipRestrict ?? null) : null;
       data.binanceSecret = seal(data.binanceSecret);
     }
     res.json(publicSettings(await store(req).upsertAccountSettings(data)));

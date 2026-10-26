@@ -120,6 +120,15 @@ export default function TerminalPage() {
           {acct.name} did not answer: {acct.error}
         </Card>
       )}
+      {acct && acct.env === "live" && acct.ipLocked === false && (
+        <Card className="flex items-center gap-2 border-red-500/50 bg-red-500/5 p-3 text-xs text-red-400" data-testid="bar-unlocked-key">
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          <span>
+            This live trading key is <b>not locked to an IP</b>. Anyone who obtains it can trade this account from anywhere.
+            Restrict it on Binance to the server's outbound IP as soon as the host has one.
+          </span>
+        </Card>
+      )}
       {acct && acct.hedgeMode === false && <HedgeModeBar account={acct.name} />}
 
       {acct && <Desk account={acct.name} env={acct.env} hedge={acct.hedgeMode !== false} />}
@@ -216,6 +225,9 @@ function Desk({ account, env, hedge }: { account: string; env: "live" | "testnet
   const [qty, setQty] = useState("");
   const [leverage, setLeverage] = useState("5");
   const [confirm, setConfirm] = useState(false);
+  // Real money asks for a word, not a click: a second click is a reflex.
+  const [typed, setTyped] = useState("");
+  const armedToSend = env !== "live" || typed.trim().toUpperCase() === "SEND";
 
   // A market entry is priced where the market is; the field follows the tape.
   useEffect(() => {
@@ -296,6 +308,7 @@ function Desk({ account, env, hedge }: { account: string; env: "live" | "testnet
     try {
       const r = await send.mutateAsync({ account, plan });
       setConfirm(false);
+      setTyped("");
       if (r.refused.length) {
         toast({
           title: "Sent — but the venue refused part of it",
@@ -484,11 +497,17 @@ function Desk({ account, env, hedge }: { account: string; env: "live" | "testnet
               </li>
             </ul>
           )}
+          {env === "live" && (
+            <label className="block space-y-1 pt-1">
+              <span className="block text-[10px] uppercase tracking-wider text-red-400">Real money — type SEND to confirm</span>
+              <Input value={typed} onChange={(e) => setTyped(e.target.value)} autoFocus spellCheck={false} autoComplete="off" className="h-8 font-mono text-sm uppercase" data-testid="input-terminal-type-send" />
+            </label>
+          )}
           <div className="flex justify-end gap-2 pt-2">
-            <Button variant="ghost" size="sm" onClick={() => setConfirm(false)} data-testid="button-terminal-confirm-no">
+            <Button variant="ghost" size="sm" onClick={() => { setConfirm(false); setTyped(""); }} data-testid="button-terminal-confirm-no">
               Not yet
             </Button>
-            <Button size="sm" onClick={() => void doSend()} disabled={send.isPending} data-testid="button-terminal-confirm-yes">
+            <Button size="sm" onClick={() => void doSend()} disabled={send.isPending || !armedToSend} data-testid="button-terminal-confirm-yes">
               {send.isPending && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
               Send
             </Button>

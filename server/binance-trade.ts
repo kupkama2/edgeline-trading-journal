@@ -184,9 +184,16 @@ export async function orderById(v: Venue, symbol: string, orderId: number): Prom
   }
 }
 
-/** The fills behind the trade's orders on one symbol, since it was sent. */
+/**
+ * The fills behind the trade's orders on one symbol, since it was sent.
+ *
+ * The venue refuses a window longer than seven days, so a trade held longer
+ * is read over the last week: its entry fill is already on the record, and
+ * the fills that matter now are the ones closing it.
+ */
 export async function fillsSince(v: Venue, symbol: string, sinceMs: number): Promise<BinanceUserTrade[]> {
-  const j = await call(v, "GET", "/fapi/v1/userTrades", { symbol, startTime: sinceMs, limit: 1000 });
+  const floor = Date.now() - (7 * 24 * 60 * 60 * 1000 - 60 * 60 * 1000);
+  const j = await call(v, "GET", "/fapi/v1/userTrades", { symbol, startTime: Math.max(sinceMs, floor), limit: 1000 });
   return parseUserTrades(j);
 }
 

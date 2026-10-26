@@ -262,6 +262,7 @@ ALTER TABLE account_settings ADD COLUMN IF NOT EXISTS binance_key TEXT;
 ALTER TABLE account_settings ADD COLUMN IF NOT EXISTS binance_secret TEXT;
 ALTER TABLE account_settings ADD COLUMN IF NOT EXISTS binance_env TEXT NOT NULL DEFAULT 'live';
 ALTER TABLE account_settings ADD COLUMN IF NOT EXISTS binance_trade BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE account_settings ADD COLUMN IF NOT EXISTS binance_ip_locked BOOLEAN;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS terminal TEXT;
 CREATE TABLE IF NOT EXISTS terminal_log (
   id SERIAL PRIMARY KEY,
@@ -727,6 +728,22 @@ const DEFAULT_STYLES: { name: string; color: string }[] = [
   { name: "NQ Scalps", color: "amber" },
   { name: "Crypto Swings", color: "violet" },
 ];
+
+/* ============================== the watch ============================== */
+
+/**
+ * Who has a terminal trade still running — every account, not one. The
+ * server's watch reads those trades back whether or not anybody is signed
+ * in, so it has to be able to ask across accounts; it then scopes every
+ * write to the account it found.
+ */
+export async function terminalUsers(): Promise<number[]> {
+  const rows = await db
+    .selectDistinct({ userId: trades.userId })
+    .from(trades)
+    .where(and(sqlx`${trades.terminal} IS NOT NULL`, inArray(trades.status, ["pending", "open"])));
+  return rows.map((r) => r.userId);
+}
 
 /* ============================== accounts ============================== */
 
@@ -1497,6 +1514,7 @@ export class DatabaseStorage implements IStorage {
                 // the key puts both back to the harmless defaults.
                 binanceEnv: s.binanceKey ? (s.binanceEnv ?? "live") : "live",
                 binanceTrade: s.binanceKey ? (s.binanceTrade ?? false) : false,
+                binanceIpLocked: s.binanceKey ? (s.binanceIpLocked ?? null) : null,
               }
             : {}),
         })
@@ -1517,6 +1535,7 @@ export class DatabaseStorage implements IStorage {
         binanceSecret: s.binanceKey ? (s.binanceSecret ?? null) : null,
         binanceEnv: s.binanceKey ? (s.binanceEnv ?? "live") : "live",
         binanceTrade: s.binanceKey ? (s.binanceTrade ?? false) : false,
+        binanceIpLocked: s.binanceKey ? (s.binanceIpLocked ?? null) : null,
         userId: this.userId,
       })
       .returning();

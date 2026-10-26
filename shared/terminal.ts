@@ -227,7 +227,9 @@ export function ordersForPlan(p: TerminalPlan, r: SymbolRules, qty: string, tag:
       workingType: "MARK_PRICE",
       priceProtect: "TRUE",
       newClientOrderId: `${tag}-t${i + 1}`,
-      ...(last ? { closePosition: "true" } : { quantity: each, reduceOnly: "true" }),
+      // No reduceOnly: hedge mode refuses it, and a SELL on the LONG side
+      // can only reduce anyway.
+      ...(last ? { closePosition: "true" } : { quantity: each }),
     };
   });
 
@@ -262,12 +264,12 @@ export function bracketAt(kind: "stop" | "target", price: number, r: SymbolRules
  * from being somebody else's trading key. The testnet has no money and no
  * permissions endpoint, so it is not asked.
  */
-export function tradingKeyRefusal(r: KeyRestrictions): string | null {
+export function tradingKeyRefusal(r: KeyRestrictions, allowUnlocked = false): string | null {
   if (r.enableWithdrawals) return "This key can withdraw. A trading key must not — turn Enable Withdrawals off.";
   if (r.enableInternalTransfer || r.permitsUniversalTransfer) return "This key can transfer between accounts. Turn that off on a trading key.";
   if (!r.enableFutures) return "This key cannot trade futures. Turn Enable Futures on, or save it as a read-only key.";
-  if (!r.ipRestrict)
-    return "This key works from any IP. A trading key must be restricted to trusted IPs — add the server's outbound IP on Binance and try again.";
+  if (!r.ipRestrict && !allowUnlocked)
+    return "This key works from any IP. A trading key must be restricted to trusted IPs — add the server's outbound IP on Binance and try again. (A host with no fixed IP can set TERMINAL_ALLOW_UNLOCKED_KEY=1 to accept this, and the terminal will say so in red.)";
   return null;
 }
 
@@ -275,7 +277,7 @@ export function tradingKeyRefusal(r: KeyRestrictions): string | null {
 
 /** What the journal remembers about the orders behind a terminal trade. */
 export interface TerminalRef {
-  venue: "binance";
+  venue: "binance" | "hyperliquid";
   env: "live" | "testnet";
   account: string;
   symbol: string;
@@ -300,7 +302,7 @@ export function parseTerminalRef(raw: string | null | undefined): TerminalRef | 
   if (!raw) return null;
   try {
     const j = JSON.parse(raw);
-    return j && j.venue === "binance" && typeof j.symbol === "string" ? (j as TerminalRef) : null;
+    return j && (j.venue === "binance" || j.venue === "hyperliquid") && typeof j.symbol === "string" ? (j as TerminalRef) : null;
   } catch {
     return null;
   }
@@ -436,7 +438,7 @@ export function reconcilePatch(
     patch.status = "closed";
     patch.exitPrice = wavg(exitFills);
     patch.exitTime = new Date(Math.max(...exitFills.map((f) => f.time))).toISOString();
-    if (!trade.exitReason) {
+    if (!trade.exitReason || trade.exitReason === "other") {
       const why = exitReasonFor(ref, { direction: trade.direction ?? (ref.positionSide === "SHORT" ? "short" : "long"), entryPrice: patch.entryPrice ?? trade.entryPrice, stopMoves: trade.stopMoves }, exitFills);
       if (why) patch.exitReason = why;
     }
