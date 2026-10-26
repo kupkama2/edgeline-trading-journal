@@ -157,61 +157,75 @@ describe("which keys may trade", () => {
 describe("what the venue's answer does to the trade", () => {
   const ref: TerminalRef = {
     venue: "binance", env: "testnet", account: "T", symbol: "BTCUSDT", positionSide: "LONG", tag: "edg-9",
-    leverage: 5, qty: 0.05, entryOrderId: 1, stopOrderId: 2, targetOrderIds: [3], closeOrderIds: [],
+    leverage: 5, qty: 0.05, entryOrderId: 1, stopOrderId: 2, targetOrderIds: [3, 4], closeOrderIds: [9],
   };
+  let tid = 1;
   const fill = (orderId: number, price: number, qty: number, time: number) => ({
-    orderId, price, qty, time, commission: 0.1, commissionUsd: true, realizedPnl: 0,
+    tid: tid++, orderId, price, qty, time, commission: 0.1, commissionUsd: true, realizedPnl: 0,
   });
+  const filled = { status: "FILLED", avgPrice: 79990, executedQty: 0.05, updateTime: 1 };
+  const open = { status: "open", entryPrice: 79990, size: 0.05, fees: 0.1, direction: "long" };
 
   it("leaves a resting limit alone until it fills, then opens the trade at the fill", () => {
     const pending = { status: "pending", entryPrice: 80000, size: 0.05, fees: null };
-    expect(reconcilePatch(pending, ref, { entry: { status: "NEW", avgPrice: 0, executedQty: 0, updateTime: 0 }, fills: [], positionAmt: 0, openOrderIds: [1, 2, 3] })).toBeNull();
-    const p = reconcilePatch(pending, ref, {
+    expect(reconcilePatch(pending, ref, { entry: { status: "NEW", avgPrice: 0, executedQty: 0, updateTime: 0 }, fills: [], positionAmt: 0, openOrderIds: [1, 2, 3] }).patch).toBeNull();
+    const { patch } = reconcilePatch(pending, ref, {
       entry: { status: "FILLED", avgPrice: 79990, executedQty: 0.05, updateTime: 1_700_000_000_000 },
       fills: [fill(1, 79990, 0.05, 1_700_000_000_000)],
       positionAmt: 0.05,
       openOrderIds: [2, 3],
     });
-    expect(p).toMatchObject({ status: "open", entryPrice: 79990, size: 0.05, entryTime: new Date(1_700_000_000_000).toISOString(), fees: 0.1 });
-    expect(p?.exitPrice).toBeUndefined();
+    expect(patch).toMatchObject({ status: "open", entryPrice: 79990, size: 0.05, entryTime: new Date(1_700_000_000_000).toISOString(), fees: 0.1 });
+    expect(patch?.exitPrice).toBeUndefined();
   });
 
   it("cancels the trade when the venue cancelled the resting entry unfilled", () => {
     expect(
       reconcilePatch({ status: "pending", entryPrice: 80000, size: 0.05, fees: null }, ref, {
         entry: { status: "CANCELED", avgPrice: 0, executedQty: 0, updateTime: 0 }, fills: [], positionAmt: 0, openOrderIds: [],
-      }),
+      }).patch,
     ).toEqual({ status: "cancelled", cancelReason: "not_filled" });
   });
 
-  it("closes an open trade at the closing fills once the position side is flat", () => {
-    const p = reconcilePatch({ status: "open", entryPrice: 79990, size: 0.05, fees: 0.1 }, ref, {
-      entry: { status: "FILLED", avgPrice: 79990, executedQty: 0.05, updateTime: 1 },
-      fills: [fill(1, 79990, 0.05, 1), fill(2, 79000, 0.05, 5_000)],
-      positionAmt: 0,
-      openOrderIds: [],
+  it("closes an open trade at the closing fills once the position side is flat, and says the stop did it", () => {
+    const { patch, partials } = reconcilePatch(open, ref, {
+      entry: filled, fills: [fill(1, 79990, 0.05, 1), fill(2, 79000, 0.05, 5_000)], positionAmt: 0, openOrderIds: [],
     });
-    expect(p).toMatchObject({ status: "closed", exitPrice: 79000, exitTime: new Date(5_000).toISOString(), fees: 0.2 });
+    expect(patch).toMatchObject({ status: "closed", exitPrice: 79000, exitTime: new Date(5_000).toISOString(), fees: 0.2, exitReason: "stop" });
+    expect(partials).toEqual([]);
   });
 
   it("does not close a trade whose position is still on, whatever fills exist elsewhere", () => {
-    const p = reconcilePatch({ status: "open", entryPrice: 79990, size: 0.05, fees: 0.1 }, ref, {
-      entry: { status: "FILLED", avgPrice: 79990, executedQty: 0.05, updateTime: 1 },
-      fills: [fill(1, 79990, 0.05, 1)],
-      positionAmt: 0.05,
-      openOrderIds: [2, 3],
-    });
-    expect(p).toBeNull();
+    const { patch } = reconcilePatch(open, ref, { entry: filled, fills: [fill(1, 79990, 0.05, 1)], positionAmt: 0.05, openOrderIds: [2, 3] });
+    expect(patch).toBeNull();
   });
 
-  it("counts only this trade's own fills: a partial target closes nothing while size remains", () => {
-    const p = reconcilePatch({ status: "open", entryPrice: 79990, size: 0.05, fees: 0.1 }, ref, {
-      entry: { status: "FILLED", avgPrice: 79990, executedQty: 0.05, updateTime: 1 },
-      fills: [fill(1, 79990, 0.05, 1), fill(3, 81000, 0.016, 3_000)],
-      positionAmt: 0.034,
-      openOrderIds: [2],
+  it("logs a target that took its share as a partial, and closes at the fills that took the rest", () => {
+    const first = reconcilePatch(open, ref, {
+      entry: filled, fills: [fill(1, 79990, 0.05, 1), fill(3, 81000, 0.025, 3_000)], positionAmt: 0.025, openOrderIds: [2, 4],
     });
-    expect(p?.status).toBeUndefined();
-    expect(p?.fees).toBeCloseTo(0.2);
+    expect(first.patch?.status).toBeUndefined();
+    expect(first.partials).toMatchObject([{ orderId: 3, price: 81000, qty: 0.025, time: 3_000 }]);
+    const then = reconcilePatch(open, ref, {
+      entry: filled, fills: [fill(1, 79990, 0.05, 1), fill(3, 81000, 0.025, 3_000), fill(4, 82000, 0.025, 6_000)], positionAmt: 0, openOrderIds: [],
+    });
+    expect(then.partials).toHaveLength(1);
+    // The exit is the second target alone; the first is in the ledger.
+    expect(then.patch).toMatchObject({ status: "closed", exitPrice: 82000, exitReason: "target" });
+  });
+
+  it("names a close from the terminal, a breakeven and a trail for what they were", () => {
+    const by = (orderId: number, price: number, stopMoves: string | null) =>
+      reconcilePatch({ ...open, stopMoves }, ref, { entry: filled, fills: [fill(1, 79990, 0.05, 1), fill(orderId, price, 0.05, 9)], positionAmt: 0, openOrderIds: [] }).patch?.exitReason;
+    expect(by(9, 80500, null)).toBe("discretion");
+    expect(by(2, 79992, '[{"at":"x","price":79992}]')).toBe("breakeven");
+    expect(by(2, 80600, '[{"at":"x","price":80600}]')).toBe("trailed");
+    expect(by(2, 79500, '[{"at":"x","price":79500}]')).toBe("stop");
+  });
+
+  it("never overrides an exit reason somebody already gave", () => {
+    const { patch } = reconcilePatch({ ...open, exitReason: "time" }, ref, { entry: filled, fills: [fill(1, 79990, 0.05, 1), fill(2, 79000, 0.05, 5)], positionAmt: 0, openOrderIds: [] });
+    expect(patch?.status).toBe("closed");
+    expect(patch?.exitReason).toBeUndefined();
   });
 });

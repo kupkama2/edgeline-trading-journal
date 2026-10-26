@@ -45,6 +45,7 @@ import {
   fmtQty,
   ordersForPlan,
   parseTerminalRef,
+  partialNote,
   reconcilePatch,
   sizePlan,
   MAX_TARGETS,
@@ -52,7 +53,7 @@ import {
   type TerminalRef,
   type VenueSnapshot,
 } from "@shared/terminal";
-import { addStopMove, formatStopMoves } from "@shared/stops";
+import { addStopMove, currentStop, formatStopMoves } from "@shared/stops";
 import { USD_COMMISSION } from "@shared/binance-account";
 import type { AccountSettings, TradeWithTags } from "@shared/schema";
 
@@ -173,6 +174,7 @@ async function reconcileOne(req: Request, t: TradeWithTags, armed: Armed): Promi
   const fills = rows
     .filter((r) => mine.has(r.orderId))
     .map((r) => ({
+      tid: r.id,
       orderId: r.orderId,
       price: r.price,
       qty: r.qty,
@@ -189,11 +191,19 @@ async function reconcileOne(req: Request, t: TradeWithTags, armed: Armed): Promi
     positionAmt: pos?.amt ?? 0,
     openOrderIds: resting.map((o) => o.orderId),
   };
-  const patch = reconcilePatch(t, ref, snap) ?? {};
+  const { patch: read, partials } = reconcilePatch(t, ref, snap);
+  const patch = read ?? {};
+  // A target that took its share while the rest stayed on: a partial in the
+  // ledger, once, by the venue's fill id.
+  const logged = new Set((t.fills ?? []).map((f) => f.note ?? ""));
+  for (const f of partials) {
+    if (logged.has(partialNote(f.tid))) continue;
+    await store(req).addFill(t.id, { kind: "partial", price: f.price, size: f.qty, time: new Date(f.time).toISOString(), note: partialNote(f.tid) });
+  }
   const stopResting = ref.stopOrderId != null && snap.openOrderIds.includes(ref.stopOrderId);
   const nowOpen = (patch.status ?? t.status) === "open";
   const nextRef: TerminalRef = { ...ref, unprotected: nowOpen && !stopResting, checkedAt: new Date().toISOString() };
-  const changed = Object.keys(patch).length > 0 || formatTerminalRef(nextRef) !== formatTerminalRef({ ...ref, checkedAt: nextRef.checkedAt });
+  const changed = Object.keys(patch).length > 0 || partials.length > 0 || formatTerminalRef(nextRef) !== formatTerminalRef({ ...ref, checkedAt: nextRef.checkedAt });
   if (!changed && ref.checkedAt && Date.now() - new Date(ref.checkedAt).getTime() < 60_000) return t;
   const after = await store(req).updateTrade(t.id, { ...patch, terminal: formatTerminalRef(nextRef) } as any);
   return after ?? t;
@@ -389,10 +399,17 @@ export function registerTerminalRoutes(app: Express): void {
         if (ref.stopOrderId != null) await cancelOrder(venue, ref.symbol, ref.stopOrderId);
         return placeOrder(venue, bracketAt("stop", price, rules, side, `${ref.tag}-s${Date.now().toString(36)}`));
       });
-      const moves = addStopMove(t.stopMoves, Number(next.stopPrice ?? price), new Date().toISOString(), "terminal");
+      const at = new Date().toISOString();
+      const to = Number(next.stopPrice ?? price);
+      const moves = addStopMove(t.stopMoves, to, at, "terminal");
       const after = await s.updateTrade(t.id, {
         stopMoves: formatStopMoves(moves),
-        terminal: formatTerminalRef({ ...ref, stopOrderId: next.orderId, unprotected: false }),
+        terminal: formatTerminalRef({
+          ...ref,
+          stopOrderId: next.orderId,
+          unprotected: false,
+          moves: [...(ref.moves ?? []), { at, kind: "stop", from: currentStop(t), to }],
+        }),
       } as any);
       res.json({ trade: after, order: next });
     }),
@@ -415,7 +432,15 @@ export function registerTerminalRoutes(app: Express): void {
         for (const id of ref.targetOrderIds) await cancelOrder(venue, ref.symbol, id);
         return placeOrder(venue, bracketAt("target", price, rules, side, `${ref.tag}-t${Date.now().toString(36)}`));
       });
-      const after = await s.updateTrade(t.id, { terminal: formatTerminalRef({ ...ref, targetOrderIds: [next.orderId] }) } as any);
+      const to = Number(next.stopPrice ?? price);
+      const lastTarget = [...(ref.moves ?? [])].reverse().find((m) => m.kind === "target")?.to ?? t.initialTarget ?? null;
+      const after = await s.updateTrade(t.id, {
+        terminal: formatTerminalRef({
+          ...ref,
+          targetOrderIds: [next.orderId],
+          moves: [...(ref.moves ?? []), { at: new Date().toISOString(), kind: "target", from: lastTarget, to }],
+        }),
+      } as any);
       res.json({ trade: after, order: next });
     }),
   );

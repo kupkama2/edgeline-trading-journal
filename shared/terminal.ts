@@ -288,6 +288,8 @@ export interface TerminalRef {
   targetOrderIds: number[];
   /** Market closes sent from the terminal, so their fills count as this trade's exit. */
   closeOrderIds?: number[];
+  /** Every bracket moved from the terminal: what it was, what it became, when. */
+  moves?: { at: string; kind: "stop" | "target"; from: number | null; to: number }[];
   /** Brackets that were asked for and refused — the trade is on the book without them. */
   unprotected?: boolean;
   /** When the terminal last read this trade back from the venue. */
@@ -310,7 +312,7 @@ export const formatTerminalRef = (ref: TerminalRef): string => JSON.stringify(re
 export interface VenueSnapshot {
   entry: { status: string; avgPrice: number; executedQty: number; updateTime: number } | null;
   /** This position side's fills on the symbol since the trade was sent. */
-  fills: { orderId: number; price: number; qty: number; time: number; commission: number; commissionUsd: boolean; realizedPnl: number }[];
+  fills: { tid: number; orderId: number; price: number; qty: number; time: number; commission: number; commissionUsd: boolean; realizedPnl: number }[];
   /** The quantity the venue holds on this position side now. */
   positionAmt: number;
   openOrderIds: number[];
@@ -323,8 +325,47 @@ export interface ReconcilePatch {
   entryTime?: string;
   exitPrice?: number | null;
   exitTime?: string | null;
+  exitReason?: string;
   fees?: number | null;
   cancelReason?: string;
+}
+
+/** A closing fill that took some of the position off before the rest went: a partial, for the ledger. */
+export interface Partial {
+  tid: number;
+  orderId: number;
+  price: number;
+  qty: number;
+  time: number;
+}
+
+/** Fills logged as partials carry the venue's fill id in the note, so a re-read never logs one twice. */
+export const partialNote = (tid: number) => `terminal · fill ${tid}`;
+
+/**
+ * How the trade ended, read off which order's fills closed it.
+ *
+ *   the stop            "stop" — unless it had been moved: to the entry is
+ *                       "breakeven", past it on the winning side "trailed"
+ *   a target            "target"
+ *   a close from here   "discretion"
+ */
+export function exitReasonFor(
+  ref: TerminalRef,
+  trade: { direction: string; entryPrice: number; stopMoves?: string | null },
+  exitFills: { orderId: number; price: number }[],
+): string | null {
+  if (exitFills.length === 0) return null;
+  const last = exitFills[exitFills.length - 1];
+  if ((ref.closeOrderIds ?? []).includes(last.orderId)) return "discretion";
+  if (ref.targetOrderIds.includes(last.orderId)) return "target";
+  if (last.orderId !== ref.stopOrderId && !(ref.moves ?? []).some((m) => m.kind === "stop")) return null;
+  const moved = !!trade.stopMoves && trade.stopMoves !== "[]" && trade.stopMoves !== "null";
+  if (!moved) return "stop";
+  const sign = trade.direction === "short" ? -1 : 1;
+  const edge = (sign * (last.price - trade.entryPrice)) / trade.entryPrice;
+  if (Math.abs(edge) <= 0.0005) return "breakeven";
+  return edge > 0 ? "trailed" : "stop";
 }
 
 const wavg = (xs: { price: number; qty: number }[]) => {
@@ -342,13 +383,14 @@ const wavg = (xs: { price: number; qty: number }[]) => {
  * drew are the plan, whatever the brackets did since.
  */
 export function reconcilePatch(
-  trade: { status: string; entryPrice: number; size: number; fees: number | null },
+  trade: { status: string; entryPrice: number; size: number; fees: number | null; direction?: string; stopMoves?: string | null; exitReason?: string | null },
   ref: TerminalRef,
   snap: VenueSnapshot,
-): ReconcilePatch | null {
+): { patch: ReconcilePatch | null; partials: Partial[] } {
+  const partials: Partial[] = [];
   const patch: ReconcilePatch = {};
   const entryFills = snap.fills.filter((f) => f.orderId === ref.entryOrderId);
-  const closing = snap.fills.filter((f) => f.orderId !== ref.entryOrderId);
+  const closing = snap.fills.filter((f) => f.orderId !== ref.entryOrderId).sort((a, b) => a.time - b.time || a.tid - b.tid);
   const feesKnown = snap.fills.every((f) => f.commissionUsd);
   const fees = feesKnown ? snap.fills.reduce((s, f) => s + f.commission, 0) : null;
 
@@ -357,9 +399,9 @@ export function reconcilePatch(
 
   if (trade.status === "pending") {
     if (snap.entry && (snap.entry.status === "CANCELED" || snap.entry.status === "EXPIRED" || snap.entry.status === "REJECTED") && filledQty === 0) {
-      return { status: "cancelled", cancelReason: "not_filled" };
+      return { patch: { status: "cancelled", cancelReason: "not_filled" }, partials };
     }
-    if (!entryDone) return null;
+    if (!entryDone) return { patch: null, partials };
     patch.status = "open";
     patch.entryPrice = entryFills.length ? wavg(entryFills) : snap.entry!.avgPrice;
     patch.size = filledQty || snap.entry!.executedQty;
@@ -369,15 +411,36 @@ export function reconcilePatch(
     if (entryFills.length && Math.abs(wavg(entryFills) - trade.entryPrice) > 1e-9) patch.entryPrice = wavg(entryFills);
     if (filledQty > 0 && Math.abs(filledQty - trade.size) > 1e-9) patch.size = filledQty;
   } else {
-    return null;
+    return { patch: null, partials };
+  }
+
+  /*
+   * Which closing fills were partials and which were the exit. Walking the
+   * fills in time order against the size that went on: everything that
+   * still left some position standing is a partial — a target taking its
+   * share — and the fills that brought it to flat are the exit. The ledger
+   * takes the partials; the exit price is the average of the rest.
+   */
+  const held = filledQty || patch.size || trade.size;
+  let gone = 0;
+  const exitFills: typeof closing = [];
+  for (const f of closing) {
+    const after = gone + f.qty;
+    if (after < held - 1e-9) partials.push({ tid: f.tid, orderId: f.orderId, price: f.price, qty: f.qty, time: f.time });
+    else exitFills.push(f);
+    gone = after;
   }
 
   const flat = Math.abs(snap.positionAmt) < 1e-9;
-  if ((trade.status === "open" || patch.status === "open") && flat && closing.length > 0) {
+  if ((trade.status === "open" || patch.status === "open") && flat && exitFills.length > 0) {
     patch.status = "closed";
-    patch.exitPrice = wavg(closing);
-    patch.exitTime = new Date(Math.max(...closing.map((f) => f.time))).toISOString();
+    patch.exitPrice = wavg(exitFills);
+    patch.exitTime = new Date(Math.max(...exitFills.map((f) => f.time))).toISOString();
+    if (!trade.exitReason) {
+      const why = exitReasonFor(ref, { direction: trade.direction ?? (ref.positionSide === "SHORT" ? "short" : "long"), entryPrice: patch.entryPrice ?? trade.entryPrice, stopMoves: trade.stopMoves }, exitFills);
+      if (why) patch.exitReason = why;
+    }
   }
   if (fees != null && Math.abs(fees - (trade.fees ?? 0)) > 1e-9) patch.fees = fees;
-  return Object.keys(patch).length ? patch : null;
+  return { patch: Object.keys(patch).length ? patch : null, partials };
 }

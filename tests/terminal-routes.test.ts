@@ -334,6 +334,19 @@ describe.skipIf(!DB)("the terminal against a stub venue", () => {
     expect(nextRef.stopOrderId).toBe(body.order.orderId);
     expect(nextRef.stopOrderId).not.toBe(oldStop);
     expect(JSON.parse(body.trade.stopMoves)).toMatchObject([{ price: 79600, note: "terminal" }]);
+    expect(nextRef.moves).toMatchObject([{ kind: "stop", from: 79000, to: 79600 }]);
+    ref = nextRef;
+  });
+
+  it("moves the target the same way, and remembers what it was", async () => {
+    const r = await send("POST", `/api/terminal/trades/${tradeId}/target`, { price: 83000 });
+    expect(r.status).toBe(200);
+    const body = await r.json();
+    const nextRef = JSON.parse(body.trade.terminal);
+    expect(nextRef.targetOrderIds).toEqual([body.order.orderId]);
+    expect(nextRef.moves.at(-1)).toMatchObject({ kind: "target", from: 82500, to: 83000 });
+    // The plan as drawn stays the plan.
+    expect(body.trade.initialTarget).toBe(82500);
     ref = nextRef;
   });
 
@@ -355,7 +368,7 @@ describe.skipIf(!DB)("the terminal against a stub venue", () => {
     const r = await send("POST", "/api/terminal/reconcile", {});
     expect((await r.json()).checked).toEqual([{ id: tradeId, status: "closed" }]);
     const t = await store.getTrade(tradeId);
-    expect(t).toMatchObject({ status: "closed", exitPrice: 79598, entryPrice: 79995, initialStop: 79000, initialTarget: 82500 });
+    expect(t).toMatchObject({ status: "closed", exitPrice: 79598, entryPrice: 79995, initialStop: 79000, initialTarget: 82500, exitReason: "stop" });
     expect(t.exitTime).toBeTruthy();
     expect(t.fees).toBeCloseTo(0.04);
   });
@@ -383,6 +396,32 @@ describe.skipIf(!DB)("the terminal against a stub venue", () => {
     expect(position.amt).toBe(0);
     expect(closed.status).toBe("closed");
     expect(closed.exitPrice).toBe(80010);
+    expect(closed.exitReason).toBe("discretion");
+  });
+
+  it("writes a scale-out as a partial in the ledger and closes at the last target, as a target", async () => {
+    const r = await send("POST", "/api/terminal/send", {
+      account: ACCOUNT,
+      plan: { symbol: "BTCUSDT", side: "long", entryType: "market", entryPrice: 80010, stop: 79000, targets: [80500, 81000], qty: 0.02, leverage: 3 },
+    });
+    expect(r.status).toBe(201);
+    const { trade, placed } = await r.json();
+    expect(placed.targetOrderIds).toHaveLength(2);
+    fillOrder(placed.targetOrderIds[0], 80500);
+    expect(position.amt).toBeCloseTo(0.01);
+    await send("POST", "/api/terminal/reconcile", {});
+    let t = await store.getTrade(trade.id);
+    expect(t.status).toBe("open");
+    expect(t.fills).toMatchObject([{ kind: "partial", price: 80500, size: 0.01 }]);
+    // Read again: the same fill is not logged twice.
+    await send("POST", "/api/terminal/reconcile", {});
+    t = await store.getTrade(trade.id);
+    expect(t.fills).toHaveLength(1);
+    fillOrder(placed.targetOrderIds[1], 81000);
+    await send("POST", "/api/terminal/reconcile", {});
+    t = await store.getTrade(trade.id);
+    expect(t).toMatchObject({ status: "closed", exitPrice: 81000, exitReason: "target", size: 0.02 });
+    expect(t.fills).toHaveLength(1);
   });
 
   it("cancels a resting plan: every order off, the trade marked pulled", async () => {
