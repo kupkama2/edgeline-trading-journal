@@ -9,7 +9,9 @@ import {
   LineChart,
   NotebookPen,
   Palette,
-  Settings2, BookOpen } from "lucide-react";
+  Settings2, BookOpen, Crosshair } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import type { SessionResponse } from "@/components/login-gate";
 import { XpChip, XpToaster } from "@/components/xp";
 import { useLayout, type LayoutVersion } from "@/lib/layout";
 import { usePublicMode } from "@/lib/public-mode";
@@ -263,6 +265,11 @@ function ChapterChip() {
 
 export function Shell({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
+  // The terminal tab exists only for the people the server lists.
+  const session = useQuery<SessionResponse>({ queryKey: ["/api/session"] });
+  const nav = session.data?.terminal
+    ? [...NAV.slice(0, 4), { href: "/terminal", label: "Terminal", icon: Crosshair }, ...NAV.slice(4)]
+    : NAV;
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -277,7 +284,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
           </Link>
 
           <nav className="ml-2 flex items-center gap-1 overflow-x-auto">
-            {NAV.map(({ href, label, icon: Icon }) => {
+            {nav.map(({ href, label, icon: Icon }) => {
               // /daily still resolves to the same page, so it must still
               // light the tab that replaced it.
               const active =

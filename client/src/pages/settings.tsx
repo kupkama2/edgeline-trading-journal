@@ -20,7 +20,7 @@ import { spanLabel, spanRange, useChapters, useDeleteChapter, useStartChapter } 
 import { inSpan } from "@shared/chapters";
 import { usePrefs, useSetPrefs } from "@/lib/prefs";
 import type { ReviewMode } from "@shared/review-pressure";
-import { DateTime24, localNow, toIso } from "@/components/trade-shared";
+import { DateTime24, Segmented, localNow, toIso } from "@/components/trade-shared";
 import {
   useMistakeTags,
   useCreateTag,
@@ -70,6 +70,8 @@ function AccountFeesRow({
         wallet?: string | null;
         /** "…ab12" when a Binance key is held. The key itself never comes back. */
         binanceKeyHint?: string | null;
+        binanceEnv?: string;
+        binanceTrade?: boolean;
       }
     | undefined;
   /** The other accounts, for folding a passed evaluation into one of them. */
@@ -87,6 +89,8 @@ function AccountFeesRow({
   const [bnKey, setBnKey] = useState("");
   const [bnSecret, setBnSecret] = useState("");
   const [bnOpen, setBnOpen] = useState(false);
+  /** What the key is for: the sync alone, or the terminal — on the live venue or its testnet. */
+  const [keyMode, setKeyMode] = useState<"read" | "trade-live" | "trade-testnet">("read");
   /** The last sync's trade-by-trade account, open until it has been looked at. */
   const [report, setReport] = useState<{ venue: string; account: SyncSummary["accounts"][number] } | null>(null);
   const [balance, setBalance] = useState("");
@@ -165,11 +169,21 @@ function AccountFeesRow({
         ...storedFees(),
         binanceKey: bnKey.trim(),
         binanceSecret: bnSecret.trim(),
+        binanceEnv: keyMode === "trade-testnet" ? "testnet" : "live",
+        binanceTrade: keyMode !== "read",
       } as any);
       setBnKey("");
       setBnSecret("");
       setBnOpen(false);
-      toast({ title: "Key saved", description: `${name} will sync its positions from Binance. The key was checked: it can read, and it cannot spend.` });
+      toast({
+        title: "Key saved",
+        description:
+          keyMode === "read"
+            ? `${name} will sync its positions from Binance. The key was checked: it can read, and it cannot spend.`
+            : keyMode === "trade-testnet"
+              ? `${name} trades on the Binance futures testnet from the terminal.`
+              : `${name} trades on Binance from the terminal. The key was checked: futures on, withdrawals off, locked to an IP.`,
+      });
     } catch (err: any) {
       // The server's refusal is the useful part — "this key can withdraw" is
       // an instruction, and it must not be flattened into "didn't save".
@@ -396,6 +410,16 @@ function AccountFeesRow({
                 <span className="font-mono text-[11px] text-muted-foreground" data-testid={`text-binance-key-${name}`}>
                   key {existing.binanceKeyHint}
                 </span>
+                {existing.binanceTrade && (
+                  <span
+                    className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider ${
+                      existing.binanceEnv === "testnet" ? "bg-amber-500/15 text-amber-500" : "bg-red-500/15 text-red-400"
+                    }`}
+                    data-testid={`badge-binance-trading-${name}`}
+                  >
+                    {existing.binanceEnv === "testnet" ? "testnet · trading" : "live · trading"}
+                  </span>
+                )}
                 <Button
                   size="sm"
                   variant="outline"
@@ -415,10 +439,21 @@ function AccountFeesRow({
               </>
             ) : (
               <>
+                <Segmented
+                  size="xs"
+                  value={keyMode}
+                  onChange={setKeyMode}
+                  ariaLabel="What the key is for"
+                  options={[
+                    { id: "read", label: "read-only", testId: `button-key-mode-read-${name}` },
+                    { id: "trade-live", label: "trading", title: "Places orders from the terminal on the live venue", testId: `button-key-mode-live-${name}` },
+                    { id: "trade-testnet", label: "testnet", title: "A futures testnet key: play money, for the terminal", testId: `button-key-mode-testnet-${name}` },
+                  ]}
+                />
                 <Input
                   value={bnKey}
                   onChange={(e) => setBnKey(e.target.value)}
-                  placeholder="Binance API key (read-only)"
+                  placeholder={keyMode === "read" ? "Binance API key (read-only)" : keyMode === "trade-testnet" ? "Testnet API key" : "Binance API key (trading)"}
                   spellCheck={false}
                   autoComplete="off"
                   className="h-7 w-52 max-w-full font-mono text-[11px]"
@@ -451,9 +486,24 @@ function AccountFeesRow({
                   </Button>
                 )}
                 <span className="basis-full text-[10px] leading-snug text-muted-foreground">
-                  Make it in Binance under API Management with only <em>Enable Reading</em> ticked —
-                  that is all the sync needs, futures history included. A key that can withdraw,
-                  transfer, or place spot or margin orders is refused.
+                  {keyMode === "read" ? (
+                    <>
+                      Make it in Binance under API Management with only <em>Enable Reading</em> ticked —
+                      that is all the sync needs, futures history included. A key that can withdraw,
+                      transfer, or place spot or margin orders is refused.
+                    </>
+                  ) : keyMode === "trade-testnet" ? (
+                    <>
+                      A key from the Binance futures testnet, for the terminal. Play money; it is checked by
+                      reading the testnet balance with it.
+                    </>
+                  ) : (
+                    <>
+                      A key the terminal places orders with. It must have <em>Enable Futures</em> on,
+                      withdrawals and transfers off, and be restricted to the server's IP — the venue is
+                      asked, and a key that fails any of those is refused.
+                    </>
+                  )}
                 </span>
               </>
             )}

@@ -1,4 +1,5 @@
 import type { Express, Request, Response, NextFunction } from "express";
+import { terminalAllowed } from "./terminal";
 import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
 import { randomBytes, timingSafeEqual } from "node:crypto";
@@ -333,7 +334,7 @@ export function setupAuth(app: Express) {
 
   app.get("/api/session", async (req: Request, res: Response) => {
     const user = req.session?.userId ? await accounts.byId(req.session.userId) : undefined;
-    res.json({ user: user ? toSessionUser(user) : null, provider: "google" });
+    res.json({ user: user ? toSessionUser(user) : null, provider: "google", terminal: terminalAllowed(user?.email) });
   });
 
   app.post("/api/logout", (req: Request, res: Response) => {
@@ -390,7 +391,8 @@ function setupLocalAccount(app: Express) {
   }
 
   app.get("/api/session", async (_req: Request, res: Response) => {
-    res.json({ user: toSessionUser(await localUser()), provider: "local" });
+    const user = await localUser();
+    res.json({ user: toSessionUser(user), provider: "local", terminal: terminalAllowed(user.email) });
   });
 
   app.post("/api/logout", (_req: Request, res: Response) => res.json({ ok: true }));

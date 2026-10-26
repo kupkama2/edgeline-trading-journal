@@ -46,7 +46,8 @@ import { oneAtATime } from "./venue-sync";
 import { freshStartRefusal } from "@shared/chapters";
 import { normalizeSetupRead } from "@shared/setup-read";
 import { debriefTrades, normalizeDebrief } from "@shared/debrief";
-import { syncBinance, verifyKey } from "./binance-account";
+import { syncBinance, verifyKey, verifyTradingKey } from "./binance-account";
+import { registerTerminalRoutes } from "./terminal";
 import { seal } from "./secrets";
 import { hlAsset, splitHlAsset, venueOfAccount } from "@shared/hyperliquid";
 
@@ -588,6 +589,9 @@ export async function registerRoutes(
   httpServer: Server,
   app: Express,
 ): Promise<Server> {
+  // The terminal's own routes, behind their own allowlist (server/terminal.ts).
+  registerTerminalRoutes(app);
+
   /* ------------------------------- trades ------------------------------- */
   app.get("/api/trades", async (req, res) => {
     res.json(await store(req).listTrades());
@@ -1767,8 +1771,15 @@ export async function registerRoutes(
        */
       if (!data.binanceSecret)
         return res.status(400).json({ message: "A key needs its secret." });
-      const verdict = await verifyKey({ key: data.binanceKey, secret: data.binanceSecret });
+      // A testnet key is a trading key by nature: the testnet has nothing to
+      // read that was not put there by trading, and nothing to lose.
+      const env = data.binanceEnv ?? "live";
+      const trades = env === "testnet" || data.binanceTrade === true;
+      const creds = { key: data.binanceKey, secret: data.binanceSecret };
+      const verdict = trades ? await verifyTradingKey(creds, env) : await verifyKey(creds);
       if (!verdict.ok) return res.status(400).json({ message: verdict.reason });
+      data.binanceEnv = env;
+      data.binanceTrade = trades;
       data.binanceSecret = seal(data.binanceSecret);
     }
     res.json(publicSettings(await store(req).upsertAccountSettings(data)));

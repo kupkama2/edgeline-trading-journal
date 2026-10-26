@@ -33,6 +33,7 @@ import {
   type KeyRestrictions,
 } from "@shared/binance-account";
 import { marketsSeen, tradesFromFills } from "@shared/hyperliquid";
+import { tradingKeyRefusal } from "@shared/terminal";
 import { egressFor } from "./egress";
 import { ensureCatalogue } from "./outcomes";
 import { open } from "./secrets";
@@ -47,6 +48,17 @@ import { emptySync, writeVenueTrades, type AccountSync, type SyncSummary } from 
  */
 const SAPI = (process.env.BINANCE_SAPI_BASE || process.env.BINANCE_BASE || "https://api.binance.com").replace(/\/+$/, "");
 const FUTURES = (process.env.BINANCE_FUTURES_BASE || "https://fapi.binance.com").replace(/\/+$/, "");
+/*
+ * The futures testnet is its own venue with its own keys and play money.
+ * Overridable because Binance has moved it before (testnet.binancefuture.com
+ * → the "demo trading" host); the terminal's status page says which host it
+ * is talking to, so a move shows up as a sentence rather than a mystery.
+ */
+const TESTNET = (process.env.BINANCE_TESTNET_FUTURES_BASE || "https://testnet.binancefuture.com").replace(/\/+$/, "");
+
+export type BinanceEnv = "live" | "testnet";
+/** The futures host an account's key belongs to. */
+export const futuresBase = (env: string | null | undefined): string => (env === "testnet" ? TESTNET : FUTURES);
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** How far back a sync reads positions that have closed. */
@@ -96,7 +108,18 @@ export interface Creds {
   secret: string;
 }
 
-async function signedGet(base: string, path: string, params: Record<string, string | number | undefined>, creds: Creds): Promise<unknown> {
+/**
+ * One signed request, any method. Every parameter rides in the query string
+ * — Binance accepts that for POST and DELETE as well as GET — so the bytes
+ * signed and the bytes sent are the same string whatever the verb.
+ */
+export async function signedCall(
+  method: "GET" | "POST" | "PUT" | "DELETE",
+  base: string,
+  path: string,
+  params: Record<string, string | number | undefined>,
+  creds: Creds,
+): Promise<unknown> {
   const q = signedQuery(params, Date.now());
   const signature = createHmac("sha256", creds.secret).update(q).digest("hex");
   const url = `${base}${path}?${q}&signature=${signature}`;
@@ -104,6 +127,7 @@ async function signedGet(base: string, path: string, params: Record<string, stri
   const timer = setTimeout(() => ctl.abort(), 20_000);
   try {
     const res = await undiciFetch(url, {
+      method,
       headers: { "X-MBX-APIKEY": creds.key, accept: "application/json" },
       signal: ctl.signal,
       dispatcher: egressFor(base),
@@ -137,6 +161,9 @@ async function signedGet(base: string, path: string, params: Record<string, stri
   }
 }
 
+const signedGet = (base: string, path: string, params: Record<string, string | number | undefined>, creds: Creds) =>
+  signedCall("GET", base, path, params, creds);
+
 /* ------------------------------ the key ------------------------------ */
 
 /**
@@ -162,14 +189,46 @@ export async function verifyKey(creds: Creds): Promise<{ ok: true; restrictions:
   return refusal ? { ok: false, reason: refusal } : { ok: true, restrictions };
 }
 
-/* ------------------------------ the reads ------------------------------ */
-
-export async function fetchPositions(creds: Creds) {
-  return parsePositions(await signedGet(FUTURES, "/fapi/v2/positionRisk", {}, creds));
+/**
+ * A key that will TRADE, checked before it is kept.
+ *
+ * Live: the venue's own word on the key's permissions, held to the trading
+ * rules — futures on, money movement off, locked to an IP. Testnet: there is
+ * no permissions endpoint and nothing to steal, so the check is that the
+ * key can read its own futures balance on the testnet host, which is also
+ * the check that it IS a testnet key rather than a live one pasted in the
+ * wrong box.
+ */
+export async function verifyTradingKey(
+  creds: Creds,
+  env: BinanceEnv,
+): Promise<{ ok: true; restrictions: KeyRestrictions | null } | { ok: false; reason: string }> {
+  if (env === "testnet") {
+    try {
+      await signedGet(TESTNET, "/fapi/v2/balance", {}, creds);
+      return { ok: true, restrictions: null };
+    } catch (err: any) {
+      return { ok: false, reason: `The testnet did not accept this key: ${String(err?.message ?? err)}` };
+    }
+  }
+  let restrictions: KeyRestrictions;
+  try {
+    restrictions = await fetchRestrictions(creds);
+  } catch (err: any) {
+    return { ok: false, reason: `Could not confirm what this key may do: ${String(err?.message ?? err)}` };
+  }
+  const refusal = tradingKeyRefusal(restrictions);
+  return refusal ? { ok: false, reason: refusal } : { ok: true, restrictions };
 }
 
-export async function fetchOpenOrders(creds: Creds) {
-  return parseOpenOrders(await signedGet(FUTURES, "/fapi/v1/openOrders", {}, creds));
+/* ------------------------------ the reads ------------------------------ */
+
+export async function fetchPositions(creds: Creds, base = FUTURES) {
+  return parsePositions(await signedGet(base, "/fapi/v2/positionRisk", {}, creds));
+}
+
+export async function fetchOpenOrders(creds: Creds, base = FUTURES) {
+  return parseOpenOrders(await signedGet(base, "/fapi/v1/openOrders", {}, creds));
 }
 
 /** [from, to) cut into consecutive windows no longer than Binance allows. */
@@ -204,13 +263,13 @@ async function readWindow<T>(
 }
 
 /** Symbols that realised a P&L inside the lookback — the closed trades to go and read. */
-export async function fetchClosedSymbols(creds: Creds, since: number, now = Date.now()): Promise<string[]> {
+export async function fetchClosedSymbols(creds: Creds, since: number, now = Date.now(), base = FUTURES): Promise<string[]> {
   const seen = new Set<string>();
   for (const [start, end] of windows(since, now)) {
     const { rows } = await readWindow(
       async (a, b) => {
         const got: any = await signedGet(
-          FUTURES,
+          base,
           "/fapi/v1/income",
           { incomeType: "REALIZED_PNL", startTime: a, endTime: b, limit: PAGE },
           creds,
@@ -238,6 +297,7 @@ export async function fetchUserTrades(
   symbol: string,
   since: number,
   now = Date.now(),
+  base = FUTURES,
 ): Promise<{ rows: BinanceUserTrade[]; truncated: boolean }> {
   const byId = new Map<number, BinanceUserTrade>();
   let truncated = false;
@@ -245,7 +305,7 @@ export async function fetchUserTrades(
     const got = await readWindow(
       async (a, b) =>
         parseUserTrades(
-          await signedGet(FUTURES, "/fapi/v1/userTrades", { symbol, startTime: a, endTime: b, limit: PAGE }, creds),
+          await signedGet(base, "/fapi/v1/userTrades", { symbol, startTime: a, endTime: b, limit: PAGE }, creds),
         ),
       start,
       end,
@@ -292,11 +352,12 @@ export async function syncBinance(userId: number, onlyAccount?: string): Promise
         );
       }
       const creds: Creds = { key: acct.binanceKey!, secret };
-      row.source = `…${acct.binanceKey!.slice(-4)}`;
+      const base = futuresBase(acct.binanceEnv);
+      row.source = `…${acct.binanceKey!.slice(-4)}${acct.binanceEnv === "testnet" ? " (testnet)" : ""}`;
 
       const now = Date.now();
-      const positions = await fetchPositions(creds);
-      const closedSymbols = await fetchClosedSymbols(creds, now - LOOKBACK_MS, now);
+      const positions = await fetchPositions(creds, base);
+      const closedSymbols = await fetchClosedSymbols(creds, now - LOOKBACK_MS, now, base);
       const openSymbols = Array.from(positions.entries())
         .filter(([, p]) => Math.abs(p.amt) > 1e-9)
         .map(([s]) => s);
@@ -323,7 +384,7 @@ export async function syncBinance(userId: number, onlyAccount?: string): Promise
         }
         try {
           const since = now - (isOpen.has(symbol) ? OPEN_LOOKBACK_MS : LOOKBACK_MS);
-          const { rows, truncated: cut } = await fetchUserTrades(creds, symbol, since, now);
+          const { rows, truncated: cut } = await fetchUserTrades(creds, symbol, since, now, base);
           if (cut) {
             truncated.push(symbol);
             continue;
@@ -356,7 +417,7 @@ export async function syncBinance(userId: number, onlyAccount?: string): Promise
         problems.push(`${hedged.join(", ")} ${hedged.length === 1 ? "was" : "were"} traded in hedge mode, which the sync cannot read as single positions — log those by hand.`);
       if (problems.length) row.error = problems.join(" ");
 
-      const orders = await fetchOpenOrders(creds).catch(() => []);
+      const orders = await fetchOpenOrders(creds, base).catch(() => []);
       await writeVenueTrades(store, row, read.trades, {
         symbolOf: (s) => baseAssetOf(s, cat),
         levelsFor: (t) => levelsFromOpenOrders(t, orders),

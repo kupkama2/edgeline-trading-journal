@@ -83,7 +83,7 @@ const TIMEFRAMES = [
 
 type Timeframe = (typeof TIMEFRAMES)[number]["id"];
 
-const pill = (on: boolean) =>
+export const pill = (on: boolean) =>
   `rounded-md border px-1.5 py-0.5 font-mono text-[10px] leading-tight transition-colors ${
     on
       ? "border-primary/60 bg-secondary text-foreground"
@@ -341,7 +341,7 @@ export function TradeChart({
  * down when it goes, rather than a chart object outliving the element it was
  * given.
  */
-function Candles({
+export function Candles({
   tradeId,
   interval,
   candles,
@@ -350,15 +350,25 @@ function Candles({
   direction,
   entryMs,
   exitMs,
+  loadPage,
+  seriesKey,
+  height = HEIGHT,
 }: {
-  tradeId: number;
+  /** The trade whose candle route pages history. Omit it and pass `loadPage`. */
+  tradeId?: number;
   interval: string;
   candles: Candle[];
   levels: Level[];
   onLevel?: (field: LevelField, price: number, done: boolean) => void;
-  direction: string;
-  entryMs: number;
-  exitMs: number | null;
+  direction?: string;
+  /** Where to mark the entry and exit. Omitted, nothing is marked. */
+  entryMs?: number | null;
+  exitMs?: number | null;
+  /** History for a chart that is not a trade's — the terminal's, by symbol. */
+  loadPage?: (before: number) => Promise<{ candles?: Candle[] }>;
+  /** What "a new set of bars" means when there is no trade id: the symbol. */
+  seriesKey?: string;
+  height?: number;
 }) {
   const { theme } = useTheme();
   const hostRef = useRef<HTMLDivElement>(null);
@@ -437,7 +447,7 @@ function Candles({
     // A fetch still in flight belongs to the old timeframe; it must not hold
     // the loader shut for the new one either.
     loadingRef.current = false;
-  }, [tradeId, interval]);
+  }, [tradeId, seriesKey, interval]);
 
   /** Everything drawn: pages scrolled into, then the trade's own window. */
   const bars = () => (olderRef.current.length ? [...olderRef.current, ...candles] : candles);
@@ -459,7 +469,9 @@ function Candles({
     loadingRef.current = true;
     const generation = generationRef.current;
     try {
-      const page = await fetchCandlePage(tradeId, interval, drawn[0].t - 1);
+      const page = loadPage
+        ? await loadPage(drawn[0].t - 1)
+        : await fetchCandlePage(tradeId ?? 0, interval, drawn[0].t - 1);
       // The timeframe (or the trade) changed while this was in flight:
       // prepending it would draw the old bars over the new series.
       if (generation !== generationRef.current) return;
@@ -612,7 +624,7 @@ function Candles({
       return (best.t / 1000) as UTCTimestamp;
     };
     const long = direction === "long";
-    const marks: SeriesMarker<Time>[] = [
+    const marks: SeriesMarker<Time>[] = entryMs == null ? [] : [
       {
         time: snap(entryMs),
         position: long ? "belowBar" : "aboveBar",
@@ -659,7 +671,7 @@ function Candles({
     };
     ts.subscribeVisibleLogicalRangeChange(onRange);
     return () => ts.unsubscribeVisibleLogicalRangeChange(onRange);
-  }, [epoch, tradeId, interval, candles]);
+  }, [epoch, tradeId, seriesKey, interval, candles]);
 
   /** How close the pointer has to be to a line to mean it. */
   const GRAB_PX = 7;
@@ -743,7 +755,7 @@ function Candles({
     <div className="relative">
       <div
         ref={hostRef}
-        style={{ height: HEIGHT }}
+        style={{ height }}
         data-testid="chart-canvas"
         /*
          * Drag a level to where it belongs.

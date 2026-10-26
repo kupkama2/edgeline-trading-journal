@@ -8,6 +8,8 @@ import type { SessionUser } from "@shared/schema";
 export interface SessionResponse {
   user: SessionUser | null;
   provider: "google" | "local";
+  /** Whether the terminal exists for this person. Absent means no. */
+  terminal?: boolean;
 }
 
 /** Google's mark, inlined — a CDN request just to draw a logo is a tracker. */
