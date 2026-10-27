@@ -109,9 +109,14 @@ export interface Creds {
 }
 
 /**
- * One signed request, any method. Every parameter rides in the query string
- * — Binance accepts that for POST and DELETE as well as GET — so the bytes
- * signed and the bytes sent are the same string whatever the verb.
+ * One signed request, any method.
+ *
+ * GET and DELETE carry their parameters in the query string. POST and PUT
+ * carry them in the body, form-encoded: the older futures endpoints read
+ * either, but the Algo Order service reads only the body — a POST with
+ * everything in the query came back "Mandatory parameter 'algotype' was not
+ * sent" with algoType plainly in the URL. This is also how ccxt sends them.
+ * Either way the bytes signed and the bytes sent are the same string.
  */
 export async function signedCall(
   method: "GET" | "POST" | "PUT" | "DELETE",
@@ -122,13 +127,20 @@ export async function signedCall(
 ): Promise<unknown> {
   const q = signedQuery(params, Date.now());
   const signature = createHmac("sha256", creds.secret).update(q).digest("hex");
-  const url = `${base}${path}?${q}&signature=${signature}`;
+  const signed = `${q}&signature=${signature}`;
+  const inBody = method === "POST" || method === "PUT";
+  const url = inBody ? `${base}${path}` : `${base}${path}?${signed}`;
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), 20_000);
   try {
     const res = await undiciFetch(url, {
       method,
-      headers: { "X-MBX-APIKEY": creds.key, accept: "application/json" },
+      headers: {
+        "X-MBX-APIKEY": creds.key,
+        accept: "application/json",
+        ...(inBody ? { "content-type": "application/x-www-form-urlencoded" } : {}),
+      },
+      body: inBody ? signed : undefined,
       signal: ctl.signal,
       dispatcher: egressFor(base),
     } as any);

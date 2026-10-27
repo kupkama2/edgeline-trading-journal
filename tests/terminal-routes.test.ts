@@ -99,6 +99,11 @@ function fillOrder(orderId: number, price: number, qty?: number) {
 function startVenue(): Promise<string> {
   return new Promise((resolve) => {
     venue = createServer((req, res) => {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => handle(req, res, body));
+    });
+    const handle = (req: any, res: any, body: string) => {
       const u = new URL(req.url ?? "/", "http://x");
       const json = (x: unknown, status = 200) => {
         res.statusCode = status;
@@ -122,13 +127,17 @@ function startVenue(): Promise<string> {
       if (u.pathname === "/api/v3/exchangeInfo") return json({ symbols: [] });
 
       const key = req.headers["x-mbx-apikey"] as string | undefined;
-      const sig = u.searchParams.get("signature") ?? "";
-      u.searchParams.delete("signature");
-      const query = u.search.slice(1);
+      // Like the algo service: a POST's parameters are read from the body
+      // only. Anything left in the query string of a POST is not seen.
+      const raw = req.method === "POST" || req.method === "PUT" ? body : u.search.slice(1);
+      const sp = new URLSearchParams(raw);
+      const sig = sp.get("signature") ?? "";
+      const query = raw.replace(/&signature=[0-9a-f]*$/, "");
       const expected = key === KEY ? createHmac("sha256", SECRET).update(query).digest("hex") : "";
-      const signed = key === KEY && sig === expected && Math.abs(Number(u.searchParams.get("timestamp")) - Date.now()) < 60_000;
+      const signed = key === KEY && sig === expected && Math.abs(Number(sp.get("timestamp")) - Date.now()) < 60_000;
       if (!signed) return json({ code: -2015, msg: "Invalid API-key, IP, or permissions for action." }, 401);
-      const params = Object.fromEntries(u.searchParams.entries());
+      sp.delete("signature");
+      const params = Object.fromEntries(sp.entries());
       calls.push({ method: req.method ?? "GET", path: u.pathname, params });
 
       switch (`${req.method} ${u.pathname}`) {
@@ -208,7 +217,7 @@ function startVenue(): Promise<string> {
         default:
           return json({ code: -1121, msg: "Invalid symbol." }, 400);
       }
-    });
+    };
     venue.listen(0, "127.0.0.1", () => resolve(`http://127.0.0.1:${(venue.address() as any).port}`));
   });
 }
