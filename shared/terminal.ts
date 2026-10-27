@@ -288,10 +288,12 @@ export interface TerminalRef {
   entryOrderId: number | null;
   stopOrderId: number | null;
   targetOrderIds: number[];
-  /** Market closes sent from the terminal, so their fills count as this trade's exit. */
+  /** Market closes and partial takes sent from the terminal, so their fills count as this trade's. */
   closeOrderIds?: number[];
-  /** Every bracket moved from the terminal: what it was, what it became, when. */
-  moves?: { at: string; kind: "stop" | "target"; from: number | null; to: number }[];
+  /** Adds sent from the terminal: fills on these grow the position and go to the ledger as adds. */
+  addOrderIds?: number[];
+  /** Every level moved from the terminal: what it was, what it became, when. */
+  moves?: { at: string; kind: "stop" | "target" | "entry"; from: number | null; to: number }[];
   /**
    * Brackets waiting for a resting entry to fill. The venue will not hold a
    * close-position order for a position that does not exist, so the stop
@@ -320,8 +322,13 @@ export const formatTerminalRef = (ref: TerminalRef): string => JSON.stringify(re
 /** What the venue says now, in the terms the reconcile reads. */
 export interface VenueSnapshot {
   entry: { status: string; avgPrice: number; executedQty: number; updateTime: number } | null;
-  /** This position side's fills on the symbol since the trade was sent. */
-  fills: { tid: number; orderId: number; price: number; qty: number; time: number; commission: number; commissionUsd: boolean; realizedPnl: number }[];
+  /**
+   * This position side's fills on the symbol since the trade was sent. Fills
+   * from orders this terminal did not place — a close from the venue's own
+   * app — are marked `foreign`: they count only when they are the only
+   * explanation for a position that has gone flat.
+   */
+  fills: { tid: number; orderId: number; price: number; qty: number; time: number; commission: number; commissionUsd: boolean; realizedPnl: number; side?: "BUY" | "SELL"; foreign?: boolean }[];
   /** The quantity the venue holds on this position side now. */
   positionAmt: number;
   openOrderIds: number[];
@@ -395,22 +402,30 @@ export function reconcilePatch(
   trade: { status: string; entryPrice: number; size: number; fees: number | null; direction?: string; stopMoves?: string | null; exitReason?: string | null },
   ref: TerminalRef,
   snap: VenueSnapshot,
-): { patch: ReconcilePatch | null; partials: Partial[] } {
+): { patch: ReconcilePatch | null; partials: Partial[]; adds: Partial[] } {
   const partials: Partial[] = [];
   const patch: ReconcilePatch = {};
-  const entryFills = snap.fills.filter((f) => f.orderId === ref.entryOrderId);
-  const closing = snap.fills.filter((f) => f.orderId !== ref.entryOrderId).sort((a, b) => a.time - b.time || a.tid - b.tid);
-  const feesKnown = snap.fills.every((f) => f.commissionUsd);
-  const fees = feesKnown ? snap.fills.reduce((s, f) => s + f.commission, 0) : null;
+  const own = snap.fills.filter((f) => !f.foreign);
+  const addIds = new Set(ref.addOrderIds ?? []);
+  const entryFills = own.filter((f) => f.orderId === ref.entryOrderId);
+  // Adds grow the position: the ledger takes them, the walk below counts them as held.
+  const adds: Partial[] = own
+    .filter((f) => addIds.has(f.orderId))
+    .map((f) => ({ tid: f.tid, orderId: f.orderId, price: f.price, qty: f.qty, time: f.time }));
+  const byTime = (a: { time: number; tid: number }, b: { time: number; tid: number }) => a.time - b.time || a.tid - b.tid;
+  const closing = own.filter((f) => f.orderId !== ref.entryOrderId && !addIds.has(f.orderId)).sort(byTime);
+  const foreignClosing = snap.fills.filter((f) => f.foreign).sort(byTime);
+  const feesKnown = own.every((f) => f.commissionUsd);
+  const fees = feesKnown ? own.reduce((s, f) => s + f.commission, 0) : null;
 
   const filledQty = entryFills.reduce((s, f) => s + f.qty, 0);
   const entryDone = snap.entry?.status === "FILLED" || (snap.entry?.status === "PARTIALLY_FILLED" && filledQty > 0);
 
   if (trade.status === "pending") {
     if (snap.entry && (snap.entry.status === "CANCELED" || snap.entry.status === "EXPIRED" || snap.entry.status === "REJECTED") && filledQty === 0) {
-      return { patch: { status: "cancelled", cancelReason: "not_filled" }, partials };
+      return { patch: { status: "cancelled", cancelReason: "not_filled" }, partials, adds };
     }
-    if (!entryDone) return { patch: null, partials };
+    if (!entryDone) return { patch: null, partials, adds };
     patch.status = "open";
     patch.entryPrice = entryFills.length ? wavg(entryFills) : snap.entry!.avgPrice;
     patch.size = filledQty || snap.entry!.executedQty;
@@ -420,36 +435,56 @@ export function reconcilePatch(
     if (entryFills.length && Math.abs(wavg(entryFills) - trade.entryPrice) > 1e-9) patch.entryPrice = wavg(entryFills);
     if (filledQty > 0 && Math.abs(filledQty - trade.size) > 1e-9) patch.size = filledQty;
   } else {
-    return { patch: null, partials };
+    return { patch: null, partials, adds };
   }
 
   /*
    * Which closing fills were partials and which were the exit. Walking the
-   * fills in time order against the size that went on: everything that
-   * still left some position standing is a partial — a target taking its
-   * share — and the fills that brought it to flat are the exit. The ledger
-   * takes the partials; the exit price is the average of the rest.
+   * fills in time order against the size that went on — the entry plus any
+   * adds: everything that still left some position standing is a partial (a
+   * target taking its share, a take from the terminal) and the fills that
+   * brought it to flat are the exit. The ledger takes the partials; the exit
+   * price is the average of the rest.
+   *
+   * A position that is flat without this terminal's fills explaining it was
+   * closed somewhere else — the venue's own app. Then, and only then, the
+   * fills from orders this terminal never placed are taken as the rest of
+   * the story, and the trade closes "by hand".
    */
-  const held = filledQty || patch.size || trade.size;
+  const flat = Math.abs(snap.positionAmt) < 1e-9;
+  const held = (filledQty || patch.size || trade.size) + adds.reduce((s, a) => s + a.qty, 0);
   let gone = 0;
   const exitFills: typeof closing = [];
-  for (const f of closing) {
-    const after = gone + f.qty;
-    if (after < held - 1e-9) partials.push({ tid: f.tid, orderId: f.orderId, price: f.price, qty: f.qty, time: f.time });
-    else exitFills.push(f);
-    gone = after;
+  let closedElsewhere = false;
+  const walk = (list: typeof closing, untilCovered = false) => {
+    for (const f of list) {
+      if (untilCovered && gone >= held - 1e-9) break;
+      const after = gone + f.qty;
+      if (after < held - 1e-9) partials.push({ tid: f.tid, orderId: f.orderId, price: f.price, qty: f.qty, time: f.time });
+      else exitFills.push(f);
+      gone = after;
+    }
+  };
+  walk(closing);
+  if (flat && gone < held - 1e-9 && foreignClosing.length > 0) {
+    closedElsewhere = true;
+    walk(foreignClosing, true);
   }
 
-  const flat = Math.abs(snap.positionAmt) < 1e-9;
   if ((trade.status === "open" || patch.status === "open") && flat && exitFills.length > 0) {
     patch.status = "closed";
     patch.exitPrice = wavg(exitFills);
     patch.exitTime = new Date(Math.max(...exitFills.map((f) => f.time))).toISOString();
     if (!trade.exitReason || trade.exitReason === "other") {
-      const why = exitReasonFor(ref, { direction: trade.direction ?? (ref.positionSide === "SHORT" ? "short" : "long"), entryPrice: patch.entryPrice ?? trade.entryPrice, stopMoves: trade.stopMoves }, exitFills);
+      const why = closedElsewhere
+        ? "discretion"
+        : exitReasonFor(ref, { direction: trade.direction ?? (ref.positionSide === "SHORT" ? "short" : "long"), entryPrice: patch.entryPrice ?? trade.entryPrice, stopMoves: trade.stopMoves }, exitFills);
       if (why) patch.exitReason = why;
     }
   }
   if (fees != null && Math.abs(fees - (trade.fees ?? 0)) > 1e-9) patch.fees = fees;
-  return { patch: Object.keys(patch).length ? patch : null, partials };
+  return { patch: Object.keys(patch).length ? patch : null, partials, adds };
 }
+
+/** An add logged from the terminal carries the venue's fill id, as a partial does. */
+export const addNote = (tid: number) => `terminal · add ${tid}`;

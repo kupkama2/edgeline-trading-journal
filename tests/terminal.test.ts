@@ -15,6 +15,7 @@ import {
 } from "../shared/terminal";
 import { parseRestrictions } from "../shared/binance-account";
 import { streamUrl, worthAReadBack } from "../server/binance-stream";
+import { parseAlgoOrder } from "../server/binance-trade";
 
 /**
  * The terminal, the half that can be wrong without a venue: what a plan
@@ -231,6 +232,29 @@ describe("what the venue's answer does to the trade", () => {
     expect(by(2, 79500, '[{"at":"x","price":79500}]')).toBe("stop");
   });
 
+  it("counts an add as more on, logs it, and closes only once the whole of it is gone", () => {
+    const withAdd = { ...ref, addOrderIds: [7] };
+    const more = [fill(1, 79990, 0.05, 1), fill(7, 80100, 0.05, 2_000)];
+    const grown = reconcilePatch(open, withAdd, { entry: filled, fills: more, positionAmt: 0.1, openOrderIds: [2, 3] });
+    expect(grown.patch?.status).toBeUndefined();
+    expect(grown.adds).toMatchObject([{ orderId: 7, price: 80100, qty: 0.05 }]);
+    // Half off at the first target is a partial against the grown size, not an exit.
+    const half = reconcilePatch(open, withAdd, { entry: filled, fills: [...more, fill(3, 81000, 0.05, 3_000)], positionAmt: 0.05, openOrderIds: [2, 4] });
+    expect(half.patch?.status).toBeUndefined();
+    expect(half.partials).toMatchObject([{ orderId: 3, qty: 0.05 }]);
+    const done = reconcilePatch(open, withAdd, { entry: filled, fills: [...more, fill(3, 81000, 0.05, 3_000), fill(4, 82000, 0.05, 4_000)], positionAmt: 0, openOrderIds: [] });
+    expect(done.patch).toMatchObject({ status: "closed", exitPrice: 82000, exitReason: "target" });
+  });
+
+  it("closes a trade flattened from the venue's own app at those fills, as a close by hand", () => {
+    const outside = { ...fill(77, 80300, 0.05, 8_000), foreign: true as const };
+    const { patch, partials } = reconcilePatch(open, ref, { entry: filled, fills: [fill(1, 79990, 0.05, 1), outside], positionAmt: 0, openOrderIds: [] });
+    expect(patch).toMatchObject({ status: "closed", exitPrice: 80300, exitReason: "discretion" });
+    expect(partials).toEqual([]);
+    // Foreign fills on a position still standing are nobody's business.
+    expect(reconcilePatch(open, ref, { entry: filled, fills: [fill(1, 79990, 0.05, 1), outside], positionAmt: 0.05, openOrderIds: [2, 3] }).patch).toBeNull();
+  });
+
   it("never overrides an exit reason somebody already gave", () => {
     const { patch } = reconcilePatch({ ...open, exitReason: "time" }, ref, { entry: filled, fills: [fill(1, 79990, 0.05, 1), fill(2, 79000, 0.05, 5)], positionAmt: 0, openOrderIds: [] });
     expect(patch?.status).toBe("closed");
@@ -253,5 +277,17 @@ describe("the user-data stream", () => {
     expect(worthAReadBack({ data: { e: "ALGO_UPDATE", o: { X: "TRIGGERED" } } })).toBe(true);
     expect(worthAReadBack({ e: "ACCOUNT_UPDATE" })).toBe(false);
     expect(worthAReadBack("nonsense")).toBe(false);
+  });
+});
+
+describe("the venue's algo-order answers", () => {
+  it("reads a new-order answer that names no symbol, with the symbol the caller sent", () => {
+    const o = parseAlgoOrder({ algoId: 55, clientAlgoId: "edg-1-s", side: "SELL", positionSide: "LONG", orderType: "STOP_MARKET", algoStatus: "NEW", triggerPrice: "79500.0", closePosition: true, createTime: 10, actualOrderId: "" }, "btcusdt");
+    expect(o).toMatchObject({ symbol: "BTCUSDT", orderId: 55, clientOrderId: "edg-1-s", type: "STOP_MARKET", status: "NEW", stopPrice: 79500, closePosition: true, triggeredOrderId: null });
+    expect(parseAlgoOrder({ algoId: 55 })).toBeNull();
+  });
+
+  it("names the plain order a fired bracket became", () => {
+    expect(parseAlgoOrder({ algoId: 56, symbol: "BTCUSDT", orderType: "TAKE_PROFIT_MARKET", algoStatus: "FINISHED", actualOrderId: "9001", triggerTime: 20 })).toMatchObject({ triggeredOrderId: 9001, status: "FINISHED", updateTime: 20 });
   });
 });

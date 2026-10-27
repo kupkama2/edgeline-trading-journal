@@ -24,6 +24,7 @@ import { open } from "./secrets";
 import { futuresBase, signedCall, type BinanceEnv, type Creds } from "./binance-account";
 import { fetchCandles, type Interval } from "./binance";
 import {
+  addToPosition,
   algoOrderById,
   cancelBracket,
   cancelOrder,
@@ -45,6 +46,7 @@ import {
   type VenueOrder,
 } from "./binance-trade";
 import {
+  addNote,
   bracketAt,
   formatTerminalRef,
   fmtPrice,
@@ -170,11 +172,24 @@ const refOf = (t: TradeWithTags): TerminalRef => {
  * which the terminal shows in red; the position is still real.
  */
 async function reconcileOne(s: DatabaseStorage, t: TradeWithTags, armed: Armed): Promise<TradeWithTags> {
-  const ref = refOf(t);
+  let ref = refOf(t);
   const v = armed.venue;
   const entry = ref.entryOrderId != null ? await orderById(v, ref.symbol, ref.entryOrderId) : null;
   const since = new Date(t.entryTime).getTime() - 5 * 60_000;
-  const mine = new Set([ref.entryOrderId, ref.stopOrderId, ...ref.targetOrderIds, ...(ref.closeOrderIds ?? [])].filter((x): x is number => x != null));
+  const resting = await openOrders(v, ref.symbol);
+  /*
+   * Brackets the record has lost track of but the book still holds — an
+   * answer that would not parse, a restart mid-send — are recognised by the
+   * tag every order from here carries, and taken back onto the record.
+   */
+  const tagged = resting.filter((o) => o.clientOrderId.startsWith(`${ref.tag}-`) && o.positionSide === ref.positionSide);
+  const foundStop = tagged.find((o) => o.type === "STOP_MARKET");
+  const foundTargets = tagged.filter((o) => o.type === "TAKE_PROFIT_MARKET");
+  if (ref.stopOrderId == null && foundStop) ref = { ...ref, stopOrderId: foundStop.orderId };
+  if (ref.targetOrderIds.length === 0 && foundTargets.length) ref = { ...ref, targetOrderIds: foundTargets.map((o) => o.orderId) };
+  const mine = new Set(
+    [ref.entryOrderId, ref.stopOrderId, ...ref.targetOrderIds, ...(ref.closeOrderIds ?? []), ...(ref.addOrderIds ?? [])].filter((x): x is number => x != null),
+  );
   /*
    * A bracket that fired placed a plain order of its own, and the fills
    * carry THAT id. Each bracket is asked what it became, and its fills are
@@ -196,21 +211,29 @@ async function reconcileOne(s: DatabaseStorage, t: TradeWithTags, armed: Armed):
   }
   const rows = await fillsSince(v, ref.symbol, since);
   const closeSide = ref.positionSide === "LONG" ? "SELL" : "BUY";
+  const entryAt = new Date(t.entryTime).getTime();
   const fills = rows
     .filter((r) => {
       if (mine.has(r.orderId)) return true;
+      if (!(r.positionSide === ref.positionSide || r.positionSide === "BOTH")) return false;
       // A fired bracket the venue did not name the order of: its fills are
       // the closing-side fills from the moment it fired.
       const f = fired.find((x) => x.side === closeSide && r.side === closeSide && r.time >= x.at - 5_000);
-      if (f && (r.positionSide === ref.positionSide || r.positionSide === "BOTH")) {
+      if (f) {
         alias.set(r.orderId, f.algoId);
         return true;
       }
-      return false;
+      // Anything else on the closing side after the entry went on: a close
+      // made from the venue's own app. Kept, marked foreign; counted only if
+      // it is the only thing that explains a flat position. Strictly after:
+      // the trade before this one on the same symbol closed before it.
+      return r.side === closeSide && r.time > entryAt;
     })
     .map((r) => ({
       tid: r.id,
       orderId: alias.get(r.orderId) ?? r.orderId,
+      side: r.side,
+      foreign: !mine.has(r.orderId) && !alias.has(r.orderId),
       price: r.price,
       qty: r.qty,
       time: r.time,
@@ -219,21 +242,24 @@ async function reconcileOne(s: DatabaseStorage, t: TradeWithTags, armed: Armed):
       realizedPnl: r.realizedPnl,
     }));
   const pos = (await positions(v)).find((p) => p.symbol === ref.symbol && p.positionSide === ref.positionSide);
-  const resting = await openOrders(v, ref.symbol);
   const snap: VenueSnapshot = {
     entry: entry ? { status: entry.status, avgPrice: entry.avgPrice, executedQty: entry.executedQty, updateTime: entry.updateTime } : null,
     fills,
     positionAmt: pos?.amt ?? 0,
     openOrderIds: resting.map((o) => o.orderId),
   };
-  const { patch: read, partials } = reconcilePatch(t, ref, snap);
+  const { patch: read, partials, adds } = reconcilePatch(t, ref, snap);
   const patch = read ?? {};
-  // A target that took its share while the rest stayed on: a partial in the
-  // ledger, once, by the venue's fill id.
+  // A target that took its share while the rest stayed on, a take from here,
+  // an add: rows in the ledger, once each, by the venue's fill id.
   const already = new Set((t.fills ?? []).map((f) => f.note ?? ""));
   for (const f of partials) {
     if (already.has(partialNote(f.tid))) continue;
     await s.addFill(t.id, { kind: "partial", price: f.price, size: f.qty, time: new Date(f.time).toISOString(), note: partialNote(f.tid) });
+  }
+  for (const f of adds) {
+    if (already.has(addNote(f.tid))) continue;
+    await s.addFill(t.id, { kind: "add", price: f.price, size: f.qty, time: new Date(f.time).toISOString(), note: addNote(f.tid) });
   }
   const nowOpen = (patch.status ?? t.status) === "open";
   /*
@@ -251,8 +277,9 @@ async function reconcileOne(s: DatabaseStorage, t: TradeWithTags, armed: Armed):
   }
   const stopResting = withBrackets.stopOrderId != null && snap.openOrderIds.includes(withBrackets.stopOrderId);
   const nextRef: TerminalRef = { ...withBrackets, unprotected: nowOpen && !stopResting, checkedAt: new Date().toISOString() };
-  const changed = Object.keys(patch).length > 0 || partials.length > 0 || formatTerminalRef(nextRef) !== formatTerminalRef({ ...ref, checkedAt: nextRef.checkedAt });
-  if (!changed && ref.checkedAt && Date.now() - new Date(ref.checkedAt).getTime() < 60_000) return t;
+  const before = refOf(t);
+  const changed = Object.keys(patch).length > 0 || partials.length > 0 || adds.length > 0 || formatTerminalRef(nextRef) !== formatTerminalRef({ ...before, checkedAt: nextRef.checkedAt });
+  if (!changed && before.checkedAt && Date.now() - new Date(before.checkedAt).getTime() < 60_000) return t;
   const after = await s.updateTrade(t.id, { ...patch, terminal: formatTerminalRef(nextRef) } as any);
   return after ?? t;
 }
@@ -740,11 +767,108 @@ export function registerTerminalRoutes(app: Express): void {
       }
       await logged(store(req), "cancel-brackets", ref.account, t.id, {}, async () => {
         for (const id of [ref.stopOrderId, ...ref.targetOrderIds]) if (id != null) await cancelBracket(venue, ref.symbol, id);
+        // A resting add would reopen the side after the close.
+        for (const id of ref.addOrderIds ?? []) await cancelOrder(venue, ref.symbol, id);
         return { cancelled: true };
       });
       const nextRef: TerminalRef = { ...ref, closeOrderIds: [...(ref.closeOrderIds ?? []), ...(closeOrder ? [closeOrder.orderId] : [])] };
       const stamped = (await s.updateTrade(t.id, { terminal: formatTerminalRef(nextRef) } as any)) ?? t;
       res.json({ trade: await reconcileOne(store(req), stamped, { venue, acct }) });
+    }),
+  );
+
+  /** Some of it off at market: a take. The fill lands in the ledger as a partial. */
+  app.post(
+    "/api/terminal/trades/:id/reduce",
+    wrap(async (req, res) => {
+      const body = z.object({ qty: z.number().positive().optional(), fraction: z.number().gt(0).lte(1).optional() }).parse(req.body);
+      const s = store(req);
+      const t = await s.getTrade(Number(req.params.id));
+      if (!t) throw httpError(404, "Trade not found");
+      const ref = refOf(t);
+      if (t.status !== "open") throw httpError(400, "Only an open position can be reduced.");
+      const { venue, acct } = await arm(store(req), ref.account);
+      const rules = await rulesFor(venue.env, ref.symbol);
+      const pos = (await positions(venue)).find((p) => p.symbol === ref.symbol && p.positionSide === ref.positionSide);
+      if (!pos || Math.abs(pos.amt) <= 0) throw httpError(409, "The venue holds no position on this side.");
+      const want = body.qty ?? Math.abs(pos.amt) * (body.fraction ?? 0.5);
+      const qty = fmtQty(Math.min(want, Math.abs(pos.amt)), rules);
+      if (Number(qty) <= 0) throw httpError(400, `That rounds to nothing at ${ref.symbol}'s step.`);
+      const order = await logged(store(req), "reduce", ref.account, t.id, { qty }, () =>
+        closeAtMarket(venue, ref.symbol, ref.positionSide, qty, `${ref.tag}-r${Date.now().toString(36)}`),
+      );
+      const nextRef: TerminalRef = { ...ref, closeOrderIds: [...(ref.closeOrderIds ?? []), order.orderId] };
+      const stamped = (await s.updateTrade(t.id, { terminal: formatTerminalRef(nextRef) } as any)) ?? t;
+      res.json({ trade: await reconcileOne(s, stamped, { venue, acct }), order });
+    }),
+  );
+
+  /** More on: at market, or resting at a price. The fill lands in the ledger as an add. */
+  app.post(
+    "/api/terminal/trades/:id/add",
+    wrap(async (req, res) => {
+      const body = z.object({ qty: z.number().positive(), price: z.number().positive().nullable().optional() }).parse(req.body);
+      const s = store(req);
+      const t = await s.getTrade(Number(req.params.id));
+      if (!t) throw httpError(404, "Trade not found");
+      const ref = refOf(t);
+      if (t.status !== "open") throw httpError(400, "Only an open position can be added to.");
+      const { venue, acct } = await arm(store(req), ref.account);
+      const rules = await rulesFor(venue.env, ref.symbol);
+      const qty = fmtQty(body.qty, rules);
+      if (Number(qty) <= 0) throw httpError(400, `That rounds to nothing at ${ref.symbol}'s step.`);
+      const price = body.price != null ? fmtPrice(body.price, rules) : null;
+      if (MAX_NOTIONAL > 0 && Number(qty) * (body.price ?? t.entryPrice) > MAX_NOTIONAL)
+        throw httpError(400, `That add is over the terminal's ceiling of $${MAX_NOTIONAL} of notional.`);
+      const order = await logged(store(req), "add", ref.account, t.id, { qty, price }, () =>
+        addToPosition(venue, ref.symbol, ref.positionSide, qty, price, `${ref.tag}-a${Date.now().toString(36)}`),
+      );
+      const nextRef: TerminalRef = { ...ref, addOrderIds: [...(ref.addOrderIds ?? []), order.orderId] };
+      const stamped = (await s.updateTrade(t.id, { terminal: formatTerminalRef(nextRef) } as any)) ?? t;
+      res.json({ trade: await reconcileOne(s, stamped, { venue, acct }), order });
+    }),
+  );
+
+  /** A resting entry moved: the old limit off, a new one on at the price, the plan's entry with it. */
+  app.post(
+    "/api/terminal/trades/:id/entry",
+    wrap(async (req, res) => {
+      const { price } = priceSchema.parse(req.body);
+      const s = store(req);
+      const t = await s.getTrade(Number(req.params.id));
+      if (!t) throw httpError(404, "Trade not found");
+      const ref = refOf(t);
+      if (t.status !== "pending") throw httpError(400, "Only a resting entry can be moved.");
+      const { venue, acct } = await arm(store(req), ref.account);
+      const rules = await rulesFor(venue.env, ref.symbol);
+      const current = ref.entryOrderId != null ? await orderById(venue, ref.symbol, ref.entryOrderId) : null;
+      // Filled in the meantime: the ordinary read-back opens it, and there is nothing to move.
+      if (current && current.executedQty > 0) return res.json({ trade: await reconcileOne(s, t, { venue, acct }), order: null });
+      const next = await logged(store(req), "move-entry", ref.account, t.id, { price }, async () => {
+        if (ref.entryOrderId != null) await cancelOrder(venue, ref.symbol, ref.entryOrderId);
+        return placeOrder(venue, {
+          symbol: ref.symbol,
+          positionSide: ref.positionSide,
+          side: ref.positionSide === "LONG" ? "BUY" : "SELL",
+          type: "LIMIT",
+          timeInForce: "GTC",
+          quantity: fmtQty(ref.qty, rules),
+          price: fmtPrice(price, rules),
+          newClientOrderId: `${ref.tag}-e${Date.now().toString(36)}`,
+        });
+      });
+      const to = Number(next.price ?? price);
+      const stop = ref.armOnFill ? Number(ref.armOnFill.stop.stopPrice) : (t.initialStop ?? null);
+      const after = await s.updateTrade(t.id, {
+        entryPrice: to,
+        ...(stop != null ? { riskAmount: Math.abs(to - stop) * ref.qty } : {}),
+        terminal: formatTerminalRef({
+          ...ref,
+          entryOrderId: next.orderId,
+          moves: [...(ref.moves ?? []), { at: new Date().toISOString(), kind: "entry", from: t.entryPrice, to }],
+        }),
+      } as any);
+      res.json({ trade: after, order: next });
     }),
   );
 

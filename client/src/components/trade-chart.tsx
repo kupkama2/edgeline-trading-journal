@@ -681,7 +681,9 @@ export function Candles({
      * on that would yank the view back to the default every few minutes,
      * undoing whatever the trader had just zoomed into.
      */
-    const shape = `${candles.length}:${candles[0].t}:${candles[candles.length - 1].t}`;
+    // Keyed on where the window begins, not how many bars it holds: a live
+    // bar appended every minute must not yank the view back to the default.
+    const shape = `${seriesKey ?? tradeId}:${interval}:${candles[0].t}`;
     if (shape !== a.shape) {
       a.shape = shape;
       a.chart.timeScale().fitContent();
