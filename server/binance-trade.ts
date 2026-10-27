@@ -337,57 +337,75 @@ export interface Placed {
   targets: VenueOrder[];
   /** Brackets the venue refused, with its words. The entry stands regardless. */
   refused: { which: string; reason: string }[];
+  /** The brackets wait for the entry to fill; nothing protects a position that does not exist yet. */
+  deferred: boolean;
 }
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 /**
- * A plan onto the book, safest thing first.
+ * A bracket, placed as soon as the venue will take it.
  *
- *   1. the stop — it can rest before there is a position to protect
- *   2. the entry — if this is refused, the stop comes back off and the
- *      refusal is thrown: nothing happened
- *   3. the targets — refused ones are reported, not thrown: the position is
- *      on and protected, and throwing would hide that from the caller
+ * A close-position order is refused until the position it closes exists
+ * (-4509, "TIF GTE can only be used with open positions"; older hosts say
+ * -2022). Right after a market entry the position is real but may not be
+ * visible for a moment, so the refusal is retried briefly before it is
+ * taken as the venue's answer.
  */
-export async function placePlan(
+async function placeBracket(v: Venue, o: OrderParams, tries = 6, waitMs = 300): Promise<VenueOrder> {
+  for (let i = 0; ; i++) {
+    try {
+      return await placeOrder(v, o);
+    } catch (err) {
+      const noPosition = err instanceof BinanceError && (err.code === -4509 || err.code === -2022);
+      if (!noPosition || i + 1 >= tries) throw err;
+      await sleep(waitMs);
+    }
+  }
+}
+
+/** The stop and the targets onto the book of a position that now exists. Refusals are reported, not thrown. */
+export async function placeBrackets(
   v: Venue,
-  orders: { stop: OrderParams; entry: OrderParams; targets: OrderParams[] },
-): Promise<Placed> {
+  brackets: { stop: OrderParams; targets: OrderParams[] },
+): Promise<{ stop: VenueOrder | null; targets: VenueOrder[]; refused: Placed["refused"] }> {
   const refused: Placed["refused"] = [];
   let stop: VenueOrder | null = null;
   try {
-    stop = await placeOrder(v, orders.stop);
+    stop = await placeBracket(v, brackets.stop);
   } catch (err: any) {
-    /*
-     * Some hosts refuse a close-position stop with no position behind it
-     * ("ReduceOnly Order is rejected", -2022). The entry still goes in and
-     * the stop is placed right after it; the window is one round trip.
-     */
-    if (!(err instanceof BinanceError && err.code === -2022)) throw err;
-  }
-  let entry: VenueOrder;
-  try {
-    entry = await placeOrder(v, orders.entry);
-  } catch (err) {
-    if (stop) await cancelOrder(v, stop.symbol, stop.orderId).catch(() => {});
-    throw err;
-  }
-  if (!stop) {
-    try {
-      stop = await placeOrder(v, orders.stop);
-    } catch (err: any) {
-      refused.push({ which: "stop", reason: String(err?.message ?? err) });
-    }
+    refused.push({ which: "stop", reason: String(err?.message ?? err) });
   }
   const targets: VenueOrder[] = [];
-  for (let i = 0; i < orders.targets.length; i++) {
-    const t = orders.targets[i];
+  for (let i = 0; i < brackets.targets.length; i++) {
     try {
-      targets.push(await placeOrder(v, t));
+      targets.push(await placeBracket(v, brackets.targets[i]));
     } catch (err: any) {
       refused.push({ which: `target ${i + 1}`, reason: String(err?.message ?? err) });
     }
   }
-  return { stop, entry, targets, refused };
+  return { stop, targets, refused };
+}
+
+/**
+ * A plan onto the book.
+ *
+ * The venue will not hold a close-position bracket for a position that does
+ * not exist, so the entry goes first. A market entry has a position within
+ * the round trip, and the stop and targets follow it at once. A limit entry
+ * rests with nothing attached — there is nothing to protect yet — and the
+ * brackets are placed by the read-back the moment the fill is seen (see
+ * terminal.ts, `armOnFill`). The entry being refused means nothing happened.
+ */
+export async function placePlan(
+  v: Venue,
+  orders: { stop: OrderParams; entry: OrderParams; targets: OrderParams[] },
+  entryRests: boolean,
+): Promise<Placed> {
+  const entry = await placeOrder(v, orders.entry);
+  if (entryRests) return { entry, stop: null, targets: [], refused: [], deferred: true };
+  const { stop, targets, refused } = await placeBrackets(v, { stop: orders.stop, targets: orders.targets });
+  return { entry, stop, targets, refused, deferred: false };
 }
 
 /** Flatten one position side at market, by the quantity the venue holds. */

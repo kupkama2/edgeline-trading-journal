@@ -32,6 +32,7 @@ import {
   hedgeMode,
   openOrders,
   orderById,
+  placeBrackets,
   placeOrder,
   placePlan,
   positions,
@@ -44,6 +45,7 @@ import {
 import {
   bracketAt,
   formatTerminalRef,
+  fmtPrice,
   fmtQty,
   ordersForPlan,
   parseTerminalRef,
@@ -226,14 +228,27 @@ async function reconcileOne(s: DatabaseStorage, t: TradeWithTags, armed: Armed):
   const patch = read ?? {};
   // A target that took its share while the rest stayed on: a partial in the
   // ledger, once, by the venue's fill id.
-  const logged = new Set((t.fills ?? []).map((f) => f.note ?? ""));
+  const already = new Set((t.fills ?? []).map((f) => f.note ?? ""));
   for (const f of partials) {
-    if (logged.has(partialNote(f.tid))) continue;
+    if (already.has(partialNote(f.tid))) continue;
     await s.addFill(t.id, { kind: "partial", price: f.price, size: f.qty, time: new Date(f.time).toISOString(), note: partialNote(f.tid) });
   }
-  const stopResting = ref.stopOrderId != null && snap.openOrderIds.includes(ref.stopOrderId);
   const nowOpen = (patch.status ?? t.status) === "open";
-  const nextRef: TerminalRef = { ...ref, unprotected: nowOpen && !stopResting, checkedAt: new Date().toISOString() };
+  /*
+   * The resting entry has filled: the brackets it was drawn with go on now,
+   * while the position is seconds old. Refusals are kept on the record and
+   * shown in red; the position is real either way.
+   */
+  let withBrackets: TerminalRef = ref;
+  if (ref.armOnFill && nowOpen && Math.abs(snap.positionAmt) > 1e-9) {
+    const brackets = ref.armOnFill;
+    const placed = await logged(s, "arm-brackets", ref.account, t.id, brackets, () => placeBrackets(v, brackets));
+    const { armOnFill: _done, ...rest } = ref;
+    withBrackets = { ...rest, stopOrderId: placed.stop?.orderId ?? null, targetOrderIds: placed.targets.map((o) => o.orderId) };
+    if (placed.stop) snap.openOrderIds.push(placed.stop.orderId);
+  }
+  const stopResting = withBrackets.stopOrderId != null && snap.openOrderIds.includes(withBrackets.stopOrderId);
+  const nextRef: TerminalRef = { ...withBrackets, unprotected: nowOpen && !stopResting, checkedAt: new Date().toISOString() };
   const changed = Object.keys(patch).length > 0 || partials.length > 0 || formatTerminalRef(nextRef) !== formatTerminalRef({ ...ref, checkedAt: nextRef.checkedAt });
   if (!changed && ref.checkedAt && Date.now() - new Date(ref.checkedAt).getTime() < 60_000) return t;
   const after = await s.updateTrade(t.id, { ...patch, terminal: formatTerminalRef(nextRef) } as any);
@@ -454,7 +469,8 @@ export function registerTerminalRoutes(app: Express): void {
       await logged(store(req), "leverage", account, null, { symbol: rules.symbol, leverage: plan.leverage }, () =>
         setLeverage(venue, rules.symbol, plan.leverage),
       );
-      const placed = await logged(store(req), "send", account, null, orders, () => placePlan(venue, orders));
+      const rests = plan.entryType === "limit";
+      const placed = await logged(store(req), "send", account, null, orders, () => placePlan(venue, orders, rests));
 
       const ref: TerminalRef = {
         venue: "binance",
@@ -468,8 +484,10 @@ export function registerTerminalRoutes(app: Express): void {
         entryOrderId: placed.entry.orderId,
         stopOrderId: placed.stop?.orderId ?? null,
         targetOrderIds: placed.targets.map((o) => o.orderId),
-        unprotected: !placed.stop,
+        // A resting entry has no position to protect yet; its brackets wait.
+        unprotected: !rests && !placed.stop,
         closeOrderIds: [],
+        ...(rests ? { armOnFill: { stop: orders.stop, targets: orders.targets } } : {}),
       };
       const [first, ...rest] = plan.targets;
       const trade = await store(req).createTrade({
@@ -514,11 +532,25 @@ export function registerTerminalRoutes(app: Express): void {
       const { venue } = await arm(store(req), ref.account);
       const rules = await rulesFor(venue.env, ref.symbol);
       const side = ref.positionSide === "LONG" ? "long" : "short";
+      const at = new Date().toISOString();
+      // Brackets still waiting for the fill are moved on paper; nothing is on the book to replace.
+      if (ref.armOnFill) {
+        const to = Number(fmtPrice(price, rules));
+        const moves = addStopMove(t.stopMoves, to, at, "terminal");
+        const after = await s.updateTrade(t.id, {
+          stopMoves: formatStopMoves(moves),
+          terminal: formatTerminalRef({
+            ...ref,
+            armOnFill: { ...ref.armOnFill, stop: { ...ref.armOnFill.stop, stopPrice: fmtPrice(price, rules) } },
+            moves: [...(ref.moves ?? []), { at, kind: "stop", from: currentStop(t), to }],
+          }),
+        } as any);
+        return res.json({ trade: after, order: null });
+      }
       const next = await logged(store(req), "move-stop", ref.account, t.id, { price }, async () => {
         if (ref.stopOrderId != null) await cancelBracket(venue, ref.symbol, ref.stopOrderId);
         return placeOrder(venue, bracketAt("stop", price, rules, side, `${ref.tag}-s${Date.now().toString(36)}`));
       });
-      const at = new Date().toISOString();
       const to = Number(next.stopPrice ?? price);
       const moves = addStopMove(t.stopMoves, to, at, "terminal");
       const after = await s.updateTrade(t.id, {
@@ -547,6 +579,18 @@ export function registerTerminalRoutes(app: Express): void {
       const { venue } = await arm(store(req), ref.account);
       const rules = await rulesFor(venue.env, ref.symbol);
       const side = ref.positionSide === "LONG" ? "long" : "short";
+      if (ref.armOnFill) {
+        const to = Number(fmtPrice(price, rules));
+        const lastTarget = [...(ref.moves ?? [])].reverse().find((m) => m.kind === "target")?.to ?? t.initialTarget ?? null;
+        const after = await s.updateTrade(t.id, {
+          terminal: formatTerminalRef({
+            ...ref,
+            armOnFill: { ...ref.armOnFill, targets: [bracketAt("target", price, rules, side, `${ref.tag}-t1`)] },
+            moves: [...(ref.moves ?? []), { at: new Date().toISOString(), kind: "target", from: lastTarget, to }],
+          }),
+        } as any);
+        return res.json({ trade: after, order: null });
+      }
       const next = await logged(store(req), "move-target", ref.account, t.id, { price }, async () => {
         for (const id of ref.targetOrderIds) await cancelBracket(venue, ref.symbol, id);
         return placeOrder(venue, bracketAt("target", price, rules, side, `${ref.tag}-t${Date.now().toString(36)}`));

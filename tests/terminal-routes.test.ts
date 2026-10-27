@@ -184,6 +184,9 @@ function startVenue(): Promise<string> {
           if (!ALGO.has(params.type)) return json({ code: -1116, msg: "Invalid orderType." }, 400);
           if (params.stopPrice || params.newClientOrderId) return json({ code: -1104, msg: "Not all sent parameters were read." }, 400);
           if (params.reduceOnly) return json({ code: -4119, msg: "reduceOnly cannot be sent in hedge mode." }, 400);
+          // A close-position bracket needs a position to close — the venue's -4509.
+          if (params.closePosition === "true" && Math.abs(position.amt) < 1e-12)
+            return json({ code: -4509, msg: "Time in Force (TIF) GTE can only be used with open positions. Please ensure that positions are available." }, 400);
           const a = {
             algoId: nextId++, clientAlgoId: params.clientAlgoId ?? `algo${nextId}`, symbol: params.symbol, side: params.side, positionSide: params.positionSide,
             orderType: params.type, algoType: "CONDITIONAL", algoStatus: "NEW", quantity: params.quantity ?? "0", triggerPrice: params.triggerPrice,
@@ -336,7 +339,7 @@ describe.skipIf(!DB)("the terminal against a stub venue", () => {
   let tradeId = 0;
   let ref: any;
 
-  it("sends a limit plan: leverage, then the stop, the entry and the target, and logs the trade as resting", async () => {
+  it("sends a limit plan: leverage and the entry only, with the brackets waiting for the fill", async () => {
     calls.length = 0;
     const r = await send("POST", "/api/terminal/send", {
       account: ACCOUNT,
@@ -350,19 +353,17 @@ describe.skipIf(!DB)("the terminal against a stub venue", () => {
     expect(body.sized.qty).toBe("0.050");
 
     const writes = calls.filter((c) => c.method === "POST");
-    // Brackets go to the algo endpoint in its words; the entry to the plain one.
-    expect(writes.map((c) => c.path)).toEqual(["/fapi/v1/leverage", "/fapi/v1/algoOrder", "/fapi/v1/order", "/fapi/v1/algoOrder"]);
+    // Nothing to protect yet: the entry rests alone, the brackets wait on the record.
+    expect(writes.map((c) => c.path)).toEqual(["/fapi/v1/leverage", "/fapi/v1/order"]);
     expect(writes[0].params).toMatchObject({ symbol: "BTCUSDT", leverage: "7" });
-    expect(writes[1].params).toMatchObject({ algoType: "CONDITIONAL", type: "STOP_MARKET", side: "SELL", positionSide: "LONG", triggerPrice: "79000.0", closePosition: "true", clientAlgoId: `${ref.tag}-s` });
-    expect(writes[1].params.stopPrice).toBeUndefined();
-    expect(writes[2].params).toMatchObject({ type: "LIMIT", side: "BUY", positionSide: "LONG", price: "80000.0", quantity: "0.050", timeInForce: "GTC" });
-    expect(writes[3].params).toMatchObject({ type: "TAKE_PROFIT_MARKET", side: "SELL", triggerPrice: "82500.0", closePosition: "true" });
-    expect(writes[2].params.newClientOrderId).toBe(`${ref.tag}-e`);
+    expect(writes[1].params).toMatchObject({ type: "LIMIT", side: "BUY", positionSide: "LONG", price: "80000.0", quantity: "0.050", timeInForce: "GTC" });
+    expect(writes[1].params.newClientOrderId).toBe(`${ref.tag}-e`);
+    expect(ref.armOnFill.stop).toMatchObject({ type: "STOP_MARKET", side: "SELL", positionSide: "LONG", stopPrice: "79000.0", closePosition: "true" });
+    expect(ref.armOnFill.targets).toHaveLength(1);
 
     const t = await store.getTrade(tradeId);
     expect(t).toMatchObject({ symbol: "BTC", direction: "long", size: 0.05, entryPrice: 80000, initialStop: 79000, initialTarget: 82500, status: "pending", account: ACCOUNT });
-    expect(ref).toMatchObject({ symbol: "BTCUSDT", positionSide: "LONG", leverage: 7, unprotected: false });
-    expect(ref.stopOrderId).toBe(algos.find((a) => a.orderType === "STOP_MARKET")!.algoId);
+    expect(ref).toMatchObject({ symbol: "BTCUSDT", positionSide: "LONG", leverage: 7, unprotected: false, stopOrderId: null, targetOrderIds: [] });
     expect(ref.entryOrderId).toBe(orders.find((o) => o.type === "LIMIT")!.orderId);
 
     const log = await get("/api/terminal/log");
@@ -370,11 +371,13 @@ describe.skipIf(!DB)("the terminal against a stub venue", () => {
     expect(log.every((l: any) => l.ok)).toBe(true);
   });
 
-  it("leaves a resting trade resting, then opens it at the fill once the entry fills", async () => {
+  it("leaves a resting trade resting, then opens it at the fill and arms the brackets the moment it fills", async () => {
     let r = await send("POST", "/api/terminal/reconcile", {});
     expect((await r.json()).checked).toEqual([{ id: tradeId, status: "pending" }]);
+    expect(algos).toHaveLength(0);
 
     fillOrder(ref.entryOrderId, 79995);
+    calls.length = 0;
     r = await send("POST", "/api/terminal/reconcile", {});
     expect((await r.json()).checked).toEqual([{ id: tradeId, status: "open" }]);
     const t = await store.getTrade(tradeId);
@@ -382,7 +385,19 @@ describe.skipIf(!DB)("the terminal against a stub venue", () => {
     expect(t.entryPrice).toBe(79995);
     expect(t.size).toBe(0.05);
     expect(t.fees).toBeCloseTo(0.02);
-    expect(JSON.parse(t.terminal).unprotected).toBe(false);
+    // The brackets went on in the venue's words, in the same pass that saw the fill.
+    const armed = calls.filter((c) => c.method === "POST" && c.path === "/fapi/v1/algoOrder");
+    expect(armed.map((c) => c.params.type)).toEqual(["STOP_MARKET", "TAKE_PROFIT_MARKET"]);
+    expect(armed[0].params).toMatchObject({ algoType: "CONDITIONAL", side: "SELL", positionSide: "LONG", triggerPrice: "79000.0", closePosition: "true", clientAlgoId: `${ref.tag}-s` });
+    expect(armed[0].params.stopPrice).toBeUndefined();
+    expect(armed[1].params).toMatchObject({ triggerPrice: "82500.0", closePosition: "true" });
+    ref = JSON.parse(t.terminal);
+    expect(ref.armOnFill).toBeUndefined();
+    expect(ref.unprotected).toBe(false);
+    expect(ref.stopOrderId).toBe(algos.find((a) => a.orderType === "STOP_MARKET")!.algoId);
+    expect(ref.targetOrderIds).toHaveLength(1);
+    const log = await get("/api/terminal/log");
+    expect(log.some((l: any) => l.action === "arm-brackets" && l.ok)).toBe(true);
   });
 
   it("moves the stop by replacing the resting order, and writes the move to the stop log", async () => {
@@ -448,7 +463,8 @@ describe.skipIf(!DB)("the terminal against a stub venue", () => {
     const body = await r.json();
     const id = body.trade.id;
     expect(body.trade.status).toBe("open");
-    expect(calls.filter((c) => c.method === "POST" && /\/fapi\/v1\/(algo)?[oO]rder$/.test(c.path)).map((c) => c.params.type)).toEqual(["STOP_MARKET", "MARKET"]);
+    // Entry first — the venue holds no bracket for a position that does not exist — then the stop, at once.
+    expect(calls.filter((c) => c.method === "POST" && /\/fapi\/v1\/(algo)?[oO]rder$/.test(c.path)).map((c) => c.params.type)).toEqual(["MARKET", "STOP_MARKET"]);
     expect(position.amt).toBeCloseTo(0.1);
 
     calls.length = 0;
@@ -496,8 +512,8 @@ describe.skipIf(!DB)("the terminal against a stub venue", () => {
     });
     expect(r.status).toBe(201);
     const body = await r.json();
-    expect(body.placed.targetOrderIds).toHaveLength(2);
-    expect(restingFor(body.placed.tag)).toHaveLength(4);
+    expect(body.placed.armOnFill.targets).toHaveLength(2);
+    expect(restingFor(body.placed.tag)).toHaveLength(1);
     const c = await send("POST", `/api/terminal/trades/${body.trade.id}/cancel`, {});
     expect((await c.json()).trade).toMatchObject({ status: "cancelled", cancelReason: "pulled" });
     expect(restingFor(body.placed.tag)).toHaveLength(0);
