@@ -20,6 +20,8 @@ import { z } from "zod";
 import { storageFor, terminalUsers, tradingAccountsEverywhere, type DatabaseStorage } from "./storage";
 import { openUserStream, worthAReadBack, type StreamHandle } from "./binance-stream";
 import { oneAtATime } from "./venue-sync";
+import { fetch as undiciFetch } from "undici";
+import { egressFor } from "./egress";
 import { open } from "./secrets";
 import { futuresBase, signedCall, type BinanceEnv, type Creds } from "./binance-account";
 import { fetchCandles, type Interval } from "./binance";
@@ -198,6 +200,19 @@ const refOf = (t: TradeWithTags): TerminalRef => {
  * this one's average. A trade with no stop resting is flagged `unprotected`,
  * which the terminal shows in red; the position is still real.
  */
+/** A public read off the venue: no key, no signature. */
+async function publicGet(base: string, path: string): Promise<any> {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 10_000);
+  try {
+    const res = await undiciFetch(`${base}${path}`, { headers: { accept: "application/json" }, signal: ctl.signal, dispatcher: egressFor(base) } as any);
+    if (!res.ok) throw new Error(`${new URL(base).hostname} → HTTP ${res.status} on ${path.split("?")[0]}`);
+    return res.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** The mark on this position side now, or nothing when the venue holds none. */
 async function markOf(v: Venue, ref: TerminalRef): Promise<number | null> {
   try {
@@ -807,6 +822,38 @@ export function registerTerminalRoutes(app: Express, deps: { llm?: (prompt: stri
       // The account's stream, if it is not open yet, so this trade's fill is heard at once.
       void ensureStreams().catch(() => {});
       res.status(201).json({ trade, placed: ref, refused: placed.refused, sized });
+    }),
+  );
+
+  /** The strip over the chart: last, mark, the day's change and range, funding. Public data, from the account's own host. */
+  app.get(
+    "/api/terminal/ticker",
+    wrap(async (req, res) => {
+      const { account, symbol } = z.object({ account: z.string().min(1), symbol: z.string().min(1) }).parse(req.query);
+      const acct = (await store(req).listAccountSettings()).find((a) => a.name === account);
+      if (!acct) throw httpError(404, "No such account");
+      const base = futuresBase(acct.binanceEnv);
+      const sym = symbol.toUpperCase();
+      const n = (x: unknown) => (x == null || x === "" || !Number.isFinite(Number(x)) ? null : Number(x));
+      const [day, prem] = await Promise.all([
+        publicGet(base, `/fapi/v1/ticker/24hr?symbol=${encodeURIComponent(sym)}`).catch(() => null),
+        publicGet(base, `/fapi/v1/premiumIndex?symbol=${encodeURIComponent(sym)}`).catch(() => null),
+      ]);
+      if (!day && !prem) throw httpError(502, "The venue did not answer for that symbol.");
+      res.json({
+        symbol: sym,
+        last: n(day?.lastPrice),
+        change: n(day?.priceChange),
+        changePct: n(day?.priceChangePercent),
+        high: n(day?.highPrice),
+        low: n(day?.lowPrice),
+        volume: n(day?.volume),
+        quoteVolume: n(day?.quoteVolume),
+        mark: n(prem?.markPrice),
+        index: n(prem?.indexPrice),
+        fundingRate: n(prem?.lastFundingRate),
+        nextFundingTime: n(prem?.nextFundingTime),
+      });
     }),
   );
 

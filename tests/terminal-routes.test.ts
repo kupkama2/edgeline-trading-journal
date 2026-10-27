@@ -144,6 +144,8 @@ function startVenue(): Promise<string> {
         });
       }
       if (u.pathname === "/api/v3/exchangeInfo") return json({ symbols: [] });
+      if (u.pathname === "/fapi/v1/ticker/24hr") return json({ symbol: u.searchParams.get("symbol"), lastPrice: "80010.0", priceChange: "-410.0", priceChangePercent: "-0.51", highPrice: "80900.0", lowPrice: "79500.0", volume: "12345.6", quoteVolume: "987654321.0" });
+      if (u.pathname === "/fapi/v1/premiumIndex") return json({ symbol: u.searchParams.get("symbol"), markPrice: "80020.0", indexPrice: "80015.0", lastFundingRate: "0.0001", nextFundingTime: 1793120000000 });
       if (u.pathname === "/fapi/v1/klines") return json(klines(Number(u.searchParams.get("startTime") ?? 0), Number(u.searchParams.get("endTime") ?? Date.now())));
 
       // The listen key: the API key alone, no signature (USER_STREAM).
@@ -863,6 +865,11 @@ describe.skipIf(!DB)("the terminal against a stub venue", () => {
     t = await store.getTrade(trade.id);
     expect(t.status).toBe("closed");
     expect(position.amt).toBe(0);
+  });
+
+  it("reads the ticker strip off the account's own host", async () => {
+    const t = await get(`/api/terminal/ticker?account=${encodeURIComponent(ACCOUNT)}&symbol=btcusdt`);
+    expect(t).toMatchObject({ symbol: "BTCUSDT", last: 80010, changePct: -0.51, high: 80900, low: 79500, mark: 80020, fundingRate: 0.0001, nextFundingTime: 1793120000000 });
   });
 
   it("cancels a resting plan: every order off, the trade marked pulled", async () => {

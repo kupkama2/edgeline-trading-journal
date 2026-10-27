@@ -374,3 +374,27 @@ export function useCancelOrder() {
     onSuccess: afterWrite,
   });
 }
+
+export interface Ticker {
+  symbol: string;
+  last: number | null;
+  change: number | null;
+  changePct: number | null;
+  high: number | null;
+  low: number | null;
+  volume: number | null;
+  quoteVolume: number | null;
+  mark: number | null;
+  index: number | null;
+  fundingRate: number | null;
+  nextFundingTime: number | null;
+}
+
+export function useTicker(account: string | null, symbol: string | null) {
+  return useQuery<Ticker>({
+    queryKey: [`/api/terminal/ticker?account=${encodeURIComponent(account ?? "")}&symbol=${encodeURIComponent(symbol ?? "")}`],
+    enabled: !!account && !!symbol,
+    refetchInterval: 5_000,
+    retry: false,
+  });
+}
