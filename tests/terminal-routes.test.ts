@@ -60,6 +60,20 @@ const restingFor = (tag: string) => [
 ];
 const fills: any[] = [];
 const position = { amt: 0, entryPrice: 0 };
+/** The tape: flat at 80010 unless a minute is given a spike. */
+const spikes = new Map<number, { h: number; l: number }>();
+const minuteOf = (ms: number) => Math.floor(ms / 60_000) * 60_000;
+function klines(start: number, end: number) {
+  const out: any[] = [];
+  for (let t = minuteOf(start); t <= end && out.length < 1000; t += 60_000) {
+    const s = spikes.get(t);
+    out.push([t, "80010", String(s?.h ?? 80012), String(s?.l ?? 80008), "80010", "1", t + 59_999, "0", 0, "0", "0", "0"]);
+  }
+  return out;
+}
+/** A stand-in for the model: answers the management review from the brief it is given. */
+let model: Server;
+let modelCalls: string[] = [];
 let dual = true;
 let nextId = 100;
 let nextTid = 5000;
@@ -130,6 +144,7 @@ function startVenue(): Promise<string> {
         });
       }
       if (u.pathname === "/api/v3/exchangeInfo") return json({ symbols: [] });
+      if (u.pathname === "/fapi/v1/klines") return json(klines(Number(u.searchParams.get("startTime") ?? 0), Number(u.searchParams.get("endTime") ?? Date.now())));
 
       // The listen key: the API key alone, no signature (USER_STREAM).
       if (u.pathname === "/fapi/v1/listenKey") {
@@ -265,6 +280,23 @@ describe.skipIf(!DB)("the terminal against a stub venue", () => {
     process.env.HYPERLIQUID_BASE = stub;
     process.env.SESSION_SECRET = `test-${stamp}-session-secret-long-enough`;
     process.env.TERMINAL_EMAILS = ` Other@x.test, ${EMAIL.toUpperCase()} `;
+    process.env.TERMINAL_PLAN_WATCH_GAP_MS = "0";
+    model = createServer((req, res) => {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        const asked = JSON.parse(body || "{}").messages?.[0]?.content?.map((c: any) => c.text ?? "").join("") ?? "";
+        modelCalls.push(asked);
+        const reply = /Management cost/.test(asked)
+          ? { verdict: "hurt", summary: "You took half off at +0.0R and closed the rest; left alone it reached the target.", lesson: "Let the plan run to its target." }
+          : { verdict: "neutral", summary: "Nothing was changed.", lesson: null };
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify({ id: "msg_test", type: "message", role: "assistant", model: "claude-test", content: [{ type: "text", text: JSON.stringify(reply) }], stop_reason: "end_turn", stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } }));
+      });
+    });
+    await new Promise<void>((r) => model.listen(0, "127.0.0.1", r));
+    process.env.ANTHROPIC_API_KEY = "test-key";
+    process.env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${(model.address() as any).port}`;
 
     const { initSchema, accounts, storageFor } = await import("../server/storage");
     await initSchema();
@@ -301,6 +333,7 @@ describe.skipIf(!DB)("the terminal against a stub venue", () => {
     await new Promise<void>((r) => wss.close(() => r()));
     const shut = (x: Server | undefined) => new Promise<void>((r) => (x ? x.close(() => r()) : r()));
     await shut(venue);
+    await shut(model);
     await shut(app);
   });
 
@@ -447,9 +480,11 @@ describe.skipIf(!DB)("the terminal against a stub venue", () => {
     const r = await send("POST", `/api/terminal/trades/${tradeId}/stop`, { price: 79600.04 });
     expect(r.status).toBe(200);
     const body = await r.json();
-    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(["DELETE /fapi/v1/algoOrder", "POST /fapi/v1/algoOrder"]);
-    expect(calls[0].params.algoId).toBe(String(oldStop));
-    expect(calls[1].params).toMatchObject({ type: "STOP_MARKET", triggerPrice: "79600.0", closePosition: "true", positionSide: "LONG" });
+    // The mark is read for the record first; what moves money is the old bracket off and the new one on.
+    const writes = calls.filter((c) => c.method !== "GET");
+    expect(writes.map((c) => `${c.method} ${c.path}`)).toEqual(["DELETE /fapi/v1/algoOrder", "POST /fapi/v1/algoOrder"]);
+    expect(writes[0].params.algoId).toBe(String(oldStop));
+    expect(writes[1].params).toMatchObject({ type: "STOP_MARKET", triggerPrice: "79600.0", closePosition: "true", positionSide: "LONG" });
     expect(algos.find((a) => a.algoId === oldStop)!.algoStatus).toBe("CANCELED");
     const nextRef = JSON.parse(body.trade.terminal);
     expect(nextRef.stopOrderId).toBe(body.order.orderId);
@@ -567,6 +602,163 @@ describe.skipIf(!DB)("the terminal against a stub venue", () => {
     // Tidy: flatten it so the later tests start from a flat book.
     await send("POST", `/api/terminal/trades/${trade.id}/close`, {});
     expect(position.amt).toBe(0);
+  });
+
+  it("takes some off at market as a partial, and adds more as an add in the ledger", async () => {
+    const r = await send("POST", "/api/terminal/send", {
+      account: ACCOUNT,
+      plan: { symbol: "BTCUSDT", side: "long", entryType: "market", entryPrice: 80010, stop: 79000, targets: [], qty: 0.04, leverage: 3 },
+    });
+    expect(r.status).toBe(201);
+    const { trade, placed } = await r.json();
+    expect(position.amt).toBeCloseTo(0.04);
+
+    calls.length = 0;
+    const half = await send("POST", `/api/terminal/trades/${trade.id}/reduce`, { fraction: 0.5 });
+    expect(half.status).toBe(200);
+    const sold = calls.find((x) => x.method === "POST" && x.path === "/fapi/v1/order")!;
+    expect(sold.params).toMatchObject({ type: "MARKET", side: "SELL", positionSide: "LONG", quantity: "0.020" });
+    expect(position.amt).toBeCloseTo(0.02);
+    let t = (await half.json()).trade;
+    expect(t.status).toBe("open");
+    expect(t.fills).toMatchObject([{ kind: "partial", size: 0.02, price: 80010 }]);
+
+    calls.length = 0;
+    const more = await send("POST", `/api/terminal/trades/${trade.id}/add`, { qty: 0.01 });
+    expect(more.status).toBe(200);
+    const bought = calls.find((x) => x.method === "POST" && x.path === "/fapi/v1/order")!;
+    expect(bought.params).toMatchObject({ type: "MARKET", side: "BUY", positionSide: "LONG", quantity: "0.010" });
+    expect(position.amt).toBeCloseTo(0.03);
+    t = (await more.json()).trade;
+    expect(t.fills.map((f: any) => f.kind).sort()).toEqual(["add", "partial"]);
+    expect(t.fills.find((f: any) => f.kind === "add")).toMatchObject({ size: 0.01, price: 80010 });
+
+    // A resting add is a limit under the tag; the close takes it off with the rest.
+    const resting = await send("POST", `/api/terminal/trades/${trade.id}/add`, { qty: 0.01, price: 79000 });
+    expect(resting.status).toBe(200);
+    expect(restingFor(`${placed.tag}-a`)).toHaveLength(1);
+    const c = await send("POST", `/api/terminal/trades/${trade.id}/close`, {});
+    expect(c.status).toBe(200);
+    expect(restingFor(`${placed.tag}-a`)).toHaveLength(0);
+    expect(position.amt).toBe(0);
+    const closed = (await c.json()).trade;
+    expect(closed).toMatchObject({ status: "closed", exitReason: "discretion", exitPrice: 80010 });
+    // The partial and the add stay in the ledger; the exit is the rest.
+    expect(closed.fills).toHaveLength(2);
+  });
+
+  it("closes a trade that was flattened from the venue's own app, as a close by hand", async () => {
+    const r = await send("POST", "/api/terminal/send", {
+      account: ACCOUNT,
+      plan: { symbol: "BTCUSDT", side: "long", entryType: "market", entryPrice: 80010, stop: 79000, targets: [], qty: 0.01, leverage: 3 },
+    });
+    expect(r.status).toBe(201);
+    const { trade } = await r.json();
+    // Somebody sells the position from the app: an order this terminal never placed.
+    const outside: StubOrder = {
+      orderId: nextId++, clientOrderId: "app-close", symbol: "BTCUSDT", side: "SELL", positionSide: "LONG", type: "MARKET", status: "NEW",
+      price: "0", stopPrice: "0", origQty: "0.01", executedQty: "0", avgPrice: "0", closePosition: false, reduceOnly: false, time: Date.now(), updateTime: Date.now(),
+    };
+    orders.push(outside);
+    fillOrder(outside.orderId, 80250);
+    expect(position.amt).toBe(0);
+    await send("POST", "/api/terminal/reconcile", {});
+    const t = await store.getTrade(trade.id);
+    expect(t).toMatchObject({ status: "closed", exitPrice: 80250, exitReason: "discretion" });
+  });
+
+  it("moves a resting entry to a new price, and the plan's entry and risk with it", async () => {
+    const r = await send("POST", "/api/terminal/send", {
+      account: ACCOUNT,
+      plan: { symbol: "BTCUSDT", side: "long", entryType: "limit", entryPrice: 79000, stop: 78000, targets: [81000], qty: 0.01, leverage: 2 },
+    });
+    expect(r.status).toBe(201);
+    const { trade, placed } = await r.json();
+    expect(restingFor(`${placed.tag}-e`)).toHaveLength(1);
+    const m = await send("POST", `/api/terminal/trades/${trade.id}/entry`, { price: 79200 });
+    expect(m.status).toBe(200);
+    const body = await m.json();
+    expect(body.order).toMatchObject({ type: "LIMIT", price: 79200, status: "NEW" });
+    expect(body.trade).toMatchObject({ status: "pending", entryPrice: 79200, riskAmount: 12 });
+    const still = restingFor(`${placed.tag}-e`);
+    expect(still).toHaveLength(1);
+    expect(still[0].orderId).toBe(body.order.orderId);
+    expect(orders.find((o) => o.orderId === placed.entryOrderId)?.status).toBe("CANCELED");
+    const ref = JSON.parse(body.trade.terminal);
+    expect(ref.entryOrderId).toBe(body.order.orderId);
+    expect(ref.moves).toMatchObject([{ kind: "entry", from: 79000, to: 79200 }]);
+    // Not for an open position.
+    const open = await send("POST", `/api/terminal/trades/${trade.id}/reduce`, {});
+    expect(open.status).toBe(400);
+    await send("POST", `/api/terminal/trades/${trade.id}/cancel`, {});
+  });
+
+  it("pins the idea, logs each move with the mark and R it was made at, sees the original target hit on the tape, and reviews the management once closed", async () => {
+    spikes.clear();
+    const r = await send("POST", "/api/terminal/send", {
+      account: ACCOUNT,
+      plan: { symbol: "BTCUSDT", side: "long", entryType: "market", entryPrice: 80010, stop: 79010, targets: [81010], qty: 0.02, leverage: 3 },
+    });
+    expect(r.status).toBe(201);
+    const { trade, placed } = await r.json();
+    expect(placed.idea).toMatchObject({ entry: 80010, stop: 79010, targets: [81010], qty: 0.02 });
+    // Watched from the first read-back: nothing reached yet.
+    await send("POST", "/api/terminal/reconcile", {});
+    let t = await store.getTrade(trade.id);
+    let ref = JSON.parse(t.terminal);
+    expect(ref.planWatch).toBeTruthy();
+    expect(ref.planWatch.first).toBeUndefined();
+    expect(t.noManagementOutcome).toBeNull();
+
+    // The stop moved to breakeven: the move carries the mark (80020 on the stub) and the R at it.
+    const m = await send("POST", `/api/terminal/trades/${trade.id}/stop`, { price: 80010 });
+    expect(m.status).toBe(200);
+    ref = JSON.parse((await m.json()).trade.terminal);
+    expect(ref.moves).toHaveLength(1);
+    expect(ref.moves[0]).toMatchObject({ kind: "stop", from: 79010, to: 80010, mark: 80020 });
+    expect(ref.moves[0].r).toBeCloseTo(0.01, 2);
+
+    // Half off: a reduce on the record too.
+    await send("POST", `/api/terminal/trades/${trade.id}/reduce`, { fraction: 0.5 });
+    t = await store.getTrade(trade.id);
+    ref = JSON.parse(t.terminal);
+    expect(ref.moves.map((x: any) => x.kind)).toEqual(["stop", "reduce"]);
+
+    // The tape reaches the original target this minute.
+    spikes.set(minuteOf(Date.now()), { h: 81020, l: 80000 });
+    await send("POST", "/api/terminal/reconcile", {});
+    t = await store.getTrade(trade.id);
+    ref = JSON.parse(t.terminal);
+    expect(ref.planWatch.first).toBe("target");
+    expect(ref.planWatch.targetHitPrice).toBe(81010);
+    // Written as the plan's answer, by the market, while the trade is still on.
+    expect(t.status).toBe("open");
+    expect(t).toMatchObject({ noManagementOutcome: "target_first", outcomeSource: "auto" });
+    const log = await store.listTerminalLog(50);
+    expect(log.some((l: any) => l.tradeId === trade.id && l.action === "plan-hit" && /"kind":"target"/.test(l.request ?? ""))).toBe(true);
+
+    // Closed by hand: the review runs on the next pass, against the plan's answer.
+    modelCalls = [];
+    const c = await send("POST", `/api/terminal/trades/${trade.id}/close`, {});
+    expect(c.status).toBe(200);
+    expect((await c.json()).trade.status).toBe("closed");
+    await send("POST", "/api/terminal/reconcile", {});
+    t = await store.getTrade(trade.id);
+    ref = JSON.parse(t.terminal);
+    expect(ref.moves.map((x: any) => x.kind)).toEqual(["stop", "reduce", "close"]);
+    expect(ref.review).toMatchObject({ verdict: "hurt", basis: { planVerdict: "target_first", planR: 1 } });
+    expect(ref.review.lesson).toBe("Let the plan run to its target.");
+    expect(modelCalls).toHaveLength(1);
+    expect(modelCalls[0]).toContain("Stop 79010 → 80010 (breakeven)");
+    expect(modelCalls[0]).toContain("Tape reached the original target 81010");
+    // Once: a second pass does not ask again.
+    await send("POST", "/api/terminal/reconcile", {});
+    expect(modelCalls).toHaveLength(1);
+    // Asked by name, it reads again.
+    const again = await send("POST", `/api/terminal/trades/${trade.id}/review`, {});
+    expect(again.status).toBe(200);
+    expect(modelCalls).toHaveLength(2);
+    spikes.clear();
   });
 
   it("cancels a resting plan: every order off, the trade marked pulled", async () => {

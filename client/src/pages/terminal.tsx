@@ -13,9 +13,9 @@
  * The page exists only for the emails the server lists. Everyone else sees
  * one line saying so, and the API behind it answers 404.
  */
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, Crosshair, Loader2, ShieldX, Target } from "lucide-react";
+import { AlertTriangle, Bell, BellOff, Crosshair, Loader2, Radio, ShieldX, Target } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -29,20 +29,28 @@ import { pill } from "@/components/trade-chart";
 import { useTrades } from "@/lib/data";
 import {
   fetchTerminalPage,
+  useAddSize,
   useCancelTerminalTrade,
   useCloseTerminalTrade,
   useEnableHedgeMode,
+  useLiveKlines,
   useMoveBracket,
+  useMoveEntry,
+  usePlanAlerts,
+  notificationsAllowed,
   useReconcile,
+  useReduce,
   useSendPlan,
   useTerminalBook,
   useTerminalCandles,
+  useTerminalLog,
   useTerminalStatus,
   useTerminalSymbols,
+  type Book as BookData,
   type VenueOrder,
 } from "@/lib/terminal";
 import { fmtAmount, fmtMoney } from "@shared/metrics";
-import { parseTerminalRef, sizePlan, type SymbolRules, type TerminalPlan } from "@shared/terminal";
+import { parseTerminalRef, planVerdictOf, rAt, sizePlan, type SymbolRules, type TerminalPlan } from "@shared/terminal";
 import type { TradeWithTags } from "@shared/schema";
 
 const Candles = lazy(() => import("@/components/trade-chart").then((m) => ({ default: m.Candles })));
@@ -101,6 +109,7 @@ export default function TerminalPage() {
               </SelectContent>
             </Select>
           )}
+          <AlertsBell />
           {acct?.balance && (
             <span className="font-mono text-xs text-muted-foreground" data-testid="text-terminal-balance">
               {acct.balance.asset} {num(acct.balance.available)} free
@@ -187,7 +196,7 @@ function Desk({ account, env, hedge }: { account: string; env: "live" | "testnet
   const [interval, setInterval_] = useState<Interval>("15m");
   const rule = useMemo(() => rules.find((r) => r.symbol === symbol) ?? null, [rules, symbol]);
   const candlesQ = useTerminalCandles(rule ? symbol : null, interval);
-  const candles = candlesQ.data?.candles ?? [];
+  const { candles, live: tapeLive } = useLiveKlines(rule ? symbol : null, interval, candlesQ.data?.candles ?? []);
   const last = candles.length ? candles[candles.length - 1].c : null;
   const book = useTerminalBook(account);
 
@@ -213,6 +222,22 @@ function Desk({ account, env, hedge }: { account: string; env: "live" | "testnet
     [trades, account],
   );
   const live = mine.find((x) => x.ref.symbol === symbol) ?? null;
+
+  // The original stop or target being reached while a trade is on: said once, here and on the desktop.
+  const say = useCallback(
+    (title: string, body: string, tone: "stop" | "target") => {
+      toast({ title, description: body, variant: tone === "stop" ? "destructive" : "default", duration: 15_000 });
+      if (notificationsAllowed()) {
+        try {
+          new Notification(title, { body, tag: title });
+        } catch {
+          /* no desktop notifications here */
+        }
+      }
+    },
+    [toast],
+  );
+  usePlanAlerts(mine, say);
 
   /* ---------------- the ticket ---------------- */
   const [side, setSide] = useState<"long" | "short">("long");
@@ -297,7 +322,11 @@ function Desk({ account, env, hedge }: { account: string; env: "live" | "testnet
   const levels = useMemo<Level[]>(() => {
     if (live) {
       const t = live.t;
-      const out: Level[] = [{ price: t.entryPrice, label: t.status === "pending" ? "entry · resting" : "entry", color: "entry", dashed: t.status === "pending" }];
+      const out: Level[] = [
+        t.status === "pending"
+          ? { price: t.entryPrice, label: "entry · resting", color: "entry", dashed: true, field: "entryPrice" }
+          : { price: t.entryPrice, label: "entry", color: "entry", dashed: false },
+      ];
       const waiting = live.ref.armOnFill;
       if (liveBrackets.stop) out.push({ price: liveBrackets.stop.stopPrice!, label: "stop", color: "stop", dashed: false, field: "initialStop" });
       else if (waiting) out.push({ price: Number(waiting.stop.stopPrice), label: "stop · on fill", color: "stop", dashed: true, field: "initialStop" });
@@ -321,10 +350,18 @@ function Desk({ account, env, hedge }: { account: string; env: "live" | "testnet
   }, [live, liveBrackets, entry, stop, targets, entryType]);
 
   const move = useMoveBracket();
+  const moveEntry = useMoveEntry();
   const onLevel = (field: LevelField, price: number, done: boolean) => {
     const p = rule ? Number(price.toFixed(Math.max(0, Math.round(-Math.log10(rule.tickSize))))) : price;
     if (live) {
       if (!done) return;
+      if (field === "entryPrice" && live.t.status === "pending") {
+        moveEntry
+          .mutateAsync({ tradeId: live.t.id, price: p })
+          .then(() => toast({ title: "Entry moved", description: `${symbol} resting at ${num(p)}.` }))
+          .catch((err: any) => toast({ title: "Not moved", description: String(err?.message ?? err).slice(0, 200), variant: "destructive" }));
+        return;
+      }
       const kind = field === "initialStop" ? "stop" : field === "initialTarget" ? "target" : null;
       if (!kind) return;
       move
@@ -384,8 +421,9 @@ function Desk({ account, env, hedge }: { account: string; env: "live" | "testnet
             ))}
           </datalist>
           {last != null && (
-            <span className="font-mono text-sm" data-testid="text-terminal-last">
+            <span className="flex items-center gap-1.5 font-mono text-sm" data-testid="text-terminal-last">
               {num(last)}
+              <Radio className={`h-3 w-3 ${tapeLive ? "text-emerald-400" : "text-muted-foreground/40"}`} aria-label={tapeLive ? "live" : "polling"} />
             </span>
           )}
           {!rule && rules.length > 0 && <span className="text-[11px] text-amber-500">not a perpetual on this host</span>}
@@ -399,8 +437,15 @@ function Desk({ account, env, hedge }: { account: string; env: "live" | "testnet
         </div>
         {live && (
           <p className="mb-2 text-[11px] text-sky-400" data-testid="text-terminal-managing">
-            Managing trade #{live.t.id} — drag the stop or target to move the resting order.
-            {live.ref.unprotected && <span className="ml-2 font-semibold text-red-400">No stop is resting on this position.</span>}
+            Managing #{live.t.id} — drag the {live.t.status === "pending" ? "entry, " : ""}stop or target to move the resting order.
+            {live.ref.unprotected && live.t.status === "open" && (
+              <span className="ml-2 font-semibold text-red-400">No stop is resting on this position.</span>
+            )}
+          </p>
+        )}
+        {candlesQ.isError && (
+          <p className="mb-2 text-[11px] text-amber-500" data-testid="text-terminal-candles-error">
+            The price feed did not answer for {interval}: {String((candlesQ.error as any)?.message ?? candlesQ.error).replace(/^\d+:\s*/, "").slice(0, 160)}
           </p>
         )}
         {candles.length === 0 ? (
@@ -425,6 +470,9 @@ function Desk({ account, env, hedge }: { account: string; env: "live" | "testnet
 
       {/* ------------------------------ ticket + book ------------------------------ */}
       <div className="space-y-4">
+        {live ? (
+          <ManagePanel live={live} book={book.data} rule={rule} last={last} />
+        ) : (
         <Card className="space-y-3 border-card-border bg-card p-3" data-testid="card-terminal-ticket">
           <div className="grid grid-cols-2 gap-2">
             <Segmented
@@ -504,9 +552,10 @@ function Desk({ account, env, hedge }: { account: string; env: "live" | "testnet
 
           <Button className="h-10 w-full" disabled={!canSend} onClick={() => setConfirm(true)} data-testid="button-terminal-send">
             {send.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            {live ? `Already in ${symbol} — close it first` : `Send ${side} ${rule?.baseAsset ?? symbol}`}
+            Send {side} {rule?.baseAsset ?? symbol}
           </Button>
         </Card>
+        )}
 
         <Book account={account} mine={mine} book={book.data} />
       </div>
@@ -553,6 +602,219 @@ function Desk({ account, env, hedge }: { account: string; env: "live" | "testnet
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+/** Desktop notifications for the original stop or target being hit: asked for with a click, as browsers require. */
+function AlertsBell() {
+  const [state, setState] = useState<NotificationPermission | "unsupported">(() => (typeof Notification === "undefined" ? "unsupported" : Notification.permission));
+  if (state === "unsupported") return null;
+  const on = state === "granted";
+  return (
+    <Button
+      size="sm"
+      variant="ghost"
+      className={`h-8 px-2 text-[11px] ${on ? "text-emerald-400" : "text-muted-foreground"}`}
+      title={on ? "Desktop alerts on: you are told when an original stop or target is hit." : state === "denied" ? "Desktop alerts are blocked in this browser's site settings." : "Turn on desktop alerts for original stop/target hits"}
+      disabled={state === "denied"}
+      onClick={() => {
+        if (on) return;
+        void Notification.requestPermission().then((p) => setState(p));
+      }}
+      data-testid="button-terminal-alerts"
+    >
+      {on ? <Bell className="mr-1 h-3.5 w-3.5" /> : <BellOff className="mr-1 h-3.5 w-3.5" />}
+      {on ? "alerts on" : "alerts"}
+    </Button>
+  );
+}
+
+/* ------------------------------ managing a trade ------------------------------ */
+
+type Live = { t: TradeWithTags; ref: NonNullable<ReturnType<typeof parseTerminalRef>> };
+
+/**
+ * What you do to a trade once it is on: move the stop and the target, take
+ * some off, add some, move a resting entry, close. Each is one call to the
+ * venue and one line in the journal; the recent terminal log sits under it
+ * so a refusal is read here rather than guessed at.
+ */
+function ManagePanel({ live, book, rule, last }: { live: Live; book: BookData | undefined; rule: SymbolRules | null; last: number | null }) {
+  const { toast } = useToast();
+  const { t, ref } = live;
+  const resting = t.status === "pending";
+  const pos = (book?.positions ?? []).find((p) => p.symbol === ref.symbol && p.positionSide === ref.positionSide) ?? null;
+  const br = bracketsOf(ref.tag, book?.orders ?? []);
+  const waiting = resting ? ref.armOnFill : undefined;
+  const currentStop = br.stop?.stopPrice ?? (waiting ? Number(waiting.stop.stopPrice) : null);
+  const currentTarget = br.targets[0]?.stopPrice ?? (waiting?.targets[0] ? Number(waiting.targets[0].stopPrice) : null);
+  const held = pos ? Math.abs(pos.amt) : t.size;
+  const long = t.direction === "long";
+  const entry = pos?.entryPrice || t.entryPrice;
+  const stopForR = currentStop ?? t.initialStop ?? null;
+  const risk = stopForR != null ? Math.abs(entry - stopForR) : null;
+  const rNow = pos && risk ? ((long ? 1 : -1) * (pos.markPrice - entry)) / risk : null;
+
+  const [stopIn, setStopIn] = useState(currentStop != null ? String(currentStop) : "");
+  const [targetIn, setTargetIn] = useState(currentTarget != null ? String(currentTarget) : "");
+  const [entryIn, setEntryIn] = useState(String(t.entryPrice));
+  const [takeQty, setTakeQty] = useState("");
+  const [addQty, setAddQty] = useState("");
+  const [addType, setAddType] = useState<"market" | "limit">("market");
+  const [addPrice, setAddPrice] = useState("");
+  // The fields follow the book until they are being typed in.
+  useEffect(() => setStopIn(currentStop != null ? String(currentStop) : ""), [currentStop]);
+  useEffect(() => setTargetIn(currentTarget != null ? String(currentTarget) : ""), [currentTarget]);
+  useEffect(() => setEntryIn(String(t.entryPrice)), [t.entryPrice]);
+
+  const move = useMoveBracket();
+  const moveEntry = useMoveEntry();
+  const reduce = useReduce();
+  const add = useAddSize();
+  const close = useCloseTerminalTrade();
+  const cancel = useCancelTerminalTrade();
+  const busy = move.isPending || moveEntry.isPending || reduce.isPending || add.isPending || close.isPending || cancel.isPending;
+  const { data: log = [] } = useTerminalLog(true);
+  const mineLog = log.filter((l) => l.tradeId === t.id).slice(0, 6);
+
+  const run = (title: string, p: Promise<unknown>, done: string) =>
+    p.then(() => toast({ title, description: done })).catch((err: any) => toast({ title: `${title} — not done`, description: String(err?.message ?? err).replace(/^\d+:\s*/, "").slice(0, 220), variant: "destructive" }));
+  const digits = rule ? Math.max(0, Math.round(-Math.log10(rule.tickSize))) : 2;
+  const fmt = (v: number) => v.toFixed(digits);
+
+  return (
+    <Card className="space-y-3 border-card-border bg-card p-3" data-testid="card-terminal-manage">
+      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <span className={`text-sm font-semibold ${long ? "text-emerald-400" : "text-red-400"}`}>{long ? "LONG" : "SHORT"}</span>
+        <span className="font-mono text-sm">{ref.symbol}</span>
+        <span className="font-mono text-xs text-muted-foreground">
+          {num(held)} @ {num(entry)}
+        </span>
+        {resting ? (
+          <span className="rounded bg-secondary px-1.5 py-0.5 text-[10px] uppercase tracking-wider">resting</span>
+        ) : pos ? (
+          <span className={`font-mono text-sm ${pos.unrealized >= 0 ? "text-emerald-400" : "text-red-400"}`} data-testid="text-manage-upnl">
+            {fmtMoney(pos.unrealized)}
+            {rNow != null && <span className="ml-1 text-xs opacity-80">{rNow >= 0 ? "+" : ""}{rNow.toFixed(2)}R</span>}
+          </span>
+        ) : null}
+        <span className="ml-auto text-[10px] text-muted-foreground">trade #{t.id} · {ref.leverage}×</span>
+      </div>
+
+      {/* The idea as drawn — it is what everything after is measured against — and where the tape stands against it. */}
+      <p className="font-mono text-[10px] text-muted-foreground">
+        idea: entry {num(ref.idea?.entry ?? t.entryPrice)} · stop {(ref.idea?.stop ?? t.initialStop) != null ? num((ref.idea?.stop ?? t.initialStop)!) : "—"} · target{" "}
+        {(ref.idea?.targets[0] ?? t.initialTarget) != null ? num((ref.idea?.targets[0] ?? t.initialTarget)!) : "—"}
+      </p>
+      {!resting && <PlanWatchLine t={t} ref_={ref} mark={pos?.markPrice ?? last} />}
+
+      {resting && (
+        <div className="grid grid-cols-[1fr_auto_auto] items-end gap-2">
+          <Field label="Resting entry" value={entryIn} onChange={setEntryIn} testId="input-manage-entry" />
+          <Button size="sm" variant="outline" className="h-8 text-[11px]" disabled={busy || numOrNull(entryIn) == null || numOrNull(entryIn) === t.entryPrice}
+            onClick={() => run("Entry moved", moveEntry.mutateAsync({ tradeId: t.id, price: numOrNull(entryIn)! }), `Resting at ${entryIn}.`)} data-testid="button-manage-move-entry">
+            Move
+          </Button>
+          <Button size="sm" variant="ghost" className="h-8 text-[11px] text-muted-foreground" disabled={busy}
+            onClick={() => run("Cancelled", cancel.mutateAsync(t.id), "The resting order is off the book.")} data-testid="button-manage-cancel">
+            Cancel order
+          </Button>
+        </div>
+      )}
+
+      <div className="grid grid-cols-[1fr_auto] items-end gap-2">
+        <Field label={`Stop${currentStop == null ? (waiting ? " · on fill" : " · NONE RESTING") : br.stop ? " · resting" : " · on fill"}`} value={stopIn} onChange={setStopIn} tone={currentStop == null && !waiting ? "text-red-400 font-semibold" : "text-red-400"} testId="input-manage-stop" />
+        <Button size="sm" variant="outline" className="h-8 text-[11px]" disabled={busy || numOrNull(stopIn) == null || numOrNull(stopIn) === currentStop}
+          onClick={() => run("Stop set", move.mutateAsync({ tradeId: t.id, kind: "stop", price: numOrNull(stopIn)! }), `${ref.symbol} stop ${stopIn}.`)} data-testid="button-manage-set-stop">
+          {currentStop == null ? "Place stop" : "Set"}
+        </Button>
+      </div>
+      <div className="grid grid-cols-[1fr_auto] items-end gap-2">
+        <Field label={`Target${currentTarget == null ? " · none" : br.targets.length ? " · resting" : " · on fill"}`} value={targetIn} onChange={setTargetIn} tone="text-emerald-400" testId="input-manage-target" />
+        <Button size="sm" variant="outline" className="h-8 text-[11px]" disabled={busy || numOrNull(targetIn) == null || numOrNull(targetIn) === currentTarget}
+          onClick={() => run("Target set", move.mutateAsync({ tradeId: t.id, kind: "target", price: numOrNull(targetIn)! }), `${ref.symbol} target ${targetIn}.`)} data-testid="button-manage-set-target">
+          {currentTarget == null ? "Place target" : "Set"}
+        </Button>
+      </div>
+
+      {!resting && (
+        <>
+          <div className="space-y-1">
+            <span className="block text-[10px] uppercase tracking-wider text-muted-foreground">Take profit at market</span>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {[0.25, 0.5, 0.75].map((f) => (
+                <Button key={f} size="sm" variant="outline" className="h-7 px-2 text-[11px]" disabled={busy || !pos}
+                  onClick={() => run(`Took ${Math.round(f * 100)}%`, reduce.mutateAsync({ tradeId: t.id, fraction: f }), `${fmt(held * f)} ${rule?.baseAsset ?? ""} off at market.`)} data-testid={`button-manage-take-${Math.round(f * 100)}`}>
+                  {Math.round(f * 100)}%
+                </Button>
+              ))}
+              <Input value={takeQty} onChange={(e) => setTakeQty(e.target.value)} placeholder={rule ? `qty · ${rule.baseAsset}` : "qty"} inputMode="decimal" className="h-7 w-28 font-mono text-[11px]" data-testid="input-manage-take-qty" />
+              <Button size="sm" variant="outline" className="h-7 px-2 text-[11px]" disabled={busy || !pos || numOrNull(takeQty) == null}
+                onClick={() => run("Took profit", reduce.mutateAsync({ tradeId: t.id, qty: numOrNull(takeQty)! }), `${takeQty} off at market.`).then(() => setTakeQty(""))} data-testid="button-manage-take-qty">
+                Take
+              </Button>
+            </div>
+          </div>
+          <div className="space-y-1">
+            <span className="block text-[10px] uppercase tracking-wider text-muted-foreground">Add size</span>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <Input value={addQty} onChange={(e) => setAddQty(e.target.value)} placeholder={rule ? `qty · ${rule.baseAsset}` : "qty"} inputMode="decimal" className="h-7 w-28 font-mono text-[11px]" data-testid="input-manage-add-qty" />
+              <Segmented size="xs" value={addType} onChange={setAddType} ariaLabel="Add at" options={[{ id: "market", label: "market", testId: "button-manage-add-market" }, { id: "limit", label: "limit", testId: "button-manage-add-limit" }]} />
+              {addType === "limit" && (
+                <Input value={addPrice} onChange={(e) => setAddPrice(e.target.value)} placeholder={last != null ? fmt(last) : "price"} inputMode="decimal" className="h-7 w-28 font-mono text-[11px]" data-testid="input-manage-add-price" />
+              )}
+              <Button size="sm" variant="outline" className="h-7 px-2 text-[11px]" disabled={busy || numOrNull(addQty) == null || (addType === "limit" && numOrNull(addPrice) == null)}
+                onClick={() => run("Added", add.mutateAsync({ tradeId: t.id, qty: numOrNull(addQty)!, price: addType === "limit" ? numOrNull(addPrice) : null }), addType === "limit" ? `${addQty} resting at ${addPrice}.` : `${addQty} more at market.`).then(() => setAddQty(""))} data-testid="button-manage-add">
+                Add
+              </Button>
+            </div>
+            {(ref.addOrderIds?.length ?? 0) > 0 && (
+              <p className="text-[10px] text-muted-foreground">
+                {(book?.orders ?? []).filter((o) => ref.addOrderIds!.includes(o.orderId)).map((o) => `${num(o.origQty)} resting at ${num(o.price ?? 0)}`).join(" · ") || `${ref.addOrderIds!.length} add${ref.addOrderIds!.length === 1 ? "" : "s"} filled`}
+              </p>
+            )}
+          </div>
+          <Button variant="outline" className="h-9 w-full text-xs" disabled={busy || !pos}
+            onClick={() => run("Closed at market", close.mutateAsync(t.id), "The position is flat and the brackets are off.")} data-testid="button-manage-close">
+            Close at market
+          </Button>
+        </>
+      )}
+
+      {mineLog.length > 0 && (
+        <ul className="space-y-0.5 border-t border-border/60 pt-2 font-mono text-[10px]" data-testid="list-manage-log">
+          {mineLog.map((l) => (
+            <li key={l.id} className={`truncate ${l.ok ? "text-muted-foreground" : "text-red-400"}`} title={l.response ?? ""}>
+              {new Date(l.at).toLocaleTimeString(undefined, { hour: "2-digit", hourCycle: "h23", minute: "2-digit", second: "2-digit" })} {l.action} {l.ok ? "ok" : `failed — ${(l.response ?? "").slice(0, 80)}`}
+            </li>
+          ))}
+        </ul>
+      )}
+    </Card>
+  );
+}
+
+/** Which original level the tape has reached, and what set-and-forget would be worth now. */
+function PlanWatchLine({ t, ref_, mark }: { t: TradeWithTags; ref_: NonNullable<ReturnType<typeof parseTerminalRef>>; mark: number | null }) {
+  const w = ref_.planWatch;
+  const plan = planVerdictOf(t, ref_);
+  const idea = ref_.idea;
+  const nowR = rAt(mark, t.entryPrice, idea?.stop ?? t.initialStop, t.direction);
+  const hhmm = (iso: string) => new Date(iso).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+  if (plan.verdict) {
+    const stop = plan.verdict === "stop_first";
+    return (
+      <p className={`text-[11px] font-medium ${stop ? "text-red-400" : "text-emerald-400"}`} data-testid="text-manage-plan-hit">
+        Original {stop ? "stop" : "target"} hit{plan.at ? ` at ${hhmm(plan.at)}` : ""} — set and forget {plan.planR != null ? `${plan.planR >= 0 ? "+" : ""}${plan.planR.toFixed(2)}R` : ""}
+        {nowR != null && <span className="text-muted-foreground">; you are at {nowR >= 0 ? "+" : ""}{nowR.toFixed(2)}R</span>}
+      </p>
+    );
+  }
+  return (
+    <p className="text-[10px] text-muted-foreground" data-testid="text-manage-plan-watch">
+      {w ? "Neither original level reached yet" : "Watching the tape for the original levels"}
+      {nowR != null && ` · ${nowR >= 0 ? "+" : ""}${nowR.toFixed(2)}R now`}
+    </p>
   );
 }
 
@@ -635,8 +897,8 @@ function Book({
             <li key={t.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2 text-xs" data-testid={`row-terminal-trade-${t.id}`}>
               <span className={`font-semibold ${t.direction === "long" ? "text-emerald-400" : "text-red-400"}`}>{t.direction === "long" ? "LONG" : "SHORT"}</span>
               <span className="font-mono">{ref.symbol}</span>
-              <span className="font-mono text-muted-foreground">{num(t.size)}</span>
-              <span className="font-mono text-muted-foreground">@ {num(t.entryPrice)}</span>
+              <span className="font-mono text-muted-foreground">{num(p && t.status === "open" ? Math.abs(p.amt) : t.size)}</span>
+              <span className="font-mono text-muted-foreground">@ {num(p && t.status === "open" && p.entryPrice ? p.entryPrice : t.entryPrice)}</span>
               {t.status === "pending" ? (
                 <span className="rounded bg-secondary px-1.5 py-0.5 text-[10px] uppercase tracking-wider">resting</span>
               ) : p ? (

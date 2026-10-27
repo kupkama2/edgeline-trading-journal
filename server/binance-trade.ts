@@ -196,14 +196,16 @@ const ALGO_TYPES = new Set(["STOP_MARKET", "TAKE_PROFIT_MARKET", "STOP", "TAKE_P
 export const isAlgoType = (type: string | undefined) => ALGO_TYPES.has(String(type ?? "").toUpperCase());
 
 /** Tolerant on purpose: the field names are read from the venue's answer, with the plain-order names as fallbacks. */
-export function parseAlgoOrder(r: any): VenueOrder | null {
+export function parseAlgoOrder(r: any, symbolHint?: string): VenueOrder | null {
   const algoId = n(r?.algoId);
-  if (algoId == null || typeof r?.symbol !== "string") return null;
+  // The new-order answer need not echo the symbol; the caller knows it.
+  const symbol = typeof r?.symbol === "string" ? r.symbol : symbolHint;
+  if (algoId == null || !symbol) return null;
   // "Empty string if not triggered; orderId if triggered."
   const actual = n(r.actualOrderId);
   const triggered = actual != null && actual > 0 ? actual : null;
   return {
-    symbol: r.symbol.toUpperCase(),
+    symbol: symbol.toUpperCase(),
     orderId: algoId,
     triggeredOrderId: triggered,
     clientOrderId: String(r.clientAlgoId ?? r.clientOrderId ?? ""),
@@ -296,8 +298,9 @@ export async function placeOrder(v: Venue, o: OrderParams): Promise<VenueOrder> 
       ...(rest.priceProtect ? { priceProtect: String(rest.priceProtect).toLowerCase() } : {}),
       ...(rest.closePosition ? { closePosition: String(rest.closePosition).toLowerCase() } : {}),
     };
-    const got = parseAlgoOrder(await call(v, "POST", "/fapi/v1/algoOrder", params));
-    if (!got) throw new Error("The venue accepted the conditional order but sent back nothing readable.");
+    const answer = await call(v, "POST", "/fapi/v1/algoOrder", params);
+    const got = parseAlgoOrder(answer, o.symbol);
+    if (!got) throw new Error(`The venue accepted the conditional order but sent back nothing readable: ${JSON.stringify(answer).slice(0, 300)}`);
     return got;
   }
   const got = parseOrder(await call(v, "POST", "/fapi/v1/order", o));
@@ -408,7 +411,7 @@ export async function placePlan(
   return { entry, stop, targets, refused, deferred: false };
 }
 
-/** Flatten one position side at market, by the quantity the venue holds. */
+/** Take some or all of one position side off at market. */
 export async function closeAtMarket(v: Venue, symbol: string, positionSide: "LONG" | "SHORT", qty: string, tag: string): Promise<VenueOrder> {
   return placeOrder(v, {
     symbol,
@@ -418,4 +421,22 @@ export async function closeAtMarket(v: Venue, symbol: string, positionSide: "LON
     quantity: qty,
     newClientOrderId: tag,
   });
+}
+
+/** More of the same side: at market, or resting at a price. */
+export async function addToPosition(
+  v: Venue,
+  symbol: string,
+  positionSide: "LONG" | "SHORT",
+  qty: string,
+  price: string | null,
+  tag: string,
+): Promise<VenueOrder> {
+  const side = positionSide === "LONG" ? "BUY" : "SELL";
+  return placeOrder(
+    v,
+    price
+      ? { symbol, positionSide, side, type: "LIMIT", timeInForce: "GTC", quantity: qty, price, newClientOrderId: tag }
+      : { symbol, positionSide, side, type: "MARKET", quantity: qty, newClientOrderId: tag },
+  );
 }

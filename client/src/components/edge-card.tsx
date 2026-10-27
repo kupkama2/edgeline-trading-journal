@@ -22,6 +22,8 @@ export function EdgeCard({ trades }: { trades: TradeWithTags[] }) {
   const [, navigate] = useLocation();
   const e = useMemo(() => managementEdge(trades), [trades]);
   const sentence = edgeSentence(e);
+  // The trades sent from the terminal alone: every move on them was recorded as it was made.
+  const term = useMemo(() => managementEdge(trades.filter((t) => !!t.terminal)), [trades]);
 
   if (e.measured === 0) {
     return (
@@ -82,6 +84,16 @@ export function EdgeCard({ trades }: { trades: TradeWithTags[] }) {
         {e.unmeasured > 0 &&
           ` ${e.unmeasured} more closed ${e.unmeasured === 1 ? "trade has" : "trades have"} no plan outcome yet and are left out.`}
       </p>
+      {term.measured > 0 && (
+        <p className="mt-1 text-[10px] leading-snug text-muted-foreground" data-testid="edge-terminal">
+          From the terminal alone, where every move was logged as it was made: {term.measured} measured, management{" "}
+          <span className={term.totalR >= 0 ? "text-emerald-400" : "text-primary"}>
+            {term.totalR > 0 ? "+" : ""}
+            {term.totalR.toFixed(1)}R
+          </span>{" "}
+          net.
+        </p>
+      )}
     </Card>
   );
 }
