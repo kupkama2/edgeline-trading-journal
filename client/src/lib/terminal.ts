@@ -358,3 +358,19 @@ export function usePlanAlerts(
     }
   }, [mine, say]);
 }
+
+export function useTakeAt() {
+  return useMutation({
+    mutationFn: async (v: { tradeId: number; qty: number; price: number }) =>
+      (await apiRequest("POST", `/api/terminal/trades/${v.tradeId}/take`, { qty: v.qty, price: v.price })).json() as Promise<{ trade: TradeWithTags; order: VenueOrder }>,
+    onSuccess: afterWrite,
+  });
+}
+
+export function useCancelOrder() {
+  return useMutation({
+    mutationFn: async (v: { account: string; symbol: string; orderId: number }) =>
+      (await apiRequest("POST", "/api/terminal/orders/cancel", v)).json() as Promise<{ cancelled: number; trades: number[] }>,
+    onSuccess: afterWrite,
+  });
+}

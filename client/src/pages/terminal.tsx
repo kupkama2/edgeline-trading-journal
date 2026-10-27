@@ -15,7 +15,8 @@
  */
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, Bell, BellOff, Crosshair, Loader2, Radio, ShieldX, Target } from "lucide-react";
+import { AlertTriangle, Bell, BellOff, Crosshair, ExternalLink, Loader2, Radio, ShieldX, Target, X } from "lucide-react";
+import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -30,6 +31,8 @@ import {
   fetchTerminalPage,
   useAddSize,
   useAdoptPosition,
+  useCancelOrder,
+  useTakeAt,
   useTerminalTrades,
   useCancelTerminalTrade,
   useCloseTerminalTrade,
@@ -222,7 +225,25 @@ function Desk({ account, env, hedge }: { account: string; env: "live" | "testnet
         .filter((x) => x.t.status === "open" || x.t.status === "pending"),
     [trades, account],
   );
-  const live = mine.find((x) => x.ref.symbol === symbol) ?? null;
+  /*
+   * Which trade the desk is on. Picked from the book — that also brings its
+   * symbol onto the chart — or, failing that, whatever this terminal has on
+   * for the chart's symbol. A second ticket can be opened beside it (a hedge
+   * on the same symbol, say) without leaving the trade.
+   */
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [ticketToo, setTicketToo] = useState(false);
+  const live = mine.find((x) => x.t.id === selectedId && x.ref.symbol === symbol) ?? mine.find((x) => x.ref.symbol === symbol) ?? null;
+  const select = (x: { t: TradeWithTags; ref: { symbol: string } }) => {
+    setSelectedId(x.t.id);
+    setSymbol(x.ref.symbol);
+    setTicketToo(false);
+  };
+  useEffect(() => setTicketToo(false), [symbol]);
+  useEffect(() => {
+    if (ticketToo && live) setSide(live.t.direction === "long" ? "short" : "long");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ticketToo]);
 
   // The original stop or target being reached while a trade is on: said once, here and on the desktop.
   const say = useCallback(
@@ -275,7 +296,7 @@ function Desk({ account, env, hedge }: { account: string; env: "live" | "testnet
   }, [candles]);
   const snap = (p: number) => (rule ? Number(p.toFixed(Math.max(0, Math.round(-Math.log10(rule.tickSize))))) : p);
   const entryActions = useMemo(() => {
-    if (live) return null;
+    if (live && !ticketToo) return null;
     const e = numOrNull(entry);
     if (e == null) return null;
     const dist = Math.max(typicalRange != null ? typicalRange * 2 : e * 0.005, rule?.tickSize ?? 0);
@@ -292,7 +313,7 @@ function Desk({ account, env, hedge }: { account: string; env: "live" | "testnet
       },
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [live, entry, stop, targets, side, typicalRange, rule]);
+  }, [live, ticketToo, entry, stop, targets, side, typicalRange, rule]);
   // A new symbol is a new drawing.
   useEffect(() => {
     setStop("");
@@ -321,40 +342,45 @@ function Desk({ account, env, hedge }: { account: string; env: "live" | "testnet
   /* ---------------- the chart's lines ---------------- */
   const liveBrackets = useMemo(() => bracketsOf(live?.ref ?? null, book.data?.orders ?? []), [live, book.data]);
   const levels = useMemo<Level[]>(() => {
+    const drawn: Level[] = [];
+    if (!live || ticketToo) {
+      const e = numOrNull(entry);
+      const s0 = numOrNull(stop);
+      if (e != null) drawn.push({ price: e, label: entryType === "market" ? `${side} · market` : `${side} · limit`, color: "entry", dashed: entryType === "market", field: entryType === "limit" ? "entryPrice" : undefined });
+      if (s0 != null) drawn.push({ price: s0, label: "stop", color: "stop", dashed: true, field: "initialStop" });
+      const t1 = numOrNull(targets[0] ?? "");
+      if (t1 != null) drawn.push({ price: t1, label: "target", color: "target", dashed: true, field: "initialTarget" });
+      targets.slice(1).forEach((t) => {
+        const v = numOrNull(t);
+        if (v != null) drawn.push({ price: v, label: "target", color: "target", dashed: true, faint: true });
+      });
+    }
     if (live) {
       const t = live.t;
+      // With a ticket open beside it, the live trade's lines are shown but not dragged: the drag belongs to the drawing.
+      const drag = !ticketToo;
       const out: Level[] = [
         t.status === "pending"
           ? { price: t.entryPrice, label: "entry · resting", color: "entry", dashed: true, field: "entryPrice" }
           : { price: t.entryPrice, label: "entry", color: "entry", dashed: false },
       ];
       const waiting = live.ref.armOnFill;
-      if (liveBrackets.stop) out.push({ price: liveBrackets.stop.stopPrice!, label: "stop", color: "stop", dashed: false, field: "initialStop" });
-      else if (waiting) out.push({ price: Number(waiting.stop.stopPrice), label: "stop · on fill", color: "stop", dashed: true, field: "initialStop" });
+      if (liveBrackets.stop) out.push({ price: liveBrackets.stop.stopPrice!, label: "stop", color: "stop", dashed: false, field: drag ? "initialStop" : undefined });
+      else if (waiting) out.push({ price: Number(waiting.stop.stopPrice), label: "stop · on fill", color: "stop", dashed: true, field: drag ? "initialStop" : undefined });
       else if (t.initialStop != null) out.push({ price: t.initialStop, label: "stop · not resting", color: "stop", dashed: true, faint: true });
-      if (liveBrackets.targets.length) for (const o of liveBrackets.targets) out.push({ price: o.stopPrice!, label: "target", color: "target", dashed: false, field: "initialTarget" });
-      else if (waiting) for (const o of waiting.targets) out.push({ price: Number(o.stopPrice), label: "target · on fill", color: "target", dashed: true, field: "initialTarget" });
-      return out;
+      if (liveBrackets.targets.length) for (const o of liveBrackets.targets) out.push({ price: o.stopPrice!, label: o.closePosition ? "target" : `take ${num(o.origQty)}`, color: "target", dashed: false, field: drag && o.closePosition ? "initialTarget" : undefined });
+      else if (waiting) for (const o of waiting.targets) out.push({ price: Number(o.stopPrice), label: "target · on fill", color: "target", dashed: true, field: drag ? "initialTarget" : undefined });
+      if (!drag) out[0] = { ...out[0], field: undefined };
+      return [...out.map((l) => (ticketToo ? { ...l, faint: true } : l)), ...drawn];
     }
-    const out: Level[] = [];
-    const e = numOrNull(entry);
-    const s = numOrNull(stop);
-    if (e != null) out.push({ price: e, label: entryType === "market" ? `${side} · market` : `${side} · limit`, color: "entry", dashed: entryType === "market", field: entryType === "limit" ? "entryPrice" : undefined });
-    if (s != null) out.push({ price: s, label: "stop", color: "stop", dashed: true, field: "initialStop" });
-    const t1 = numOrNull(targets[0] ?? "");
-    if (t1 != null) out.push({ price: t1, label: "target", color: "target", dashed: true, field: "initialTarget" });
-    targets.slice(1).forEach((t) => {
-      const v = numOrNull(t);
-      if (v != null) out.push({ price: v, label: "target", color: "target", dashed: true, faint: true });
-    });
-    return out;
-  }, [live, liveBrackets, entry, stop, targets, entryType]);
+    return drawn;
+  }, [live, ticketToo, liveBrackets, entry, stop, targets, entryType, side]);
 
   const move = useMoveBracket();
   const moveEntry = useMoveEntry();
   const onLevel = (field: LevelField, price: number, done: boolean) => {
     const p = rule ? Number(price.toFixed(Math.max(0, Math.round(-Math.log10(rule.tickSize))))) : price;
-    if (live) {
+    if (live && !ticketToo) {
       if (!done) return;
       if (field === "entryPrice" && live.t.status === "pending") {
         moveEntry
@@ -395,13 +421,15 @@ function Desk({ account, env, hedge }: { account: string; env: "live" | "testnet
       }
       setStop("");
       setTargets([""]);
+      setTicketToo(false);
+      setSelectedId(r.trade.id);
     } catch (err: any) {
       toast({ title: "Not sent", description: String(err?.message ?? err).replace(/^\d+:\s*/, "").slice(0, 300), variant: "destructive" });
     }
   }
 
   const problems = sized?.problems ?? (plan ? [] : ["Draw a stop to size the trade."]);
-  const canSend = !!plan && !!rule && problems.length === 0 && hedge && !send.isPending && !live;
+  const canSend = !!plan && !!rule && problems.length === 0 && hedge && !send.isPending && (!live || ticketToo);
 
   return (
     <div className="grid gap-4 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
@@ -438,7 +466,7 @@ function Desk({ account, env, hedge }: { account: string; env: "live" | "testnet
         </div>
         {live && (
           <p className="mb-2 text-[11px] text-sky-400" data-testid="text-terminal-managing">
-            Managing #{live.t.id} — drag the {live.t.status === "pending" ? "entry, " : ""}stop or target to move the resting order.
+            Managing #{live.t.id}{ticketToo ? " — drawing a new order beside it" : ` — drag the ${live.t.status === "pending" ? "entry, " : ""}stop or target to move the resting order.`}
             {live.ref.unprotected && live.t.status === "open" && (
               <span className="ml-2 font-semibold text-red-400">No stop is resting on this position.</span>
             )}
@@ -471,9 +499,8 @@ function Desk({ account, env, hedge }: { account: string; env: "live" | "testnet
 
       {/* ------------------------------ ticket + book ------------------------------ */}
       <div className="space-y-4">
-        {live ? (
-          <ManagePanel live={live} book={book.data} rule={rule} last={last} />
-        ) : (
+        {live && <ManagePanel live={live} book={book.data} rule={rule} last={last} account={account} onNewOrder={() => setTicketToo((v) => !v)} ticketOpen={ticketToo} />}
+        {(!live || ticketToo) && (
         <Card className="space-y-3 border-card-border bg-card p-3" data-testid="card-terminal-ticket">
           <div className="grid grid-cols-2 gap-2">
             <Segmented
@@ -558,7 +585,8 @@ function Desk({ account, env, hedge }: { account: string; env: "live" | "testnet
         </Card>
         )}
 
-        <Book account={account} mine={mine} book={book.data} />
+        <Book account={account} mine={mine} book={book.data} selectedId={live?.t.id ?? null} onSelect={select} />
+        <Orders account={account} mine={mine} book={book.data} />
       </div>
 
       <Dialog open={confirm} onOpenChange={(o) => !o && setConfirm(false)}>
@@ -640,8 +668,25 @@ type Live = { t: TradeWithTags; ref: NonNullable<ReturnType<typeof parseTerminal
  * venue and one line in the journal; the recent terminal log sits under it
  * so a refusal is read here rather than guessed at.
  */
-function ManagePanel({ live, book, rule, last }: { live: Live; book: BookData | undefined; rule: SymbolRules | null; last: number | null }) {
+function ManagePanel({
+  live,
+  book,
+  rule,
+  last,
+  account,
+  onNewOrder,
+  ticketOpen,
+}: {
+  live: Live;
+  book: BookData | undefined;
+  rule: SymbolRules | null;
+  last: number | null;
+  account: string;
+  onNewOrder: () => void;
+  ticketOpen: boolean;
+}) {
   const { toast } = useToast();
+  const [, navigate] = useLocation();
   const { t, ref } = live;
   const resting = t.status === "pending";
   const pos = (book?.positions ?? []).find((p) => p.symbol === ref.symbol && p.positionSide === ref.positionSide) ?? null;
@@ -660,6 +705,8 @@ function ManagePanel({ live, book, rule, last }: { live: Live; book: BookData | 
   const [targetIn, setTargetIn] = useState(currentTarget != null ? String(currentTarget) : "");
   const [entryIn, setEntryIn] = useState(String(t.entryPrice));
   const [takeQty, setTakeQty] = useState("");
+  const [takeAtQty, setTakeAtQty] = useState("");
+  const [takeAtPrice, setTakeAtPrice] = useState("");
   const [addQty, setAddQty] = useState("");
   const [addType, setAddType] = useState<"market" | "limit">("market");
   const [addPrice, setAddPrice] = useState("");
@@ -672,9 +719,24 @@ function ManagePanel({ live, book, rule, last }: { live: Live; book: BookData | 
   const moveEntry = useMoveEntry();
   const reduce = useReduce();
   const add = useAddSize();
+  const takeAt = useTakeAt();
+  const cancelOrder = useCancelOrder();
   const close = useCloseTerminalTrade();
   const cancel = useCancelTerminalTrade();
-  const busy = move.isPending || moveEntry.isPending || reduce.isPending || add.isPending || close.isPending || cancel.isPending;
+  const busy = move.isPending || moveEntry.isPending || reduce.isPending || add.isPending || takeAt.isPending || close.isPending || cancel.isPending;
+  // The original risk, for the one-click stops: breakeven and a locked R.
+  const idea = ref.idea;
+  const risk0 = (idea?.stop ?? t.initialStop) != null ? Math.abs(t.entryPrice - (idea?.stop ?? t.initialStop)!) : null;
+  const dir = long ? 1 : -1;
+  const beAt = t.entryPrice;
+  const lockAt = risk0 != null ? t.entryPrice + dir * risk0 : null;
+  const canLock = (p: number | null) => p != null && pos != null && (long ? pos.markPrice > p : pos.markPrice < p) && p !== currentStop;
+  const heldFor = (() => {
+    const ms = Date.now() - new Date(t.entryTime).getTime();
+    if (!Number.isFinite(ms) || ms < 0) return null;
+    const m = Math.floor(ms / 60_000);
+    return m < 60 ? `${m}m` : m < 60 * 24 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${Math.floor(m / 1440)}d ${Math.floor((m % 1440) / 60)}h`;
+  })();
   const { data: log = [] } = useTerminalLog(true);
   const mineLog = log.filter((l) => l.tradeId === t.id).slice(0, 6);
 
@@ -699,8 +761,21 @@ function ManagePanel({ live, book, rule, last }: { live: Live; book: BookData | 
             {rNow != null && <span className="ml-1 text-xs opacity-80">{rNow >= 0 ? "+" : ""}{rNow.toFixed(2)}R</span>}
           </span>
         ) : null}
-        <span className="ml-auto text-[10px] text-muted-foreground">trade #{t.id} · {ref.leverage}×</span>
+        <span className="ml-auto flex items-center gap-1 text-[10px] text-muted-foreground">
+          <button type="button" className="inline-flex items-center gap-0.5 hover:text-foreground" onClick={() => navigate(`/trade/${t.id}`)} title="Open the trade's page" data-testid="link-manage-trade">
+            trade #{t.id} <ExternalLink className="h-3 w-3" />
+          </button>
+          · {ref.leverage}×
+        </span>
       </div>
+      {pos && !resting && (
+        <p className="font-mono text-[10px] text-muted-foreground" data-testid="text-manage-position">
+          mark {num(pos.markPrice)}
+          {pos.liquidationPrice != null && <> · liq {num(pos.liquidationPrice)}</>}
+          {heldFor && <> · on for {heldFor}</>}
+          {pos.unrealized !== 0 && pos.entryPrice > 0 && <> · {((pos.unrealized / (Math.abs(pos.amt) * pos.entryPrice)) * 100 * (ref.leverage || 1)).toFixed(1)}% on margin</>}
+        </p>
+      )}
 
       {/* The idea as drawn — it is what everything after is measured against — and where the tape stands against it. */}
       <p className="font-mono text-[10px] text-muted-foreground">
@@ -730,6 +805,21 @@ function ManagePanel({ live, book, rule, last }: { live: Live; book: BookData | 
           {currentStop == null ? "Place stop" : "Set"}
         </Button>
       </div>
+      {!resting && (
+        <div className="-mt-1 flex flex-wrap items-center gap-1.5">
+          <Button size="sm" variant="ghost" className="h-6 px-2 text-[10px]" disabled={busy || !canLock(beAt)} title="Stop to the entry: the trade can no longer lose"
+            onClick={() => run("Stop at breakeven", move.mutateAsync({ tradeId: t.id, kind: "stop", price: beAt }), `${ref.symbol} stop ${num(beAt)}.`)} data-testid="button-manage-be">
+            stop → breakeven
+          </Button>
+          {lockAt != null && (
+            <Button size="sm" variant="ghost" className="h-6 px-2 text-[10px]" disabled={busy || !canLock(lockAt)} title="Stop one original risk into profit"
+              onClick={() => run("Locked +1R", move.mutateAsync({ tradeId: t.id, kind: "stop", price: lockAt }), `${ref.symbol} stop ${num(lockAt)}.`)} data-testid="button-manage-lock-1r">
+              lock +1R
+            </Button>
+          )}
+          {pos && rNow != null && <span className="text-[10px] text-muted-foreground">{rNow >= 0 ? "+" : ""}{rNow.toFixed(2)}R now</span>}
+        </div>
+      )}
       <div className="grid grid-cols-[1fr_auto] items-end gap-2">
         <Field label={`Target${currentTarget == null ? " · none" : br.targets.length ? " · resting" : " · on fill"}`} value={targetIn} onChange={setTargetIn} tone="text-emerald-400" testId="input-manage-target" />
         <Button size="sm" variant="outline" className="h-8 text-[11px]" disabled={busy || numOrNull(targetIn) == null || numOrNull(targetIn) === currentTarget}
@@ -755,6 +845,28 @@ function ManagePanel({ live, book, rule, last }: { live: Live; book: BookData | 
                 Take
               </Button>
             </div>
+            <div className="flex flex-wrap items-center gap-1.5 pt-1">
+              <span className="text-[10px] text-muted-foreground">or resting:</span>
+              <Input value={takeAtQty} onChange={(e) => setTakeAtQty(e.target.value)} placeholder="qty" inputMode="decimal" className="h-7 w-20 font-mono text-[11px]" data-testid="input-manage-take-at-qty" />
+              <Input value={takeAtPrice} onChange={(e) => setTakeAtPrice(e.target.value)} placeholder="at price" inputMode="decimal" className="h-7 w-24 font-mono text-[11px]" data-testid="input-manage-take-at-price" />
+              <Button size="sm" variant="outline" className="h-7 px-2 text-[11px]" disabled={busy || !pos || numOrNull(takeAtQty) == null || numOrNull(takeAtPrice) == null}
+                onClick={() => run("Take resting", takeAt.mutateAsync({ tradeId: t.id, qty: numOrNull(takeAtQty)!, price: numOrNull(takeAtPrice)! }), `${takeAtQty} off at ${takeAtPrice} when it gets there.`).then(() => { setTakeAtQty(""); setTakeAtPrice(""); })} data-testid="button-manage-take-at">
+                Rest it
+              </Button>
+            </div>
+            {br.targets.filter((o) => !o.closePosition).length > 0 && (
+              <ul className="space-y-0.5 pt-1 text-[10px] text-muted-foreground" data-testid="list-manage-takes">
+                {br.targets.filter((o) => !o.closePosition).map((o) => (
+                  <li key={o.orderId} className="flex items-center gap-2">
+                    <span className="font-mono">take {num(o.origQty)} at {num(o.stopPrice ?? 0)}</span>
+                    <button type="button" className="inline-flex items-center text-muted-foreground hover:text-red-400" disabled={cancelOrder.isPending} title="Cancel this take"
+                      onClick={() => run("Take cancelled", cancelOrder.mutateAsync({ account, symbol: ref.symbol, orderId: o.orderId }), "Off the book.")} data-testid={`button-manage-cancel-take-${o.orderId}`}>
+                      <X className="h-3 w-3" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
           <div className="space-y-1">
             <span className="block text-[10px] uppercase tracking-wider text-muted-foreground">Add size</span>
@@ -775,10 +887,15 @@ function ManagePanel({ live, book, rule, last }: { live: Live; book: BookData | 
               </p>
             )}
           </div>
-          <Button variant="outline" className="h-9 w-full text-xs" disabled={busy || !pos}
-            onClick={() => run("Closed at market", close.mutateAsync(t.id), "The position is flat and the brackets are off.")} data-testid="button-manage-close">
-            Close at market
-          </Button>
+          <div className="grid grid-cols-[1fr_auto] gap-2">
+            <Button variant="outline" className="h-9 text-xs" disabled={busy || !pos}
+              onClick={() => run("Closed at market", close.mutateAsync(t.id), "The position is flat and the brackets are off.")} data-testid="button-manage-close">
+              Close at market
+            </Button>
+            <Button variant="ghost" className="h-9 text-xs text-muted-foreground" onClick={onNewOrder} data-testid="button-manage-new-order">
+              {ticketOpen ? "Hide ticket" : "New order"}
+            </Button>
+          </div>
         </>
       )}
 
@@ -869,14 +986,21 @@ function Book({
   account,
   mine,
   book,
+  selectedId,
+  onSelect,
 }: {
   account: string;
   mine: { t: TradeWithTags; ref: NonNullable<ReturnType<typeof parseTerminalRef>> }[];
   book: ReturnType<typeof useTerminalBook>["data"];
+  selectedId: number | null;
+  onSelect: (x: { t: TradeWithTags; ref: NonNullable<ReturnType<typeof parseTerminalRef>> }) => void;
 }) {
   const { toast } = useToast();
+  const [, navigate] = useLocation();
   const close = useCloseTerminalTrade();
   const cancel = useCancelTerminalTrade();
+  const reduce = useReduce();
+  const move = useMoveBracket();
   const adopt = useAdoptPosition();
   const act = (what: "close" | "cancel", id: number) =>
     (what === "close" ? close : cancel)
@@ -897,8 +1021,23 @@ function Book({
           const p = posFor(ref.symbol, ref.positionSide);
           const br = bracketsOf(ref, book?.orders ?? []);
           const waiting = t.status === "pending" ? ref.armOnFill : undefined;
+          const stop0 = ref.idea?.stop ?? t.initialStop ?? null;
+          const risk0 = stop0 != null ? Math.abs(t.entryPrice - stop0) : null;
+          const rNow = p && risk0 ? ((t.direction === "long" ? 1 : -1) * (p.markPrice - t.entryPrice)) / risk0 : null;
+          const selected = selectedId === t.id;
           return (
-            <li key={t.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2 text-xs" data-testid={`row-terminal-trade-${t.id}`}>
+            <li
+              key={t.id}
+              className={`-mx-1 flex cursor-pointer flex-wrap items-center gap-x-3 gap-y-1 rounded px-1 py-2 text-xs hover:bg-secondary/40 ${selected ? "bg-secondary/50" : ""}`}
+              onClick={() => onSelect({ t, ref })}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") onSelect({ t, ref });
+              }}
+              data-testid={`row-terminal-trade-${t.id}`}
+              aria-pressed={selected}
+            >
               <span className={`font-semibold ${t.direction === "long" ? "text-emerald-400" : "text-red-400"}`}>{t.direction === "long" ? "LONG" : "SHORT"}</span>
               <span className="font-mono">{ref.symbol}</span>
               <span className="font-mono text-muted-foreground">{num(p && t.status === "open" ? Math.abs(p.amt) : t.size)}</span>
@@ -906,7 +1045,10 @@ function Book({
               {t.status === "pending" ? (
                 <span className="rounded bg-secondary px-1.5 py-0.5 text-[10px] uppercase tracking-wider">resting</span>
               ) : p ? (
-                <span className={`font-mono ${p.unrealized >= 0 ? "text-emerald-400" : "text-red-400"}`}>{fmtMoney(p.unrealized)}</span>
+                <span className={`font-mono ${p.unrealized >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                  {fmtMoney(p.unrealized)}
+                  {rNow != null && <span className="ml-1 text-[10px] opacity-80">{rNow >= 0 ? "+" : ""}{rNow.toFixed(2)}R</span>}
+                </span>
               ) : (
                 <span className="text-[10px] text-muted-foreground">no position yet</span>
               )}
@@ -918,16 +1060,35 @@ function Book({
                 <Target className="h-3 w-3 text-emerald-400" />
                 {br.targets.length ? br.targets.map((o) => num(o.stopPrice!)).join(" / ") : "—"}
               </span>
-              <span className="ml-auto flex gap-1">
+              <span className="ml-auto flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                 {t.status === "pending" ? (
                   <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={() => void act("cancel", t.id)} disabled={cancel.isPending} data-testid={`button-terminal-cancel-${t.id}`}>
                     Cancel
                   </Button>
                 ) : (
-                  <Button size="sm" variant="outline" className="h-6 px-2 text-[11px]" onClick={() => void act("close", t.id)} disabled={close.isPending} data-testid={`button-terminal-close-${t.id}`}>
-                    Close at market
-                  </Button>
+                  <>
+                    {p && stop0 != null && (t.direction === "long" ? p.markPrice > t.entryPrice : p.markPrice < t.entryPrice) && br.stop?.stopPrice !== t.entryPrice && (
+                      <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[10px]" disabled={move.isPending} title="Stop to breakeven"
+                        onClick={() => move.mutateAsync({ tradeId: t.id, kind: "stop", price: t.entryPrice }).then(() => toast({ title: "Stop at breakeven" })).catch((err: any) => toast({ title: "Not moved", description: String(err?.message ?? err).slice(0, 200), variant: "destructive" }))}
+                        data-testid={`button-terminal-be-${t.id}`}>
+                        BE
+                      </Button>
+                    )}
+                    {p && (
+                      <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[10px]" disabled={reduce.isPending} title="Take half off at market"
+                        onClick={() => reduce.mutateAsync({ tradeId: t.id, fraction: 0.5 }).then(() => toast({ title: "Took 50%" })).catch((err: any) => toast({ title: "Not taken", description: String(err?.message ?? err).slice(0, 200), variant: "destructive" }))}
+                        data-testid={`button-terminal-half-${t.id}`}>
+                        50%
+                      </Button>
+                    )}
+                    <Button size="sm" variant="outline" className="h-6 px-2 text-[11px]" onClick={() => void act("close", t.id)} disabled={close.isPending} data-testid={`button-terminal-close-${t.id}`}>
+                      Close
+                    </Button>
+                  </>
                 )}
+                <button type="button" className="ml-1 text-muted-foreground hover:text-foreground" title="Open the trade's page" onClick={() => navigate(`/trade/${t.id}`)} data-testid={`link-terminal-trade-${t.id}`}>
+                  <ExternalLink className="h-3.5 w-3.5" />
+                </button>
               </span>
             </li>
           );
@@ -959,6 +1120,77 @@ function Book({
             )}
           </li>
         ))}
+      </ul>
+    </Card>
+  );
+}
+
+/* ------------------------------ open orders ------------------------------ */
+
+/**
+ * Every order resting on the account, named for what it is to this
+ * terminal — a trade's stop, a take, a resting add, an entry — or as not
+ * from here, each with its own cancel. A leftover bracket from a trade whose
+ * record is gone is cancelled from this list.
+ */
+function Orders({
+  account,
+  mine,
+  book,
+}: {
+  account: string;
+  mine: { t: TradeWithTags; ref: NonNullable<ReturnType<typeof parseTerminalRef>> }[];
+  book: ReturnType<typeof useTerminalBook>["data"];
+}) {
+  const { toast } = useToast();
+  const cancel = useCancelOrder();
+  const orders = book?.orders ?? [];
+  if (orders.length === 0) return null;
+  const roleOf = (o: VenueOrder): { trade: number | null; role: string } => {
+    for (const { t, ref } of mine) {
+      if (ref.entryOrderId === o.orderId) return { trade: t.id, role: "entry" };
+      if (ref.stopOrderId === o.orderId) return { trade: t.id, role: "stop" };
+      if (ref.targetOrderIds.includes(o.orderId)) return { trade: t.id, role: o.closePosition ? "target" : "take" };
+      if ((ref.addOrderIds ?? []).includes(o.orderId)) return { trade: t.id, role: "add" };
+      if (o.clientOrderId.startsWith(ref.tag)) return { trade: t.id, role: o.type.replace(/_/g, " ").toLowerCase() };
+    }
+    return { trade: null, role: "not from this terminal" };
+  };
+  return (
+    <Card className="space-y-2 border-card-border bg-card p-3" data-testid="card-terminal-orders">
+      <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Open orders · {orders.length}</p>
+      <ul className="divide-y divide-border/60">
+        {[...orders]
+          .sort((a, b) => b.time - a.time)
+          .map((o) => {
+            const r = roleOf(o);
+            return (
+              <li key={`${o.symbol}-${o.orderId}`} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 py-1.5 font-mono text-[11px]" data-testid={`row-terminal-order-${o.orderId}`}>
+                <span className={o.side === "BUY" ? "text-emerald-400" : "text-red-400"}>{o.side}</span>
+                <span>{o.symbol}</span>
+                <span className="text-muted-foreground">{o.positionSide}</span>
+                <span className="text-muted-foreground">{o.type.replace(/_/g, " ").toLowerCase()}</span>
+                <span>{o.closePosition ? "all" : num(o.origQty)}</span>
+                <span className="text-muted-foreground">{o.stopPrice != null ? `trigger ${num(o.stopPrice)}` : o.price != null ? `at ${num(o.price)}` : ""}</span>
+                <span className={`text-[10px] ${r.trade == null ? "text-amber-500" : "text-muted-foreground"}`}>{r.trade != null ? `#${r.trade} ${r.role}` : r.role}</span>
+                <button
+                  type="button"
+                  className="ml-auto text-muted-foreground hover:text-red-400 disabled:opacity-50"
+                  disabled={cancel.isPending}
+                  title="Cancel this order"
+                  onClick={() =>
+                    cancel
+                      .mutateAsync({ account, symbol: o.symbol, orderId: o.orderId })
+                      .then(() => toast({ title: "Order cancelled", description: `${o.symbol} ${o.type.replace(/_/g, " ").toLowerCase()} is off the book.` }))
+                      .catch((err: any) => toast({ title: "Not cancelled", description: String(err?.message ?? err).replace(/^\d+:\s*/, "").slice(0, 200), variant: "destructive" }))
+                  }
+                  data-testid={`button-terminal-cancel-order-${o.orderId}`}
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </li>
+            );
+          })}
       </ul>
     </Card>
   );
