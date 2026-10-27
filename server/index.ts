@@ -67,6 +67,10 @@ app.use((req, res, next) => {
 
   await registerRoutes(httpServer, app);
 
+  // The terminal reads its live trades back on its own; see server/terminal.ts.
+  const { startTerminalWatch } = await import("./terminal");
+  startTerminalWatch();
+
   app.use((err: any, req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
     /*

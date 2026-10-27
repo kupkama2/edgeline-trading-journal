@@ -17,7 +17,7 @@
  */
 import type { Express, NextFunction, Request, Response } from "express";
 import { z } from "zod";
-import { storageFor } from "./storage";
+import { storageFor, terminalUsers, type DatabaseStorage } from "./storage";
 import { open } from "./secrets";
 import { futuresBase, type BinanceEnv, type Creds } from "./binance-account";
 import { fetchCandles, type Interval } from "./binance";
@@ -111,8 +111,8 @@ interface Armed {
 }
 
 /** The account's key, opened for the length of one request. */
-async function arm(req: Request, accountName: string): Promise<Armed> {
-  const acct = (await store(req).listAccountSettings()).find((a) => a.name === accountName);
+async function arm(s: DatabaseStorage, accountName: string): Promise<Armed> {
+  const acct = (await s.listAccountSettings()).find((a) => a.name === accountName);
   if (!acct) throw httpError(404, `No account called ${accountName}.`);
   if (!acct.binanceKey || !acct.binanceSecret) throw httpError(400, `${acct.name} holds no Binance key.`);
   if (!acct.binanceTrade) throw httpError(400, `${acct.name}'s key is read-only. Save a trading key on it in Settings.`);
@@ -130,14 +130,13 @@ const said = (err: any) => String(err?.message ?? err).slice(0, 400);
 
 /** Writes to the venue are logged whatever happens; `run` is the call itself. */
 async function logged<T>(
-  req: Request,
+  s: DatabaseStorage,
   action: string,
   account: string,
   tradeId: number | null,
   request: unknown,
   run: () => Promise<T>,
 ): Promise<T> {
-  const s = store(req);
   try {
     const out = await run();
     await s.logTerminal({ at: new Date().toISOString(), account, action, tradeId, request: JSON.stringify(request), response: JSON.stringify(out ?? null).slice(0, 4000), ok: true });
@@ -164,7 +163,7 @@ const refOf = (t: TradeWithTags): TerminalRef => {
  * this one's average. A trade with no stop resting is flagged `unprotected`,
  * which the terminal shows in red; the position is still real.
  */
-async function reconcileOne(req: Request, t: TradeWithTags, armed: Armed): Promise<TradeWithTags> {
+async function reconcileOne(s: DatabaseStorage, t: TradeWithTags, armed: Armed): Promise<TradeWithTags> {
   const ref = refOf(t);
   const v = armed.venue;
   const entry = ref.entryOrderId != null ? await orderById(v, ref.symbol, ref.entryOrderId) : null;
@@ -198,15 +197,72 @@ async function reconcileOne(req: Request, t: TradeWithTags, armed: Armed): Promi
   const logged = new Set((t.fills ?? []).map((f) => f.note ?? ""));
   for (const f of partials) {
     if (logged.has(partialNote(f.tid))) continue;
-    await store(req).addFill(t.id, { kind: "partial", price: f.price, size: f.qty, time: new Date(f.time).toISOString(), note: partialNote(f.tid) });
+    await s.addFill(t.id, { kind: "partial", price: f.price, size: f.qty, time: new Date(f.time).toISOString(), note: partialNote(f.tid) });
   }
   const stopResting = ref.stopOrderId != null && snap.openOrderIds.includes(ref.stopOrderId);
   const nowOpen = (patch.status ?? t.status) === "open";
   const nextRef: TerminalRef = { ...ref, unprotected: nowOpen && !stopResting, checkedAt: new Date().toISOString() };
   const changed = Object.keys(patch).length > 0 || partials.length > 0 || formatTerminalRef(nextRef) !== formatTerminalRef({ ...ref, checkedAt: nextRef.checkedAt });
   if (!changed && ref.checkedAt && Date.now() - new Date(ref.checkedAt).getTime() < 60_000) return t;
-  const after = await store(req).updateTrade(t.id, { ...patch, terminal: formatTerminalRef(nextRef) } as any);
+  const after = await s.updateTrade(t.id, { ...patch, terminal: formatTerminalRef(nextRef) } as any);
   return after ?? t;
+}
+
+/** Every live terminal trade of one person, read back. What the page polls and the watch runs. */
+async function reconcileAll(s: DatabaseStorage): Promise<{ id: number; status: string; error?: string }[]> {
+  const trades = await s.listTerminalTrades();
+  const armedBy = new Map<string, Armed>();
+  const out: { id: number; status: string; error?: string }[] = [];
+  for (const t of trades) {
+    if (t.status === "closed") continue;
+    try {
+      const ref = refOf(t);
+      let armed = armedBy.get(ref.account);
+      if (!armed) {
+        armed = await arm(s, ref.account);
+        armedBy.set(ref.account, armed);
+      }
+      const after = await reconcileOne(s, t, armed);
+      out.push({ id: t.id, status: after.status });
+    } catch (err) {
+      out.push({ id: t.id, status: t.status, error: said(err) });
+    }
+  }
+  return out;
+}
+
+/**
+ * The watch: the journal stays true with the tab closed.
+ *
+ * A stop that fires at four in the morning closes the position whether or
+ * not anybody is looking, and a journal that only learns of it when the
+ * page is next opened is wrong for the hours between. So the server reads
+ * every live terminal trade back on its own, every twenty seconds, for
+ * every person who has one. One pass at a time; a slow venue delays the
+ * next pass rather than stacking a second on top of it.
+ */
+let watching = false;
+export function startTerminalWatch(intervalMs = 20_000): void {
+  if (TERMINAL_EMAILS.length === 0) return;
+  const tick = async () => {
+    if (watching) return;
+    watching = true;
+    try {
+      for (const userId of await terminalUsers()) {
+        const s = storageFor(userId);
+        const out = await reconcileAll(s).catch((err) => {
+          console.error("[terminal] watch:", said(err));
+          return [] as { id: number; status: string; error?: string }[];
+        });
+        for (const o of out) if (o.error) console.error(`[terminal] watch trade #${o.id}: ${o.error}`);
+      }
+    } finally {
+      watching = false;
+    }
+  };
+  const timer = setInterval(() => void tick(), intervalMs);
+  timer.unref();
+  void tick();
 }
 
 /* ------------------------------ the routes ------------------------------ */
@@ -238,9 +294,11 @@ export function registerTerminalRoutes(app: Express): void {
             env: a.binanceEnv,
             keyHint: `…${a.binanceKey!.slice(-4)}`,
             host: new URL(futuresBase(a.binanceEnv)).hostname,
+            // False is the loud one: a live key that works from any IP.
+            ipLocked: a.binanceEnv === "live" ? a.binanceIpLocked : null,
           };
           try {
-            const { venue } = await arm(req, a.name);
+            const { venue } = await arm(store(req), a.name);
             const [hedge, balance] = await Promise.all([hedgeMode(venue), usdBalance(venue)]);
             row.hedgeMode = hedge;
             row.balance = balance.find((b) => b.asset === "USDT") ?? balance[0] ?? null;
@@ -258,8 +316,8 @@ export function registerTerminalRoutes(app: Express): void {
     "/api/terminal/hedge-mode",
     wrap(async (req, res) => {
       const { account } = accountSchema.parse(req.body);
-      const { venue } = await arm(req, account);
-      await logged(req, "hedge-mode", account, null, {}, () => enableHedgeMode(venue));
+      const { venue } = await arm(store(req), account);
+      await logged(store(req), "hedge-mode", account, null, {}, () => enableHedgeMode(venue));
       res.json({ ok: true, hedgeMode: await hedgeMode(venue) });
     }),
   );
@@ -267,7 +325,7 @@ export function registerTerminalRoutes(app: Express): void {
   app.get(
     "/api/terminal/symbols",
     wrap(async (req, res) => {
-      const { acct } = await arm(req, String(req.query.account ?? ""));
+      const { acct } = await arm(store(req), String(req.query.account ?? ""));
       res.json(await exchangeRules(acct.binanceEnv as BinanceEnv));
     }),
   );
@@ -295,7 +353,7 @@ export function registerTerminalRoutes(app: Express): void {
   app.get(
     "/api/terminal/book",
     wrap(async (req, res) => {
-      const { venue } = await arm(req, String(req.query.account ?? ""));
+      const { venue } = await arm(store(req), String(req.query.account ?? ""));
       const [pos, orders, balance] = await Promise.all([positions(venue), openOrders(venue), usdBalance(venue)]);
       res.json({ positions: pos, orders, balance });
     }),
@@ -321,7 +379,7 @@ export function registerTerminalRoutes(app: Express): void {
       const parsed = sendSchema.safeParse(req.body);
       if (!parsed.success) throw httpError(400, parsed.error.issues.map((i) => i.message).join("; "));
       const { account, plan } = parsed.data;
-      const { venue, acct } = await arm(req, account);
+      const { venue, acct } = await arm(store(req), account);
       const rules = await rulesFor(venue.env, plan.symbol);
       const sized = sizePlan(plan as TerminalPlan, rules);
       if (sized.problems.length) throw httpError(400, sized.problems.join(" "));
@@ -332,10 +390,10 @@ export function registerTerminalRoutes(app: Express): void {
 
       const tag = newTag();
       const orders = ordersForPlan(plan as TerminalPlan, rules, sized.qty, tag);
-      await logged(req, "leverage", account, null, { symbol: rules.symbol, leverage: plan.leverage }, () =>
+      await logged(store(req), "leverage", account, null, { symbol: rules.symbol, leverage: plan.leverage }, () =>
         setLeverage(venue, rules.symbol, plan.leverage),
       );
-      const placed = await logged(req, "send", account, null, orders, () => placePlan(venue, orders));
+      const placed = await logged(store(req), "send", account, null, orders, () => placePlan(venue, orders));
 
       const ref: TerminalRef = {
         venue: "binance",
@@ -392,10 +450,10 @@ export function registerTerminalRoutes(app: Express): void {
       if (!t) throw httpError(404, "Trade not found");
       const ref = refOf(t);
       if (t.status !== "open" && t.status !== "pending") throw httpError(400, "That trade is finished.");
-      const { venue } = await arm(req, ref.account);
+      const { venue } = await arm(store(req), ref.account);
       const rules = await rulesFor(venue.env, ref.symbol);
       const side = ref.positionSide === "LONG" ? "long" : "short";
-      const next = await logged(req, "move-stop", ref.account, t.id, { price }, async () => {
+      const next = await logged(store(req), "move-stop", ref.account, t.id, { price }, async () => {
         if (ref.stopOrderId != null) await cancelOrder(venue, ref.symbol, ref.stopOrderId);
         return placeOrder(venue, bracketAt("stop", price, rules, side, `${ref.tag}-s${Date.now().toString(36)}`));
       });
@@ -425,10 +483,10 @@ export function registerTerminalRoutes(app: Express): void {
       if (!t) throw httpError(404, "Trade not found");
       const ref = refOf(t);
       if (t.status !== "open" && t.status !== "pending") throw httpError(400, "That trade is finished.");
-      const { venue } = await arm(req, ref.account);
+      const { venue } = await arm(store(req), ref.account);
       const rules = await rulesFor(venue.env, ref.symbol);
       const side = ref.positionSide === "LONG" ? "long" : "short";
-      const next = await logged(req, "move-target", ref.account, t.id, { price }, async () => {
+      const next = await logged(store(req), "move-target", ref.account, t.id, { price }, async () => {
         for (const id of ref.targetOrderIds) await cancelOrder(venue, ref.symbol, id);
         return placeOrder(venue, bracketAt("target", price, rules, side, `${ref.tag}-t${Date.now().toString(36)}`));
       });
@@ -454,8 +512,8 @@ export function registerTerminalRoutes(app: Express): void {
       if (!t) throw httpError(404, "Trade not found");
       const ref = refOf(t);
       if (t.status !== "pending") throw httpError(400, "Only a resting order can be cancelled. An open position is closed.");
-      const { venue, acct } = await arm(req, ref.account);
-      await logged(req, "cancel", ref.account, t.id, {}, async () => {
+      const { venue, acct } = await arm(store(req), ref.account);
+      await logged(store(req), "cancel", ref.account, t.id, {}, async () => {
         for (const id of [ref.entryOrderId, ref.stopOrderId, ...ref.targetOrderIds]) {
           if (id != null) await cancelOrder(venue, ref.symbol, id);
         }
@@ -468,7 +526,7 @@ export function registerTerminalRoutes(app: Express): void {
        * ordinary read-back writes it so; otherwise it was pulled, by hand.
        */
       const entry = ref.entryOrderId != null ? await orderById(venue, ref.symbol, ref.entryOrderId) : null;
-      if (entry && entry.executedQty > 0) return res.json({ trade: await reconcileOne(req, t, { venue, acct }) });
+      if (entry && entry.executedQty > 0) return res.json({ trade: await reconcileOne(store(req), t, { venue, acct }) });
       const after = await s.updateTrade(t.id, { status: "cancelled", cancelReason: "pulled" } as any);
       res.json({ trade: after });
     }),
@@ -483,22 +541,22 @@ export function registerTerminalRoutes(app: Express): void {
       if (!t) throw httpError(404, "Trade not found");
       const ref = refOf(t);
       if (t.status !== "open") throw httpError(400, "Only an open position can be closed.");
-      const { venue, acct } = await arm(req, ref.account);
+      const { venue, acct } = await arm(store(req), ref.account);
       const rules = await rulesFor(venue.env, ref.symbol);
       const pos = (await positions(venue)).find((p) => p.symbol === ref.symbol && p.positionSide === ref.positionSide);
       let closeOrder: VenueOrder | null = null;
       if (pos && Math.abs(pos.amt) > 0) {
-        closeOrder = await logged(req, "close", ref.account, t.id, { qty: Math.abs(pos.amt) }, () =>
+        closeOrder = await logged(store(req), "close", ref.account, t.id, { qty: Math.abs(pos.amt) }, () =>
           closeAtMarket(venue, ref.symbol, ref.positionSide, fmtQty(Math.abs(pos.amt), rules), `${ref.tag}-x${Date.now().toString(36)}`),
         );
       }
-      await logged(req, "cancel-brackets", ref.account, t.id, {}, async () => {
+      await logged(store(req), "cancel-brackets", ref.account, t.id, {}, async () => {
         for (const id of [ref.stopOrderId, ...ref.targetOrderIds]) if (id != null) await cancelOrder(venue, ref.symbol, id);
         return { cancelled: true };
       });
       const nextRef: TerminalRef = { ...ref, closeOrderIds: [...(ref.closeOrderIds ?? []), ...(closeOrder ? [closeOrder.orderId] : [])] };
       const stamped = (await s.updateTrade(t.id, { terminal: formatTerminalRef(nextRef) } as any)) ?? t;
-      res.json({ trade: await reconcileOne(req, stamped, { venue, acct }) });
+      res.json({ trade: await reconcileOne(store(req), stamped, { venue, acct }) });
     }),
   );
 
@@ -506,26 +564,7 @@ export function registerTerminalRoutes(app: Express): void {
   app.post(
     "/api/terminal/reconcile",
     wrap(async (req, res) => {
-      const s = store(req);
-      const trades = await s.listTerminalTrades();
-      const armedBy = new Map<string, Armed>();
-      const out: { id: number; status: string; error?: string }[] = [];
-      for (const t of trades) {
-        if (t.status === "closed") continue;
-        try {
-          const ref = refOf(t);
-          let armed = armedBy.get(ref.account);
-          if (!armed) {
-            armed = await arm(req, ref.account);
-            armedBy.set(ref.account, armed);
-          }
-          const after = await reconcileOne(req, t, armed);
-          out.push({ id: t.id, status: after.status });
-        } catch (err) {
-          out.push({ id: t.id, status: t.status, error: said(err) });
-        }
-      }
-      res.json({ checked: out });
+      res.json({ checked: await reconcileAll(store(req)) });
     }),
   );
 }

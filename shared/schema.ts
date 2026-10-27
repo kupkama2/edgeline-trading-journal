@@ -894,6 +894,12 @@ export const accountSettings = pgTable("account_settings", {
    * about everything except trading.
    */
   binanceTrade: boolean("binance_trade").notNull().default(false),
+  /**
+   * Whether the venue said the key is locked to trusted IPs, at the time it
+   * was saved. A trading key that works from anywhere is allowed only by an
+   * explicit server setting, and the terminal says so in red.
+   */
+  binanceIpLocked: boolean("binance_ip_locked"),
 });
 
 /**
@@ -989,6 +995,8 @@ export const upsertAccountSettingsSchema = z.object({
   /** Sent with a key; ignored without one. */
   binanceEnv: z.enum(["live", "testnet"]).optional(),
   binanceTrade: z.boolean().optional(),
+  /** Set by the server from the venue's answer, never by the client. */
+  binanceIpLocked: z.boolean().nullable().optional(),
 });
 
 /** Move every trade from one account onto another — an eval that got funded. */

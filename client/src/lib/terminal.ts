@@ -14,6 +14,8 @@ export interface TerminalAccount {
   keyHint: string;
   host: string;
   hedgeMode?: boolean;
+  /** False is the one to shout about: a live key that works from any IP. */
+  ipLocked?: boolean | null;
   balance?: { asset: string; balance: number; available: number } | null;
   error?: string;
 }

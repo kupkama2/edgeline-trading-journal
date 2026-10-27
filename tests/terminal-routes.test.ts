@@ -243,7 +243,7 @@ describe.skipIf(!DB)("the terminal against a stub venue", () => {
     const s = await get("/api/terminal/status");
     expect(s.enabled).toBe(true);
     expect(s.accounts).toHaveLength(1);
-    expect(s.accounts[0]).toMatchObject({ name: ACCOUNT, env: "testnet", host: "127.0.0.1", hedgeMode: true });
+    expect(s.accounts[0]).toMatchObject({ name: ACCOUNT, env: "testnet", host: "127.0.0.1", hedgeMode: true, ipLocked: null });
     expect(s.accounts[0].balance).toMatchObject({ asset: "USDT", available: 9800 });
   });
 

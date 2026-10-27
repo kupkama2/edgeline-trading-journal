@@ -217,7 +217,7 @@ export async function verifyTradingKey(
   } catch (err: any) {
     return { ok: false, reason: `Could not confirm what this key may do: ${String(err?.message ?? err)}` };
   }
-  const refusal = tradingKeyRefusal(restrictions);
+  const refusal = tradingKeyRefusal(restrictions, process.env.TERMINAL_ALLOW_UNLOCKED_KEY === "1");
   return refusal ? { ok: false, reason: refusal } : { ok: true, restrictions };
 }
 

@@ -40,6 +40,7 @@ default trading styles.
    | `PERPLEXITY_API_KEY` | one of | Fallback if no Anthropic key is set. |
    | `TERMINAL_EMAILS` | no | Who may use the trading terminal, comma separated. Unset, the terminal does not exist. |
    | `TERMINAL_MAX_NOTIONAL_USD` | no | A ceiling on one terminal order's notional. Unset means none. |
+   | `TERMINAL_ALLOW_UNLOCKED_KEY` | no | `1` lets a live trading key be saved without an IP restriction (a host with no fixed outbound IP). The terminal then warns in red. Prefer a plan with static outbound IPs and leave this unset. |
    | `BINANCE_TESTNET_FUTURES_BASE` | no | The futures testnet host, if Binance moves it. Default `https://testnet.binancefuture.com`. |
 
    `NODE_ENV` and `SESSION_SECRET` are handled by the blueprint —
