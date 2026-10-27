@@ -98,10 +98,25 @@ export async function fetchTerminalPage(symbol: string, interval: string, before
 }
 
 const refreshBook = () => queryClient.invalidateQueries({ predicate: (q) => String(q.queryKey[0]).startsWith("/api/terminal/book") });
+const refreshTerminalTrades = () => queryClient.invalidateQueries({ queryKey: ["/api/terminal/trades"] });
 const afterWrite = () => {
   invalidateTrades();
+  void refreshTerminalTrades();
   void refreshBook();
 };
+
+/** The terminal's own trades, paper ones included: the journal's list leaves those out. */
+export function useTerminalTrades(enabled = true) {
+  return useQuery<TradeWithTags[]>({ queryKey: ["/api/terminal/trades"], enabled, refetchInterval: 5_000 });
+}
+
+export function useAdoptPosition() {
+  return useMutation({
+    mutationFn: async (v: { account: string; symbol: string; positionSide: "LONG" | "SHORT" }) =>
+      (await apiRequest("POST", "/api/terminal/adopt", v)).json() as Promise<{ trade: TradeWithTags }>,
+    onSuccess: afterWrite,
+  });
+}
 
 export interface SendResult {
   trade: TradeWithTags;
@@ -151,7 +166,10 @@ export function useReconcile() {
       (await apiRequest("POST", "/api/terminal/reconcile", {})).json() as Promise<{
         checked: { id: number; status: string; error?: string }[];
       }>,
-    onSuccess: () => invalidateTrades(),
+    onSuccess: () => {
+      invalidateTrades();
+      void refreshTerminalTrades();
+    },
   });
 }
 

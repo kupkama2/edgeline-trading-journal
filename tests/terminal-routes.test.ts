@@ -761,6 +761,53 @@ describe.skipIf(!DB)("the terminal against a stub venue", () => {
     spikes.clear();
   });
 
+  it("keeps a testnet trade out of the journal, and lets a position whose record was deleted be adopted back", async () => {
+    const r = await send("POST", "/api/terminal/send", {
+      account: ACCOUNT,
+      plan: { symbol: "BTCUSDT", side: "long", entryType: "market", entryPrice: 80010, stop: 79010, targets: [81010], qty: 0.01, leverage: 2 },
+    });
+    expect(r.status).toBe(201);
+    const { trade, placed } = await r.json();
+    // Practice: the journal's list does not have it; the terminal's does; its own page does.
+    expect(trade.paper).toBe(true);
+    const journal = (await get("/api/trades")) as any[];
+    expect(journal.some((t) => t.id === trade.id)).toBe(false);
+    const terminalTrades = (await get("/api/terminal/trades")) as any[];
+    expect(terminalTrades.some((t) => t.id === trade.id)).toBe(true);
+    expect((await get(`/api/trades/${trade.id}`)).id).toBe(trade.id);
+    expect((await store.listTrades()).some((t) => t.id === trade.id)).toBe(false);
+
+    // The record deleted by hand: the position and its stop stay on the venue.
+    const del = await send("DELETE", `/api/trades/${trade.id}`);
+    expect(del.status).toBeLessThan(300);
+    expect(position.amt).toBeCloseTo(0.01);
+    expect(algos.find((a) => a.algoId === placed.stopOrderId)!.algoStatus).toBe("NEW");
+
+    // Adopted: a new trade from the venue's figures, the resting stop and target as its brackets.
+    const a = await send("POST", "/api/terminal/adopt", { account: ACCOUNT, symbol: "BTCUSDT", positionSide: "LONG" });
+    expect(a.status).toBe(201);
+    const adopted = (await a.json()).trade;
+    expect(adopted).toMatchObject({ status: "open", direction: "long", size: 0.01, entryPrice: 80010, initialStop: 79010, initialTarget: 81010, paper: true });
+    const ref = JSON.parse(adopted.terminal);
+    expect(ref).toMatchObject({ symbol: "BTCUSDT", positionSide: "LONG", stopOrderId: placed.stopOrderId, targetOrderIds: placed.targetOrderIds, entryOrderId: null, unprotected: false });
+    expect(ref.idea).toMatchObject({ entry: 80010, stop: 79010, targets: [81010] });
+    // Not twice.
+    expect((await send("POST", "/api/terminal/adopt", { account: ACCOUNT, symbol: "BTCUSDT", positionSide: "LONG" })).status).toBe(409);
+
+    // Managed like any other: the stop moves, the read-back keeps it, the close flattens it.
+    const m = await send("POST", `/api/terminal/trades/${adopted.id}/stop`, { price: 79500 });
+    expect(m.status).toBe(200);
+    expect(algos.find((a) => a.algoId === placed.stopOrderId)!.algoStatus).toBe("CANCELED");
+    await send("POST", "/api/terminal/reconcile", {});
+    let t = await store.getTrade(adopted.id);
+    expect(t.status).toBe("open");
+    const c = await send("POST", `/api/terminal/trades/${adopted.id}/close`, {});
+    expect(c.status).toBe(200);
+    t = (await c.json()).trade;
+    expect(t).toMatchObject({ status: "closed", exitReason: "discretion" });
+    expect(position.amt).toBe(0);
+  });
+
   it("cancels a resting plan: every order off, the trade marked pulled", async () => {
     const r = await send("POST", "/api/terminal/send", {
       account: ACCOUNT,

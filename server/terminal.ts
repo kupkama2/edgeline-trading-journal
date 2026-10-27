@@ -792,6 +792,8 @@ export function registerTerminalRoutes(app: Express, deps: { llm?: (prompt: stri
         account: acct.name,
         riskAmount: sized.riskDollars,
         terminal: formatTerminalRef(ref),
+        // A testnet fill is practice: kept for the terminal, left out of the journal.
+        paper: venue.env === "testnet",
       } as any);
       await store(req).logTerminal({
         at: new Date().toISOString(),
@@ -805,6 +807,97 @@ export function registerTerminalRoutes(app: Express, deps: { llm?: (prompt: stri
       // The account's stream, if it is not open yet, so this trade's fill is heard at once.
       void ensureStreams().catch(() => {});
       res.status(201).json({ trade, placed: ref, refused: placed.refused, sized });
+    }),
+  );
+
+  /** Every trade this terminal has a record of, paper included — the journal's own list leaves those out. */
+  app.get(
+    "/api/terminal/trades",
+    wrap(async (req, res) => {
+      res.json(await store(req).listTerminalTrades());
+    }),
+  );
+
+  /**
+   * A position the terminal has no record of — its journal trade deleted, or
+   * opened elsewhere — taken under management: a trade is written from the
+   * venue's own figures, with whatever brackets rest on that side adopted
+   * as its stop and target. The idea is pinned as of now; what came before
+   * is not known.
+   */
+  app.post(
+    "/api/terminal/adopt",
+    wrap(async (req, res) => {
+      const { account, symbol, positionSide } = z
+        .object({ account: z.string().min(1), symbol: z.string().min(1), positionSide: z.enum(["LONG", "SHORT"]) })
+        .parse(req.body);
+      const s = store(req);
+      const { venue, acct } = await arm(s, account);
+      const rules = await rulesFor(venue.env, symbol);
+      const pos = (await positions(venue)).find((p) => p.symbol === rules.symbol && p.positionSide === positionSide);
+      if (!pos || Math.abs(pos.amt) <= 0) throw httpError(409, "The venue holds no position on that side.");
+      const already = (await s.listTerminalTrades()).find((t) => {
+        const r = parseTerminalRef(t.terminal);
+        return t.status === "open" && r?.account === account && r.symbol === rules.symbol && r.positionSide === positionSide;
+      });
+      if (already) throw httpError(409, `Trade #${already.id} already manages that position.`);
+      const closeSide = positionSide === "LONG" ? "SELL" : "BUY";
+      // Newest first: a close-position bracket can outlive the position it was
+      // for, so the ones placed last are the ones that belong to this position.
+      const resting = (await openOrders(venue, rules.symbol))
+        .filter((o) => o.positionSide === positionSide && o.side === closeSide)
+        .sort((x, y) => y.time - x.time);
+      const stop = resting.find((o) => o.type === "STOP_MARKET") ?? null;
+      const newestTarget = resting.find((o) => o.type === "TAKE_PROFIT_MARKET" && o.stopPrice != null) ?? null;
+      const anchor = stop?.time ?? newestTarget?.time ?? 0;
+      // One plan's brackets go on within seconds of each other: the targets that belong with this stop are the ones placed with or after it.
+      const targets = resting.filter((o) => o.type === "TAKE_PROFIT_MARKET" && o.stopPrice != null && o.time >= anchor);
+      const size = Math.abs(pos.amt);
+      const stopPrice = stop?.stopPrice ?? null;
+      const now = new Date().toISOString();
+      const ref: TerminalRef = {
+        venue: "binance",
+        env: venue.env,
+        account,
+        symbol: rules.symbol,
+        positionSide,
+        tag: newTag(),
+        leverage: pos.leverage || 1,
+        qty: size,
+        entryOrderId: null,
+        stopOrderId: stop?.orderId ?? null,
+        targetOrderIds: targets.map((o) => o.orderId),
+        closeOrderIds: [],
+        unprotected: !stop,
+        idea: { entry: pos.entryPrice, stop: stopPrice, targets: targets.map((o) => o.stopPrice!), qty: size, riskDollars: stopPrice != null ? Math.abs(pos.entryPrice - stopPrice) * size : null, at: now },
+      };
+      const trade = await s.createTrade({
+        symbol: rules.baseAsset,
+        direction: positionSide === "LONG" ? "long" : "short",
+        size,
+        sizeUnit: "base",
+        pointValue: 1,
+        entryPrice: pos.entryPrice,
+        initialStop: stopPrice,
+        initialTarget: targets[0]?.stopPrice ?? null,
+        extraTargets: targets.length > 1 ? JSON.stringify(targets.slice(1).map((o) => o.stopPrice)) : null,
+        entryTime: now,
+        status: "open",
+        account: acct.name,
+        riskAmount: ref.idea!.riskDollars,
+        terminal: formatTerminalRef(ref),
+        paper: venue.env === "testnet",
+      } as any);
+      await s.logTerminal({
+        at: now,
+        account,
+        action: "adopt",
+        tradeId: trade.id,
+        request: JSON.stringify({ symbol: rules.symbol, positionSide, size, entryPrice: pos.entryPrice }),
+        response: JSON.stringify({ tradeId: trade.id, stopOrderId: ref.stopOrderId, targetOrderIds: ref.targetOrderIds }),
+        ok: true,
+      });
+      res.status(201).json({ trade });
     }),
   );
 

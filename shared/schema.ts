@@ -413,6 +413,13 @@ export const trades = pgTable("trades", {
    */
   terminal: text("terminal"),
   /**
+   * Practice, not record: a trade the terminal sent to a testnet. It is kept
+   * so the terminal can manage it and so its own page works, and it is left
+   * out of the journal — every list, every figure — because testnet fills
+   * are not results.
+   */
+  paper: boolean("paper").notNull().default(false),
+  /**
    * When a venue sync recognised this hand-logged trade as one of its own
    * (see shared/claim.ts). Null for a trade the sync created, or never saw.
    * A claimed trade's entry and size are the person's, and stay theirs on
