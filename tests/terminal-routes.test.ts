@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createServer, type Server } from "node:http";
 import { createHmac } from "node:crypto";
+import { WebSocketServer, type WebSocket } from "ws";
 
 /**
  * The terminal against a stub Binance: a plan sent, the orders that leave
@@ -23,6 +24,10 @@ const ACCOUNT = "Binance Testnet";
 let venue: Server;
 let app: Server;
 let base = "";
+/** The venue's user-data stream, as a socket the test can speak into. */
+let wss: WebSocketServer;
+const streamSockets: WebSocket[] = [];
+const streamUrls: string[] = [];
 
 /* ------------------------------ the stub venue ------------------------------ */
 
@@ -126,6 +131,11 @@ function startVenue(): Promise<string> {
       }
       if (u.pathname === "/api/v3/exchangeInfo") return json({ symbols: [] });
 
+      // The listen key: the API key alone, no signature (USER_STREAM).
+      if (u.pathname === "/fapi/v1/listenKey") {
+        return req.headers["x-mbx-apikey"] === KEY ? json({ listenKey: "lk-test" }) : json({ code: -2015, msg: "Invalid API-key, IP, or permissions for action." }, 401);
+      }
+
       const key = req.headers["x-mbx-apikey"] as string | undefined;
       // Like the algo service: a POST's parameters are read from the body
       // only. Anything left in the query string of a POST is not seen.
@@ -184,6 +194,9 @@ function startVenue(): Promise<string> {
           if (!ALGO.has(params.type)) return json({ code: -1116, msg: "Invalid orderType." }, 400);
           if (params.stopPrice || params.newClientOrderId) return json({ code: -1104, msg: "Not all sent parameters were read." }, 400);
           if (params.reduceOnly) return json({ code: -4119, msg: "reduceOnly cannot be sent in hedge mode." }, 400);
+          // A close-position bracket needs a position to close — the venue's -4509.
+          if (params.closePosition === "true" && Math.abs(position.amt) < 1e-12)
+            return json({ code: -4509, msg: "Time in Force (TIF) GTE can only be used with open positions. Please ensure that positions are available." }, 400);
           const a = {
             algoId: nextId++, clientAlgoId: params.clientAlgoId ?? `algo${nextId}`, symbol: params.symbol, side: params.side, positionSide: params.positionSide,
             orderType: params.type, algoType: "CONDITIONAL", algoStatus: "NEW", quantity: params.quantity ?? "0", triggerPrice: params.triggerPrice,
@@ -237,6 +250,13 @@ let stranger: { userId: number; email: string };
 describe.skipIf(!DB)("the terminal against a stub venue", () => {
   beforeAll(async () => {
     const stub = await startVenue();
+    wss = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+    wss.on("connection", (socket, req) => {
+      streamSockets.push(socket);
+      streamUrls.push(req.url ?? "");
+    });
+    await new Promise<void>((r) => wss.once("listening", r));
+    process.env.BINANCE_TESTNET_FUTURES_WS = `ws://127.0.0.1:${(wss.address() as any).port}`;
     process.env.BINANCE_BASE = stub;
     process.env.BINANCE_FUTURES_BASE = stub;
     process.env.BINANCE_TESTNET_FUTURES_BASE = stub;
@@ -275,10 +295,26 @@ describe.skipIf(!DB)("the terminal against a stub venue", () => {
   });
 
   afterAll(async () => {
+    const { stopTerminalWatch } = await import("../server/terminal");
+    stopTerminalWatch();
+    for (const sock of streamSockets) sock.terminate();
+    await new Promise<void>((r) => wss.close(() => r()));
     const shut = (x: Server | undefined) => new Promise<void>((r) => (x ? x.close(() => r()) : r()));
     await shut(venue);
     await shut(app);
   });
+
+  /** Poll until `check` holds, or fail with what was last seen. */
+  async function waitFor<T>(check: () => Promise<T>, ok: (v: T) => boolean, ms = 4_000): Promise<T> {
+    const until = Date.now() + ms;
+    let last: T;
+    do {
+      last = await check();
+      if (ok(last)) return last;
+      await new Promise((r) => setTimeout(r, 50));
+    } while (Date.now() < until);
+    return last;
+  }
 
   const fees = { name: ACCOUNT, feeMode: "percent", makerFee: 0.02, takerFee: 0.05 };
 
@@ -300,6 +336,14 @@ describe.skipIf(!DB)("the terminal against a stub venue", () => {
     expect(body).toMatchObject({ binanceEnv: "testnet", binanceTrade: true, binanceKeyHint: `…${KEY.slice(-4)}` });
     expect(body.binanceSecret).toBeUndefined();
     expect(body.binanceKey).toBeUndefined();
+  });
+
+  it("opens a user-data stream for the trading account, with the listen key it was given", async () => {
+    const { startTerminalWatch } = await import("../server/terminal");
+    startTerminalWatch(600_000);
+    const n = await waitFor(async () => streamSockets.length, (x) => x >= 1);
+    expect(n).toBe(1);
+    expect(streamUrls[0]).toBe("/private/ws?listenKey=lk-test");
   });
 
   it("reports the account, its host, hedge mode and balance", async () => {
@@ -336,7 +380,7 @@ describe.skipIf(!DB)("the terminal against a stub venue", () => {
   let tradeId = 0;
   let ref: any;
 
-  it("sends a limit plan: leverage, then the stop, the entry and the target, and logs the trade as resting", async () => {
+  it("sends a limit plan: leverage and the entry only, with the brackets waiting for the fill", async () => {
     calls.length = 0;
     const r = await send("POST", "/api/terminal/send", {
       account: ACCOUNT,
@@ -350,19 +394,17 @@ describe.skipIf(!DB)("the terminal against a stub venue", () => {
     expect(body.sized.qty).toBe("0.050");
 
     const writes = calls.filter((c) => c.method === "POST");
-    // Brackets go to the algo endpoint in its words; the entry to the plain one.
-    expect(writes.map((c) => c.path)).toEqual(["/fapi/v1/leverage", "/fapi/v1/algoOrder", "/fapi/v1/order", "/fapi/v1/algoOrder"]);
+    // Nothing to protect yet: the entry rests alone, the brackets wait on the record.
+    expect(writes.map((c) => c.path)).toEqual(["/fapi/v1/leverage", "/fapi/v1/order"]);
     expect(writes[0].params).toMatchObject({ symbol: "BTCUSDT", leverage: "7" });
-    expect(writes[1].params).toMatchObject({ algoType: "CONDITIONAL", type: "STOP_MARKET", side: "SELL", positionSide: "LONG", triggerPrice: "79000.0", closePosition: "true", clientAlgoId: `${ref.tag}-s` });
-    expect(writes[1].params.stopPrice).toBeUndefined();
-    expect(writes[2].params).toMatchObject({ type: "LIMIT", side: "BUY", positionSide: "LONG", price: "80000.0", quantity: "0.050", timeInForce: "GTC" });
-    expect(writes[3].params).toMatchObject({ type: "TAKE_PROFIT_MARKET", side: "SELL", triggerPrice: "82500.0", closePosition: "true" });
-    expect(writes[2].params.newClientOrderId).toBe(`${ref.tag}-e`);
+    expect(writes[1].params).toMatchObject({ type: "LIMIT", side: "BUY", positionSide: "LONG", price: "80000.0", quantity: "0.050", timeInForce: "GTC" });
+    expect(writes[1].params.newClientOrderId).toBe(`${ref.tag}-e`);
+    expect(ref.armOnFill.stop).toMatchObject({ type: "STOP_MARKET", side: "SELL", positionSide: "LONG", stopPrice: "79000.0", closePosition: "true" });
+    expect(ref.armOnFill.targets).toHaveLength(1);
 
     const t = await store.getTrade(tradeId);
     expect(t).toMatchObject({ symbol: "BTC", direction: "long", size: 0.05, entryPrice: 80000, initialStop: 79000, initialTarget: 82500, status: "pending", account: ACCOUNT });
-    expect(ref).toMatchObject({ symbol: "BTCUSDT", positionSide: "LONG", leverage: 7, unprotected: false });
-    expect(ref.stopOrderId).toBe(algos.find((a) => a.orderType === "STOP_MARKET")!.algoId);
+    expect(ref).toMatchObject({ symbol: "BTCUSDT", positionSide: "LONG", leverage: 7, unprotected: false, stopOrderId: null, targetOrderIds: [] });
     expect(ref.entryOrderId).toBe(orders.find((o) => o.type === "LIMIT")!.orderId);
 
     const log = await get("/api/terminal/log");
@@ -370,11 +412,13 @@ describe.skipIf(!DB)("the terminal against a stub venue", () => {
     expect(log.every((l: any) => l.ok)).toBe(true);
   });
 
-  it("leaves a resting trade resting, then opens it at the fill once the entry fills", async () => {
+  it("leaves a resting trade resting, then opens it at the fill and arms the brackets the moment it fills", async () => {
     let r = await send("POST", "/api/terminal/reconcile", {});
     expect((await r.json()).checked).toEqual([{ id: tradeId, status: "pending" }]);
+    expect(algos).toHaveLength(0);
 
     fillOrder(ref.entryOrderId, 79995);
+    calls.length = 0;
     r = await send("POST", "/api/terminal/reconcile", {});
     expect((await r.json()).checked).toEqual([{ id: tradeId, status: "open" }]);
     const t = await store.getTrade(tradeId);
@@ -382,7 +426,19 @@ describe.skipIf(!DB)("the terminal against a stub venue", () => {
     expect(t.entryPrice).toBe(79995);
     expect(t.size).toBe(0.05);
     expect(t.fees).toBeCloseTo(0.02);
-    expect(JSON.parse(t.terminal).unprotected).toBe(false);
+    // The brackets went on in the venue's words, in the same pass that saw the fill.
+    const armed = calls.filter((c) => c.method === "POST" && c.path === "/fapi/v1/algoOrder");
+    expect(armed.map((c) => c.params.type)).toEqual(["STOP_MARKET", "TAKE_PROFIT_MARKET"]);
+    expect(armed[0].params).toMatchObject({ algoType: "CONDITIONAL", side: "SELL", positionSide: "LONG", triggerPrice: "79000.0", closePosition: "true", clientAlgoId: `${ref.tag}-s` });
+    expect(armed[0].params.stopPrice).toBeUndefined();
+    expect(armed[1].params).toMatchObject({ triggerPrice: "82500.0", closePosition: "true" });
+    ref = JSON.parse(t.terminal);
+    expect(ref.armOnFill).toBeUndefined();
+    expect(ref.unprotected).toBe(false);
+    expect(ref.stopOrderId).toBe(algos.find((a) => a.orderType === "STOP_MARKET")!.algoId);
+    expect(ref.targetOrderIds).toHaveLength(1);
+    const log = await get("/api/terminal/log");
+    expect(log.some((l: any) => l.action === "arm-brackets" && l.ok)).toBe(true);
   });
 
   it("moves the stop by replacing the resting order, and writes the move to the stop log", async () => {
@@ -448,7 +504,8 @@ describe.skipIf(!DB)("the terminal against a stub venue", () => {
     const body = await r.json();
     const id = body.trade.id;
     expect(body.trade.status).toBe("open");
-    expect(calls.filter((c) => c.method === "POST" && /\/fapi\/v1\/(algo)?[oO]rder$/.test(c.path)).map((c) => c.params.type)).toEqual(["STOP_MARKET", "MARKET"]);
+    // Entry first — the venue holds no bracket for a position that does not exist — then the stop, at once.
+    expect(calls.filter((c) => c.method === "POST" && /\/fapi\/v1\/(algo)?[oO]rder$/.test(c.path)).map((c) => c.params.type)).toEqual(["MARKET", "STOP_MARKET"]);
     expect(position.amt).toBeCloseTo(0.1);
 
     calls.length = 0;
@@ -489,6 +546,29 @@ describe.skipIf(!DB)("the terminal against a stub venue", () => {
     expect(t.fills).toHaveLength(1);
   });
 
+  it("arms a limit's brackets on the venue's fill event, without being asked", async () => {
+    const r = await send("POST", "/api/terminal/send", {
+      account: ACCOUNT,
+      plan: { symbol: "BTCUSDT", side: "long", entryType: "limit", entryPrice: 79000, stop: 78000, targets: [81000], qty: 0.01, leverage: 2 },
+    });
+    expect(r.status).toBe(201);
+    const { trade, placed } = await r.json();
+    expect(placed.armOnFill).toBeTruthy();
+    calls.length = 0;
+    fillOrder(placed.entryOrderId, 79000);
+    // What the venue says on the stream when a limit fills: nothing here calls /reconcile.
+    streamSockets[0].send(JSON.stringify({ e: "ORDER_TRADE_UPDATE", T: Date.now(), E: Date.now(), o: { s: "BTCUSDT", i: placed.entryOrderId, c: `${placed.tag}-e`, x: "TRADE", X: "FILLED", ps: "LONG", l: "0.01", z: "0.01", L: "79000" } }));
+    const t = await waitFor(() => store.getTrade(trade.id), (x: any) => x.status === "open" && JSON.parse(x.terminal).stopOrderId != null);
+    expect(t.status).toBe("open");
+    const ref = JSON.parse(t.terminal);
+    expect(ref.armOnFill).toBeUndefined();
+    expect(ref.targetOrderIds).toHaveLength(1);
+    expect(calls.filter((c) => c.method === "POST" && c.path === "/fapi/v1/algoOrder").map((c) => c.params.type)).toEqual(["STOP_MARKET", "TAKE_PROFIT_MARKET"]);
+    // Tidy: flatten it so the later tests start from a flat book.
+    await send("POST", `/api/terminal/trades/${trade.id}/close`, {});
+    expect(position.amt).toBe(0);
+  });
+
   it("cancels a resting plan: every order off, the trade marked pulled", async () => {
     const r = await send("POST", "/api/terminal/send", {
       account: ACCOUNT,
@@ -496,8 +576,8 @@ describe.skipIf(!DB)("the terminal against a stub venue", () => {
     });
     expect(r.status).toBe(201);
     const body = await r.json();
-    expect(body.placed.targetOrderIds).toHaveLength(2);
-    expect(restingFor(body.placed.tag)).toHaveLength(4);
+    expect(body.placed.armOnFill.targets).toHaveLength(2);
+    expect(restingFor(body.placed.tag)).toHaveLength(1);
     const c = await send("POST", `/api/terminal/trades/${body.trade.id}/cancel`, {});
     expect((await c.json()).trade).toMatchObject({ status: "cancelled", cancelReason: "pulled" });
     expect(restingFor(body.placed.tag)).toHaveLength(0);

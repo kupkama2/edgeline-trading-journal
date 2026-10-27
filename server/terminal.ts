@@ -17,7 +17,9 @@
  */
 import type { Express, NextFunction, Request, Response } from "express";
 import { z } from "zod";
-import { storageFor, terminalUsers, type DatabaseStorage } from "./storage";
+import { storageFor, terminalUsers, tradingAccountsEverywhere, type DatabaseStorage } from "./storage";
+import { openUserStream, worthAReadBack, type StreamHandle } from "./binance-stream";
+import { oneAtATime } from "./venue-sync";
 import { open } from "./secrets";
 import { futuresBase, signedCall, type BinanceEnv, type Creds } from "./binance-account";
 import { fetchCandles, type Interval } from "./binance";
@@ -32,6 +34,7 @@ import {
   hedgeMode,
   openOrders,
   orderById,
+  placeBrackets,
   placeOrder,
   placePlan,
   positions,
@@ -44,6 +47,7 @@ import {
 import {
   bracketAt,
   formatTerminalRef,
+  fmtPrice,
   fmtQty,
   ordersForPlan,
   parseTerminalRef,
@@ -226,22 +230,43 @@ async function reconcileOne(s: DatabaseStorage, t: TradeWithTags, armed: Armed):
   const patch = read ?? {};
   // A target that took its share while the rest stayed on: a partial in the
   // ledger, once, by the venue's fill id.
-  const logged = new Set((t.fills ?? []).map((f) => f.note ?? ""));
+  const already = new Set((t.fills ?? []).map((f) => f.note ?? ""));
   for (const f of partials) {
-    if (logged.has(partialNote(f.tid))) continue;
+    if (already.has(partialNote(f.tid))) continue;
     await s.addFill(t.id, { kind: "partial", price: f.price, size: f.qty, time: new Date(f.time).toISOString(), note: partialNote(f.tid) });
   }
-  const stopResting = ref.stopOrderId != null && snap.openOrderIds.includes(ref.stopOrderId);
   const nowOpen = (patch.status ?? t.status) === "open";
-  const nextRef: TerminalRef = { ...ref, unprotected: nowOpen && !stopResting, checkedAt: new Date().toISOString() };
+  /*
+   * The resting entry has filled: the brackets it was drawn with go on now,
+   * while the position is seconds old. Refusals are kept on the record and
+   * shown in red; the position is real either way.
+   */
+  let withBrackets: TerminalRef = ref;
+  if (ref.armOnFill && nowOpen && Math.abs(snap.positionAmt) > 1e-9) {
+    const brackets = ref.armOnFill;
+    const placed = await logged(s, "arm-brackets", ref.account, t.id, brackets, () => placeBrackets(v, brackets));
+    const { armOnFill: _done, ...rest } = ref;
+    withBrackets = { ...rest, stopOrderId: placed.stop?.orderId ?? null, targetOrderIds: placed.targets.map((o) => o.orderId) };
+    if (placed.stop) snap.openOrderIds.push(placed.stop.orderId);
+  }
+  const stopResting = withBrackets.stopOrderId != null && snap.openOrderIds.includes(withBrackets.stopOrderId);
+  const nextRef: TerminalRef = { ...withBrackets, unprotected: nowOpen && !stopResting, checkedAt: new Date().toISOString() };
   const changed = Object.keys(patch).length > 0 || partials.length > 0 || formatTerminalRef(nextRef) !== formatTerminalRef({ ...ref, checkedAt: nextRef.checkedAt });
   if (!changed && ref.checkedAt && Date.now() - new Date(ref.checkedAt).getTime() < 60_000) return t;
   const after = await s.updateTrade(t.id, { ...patch, terminal: formatTerminalRef(nextRef) } as any);
   return after ?? t;
 }
 
-/** Every live terminal trade of one person, read back. What the page polls and the watch runs. */
-async function reconcileAll(s: DatabaseStorage): Promise<{ id: number; status: string; error?: string }[]> {
+/**
+ * Every live terminal trade of one person, read back. What the page polls,
+ * the watch runs, and a stream event triggers. One pass at a time per person:
+ * two passes seeing the same fresh fill would both arm its brackets.
+ */
+function reconcileAll(s: DatabaseStorage, userId: number): Promise<{ id: number; status: string; error?: string }[]> {
+  return oneAtATime(`terminal:${userId}`, () => reconcilePass(s));
+}
+
+async function reconcilePass(s: DatabaseStorage): Promise<{ id: number; status: string; error?: string }[]> {
   const trades = await s.listTerminalTrades();
   const armedBy = new Map<string, Armed>();
   const out: { id: number; status: string; error?: string }[] = [];
@@ -274,15 +299,76 @@ async function reconcileAll(s: DatabaseStorage): Promise<{ id: number; status: s
  * next pass rather than stacking a second on top of it.
  */
 let watching = false;
+let watchTimer: NodeJS.Timeout | null = null;
+let streamsOn = false;
+/** One user-data stream per trading account, keyed so a changed key reopens it. */
+const streams = new Map<string, StreamHandle>();
+const readBackTimers = new Map<number, NodeJS.Timeout>();
+
+/** A read-back for this person, shortly — several events in a burst are one pass. */
+function readBackSoon(userId: number): void {
+  const pending = readBackTimers.get(userId);
+  if (pending) clearTimeout(pending);
+  const t = setTimeout(() => {
+    readBackTimers.delete(userId);
+    void reconcileAll(storageFor(userId), userId)
+      .then((out) => {
+        for (const o of out) if (o.error) console.error(`[terminal] stream read-back trade #${o.id}: ${o.error}`);
+      })
+      .catch((err) => console.error("[terminal] stream read-back:", said(err)));
+  }, 250);
+  t.unref?.();
+  readBackTimers.set(userId, t);
+}
+
+/**
+ * Streams for every account that may trade: opened for new ones, closed for
+ * ones whose key is gone. A fill, a cancel or a bracket firing on any of
+ * them runs that person's read-back within the second — which is what puts
+ * a limit's stop on the book the moment it fills, tab open or not.
+ */
+export async function ensureStreams(): Promise<void> {
+  if (!streamsOn) return;
+  const wanted = new Set<string>();
+  for (const a of await tradingAccountsEverywhere()) {
+    if (!a.binanceKey || !a.binanceSecret) continue;
+    const secret = open(a.binanceSecret);
+    if (!secret) continue;
+    const env: BinanceEnv = a.binanceEnv === "testnet" ? "testnet" : "live";
+    const id = `${a.userId}:${a.name}:${env}:${a.binanceKey.slice(-8)}`;
+    wanted.add(id);
+    if (streams.has(id)) continue;
+    const userId = a.userId;
+    streams.set(
+      id,
+      openUserStream({
+        creds: { key: a.binanceKey, secret },
+        env,
+        label: `${a.name} (${env})`,
+        onEvent: (msg) => {
+          if (worthAReadBack(msg)) readBackSoon(userId);
+        },
+      }),
+    );
+  }
+  for (const [id, h] of Array.from(streams.entries())) {
+    if (wanted.has(id)) continue;
+    h.close();
+    streams.delete(id);
+  }
+}
+
 export function startTerminalWatch(intervalMs = 20_000): void {
   if (TERMINAL_EMAILS.length === 0) return;
+  streamsOn = true;
   const tick = async () => {
     if (watching) return;
     watching = true;
     try {
+      await ensureStreams().catch((err) => console.error("[terminal] streams:", said(err)));
       for (const userId of await terminalUsers()) {
         const s = storageFor(userId);
-        const out = await reconcileAll(s).catch((err) => {
+        const out = await reconcileAll(s, userId).catch((err) => {
           console.error("[terminal] watch:", said(err));
           return [] as { id: number; status: string; error?: string }[];
         });
@@ -292,9 +378,20 @@ export function startTerminalWatch(intervalMs = 20_000): void {
       watching = false;
     }
   };
-  const timer = setInterval(() => void tick(), intervalMs);
-  timer.unref();
+  watchTimer = setInterval(() => void tick(), intervalMs);
+  watchTimer.unref();
   void tick();
+}
+
+/** Everything the watch holds open, let go — for tests and a clean shutdown. */
+export function stopTerminalWatch(): void {
+  if (watchTimer) clearInterval(watchTimer);
+  watchTimer = null;
+  streamsOn = false;
+  for (const h of Array.from(streams.values())) h.close();
+  streams.clear();
+  for (const t of Array.from(readBackTimers.values())) clearTimeout(t);
+  readBackTimers.clear();
 }
 
 /* ------------------------------ the routes ------------------------------ */
@@ -454,7 +551,8 @@ export function registerTerminalRoutes(app: Express): void {
       await logged(store(req), "leverage", account, null, { symbol: rules.symbol, leverage: plan.leverage }, () =>
         setLeverage(venue, rules.symbol, plan.leverage),
       );
-      const placed = await logged(store(req), "send", account, null, orders, () => placePlan(venue, orders));
+      const rests = plan.entryType === "limit";
+      const placed = await logged(store(req), "send", account, null, orders, () => placePlan(venue, orders, rests));
 
       const ref: TerminalRef = {
         venue: "binance",
@@ -468,8 +566,10 @@ export function registerTerminalRoutes(app: Express): void {
         entryOrderId: placed.entry.orderId,
         stopOrderId: placed.stop?.orderId ?? null,
         targetOrderIds: placed.targets.map((o) => o.orderId),
-        unprotected: !placed.stop,
+        // A resting entry has no position to protect yet; its brackets wait.
+        unprotected: !rests && !placed.stop,
         closeOrderIds: [],
+        ...(rests ? { armOnFill: { stop: orders.stop, targets: orders.targets } } : {}),
       };
       const [first, ...rest] = plan.targets;
       const trade = await store(req).createTrade({
@@ -497,6 +597,8 @@ export function registerTerminalRoutes(app: Express): void {
         response: JSON.stringify({ tradeId: trade.id, placed: ref }),
         ok: true,
       });
+      // The account's stream, if it is not open yet, so this trade's fill is heard at once.
+      void ensureStreams().catch(() => {});
       res.status(201).json({ trade, placed: ref, refused: placed.refused, sized });
     }),
   );
@@ -514,11 +616,25 @@ export function registerTerminalRoutes(app: Express): void {
       const { venue } = await arm(store(req), ref.account);
       const rules = await rulesFor(venue.env, ref.symbol);
       const side = ref.positionSide === "LONG" ? "long" : "short";
+      const at = new Date().toISOString();
+      // Brackets still waiting for the fill are moved on paper; nothing is on the book to replace.
+      if (ref.armOnFill) {
+        const to = Number(fmtPrice(price, rules));
+        const moves = addStopMove(t.stopMoves, to, at, "terminal");
+        const after = await s.updateTrade(t.id, {
+          stopMoves: formatStopMoves(moves),
+          terminal: formatTerminalRef({
+            ...ref,
+            armOnFill: { ...ref.armOnFill, stop: { ...ref.armOnFill.stop, stopPrice: fmtPrice(price, rules) } },
+            moves: [...(ref.moves ?? []), { at, kind: "stop", from: currentStop(t), to }],
+          }),
+        } as any);
+        return res.json({ trade: after, order: null });
+      }
       const next = await logged(store(req), "move-stop", ref.account, t.id, { price }, async () => {
         if (ref.stopOrderId != null) await cancelBracket(venue, ref.symbol, ref.stopOrderId);
         return placeOrder(venue, bracketAt("stop", price, rules, side, `${ref.tag}-s${Date.now().toString(36)}`));
       });
-      const at = new Date().toISOString();
       const to = Number(next.stopPrice ?? price);
       const moves = addStopMove(t.stopMoves, to, at, "terminal");
       const after = await s.updateTrade(t.id, {
@@ -547,6 +663,18 @@ export function registerTerminalRoutes(app: Express): void {
       const { venue } = await arm(store(req), ref.account);
       const rules = await rulesFor(venue.env, ref.symbol);
       const side = ref.positionSide === "LONG" ? "long" : "short";
+      if (ref.armOnFill) {
+        const to = Number(fmtPrice(price, rules));
+        const lastTarget = [...(ref.moves ?? [])].reverse().find((m) => m.kind === "target")?.to ?? t.initialTarget ?? null;
+        const after = await s.updateTrade(t.id, {
+          terminal: formatTerminalRef({
+            ...ref,
+            armOnFill: { ...ref.armOnFill, targets: [bracketAt("target", price, rules, side, `${ref.tag}-t1`)] },
+            moves: [...(ref.moves ?? []), { at: new Date().toISOString(), kind: "target", from: lastTarget, to }],
+          }),
+        } as any);
+        return res.json({ trade: after, order: null });
+      }
       const next = await logged(store(req), "move-target", ref.account, t.id, { price }, async () => {
         for (const id of ref.targetOrderIds) await cancelBracket(venue, ref.symbol, id);
         return placeOrder(venue, bracketAt("target", price, rules, side, `${ref.tag}-t${Date.now().toString(36)}`));
@@ -624,7 +752,7 @@ export function registerTerminalRoutes(app: Express): void {
   app.post(
     "/api/terminal/reconcile",
     wrap(async (req, res) => {
-      res.json({ checked: await reconcileAll(store(req)) });
+      res.json({ checked: await reconcileAll(store(req), req.userId!) });
     }),
   );
 }

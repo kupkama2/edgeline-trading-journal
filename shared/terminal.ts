@@ -292,6 +292,13 @@ export interface TerminalRef {
   closeOrderIds?: number[];
   /** Every bracket moved from the terminal: what it was, what it became, when. */
   moves?: { at: string; kind: "stop" | "target"; from: number | null; to: number }[];
+  /**
+   * Brackets waiting for a resting entry to fill. The venue will not hold a
+   * close-position order for a position that does not exist, so the stop
+   * and targets of a limit plan are kept here and placed by the read-back
+   * the moment the fill is seen.
+   */
+  armOnFill?: { stop: OrderParams; targets: OrderParams[] };
   /** Brackets that were asked for and refused — the trade is on the book without them. */
   unprotected?: boolean;
   /** When the terminal last read this trade back from the venue. */

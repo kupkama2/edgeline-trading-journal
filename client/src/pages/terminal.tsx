@@ -298,9 +298,12 @@ function Desk({ account, env, hedge }: { account: string; env: "live" | "testnet
     if (live) {
       const t = live.t;
       const out: Level[] = [{ price: t.entryPrice, label: t.status === "pending" ? "entry · resting" : "entry", color: "entry", dashed: t.status === "pending" }];
+      const waiting = live.ref.armOnFill;
       if (liveBrackets.stop) out.push({ price: liveBrackets.stop.stopPrice!, label: "stop", color: "stop", dashed: false, field: "initialStop" });
+      else if (waiting) out.push({ price: Number(waiting.stop.stopPrice), label: "stop · on fill", color: "stop", dashed: true, field: "initialStop" });
       else if (t.initialStop != null) out.push({ price: t.initialStop, label: "stop · not resting", color: "stop", dashed: true, faint: true });
-      for (const o of liveBrackets.targets) out.push({ price: o.stopPrice!, label: "target", color: "target", dashed: false, field: "initialTarget" });
+      if (liveBrackets.targets.length) for (const o of liveBrackets.targets) out.push({ price: o.stopPrice!, label: "target", color: "target", dashed: false, field: "initialTarget" });
+      else if (waiting) for (const o of waiting.targets) out.push({ price: Number(o.stopPrice), label: "target · on fill", color: "target", dashed: true, field: "initialTarget" });
       return out;
     }
     const out: Level[] = [];
@@ -627,6 +630,7 @@ function Book({
         {mine.map(({ t, ref }) => {
           const p = posFor(ref.symbol, ref.positionSide);
           const br = bracketsOf(ref.tag, book?.orders ?? []);
+          const waiting = t.status === "pending" ? ref.armOnFill : undefined;
           return (
             <li key={t.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2 text-xs" data-testid={`row-terminal-trade-${t.id}`}>
               <span className={`font-semibold ${t.direction === "long" ? "text-emerald-400" : "text-red-400"}`}>{t.direction === "long" ? "LONG" : "SHORT"}</span>
@@ -642,7 +646,7 @@ function Book({
               )}
               <span className="flex items-center gap-1 font-mono text-[11px]">
                 <ShieldX className="h-3 w-3 text-red-400" />
-                {br.stop?.stopPrice != null ? num(br.stop.stopPrice) : <span className="font-semibold text-red-400">none</span>}
+                {br.stop?.stopPrice != null ? num(br.stop.stopPrice) : waiting ? <span className="text-muted-foreground">{num(Number(waiting.stop.stopPrice))} on fill</span> : <span className="font-semibold text-red-400">none</span>}
               </span>
               <span className="flex items-center gap-1 font-mono text-[11px]">
                 <Target className="h-3 w-3 text-emerald-400" />
