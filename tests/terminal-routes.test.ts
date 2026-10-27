@@ -73,8 +73,9 @@ function fillOrder(orderId: number, price: number, qty?: number) {
       time: Date.now(), updateTime: Date.now(),
     };
     orders.push(spawned);
-    a.orderId = spawned.orderId;
-    a.algoStatus = "FILLED";
+    a.actualOrderId = String(spawned.orderId);
+    a.algoStatus = "FINISHED";
+    a.triggerTime = Date.now();
     a.updateTime = Date.now();
     return fillOrder(spawned.orderId, price, qty);
   }
@@ -168,12 +169,17 @@ function startVenue(): Promise<string> {
         case "GET /fapi/v1/openOrders":
           return json(orders.filter((o) => o.status === "NEW" && (!params.symbol || o.symbol === params.symbol)));
         case "POST /fapi/v1/algoOrder": {
+          // As the venue answers: algoType is mandatory, and the record comes
+          // back in its own words (orderType, algoStatus, createTime, actualOrderId).
+          if (params.algoType !== "CONDITIONAL") return json({ code: -1102, msg: "Mandatory parameter 'algotype' was not sent, was empty/null, or malformed." }, 400);
           if (!ALGO.has(params.type)) return json({ code: -1116, msg: "Invalid orderType." }, 400);
           if (params.stopPrice || params.newClientOrderId) return json({ code: -1104, msg: "Not all sent parameters were read." }, 400);
+          if (params.reduceOnly) return json({ code: -4119, msg: "reduceOnly cannot be sent in hedge mode." }, 400);
           const a = {
             algoId: nextId++, clientAlgoId: params.clientAlgoId ?? `algo${nextId}`, symbol: params.symbol, side: params.side, positionSide: params.positionSide,
-            type: params.type, algoType: "CONDITIONAL", algoStatus: "NEW", quantity: params.quantity ?? "0", triggerPrice: params.triggerPrice,
-            closePosition: params.closePosition === "true", workingType: params.workingType, bookTime: Date.now(), updateTime: Date.now(), orderId: null as number | null,
+            orderType: params.type, algoType: "CONDITIONAL", algoStatus: "NEW", quantity: params.quantity ?? "0", triggerPrice: params.triggerPrice,
+            closePosition: params.closePosition === "true", workingType: params.workingType, createTime: Date.now(), updateTime: Date.now(), triggerTime: 0,
+            actualOrderId: "" as string,
           };
           algos.push(a);
           return json(a);
@@ -338,7 +344,7 @@ describe.skipIf(!DB)("the terminal against a stub venue", () => {
     // Brackets go to the algo endpoint in its words; the entry to the plain one.
     expect(writes.map((c) => c.path)).toEqual(["/fapi/v1/leverage", "/fapi/v1/algoOrder", "/fapi/v1/order", "/fapi/v1/algoOrder"]);
     expect(writes[0].params).toMatchObject({ symbol: "BTCUSDT", leverage: "7" });
-    expect(writes[1].params).toMatchObject({ type: "STOP_MARKET", side: "SELL", positionSide: "LONG", triggerPrice: "79000.0", closePosition: "true", clientAlgoId: `${ref.tag}-s` });
+    expect(writes[1].params).toMatchObject({ algoType: "CONDITIONAL", type: "STOP_MARKET", side: "SELL", positionSide: "LONG", triggerPrice: "79000.0", closePosition: "true", clientAlgoId: `${ref.tag}-s` });
     expect(writes[1].params.stopPrice).toBeUndefined();
     expect(writes[2].params).toMatchObject({ type: "LIMIT", side: "BUY", positionSide: "LONG", price: "80000.0", quantity: "0.050", timeInForce: "GTC" });
     expect(writes[3].params).toMatchObject({ type: "TAKE_PROFIT_MARKET", side: "SELL", triggerPrice: "82500.0", closePosition: "true" });
@@ -347,7 +353,7 @@ describe.skipIf(!DB)("the terminal against a stub venue", () => {
     const t = await store.getTrade(tradeId);
     expect(t).toMatchObject({ symbol: "BTC", direction: "long", size: 0.05, entryPrice: 80000, initialStop: 79000, initialTarget: 82500, status: "pending", account: ACCOUNT });
     expect(ref).toMatchObject({ symbol: "BTCUSDT", positionSide: "LONG", leverage: 7, unprotected: false });
-    expect(ref.stopOrderId).toBe(algos.find((a) => a.type === "STOP_MARKET")!.algoId);
+    expect(ref.stopOrderId).toBe(algos.find((a) => a.orderType === "STOP_MARKET")!.algoId);
     expect(ref.entryOrderId).toBe(orders.find((o) => o.type === "LIMIT")!.orderId);
 
     const log = await get("/api/terminal/log");

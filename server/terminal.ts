@@ -186,7 +186,7 @@ async function reconcileOne(s: DatabaseStorage, t: TradeWithTags, armed: Armed):
     if (a.triggeredOrderId != null) {
       alias.set(a.triggeredOrderId, id);
       mine.add(a.triggeredOrderId);
-    } else if (/TRIGGERED|FILLED/.test(a.status)) {
+    } else if (/TRIGGER|FINISHED|FILLED/.test(a.status)) {
       fired.push({ algoId: id, side: a.side, at: a.updateTime });
     }
   }
