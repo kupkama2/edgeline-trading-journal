@@ -15,7 +15,7 @@
  */
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, Bell, BellOff, Crosshair, ExternalLink, Loader2, Radio, ShieldX, Target, X } from "lucide-react";
+import { AlertTriangle, Bell, BellOff, Crosshair, ExternalLink, Loader2, ShieldX, Target, X } from "lucide-react";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -26,7 +26,6 @@ import { useToast } from "@/hooks/use-toast";
 import { Segmented, num } from "@/components/trade-shared";
 import type { SessionResponse } from "@/components/login-gate";
 import type { Level, LevelField } from "@/components/chart-levels";
-import { pill } from "@/components/trade-chart";
 import {
   fetchTerminalPage,
   useAddSize,
@@ -432,76 +431,95 @@ function Desk({ account, env, hedge }: { account: string; env: "live" | "testnet
   const canSend = !!plan && !!rule && problems.length === 0 && hedge && !send.isPending && (!live || ticketToo);
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
-      {/* ------------------------------ chart ------------------------------ */}
-      <Card className="border-card-border bg-card p-3" data-testid="card-terminal-chart">
-        <div className="mb-2 flex flex-wrap items-center gap-2">
-          <Input
-            list="terminal-symbols"
-            value={symbol}
-            onChange={(e) => setSymbol(e.target.value.toUpperCase().trim())}
-            className="h-8 w-36 font-mono text-sm uppercase"
-            spellCheck={false}
-            data-testid="input-terminal-symbol"
-          />
-          <datalist id="terminal-symbols">
-            {rules.slice(0, 400).map((r) => (
-              <option key={r.symbol} value={r.symbol} />
-            ))}
-          </datalist>
-          {last != null && (
-            <span className="flex items-center gap-1.5 font-mono text-sm" data-testid="text-terminal-last">
-              {num(last)}
-              <Radio className={`h-3 w-3 ${tapeLive ? "text-emerald-400" : "text-muted-foreground/40"}`} aria-label={tapeLive ? "live" : "polling"} />
-            </span>
-          )}
-          {!rule && rules.length > 0 && <span className="text-[11px] text-amber-500">not a perpetual on this host</span>}
-          <div className="ml-auto flex items-center gap-1">
-            {INTERVALS.map((f) => (
-              <button key={f} type="button" onClick={() => setInterval_(f)} aria-pressed={interval === f} className={pill(interval === f)} data-testid={`terminal-tf-${f}`}>
-                {f}
-              </button>
-            ))}
-          </div>
-        </div>
-        {live && (
-          <p className="mb-2 text-[11px] text-sky-400" data-testid="text-terminal-managing">
-            Managing #{live.t.id}{ticketToo ? " — drawing a new order beside it" : ` — drag the ${live.t.status === "pending" ? "entry, " : ""}stop or target to move the resting order.`}
-            {live.ref.unprotected && live.t.status === "open" && (
-              <span className="ml-2 font-semibold text-red-400">No stop is resting on this position.</span>
-            )}
-          </p>
-        )}
-        {candlesQ.isError && (
-          <p className="mb-2 text-[11px] text-amber-500" data-testid="text-terminal-candles-error">
-            The price feed did not answer for {interval}: {String((candlesQ.error as any)?.message ?? candlesQ.error).replace(/^\d+:\s*/, "").slice(0, 160)}
-          </p>
-        )}
-        {candles.length === 0 ? (
-          <p className="py-16 text-center text-[11px] text-muted-foreground" data-testid="text-terminal-no-candles">
-            {candlesQ.isLoading ? "Loading the tape…" : rule ? "No candles." : "Pick a perpetual."}
-          </p>
-        ) : (
-          <Suspense fallback={<div className="h-[420px] animate-pulse rounded-md bg-secondary/30" />}>
-            <Candles
-              seriesKey={symbol}
-              interval={interval}
-              candles={candles}
-              levels={levels}
-              onLevel={onLevel}
-              loadPage={(before) => fetchTerminalPage(symbol, interval, before)}
-              height={420}
-              entryActions={entryActions}
+    <div className="grid items-start gap-3 xl:grid-cols-[minmax(0,1fr)_400px]">
+      {/* ------------------------------ chart, book, orders ------------------------------ */}
+      <div className="min-w-0 space-y-3">
+        <Card className="overflow-hidden border-card-border bg-card" data-testid="card-terminal-chart">
+          <div className="flex flex-wrap items-center gap-2 border-b border-border/60 px-3 py-2">
+            <Input
+              list="terminal-symbols"
+              value={symbol}
+              onChange={(e) => setSymbol(e.target.value.toUpperCase().trim())}
+              className="h-8 w-32 border-border/60 bg-secondary/30 font-mono text-sm font-semibold uppercase tracking-wide"
+              spellCheck={false}
+              data-testid="input-terminal-symbol"
             />
-          </Suspense>
-        )}
-      </Card>
+            <datalist id="terminal-symbols">
+              {rules.slice(0, 400).map((r) => (
+                <option key={r.symbol} value={r.symbol} />
+              ))}
+            </datalist>
+            {last != null && (
+              <span className="flex items-center gap-1.5 font-mono text-base font-semibold tabular-nums" data-testid="text-terminal-last">
+                {num(last)}
+                <span className={`inline-block h-1.5 w-1.5 rounded-full ${tapeLive ? "animate-pulse bg-emerald-400" : "bg-muted-foreground/40"}`} aria-label={tapeLive ? "live" : "polling"} />
+              </span>
+            )}
+            {!rule && rules.length > 0 && <span className="text-[11px] text-amber-500">not a perpetual on this host</span>}
+            <div className="ml-auto flex items-center gap-0.5 rounded-md border border-border/60 bg-secondary/30 p-0.5">
+              {INTERVALS.map((f) => (
+                <button
+                  key={f}
+                  type="button"
+                  onClick={() => setInterval_(f)}
+                  aria-pressed={interval === f}
+                  className={`rounded px-2 py-0.5 font-mono text-[10px] leading-tight transition-colors ${interval === f ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+                  data-testid={`terminal-tf-${f}`}
+                >
+                  {f}
+                </button>
+              ))}
+            </div>
+          </div>
+          {(live || candlesQ.isError) && (
+            <div className="space-y-1 border-b border-border/40 px-3 py-1.5">
+              {live && (
+                <p className="text-[11px] text-sky-400/90" data-testid="text-terminal-managing">
+                  Managing #{live.t.id}{ticketToo ? " — drawing a new order beside it" : ` — drag the ${live.t.status === "pending" ? "entry, " : ""}stop or target to move the resting order.`}
+                  {live.ref.unprotected && live.t.status === "open" && (
+                    <span className="ml-2 font-semibold text-red-400">No stop is resting on this position.</span>
+                  )}
+                </p>
+              )}
+              {candlesQ.isError && (
+                <p className="text-[11px] text-amber-500" data-testid="text-terminal-candles-error">
+                  The price feed did not answer for {interval}: {String((candlesQ.error as any)?.message ?? candlesQ.error).replace(/^\d+:\s*/, "").slice(0, 160)}
+                </p>
+              )}
+            </div>
+          )}
+          <div className="p-2">
+            {candles.length === 0 ? (
+              <p className="py-24 text-center text-[11px] text-muted-foreground" data-testid="text-terminal-no-candles">
+                {candlesQ.isLoading ? "Loading the tape…" : rule ? "No candles." : "Pick a perpetual."}
+              </p>
+            ) : (
+              <Suspense fallback={<div className="h-[520px] animate-pulse rounded-md bg-secondary/30" />}>
+                <Candles
+                  seriesKey={symbol}
+                  interval={interval}
+                  candles={candles}
+                  levels={levels}
+                  onLevel={onLevel}
+                  loadPage={(before) => fetchTerminalPage(symbol, interval, before)}
+                  height={520}
+                  entryActions={entryActions}
+                />
+              </Suspense>
+            )}
+          </div>
+        </Card>
 
-      {/* ------------------------------ ticket + book ------------------------------ */}
-      <div className="space-y-4">
+        <Book account={account} mine={mine} book={book.data} selectedId={live?.t.id ?? null} onSelect={select} />
+        <Orders account={account} mine={mine} book={book.data} />
+      </div>
+
+      {/* ------------------------------ the order panel ------------------------------ */}
+      <div className="min-w-0 space-y-3 xl:sticky xl:top-4">
         {live && <ManagePanel live={live} book={book.data} rule={rule} last={last} account={account} onNewOrder={() => setTicketToo((v) => !v)} ticketOpen={ticketToo} />}
         {(!live || ticketToo) && (
-        <Card className="space-y-3 border-card-border bg-card p-3" data-testid="card-terminal-ticket">
+        <Card className="overflow-hidden border-card-border bg-card" data-testid="card-terminal-ticket">
+          <div className="space-y-3 p-3.5">
           <div className="grid grid-cols-2 gap-2">
             <Segmented
               value={side}
@@ -534,14 +552,14 @@ function Desk({ account, env, hedge }: { account: string; env: "live" | "testnet
               ))}
             </div>
           )}
-          <div className="flex items-center gap-2 text-[11px]">
+          <div className="flex items-center gap-3 text-[11px]">
             {targets.length < 3 && (
-              <button type="button" className="text-muted-foreground hover:text-foreground" onClick={() => setTargets((xs) => [...xs, ""])} data-testid="button-terminal-add-target">
+              <button type="button" className="text-muted-foreground transition-colors hover:text-foreground" onClick={() => setTargets((xs) => [...xs, ""])} data-testid="button-terminal-add-target">
                 + another target
               </button>
             )}
             {targets.length > 1 && (
-              <button type="button" className="text-muted-foreground hover:text-foreground" onClick={() => setTargets((xs) => xs.slice(0, -1))}>
+              <button type="button" className="text-muted-foreground transition-colors hover:text-foreground" onClick={() => setTargets((xs) => xs.slice(0, -1))}>
                 − last target
               </button>
             )}
@@ -566,27 +584,35 @@ function Desk({ account, env, hedge }: { account: string; env: "live" | "testnet
           </div>
 
           {sized && problems.length === 0 ? (
-            <p className="font-mono text-[11px] text-muted-foreground" data-testid="text-terminal-sized">
-              {sized.qty} {rule?.baseAsset} · {fmtAmount(sized.notional, 0)} notional · {fmtAmount(sized.margin, 0)} margin · risk {fmtAmount(sized.riskDollars, 2)}
+            <div className="grid grid-cols-4 gap-px overflow-hidden rounded-md border border-border/60 bg-border/60 font-mono text-[11px]" data-testid="text-terminal-sized">
+              <Cell k={rule?.baseAsset ?? "qty"} v={sized.qty} />
+              <Cell k="notional" v={fmtAmount(sized.notional, 0)} />
+              <Cell k="margin" v={fmtAmount(sized.margin, 0)} />
+              <Cell k="risk" v={fmtAmount(sized.riskDollars, 2)} tone="text-red-400" />
               {plan && plan.targets[0] != null && (
-                <> · {(Math.abs(plan.targets[0] - plan.entryPrice) / Math.abs(plan.entryPrice - plan.stop)).toFixed(2)}R to target</>
+                <div className="col-span-4 bg-card px-2 py-1 text-center text-[10px] text-muted-foreground">
+                  {(Math.abs(plan.targets[0] - plan.entryPrice) / Math.abs(plan.entryPrice - plan.stop)).toFixed(2)}R to the target
+                </div>
               )}
-            </p>
+            </div>
           ) : (
-            <p className="text-[11px] text-amber-500" data-testid="text-terminal-problems">
+            <p className="rounded-md border border-amber-500/30 bg-amber-500/5 px-2 py-1.5 text-[11px] text-amber-500" data-testid="text-terminal-problems">
               {problems[0]}
             </p>
           )}
 
-          <Button className="h-10 w-full" disabled={!canSend} onClick={() => setConfirm(true)} data-testid="button-terminal-send">
+          <Button
+            className={`h-10 w-full text-sm font-semibold text-white shadow-sm ${side === "long" ? "bg-emerald-600 hover:bg-emerald-500" : "bg-red-600 hover:bg-red-500"} disabled:opacity-40`}
+            disabled={!canSend}
+            onClick={() => setConfirm(true)}
+            data-testid="button-terminal-send"
+          >
             {send.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            Send {side} {rule?.baseAsset ?? symbol}
+            {side === "long" ? "Buy · long" : "Sell · short"} {rule?.baseAsset ?? symbol}
           </Button>
+          </div>
         </Card>
         )}
-
-        <Book account={account} mine={mine} book={book.data} selectedId={live?.t.id ?? null} onSelect={select} />
-        <Orders account={account} mine={mine} book={book.data} />
       </div>
 
       <Dialog open={confirm} onOpenChange={(o) => !o && setConfirm(false)}>
@@ -745,170 +771,217 @@ function ManagePanel({
   const digits = rule ? Math.max(0, Math.round(-Math.log10(rule.tickSize))) : 2;
   const fmt = (v: number) => v.toFixed(digits);
 
+  const tone = (v: number | null | undefined) => (v == null ? "" : v >= 0 ? "text-emerald-400" : "text-red-400");
+  const sideCls = long ? "bg-emerald-500/15 text-emerald-400" : "bg-red-500/15 text-red-400";
+
   return (
-    <Card className="space-y-3 border-card-border bg-card p-3" data-testid="card-terminal-manage">
-      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <span className={`text-sm font-semibold ${long ? "text-emerald-400" : "text-red-400"}`}>{long ? "LONG" : "SHORT"}</span>
-        <span className="font-mono text-sm">{ref.symbol}</span>
-        <span className="font-mono text-xs text-muted-foreground">
-          {num(held)} @ {num(entry)}
-        </span>
-        {resting ? (
-          <span className="rounded bg-secondary px-1.5 py-0.5 text-[10px] uppercase tracking-wider">resting</span>
-        ) : pos ? (
-          <span className={`font-mono text-sm ${pos.unrealized >= 0 ? "text-emerald-400" : "text-red-400"}`} data-testid="text-manage-upnl">
-            {fmtMoney(pos.unrealized)}
-            {rNow != null && <span className="ml-1 text-xs opacity-80">{rNow >= 0 ? "+" : ""}{rNow.toFixed(2)}R</span>}
+    <Card className="overflow-hidden border-card-border bg-card" data-testid="card-terminal-manage">
+      {/* ---- the position ---- */}
+      <div className="border-b border-border/60 bg-gradient-to-b from-secondary/30 to-transparent px-3.5 pb-3 pt-3">
+        <div className="flex items-center gap-2">
+          <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold tracking-wider ${sideCls}`}>{long ? "LONG" : "SHORT"}</span>
+          <span className="font-mono text-sm font-semibold">{ref.symbol}</span>
+          {resting && <span className="rounded bg-secondary px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-muted-foreground">resting</span>}
+          <span className="ml-auto flex items-center gap-1 text-[10px] text-muted-foreground">
+            <button type="button" className="inline-flex items-center gap-0.5 transition-colors hover:text-foreground" onClick={() => navigate(`/trade/${t.id}`)} title="Open the trade's page" data-testid="link-manage-trade">
+              #{t.id} <ExternalLink className="h-3 w-3" />
+            </button>
+            <span>· {ref.leverage}×</span>
           </span>
-        ) : null}
-        <span className="ml-auto flex items-center gap-1 text-[10px] text-muted-foreground">
-          <button type="button" className="inline-flex items-center gap-0.5 hover:text-foreground" onClick={() => navigate(`/trade/${t.id}`)} title="Open the trade's page" data-testid="link-manage-trade">
-            trade #{t.id} <ExternalLink className="h-3 w-3" />
-          </button>
-          · {ref.leverage}×
-        </span>
-      </div>
-      {pos && !resting && (
-        <p className="font-mono text-[10px] text-muted-foreground" data-testid="text-manage-position">
-          mark {num(pos.markPrice)}
-          {pos.liquidationPrice != null && <> · liq {num(pos.liquidationPrice)}</>}
-          {heldFor && <> · on for {heldFor}</>}
-          {pos.unrealized !== 0 && pos.entryPrice > 0 && <> · {((pos.unrealized / (Math.abs(pos.amt) * pos.entryPrice)) * 100 * (ref.leverage || 1)).toFixed(1)}% on margin</>}
-        </p>
-      )}
-
-      {/* The idea as drawn — it is what everything after is measured against — and where the tape stands against it. */}
-      <p className="font-mono text-[10px] text-muted-foreground">
-        idea: entry {num(ref.idea?.entry ?? t.entryPrice)} · stop {(ref.idea?.stop ?? t.initialStop) != null ? num((ref.idea?.stop ?? t.initialStop)!) : "—"} · target{" "}
-        {(ref.idea?.targets[0] ?? t.initialTarget) != null ? num((ref.idea?.targets[0] ?? t.initialTarget)!) : "—"}
-      </p>
-      {!resting && <PlanWatchLine t={t} ref_={ref} mark={pos?.markPrice ?? last} />}
-
-      {resting && (
-        <div className="grid grid-cols-[1fr_auto_auto] items-end gap-2">
-          <Field label="Resting entry" value={entryIn} onChange={setEntryIn} testId="input-manage-entry" />
-          <Button size="sm" variant="outline" className="h-8 text-[11px]" disabled={busy || numOrNull(entryIn) == null || numOrNull(entryIn) === t.entryPrice}
-            onClick={() => run("Entry moved", moveEntry.mutateAsync({ tradeId: t.id, price: numOrNull(entryIn)! }), `Resting at ${entryIn}.`)} data-testid="button-manage-move-entry">
-            Move
-          </Button>
-          <Button size="sm" variant="ghost" className="h-8 text-[11px] text-muted-foreground" disabled={busy}
-            onClick={() => run("Cancelled", cancel.mutateAsync(t.id), "The resting order is off the book.")} data-testid="button-manage-cancel">
-            Cancel order
-          </Button>
         </div>
-      )}
-
-      <div className="grid grid-cols-[1fr_auto] items-end gap-2">
-        <Field label={`Stop${currentStop == null ? (waiting ? " · on fill" : " · NONE RESTING") : br.stop ? " · resting" : " · on fill"}`} value={stopIn} onChange={setStopIn} tone={currentStop == null && !waiting ? "text-red-400 font-semibold" : "text-red-400"} testId="input-manage-stop" />
-        <Button size="sm" variant="outline" className="h-8 text-[11px]" disabled={busy || numOrNull(stopIn) == null || numOrNull(stopIn) === currentStop}
-          onClick={() => run("Stop set", move.mutateAsync({ tradeId: t.id, kind: "stop", price: numOrNull(stopIn)! }), `${ref.symbol} stop ${stopIn}.`)} data-testid="button-manage-set-stop">
-          {currentStop == null ? "Place stop" : "Set"}
-        </Button>
-      </div>
-      {!resting && (
-        <div className="-mt-1 flex flex-wrap items-center gap-1.5">
-          <Button size="sm" variant="ghost" className="h-6 px-2 text-[10px]" disabled={busy || !canLock(beAt)} title="Stop to the entry: the trade can no longer lose"
-            onClick={() => run("Stop at breakeven", move.mutateAsync({ tradeId: t.id, kind: "stop", price: beAt }), `${ref.symbol} stop ${num(beAt)}.`)} data-testid="button-manage-be">
-            stop → breakeven
-          </Button>
-          {lockAt != null && (
-            <Button size="sm" variant="ghost" className="h-6 px-2 text-[10px]" disabled={busy || !canLock(lockAt)} title="Stop one original risk into profit"
-              onClick={() => run("Locked +1R", move.mutateAsync({ tradeId: t.id, kind: "stop", price: lockAt }), `${ref.symbol} stop ${num(lockAt)}.`)} data-testid="button-manage-lock-1r">
-              lock +1R
-            </Button>
+        <div className="mt-2 flex items-end justify-between gap-3">
+          <div>
+            {pos && !resting ? (
+              <div className={`font-mono text-2xl font-semibold leading-none tabular-nums ${tone(pos.unrealized)}`} data-testid="text-manage-upnl">
+                {fmtMoney(pos.unrealized)}
+                {rNow != null && <span className="ml-2 text-sm font-medium opacity-80">{rNow >= 0 ? "+" : ""}{rNow.toFixed(2)}R</span>}
+              </div>
+            ) : (
+              <div className="font-mono text-2xl font-semibold leading-none text-muted-foreground">—</div>
+            )}
+            <div className="mt-1.5 font-mono text-[11px] text-muted-foreground">
+              {num(held)} {rule?.baseAsset ?? ""} @ {num(entry)}
+            </div>
+          </div>
+          {pos && !resting && (
+            <div className="grid grid-cols-3 gap-x-3 text-right font-mono text-[11px] tabular-nums" data-testid="text-manage-position">
+              <div><div className="text-[9px] uppercase tracking-wider text-muted-foreground/70">mark</div>{num(pos.markPrice)}</div>
+              <div><div className="text-[9px] uppercase tracking-wider text-muted-foreground/70">liq</div>{pos.liquidationPrice != null ? num(pos.liquidationPrice) : "—"}</div>
+              <div><div className="text-[9px] uppercase tracking-wider text-muted-foreground/70">on for</div>{heldFor ?? "—"}</div>
+            </div>
           )}
-          {pos && rNow != null && <span className="text-[10px] text-muted-foreground">{rNow >= 0 ? "+" : ""}{rNow.toFixed(2)}R now</span>}
         </div>
-      )}
-      <div className="grid grid-cols-[1fr_auto] items-end gap-2">
-        <Field label={`Target${currentTarget == null ? " · none" : br.targets.length ? " · resting" : " · on fill"}`} value={targetIn} onChange={setTargetIn} tone="text-emerald-400" testId="input-manage-target" />
-        <Button size="sm" variant="outline" className="h-8 text-[11px]" disabled={busy || numOrNull(targetIn) == null || numOrNull(targetIn) === currentTarget}
-          onClick={() => run("Target set", move.mutateAsync({ tradeId: t.id, kind: "target", price: numOrNull(targetIn)! }), `${ref.symbol} target ${targetIn}.`)} data-testid="button-manage-set-target">
-          {currentTarget == null ? "Place target" : "Set"}
-        </Button>
+        <p className="mt-2 font-mono text-[10px] text-muted-foreground/80">
+          idea · {num(ref.idea?.entry ?? t.entryPrice)} · stop {(ref.idea?.stop ?? t.initialStop) != null ? num((ref.idea?.stop ?? t.initialStop)!) : "—"} · target{" "}
+          {(ref.idea?.targets[0] ?? t.initialTarget) != null ? num((ref.idea?.targets[0] ?? t.initialTarget)!) : "—"}
+        </p>
+        {!resting && <PlanWatchLine t={t} ref_={ref} mark={pos?.markPrice ?? last} />}
       </div>
 
-      {!resting && (
-        <>
-          <div className="space-y-1">
-            <span className="block text-[10px] uppercase tracking-wider text-muted-foreground">Take profit at market</span>
-            <div className="flex flex-wrap items-center gap-1.5">
-              {[0.25, 0.5, 0.75].map((f) => (
-                <Button key={f} size="sm" variant="outline" className="h-7 px-2 text-[11px]" disabled={busy || !pos}
-                  onClick={() => run(`Took ${Math.round(f * 100)}%`, reduce.mutateAsync({ tradeId: t.id, fraction: f }), `${fmt(held * f)} ${rule?.baseAsset ?? ""} off at market.`)} data-testid={`button-manage-take-${Math.round(f * 100)}`}>
-                  {Math.round(f * 100)}%
-                </Button>
-              ))}
-              <Input value={takeQty} onChange={(e) => setTakeQty(e.target.value)} placeholder={rule ? `qty · ${rule.baseAsset}` : "qty"} inputMode="decimal" className="h-7 w-28 font-mono text-[11px]" data-testid="input-manage-take-qty" />
-              <Button size="sm" variant="outline" className="h-7 px-2 text-[11px]" disabled={busy || !pos || numOrNull(takeQty) == null}
-                onClick={() => run("Took profit", reduce.mutateAsync({ tradeId: t.id, qty: numOrNull(takeQty)! }), `${takeQty} off at market.`).then(() => setTakeQty(""))} data-testid="button-manage-take-qty">
-                Take
+      <div className="space-y-4 p-3.5">
+        {resting && (
+          <section className="space-y-1.5">
+            <SectionLabel>Resting entry</SectionLabel>
+            <div className="grid grid-cols-[1fr_auto_auto] items-center gap-1.5">
+              <Input value={entryIn} onChange={(e) => setEntryIn(e.target.value)} inputMode="decimal" className="h-8 font-mono text-sm" data-testid="input-manage-entry" />
+              <Button size="sm" variant="outline" className={CHIP} disabled={busy || numOrNull(entryIn) == null || numOrNull(entryIn) === t.entryPrice}
+                onClick={() => run("Entry moved", moveEntry.mutateAsync({ tradeId: t.id, price: numOrNull(entryIn)! }), `Resting at ${entryIn}.`)} data-testid="button-manage-move-entry">
+                Move
+              </Button>
+              <Button size="sm" variant="ghost" className={`${CHIP} text-muted-foreground`} disabled={busy}
+                onClick={() => run("Cancelled", cancel.mutateAsync(t.id), "The resting order is off the book.")} data-testid="button-manage-cancel">
+                Cancel
               </Button>
             </div>
-            <div className="flex flex-wrap items-center gap-1.5 pt-1">
-              <span className="text-[10px] text-muted-foreground">or resting:</span>
-              <Input value={takeAtQty} onChange={(e) => setTakeAtQty(e.target.value)} placeholder="qty" inputMode="decimal" className="h-7 w-20 font-mono text-[11px]" data-testid="input-manage-take-at-qty" />
-              <Input value={takeAtPrice} onChange={(e) => setTakeAtPrice(e.target.value)} placeholder="at price" inputMode="decimal" className="h-7 w-24 font-mono text-[11px]" data-testid="input-manage-take-at-price" />
-              <Button size="sm" variant="outline" className="h-7 px-2 text-[11px]" disabled={busy || !pos || numOrNull(takeAtQty) == null || numOrNull(takeAtPrice) == null}
-                onClick={() => run("Take resting", takeAt.mutateAsync({ tradeId: t.id, qty: numOrNull(takeAtQty)!, price: numOrNull(takeAtPrice)! }), `${takeAtQty} off at ${takeAtPrice} when it gets there.`).then(() => { setTakeAtQty(""); setTakeAtPrice(""); })} data-testid="button-manage-take-at">
-                Rest it
-              </Button>
-            </div>
-            {br.targets.filter((o) => !o.closePosition).length > 0 && (
-              <ul className="space-y-0.5 pt-1 text-[10px] text-muted-foreground" data-testid="list-manage-takes">
-                {br.targets.filter((o) => !o.closePosition).map((o) => (
-                  <li key={o.orderId} className="flex items-center gap-2">
-                    <span className="font-mono">take {num(o.origQty)} at {num(o.stopPrice ?? 0)}</span>
-                    <button type="button" className="inline-flex items-center text-muted-foreground hover:text-red-400" disabled={cancelOrder.isPending} title="Cancel this take"
-                      onClick={() => run("Take cancelled", cancelOrder.mutateAsync({ account, symbol: ref.symbol, orderId: o.orderId }), "Off the book.")} data-testid={`button-manage-cancel-take-${o.orderId}`}>
-                      <X className="h-3 w-3" />
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-          <div className="space-y-1">
-            <span className="block text-[10px] uppercase tracking-wider text-muted-foreground">Add size</span>
-            <div className="flex flex-wrap items-center gap-1.5">
-              <Input value={addQty} onChange={(e) => setAddQty(e.target.value)} placeholder={rule ? `qty · ${rule.baseAsset}` : "qty"} inputMode="decimal" className="h-7 w-28 font-mono text-[11px]" data-testid="input-manage-add-qty" />
-              <Segmented size="xs" value={addType} onChange={setAddType} ariaLabel="Add at" options={[{ id: "market", label: "market", testId: "button-manage-add-market" }, { id: "limit", label: "limit", testId: "button-manage-add-limit" }]} />
-              {addType === "limit" && (
-                <Input value={addPrice} onChange={(e) => setAddPrice(e.target.value)} placeholder={last != null ? fmt(last) : "price"} inputMode="decimal" className="h-7 w-28 font-mono text-[11px]" data-testid="input-manage-add-price" />
-              )}
-              <Button size="sm" variant="outline" className="h-7 px-2 text-[11px]" disabled={busy || numOrNull(addQty) == null || (addType === "limit" && numOrNull(addPrice) == null)}
-                onClick={() => run("Added", add.mutateAsync({ tradeId: t.id, qty: numOrNull(addQty)!, price: addType === "limit" ? numOrNull(addPrice) : null }), addType === "limit" ? `${addQty} resting at ${addPrice}.` : `${addQty} more at market.`).then(() => setAddQty(""))} data-testid="button-manage-add">
-                Add
-              </Button>
-            </div>
-            {(ref.addOrderIds?.length ?? 0) > 0 && (
-              <p className="text-[10px] text-muted-foreground">
-                {(book?.orders ?? []).filter((o) => ref.addOrderIds!.includes(o.orderId)).map((o) => `${num(o.origQty)} resting at ${num(o.price ?? 0)}`).join(" · ") || `${ref.addOrderIds!.length} add${ref.addOrderIds!.length === 1 ? "" : "s"} filled`}
-              </p>
-            )}
-          </div>
-          <div className="grid grid-cols-[1fr_auto] gap-2">
-            <Button variant="outline" className="h-9 text-xs" disabled={busy || !pos}
-              onClick={() => run("Closed at market", close.mutateAsync(t.id), "The position is flat and the brackets are off.")} data-testid="button-manage-close">
-              Close at market
-            </Button>
-            <Button variant="ghost" className="h-9 text-xs text-muted-foreground" onClick={onNewOrder} data-testid="button-manage-new-order">
-              {ticketOpen ? "Hide ticket" : "New order"}
-            </Button>
-          </div>
-        </>
-      )}
+          </section>
+        )}
 
-      {mineLog.length > 0 && (
-        <ul className="space-y-0.5 border-t border-border/60 pt-2 font-mono text-[10px]" data-testid="list-manage-log">
-          {mineLog.map((l) => (
-            <li key={l.id} className={`truncate ${l.ok ? "text-muted-foreground" : "text-red-400"}`} title={l.response ?? ""}>
-              {new Date(l.at).toLocaleTimeString(undefined, { hour: "2-digit", hourCycle: "h23", minute: "2-digit", second: "2-digit" })} {l.action} {l.ok ? "ok" : `failed — ${(l.response ?? "").slice(0, 80)}`}
-            </li>
-          ))}
-        </ul>
-      )}
+        {/* ---- protection ---- */}
+        <section className="space-y-1.5">
+          <div className="flex items-center justify-between">
+            <SectionLabel tone={currentStop == null && !waiting ? "text-red-400" : undefined}>
+              Stop{currentStop == null ? (waiting ? " · on fill" : " · none resting") : br.stop ? "" : " · on fill"}
+            </SectionLabel>
+            {!resting && pos && rNow != null && <span className="font-mono text-[10px] text-muted-foreground">{rNow >= 0 ? "+" : ""}{rNow.toFixed(2)}R now</span>}
+          </div>
+          <div className="grid grid-cols-[1fr_auto] items-center gap-1.5">
+            <Input value={stopIn} onChange={(e) => setStopIn(e.target.value)} inputMode="decimal" placeholder="stop price" className={`h-8 font-mono text-sm ${currentStop == null && !waiting ? "border-red-500/50" : ""}`} data-testid="input-manage-stop" />
+            <Button size="sm" variant="outline" className={CHIP} disabled={busy || numOrNull(stopIn) == null || numOrNull(stopIn) === currentStop}
+              onClick={() => run("Stop set", move.mutateAsync({ tradeId: t.id, kind: "stop", price: numOrNull(stopIn)! }), `${ref.symbol} stop ${stopIn}.`)} data-testid="button-manage-set-stop">
+              {currentStop == null ? "Place" : "Set"}
+            </Button>
+          </div>
+          {!resting && (
+            <div className="flex flex-wrap gap-1.5">
+              <Button size="sm" variant="outline" className={CHIP} disabled={busy || !canLock(beAt)} title="Stop to the entry: the trade can no longer lose"
+                onClick={() => run("Stop at breakeven", move.mutateAsync({ tradeId: t.id, kind: "stop", price: beAt }), `${ref.symbol} stop ${num(beAt)}.`)} data-testid="button-manage-be">
+                → breakeven
+              </Button>
+              {lockAt != null && (
+                <Button size="sm" variant="outline" className={CHIP} disabled={busy || !canLock(lockAt)} title="Stop one original risk into profit"
+                  onClick={() => run("Locked +1R", move.mutateAsync({ tradeId: t.id, kind: "stop", price: lockAt }), `${ref.symbol} stop ${num(lockAt)}.`)} data-testid="button-manage-lock-1r">
+                  lock +1R
+                </Button>
+              )}
+            </div>
+          )}
+        </section>
+
+        {/* ---- target ---- */}
+        <section className="space-y-1.5">
+          <SectionLabel>Target{currentTarget == null ? " · none" : br.targets.length ? "" : " · on fill"}</SectionLabel>
+          <div className="grid grid-cols-[1fr_auto] items-center gap-1.5">
+            <Input value={targetIn} onChange={(e) => setTargetIn(e.target.value)} inputMode="decimal" placeholder="target price" className="h-8 font-mono text-sm" data-testid="input-manage-target" />
+            <Button size="sm" variant="outline" className={CHIP} disabled={busy || numOrNull(targetIn) == null || numOrNull(targetIn) === currentTarget}
+              onClick={() => run("Target set", move.mutateAsync({ tradeId: t.id, kind: "target", price: numOrNull(targetIn)! }), `${ref.symbol} target ${targetIn}.`)} data-testid="button-manage-set-target">
+              {currentTarget == null ? "Place" : "Set"}
+            </Button>
+          </div>
+        </section>
+
+        {!resting && (
+          <>
+            {/* ---- take profit ---- */}
+            <section className="space-y-1.5">
+              <SectionLabel>Take profit</SectionLabel>
+              <div className="flex flex-wrap items-center gap-1.5">
+                {[0.25, 0.5, 0.75].map((f) => (
+                  <Button key={f} size="sm" variant="outline" className={CHIP} disabled={busy || !pos}
+                    onClick={() => run(`Took ${Math.round(f * 100)}%`, reduce.mutateAsync({ tradeId: t.id, fraction: f }), `${fmt(held * f)} ${rule?.baseAsset ?? ""} off at market.`)} data-testid={`button-manage-take-${Math.round(f * 100)}`}>
+                    {Math.round(f * 100)}%
+                  </Button>
+                ))}
+                <Input value={takeQty} onChange={(e) => setTakeQty(e.target.value)} placeholder="qty" inputMode="decimal" className="h-7 w-20 font-mono text-[11px]" data-testid="input-manage-take-qty" />
+                <Button size="sm" variant="outline" className={CHIP} disabled={busy || !pos || numOrNull(takeQty) == null}
+                  onClick={() => run("Took profit", reduce.mutateAsync({ tradeId: t.id, qty: numOrNull(takeQty)! }), `${takeQty} off at market.`).then(() => setTakeQty(""))} data-testid="button-manage-take-qty">
+                  at market
+                </Button>
+              </div>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <Input value={takeAtQty} onChange={(e) => setTakeAtQty(e.target.value)} placeholder="qty" inputMode="decimal" className="h-7 w-20 font-mono text-[11px]" data-testid="input-manage-take-at-qty" />
+                <Input value={takeAtPrice} onChange={(e) => setTakeAtPrice(e.target.value)} placeholder="at price" inputMode="decimal" className="h-7 w-24 font-mono text-[11px]" data-testid="input-manage-take-at-price" />
+                <Button size="sm" variant="outline" className={CHIP} disabled={busy || !pos || numOrNull(takeAtQty) == null || numOrNull(takeAtPrice) == null}
+                  onClick={() => run("Take resting", takeAt.mutateAsync({ tradeId: t.id, qty: numOrNull(takeAtQty)!, price: numOrNull(takeAtPrice)! }), `${takeAtQty} off at ${takeAtPrice} when it gets there.`).then(() => { setTakeAtQty(""); setTakeAtPrice(""); })} data-testid="button-manage-take-at">
+                  rest it
+                </Button>
+              </div>
+              {br.targets.filter((o) => !o.closePosition).length > 0 && (
+                <ul className="space-y-0.5 font-mono text-[10px] text-muted-foreground" data-testid="list-manage-takes">
+                  {br.targets.filter((o) => !o.closePosition).map((o) => (
+                    <li key={o.orderId} className="flex items-center gap-2">
+                      <span className="h-1 w-1 rounded-full bg-emerald-400" />
+                      <span>take {num(o.origQty)} at {num(o.stopPrice ?? 0)}</span>
+                      <button type="button" className="inline-flex items-center text-muted-foreground transition-colors hover:text-red-400" disabled={cancelOrder.isPending} title="Cancel this take"
+                        onClick={() => run("Take cancelled", cancelOrder.mutateAsync({ account, symbol: ref.symbol, orderId: o.orderId }), "Off the book.")} data-testid={`button-manage-cancel-take-${o.orderId}`}>
+                        <X className="h-3 w-3" />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+
+            {/* ---- add ---- */}
+            <section className="space-y-1.5">
+              <SectionLabel>Add size</SectionLabel>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <Input value={addQty} onChange={(e) => setAddQty(e.target.value)} placeholder="qty" inputMode="decimal" className="h-7 w-20 font-mono text-[11px]" data-testid="input-manage-add-qty" />
+                <Segmented size="xs" value={addType} onChange={setAddType} ariaLabel="Add at" options={[{ id: "market", label: "market", testId: "button-manage-add-market" }, { id: "limit", label: "limit", testId: "button-manage-add-limit" }]} />
+                {addType === "limit" && (
+                  <Input value={addPrice} onChange={(e) => setAddPrice(e.target.value)} placeholder={last != null ? fmt(last) : "price"} inputMode="decimal" className="h-7 w-24 font-mono text-[11px]" data-testid="input-manage-add-price" />
+                )}
+                <Button size="sm" variant="outline" className={CHIP} disabled={busy || numOrNull(addQty) == null || (addType === "limit" && numOrNull(addPrice) == null)}
+                  onClick={() => run("Added", add.mutateAsync({ tradeId: t.id, qty: numOrNull(addQty)!, price: addType === "limit" ? numOrNull(addPrice) : null }), addType === "limit" ? `${addQty} resting at ${addPrice}.` : `${addQty} more at market.`).then(() => setAddQty(""))} data-testid="button-manage-add">
+                  add
+                </Button>
+              </div>
+              {(ref.addOrderIds?.length ?? 0) > 0 && (
+                <p className="font-mono text-[10px] text-muted-foreground">
+                  {(book?.orders ?? []).filter((o) => ref.addOrderIds!.includes(o.orderId)).map((o) => `${num(o.origQty)} resting at ${num(o.price ?? 0)}`).join(" · ") || `${ref.addOrderIds!.length} add${ref.addOrderIds!.length === 1 ? "" : "s"} filled`}
+                </p>
+              )}
+            </section>
+
+            <div className="grid grid-cols-[1fr_auto] gap-2 pt-1">
+              <Button variant="outline" className="h-9 border-red-500/40 text-xs font-semibold text-red-400 hover:bg-red-500/10 hover:text-red-300" disabled={busy || !pos}
+                onClick={() => run("Closed at market", close.mutateAsync(t.id), "The position is flat and the brackets are off.")} data-testid="button-manage-close">
+                Close at market
+              </Button>
+              <Button variant="ghost" className="h-9 text-xs text-muted-foreground" onClick={onNewOrder} data-testid="button-manage-new-order">
+                {ticketOpen ? "Hide ticket" : "New order"}
+              </Button>
+            </div>
+          </>
+        )}
+
+        {mineLog.length > 0 && (
+          <ul className="space-y-0.5 border-t border-border/60 pt-2 font-mono text-[10px]" data-testid="list-manage-log">
+            {mineLog.map((l) => (
+              <li key={l.id} className={`flex gap-2 truncate ${l.ok ? "text-muted-foreground/80" : "text-red-400"}`} title={l.response ?? ""}>
+                <span className="shrink-0 tabular-nums">{new Date(l.at).toLocaleTimeString(undefined, { hour: "2-digit", hourCycle: "h23", minute: "2-digit", second: "2-digit" })}</span>
+                <span className="truncate">{l.action} {l.ok ? "" : `— ${(l.response ?? "").slice(0, 80)}`}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     </Card>
+  );
+}
+
+/** One scale for every small action on the desk. */
+const CHIP = "h-7 rounded-md border-border/60 bg-secondary/30 px-2.5 font-mono text-[11px] hover:bg-secondary/70 disabled:opacity-40";
+
+function SectionLabel({ children, tone }: { children: React.ReactNode; tone?: string }) {
+  return <span className={`block text-[10px] font-medium uppercase tracking-[0.12em] ${tone ?? "text-muted-foreground/80"}`}>{children}</span>;
+}
+
+function Cell({ k, v, tone = "" }: { k: string; v: string; tone?: string }) {
+  return (
+    <div className="bg-card px-2 py-1.5 text-center">
+      <div className="text-[9px] uppercase tracking-wider text-muted-foreground/70">{k}</div>
+      <div className={`tabular-nums ${tone}`}>{v}</div>
+    </div>
   );
 }
 
@@ -922,14 +995,14 @@ function PlanWatchLine({ t, ref_, mark }: { t: TradeWithTags; ref_: NonNullable<
   if (plan.verdict) {
     const stop = plan.verdict === "stop_first";
     return (
-      <p className={`text-[11px] font-medium ${stop ? "text-red-400" : "text-emerald-400"}`} data-testid="text-manage-plan-hit">
+      <p className={`mt-1 text-[11px] font-medium ${stop ? "text-red-400" : "text-emerald-400"}`} data-testid="text-manage-plan-hit">
         Original {stop ? "stop" : "target"} hit{plan.at ? ` at ${hhmm(plan.at)}` : ""} — set and forget {plan.planR != null ? `${plan.planR >= 0 ? "+" : ""}${plan.planR.toFixed(2)}R` : ""}
         {nowR != null && <span className="text-muted-foreground">; you are at {nowR >= 0 ? "+" : ""}{nowR.toFixed(2)}R</span>}
       </p>
     );
   }
   return (
-    <p className="text-[10px] text-muted-foreground" data-testid="text-manage-plan-watch">
+    <p className="mt-1 text-[10px] text-muted-foreground/80" data-testid="text-manage-plan-watch">
       {w ? "Neither original level reached yet" : "Watching the tape for the original levels"}
       {nowR != null && ` · ${nowR >= 0 ? "+" : ""}${nowR.toFixed(2)}R now`}
     </p>
@@ -955,13 +1028,13 @@ function Field({
 }) {
   return (
     <label className={`block min-w-0 space-y-1 ${className}`}>
-      <span className={`block text-[10px] uppercase tracking-wider text-muted-foreground ${tone}`}>{label}</span>
+      <span className={`block text-[10px] font-medium uppercase tracking-[0.12em] ${tone || "text-muted-foreground/80"}`}>{label}</span>
       <Input
         value={value}
         onChange={(e) => onChange(e.target.value)}
         disabled={disabled}
         inputMode="decimal"
-        className="h-8 font-mono text-sm"
+        className="h-8 border-border/60 bg-secondary/20 font-mono text-sm tabular-nums"
         data-testid={testId}
       />
     </label>
@@ -1013,10 +1086,14 @@ function Book({
   const unmanaged = positions.filter((p) => !mine.some((m) => m.ref.symbol === p.symbol && m.ref.positionSide === p.positionSide));
 
   return (
-    <Card className="space-y-3 border-card-border bg-card p-3" data-testid="card-terminal-book">
-      <p className="text-[10px] uppercase tracking-wider text-muted-foreground">On the book · {account}</p>
-      {mine.length === 0 && unmanaged.length === 0 && <p className="text-[11px] text-muted-foreground">Nothing open.</p>}
-      <ul className="divide-y divide-border/60">
+    <Card className="overflow-hidden border-card-border bg-card" data-testid="card-terminal-book">
+      <div className="flex items-center gap-2 border-b border-border/60 px-3 py-2">
+        <SectionLabel>Positions</SectionLabel>
+        <span className="text-[10px] text-muted-foreground/70">· {account}</span>
+        <span className="ml-auto font-mono text-[10px] text-muted-foreground/70">{mine.length + unmanaged.length}</span>
+      </div>
+      {mine.length === 0 && unmanaged.length === 0 && <p className="px-3 py-4 text-center text-[11px] text-muted-foreground">Nothing open.</p>}
+      <ul className="divide-y divide-border/40">
         {mine.map(({ t, ref }) => {
           const p = posFor(ref.symbol, ref.positionSide);
           const br = bracketsOf(ref, book?.orders ?? []);
@@ -1025,10 +1102,11 @@ function Book({
           const risk0 = stop0 != null ? Math.abs(t.entryPrice - stop0) : null;
           const rNow = p && risk0 ? ((t.direction === "long" ? 1 : -1) * (p.markPrice - t.entryPrice)) / risk0 : null;
           const selected = selectedId === t.id;
+          const long = t.direction === "long";
           return (
             <li
               key={t.id}
-              className={`-mx-1 flex cursor-pointer flex-wrap items-center gap-x-3 gap-y-1 rounded px-1 py-2 text-xs hover:bg-secondary/40 ${selected ? "bg-secondary/50" : ""}`}
+              className={`grid cursor-pointer grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 border-l-2 px-3 py-2 text-xs transition-colors sm:grid-cols-[auto_auto_minmax(0,1fr)_auto_auto] ${selected ? "border-l-primary bg-secondary/40" : "border-l-transparent hover:bg-secondary/25"}`}
               onClick={() => onSelect({ t, ref })}
               role="button"
               tabIndex={0}
@@ -1038,55 +1116,60 @@ function Book({
               data-testid={`row-terminal-trade-${t.id}`}
               aria-pressed={selected}
             >
-              <span className={`font-semibold ${t.direction === "long" ? "text-emerald-400" : "text-red-400"}`}>{t.direction === "long" ? "LONG" : "SHORT"}</span>
-              <span className="font-mono">{ref.symbol}</span>
-              <span className="font-mono text-muted-foreground">{num(p && t.status === "open" ? Math.abs(p.amt) : t.size)}</span>
-              <span className="font-mono text-muted-foreground">@ {num(p && t.status === "open" && p.entryPrice ? p.entryPrice : t.entryPrice)}</span>
-              {t.status === "pending" ? (
-                <span className="rounded bg-secondary px-1.5 py-0.5 text-[10px] uppercase tracking-wider">resting</span>
-              ) : p ? (
-                <span className={`font-mono ${p.unrealized >= 0 ? "text-emerald-400" : "text-red-400"}`}>
-                  {fmtMoney(p.unrealized)}
-                  {rNow != null && <span className="ml-1 text-[10px] opacity-80">{rNow >= 0 ? "+" : ""}{rNow.toFixed(2)}R</span>}
-                </span>
-              ) : (
-                <span className="text-[10px] text-muted-foreground">no position yet</span>
-              )}
-              <span className="flex items-center gap-1 font-mono text-[11px]">
-                <ShieldX className="h-3 w-3 text-red-400" />
-                {br.stop?.stopPrice != null ? num(br.stop.stopPrice) : waiting ? <span className="text-muted-foreground">{num(Number(waiting.stop.stopPrice))} on fill</span> : <span className="font-semibold text-red-400">none</span>}
+              <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold tracking-wider ${long ? "bg-emerald-500/15 text-emerald-400" : "bg-red-500/15 text-red-400"}`}>{long ? "LONG" : "SHORT"}</span>
+              <span className="whitespace-nowrap font-mono">
+                <span className="font-semibold">{ref.symbol}</span>
+                <span className="ml-2 text-muted-foreground">{num(p && t.status === "open" ? Math.abs(p.amt) : t.size)} @ {num(p && t.status === "open" && p.entryPrice ? p.entryPrice : t.entryPrice)}</span>
               </span>
-              <span className="flex items-center gap-1 font-mono text-[11px]">
-                <Target className="h-3 w-3 text-emerald-400" />
-                {br.targets.length ? br.targets.map((o) => num(o.stopPrice!)).join(" / ") : "—"}
-              </span>
-              <span className="ml-auto flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+              <span className="whitespace-nowrap font-mono tabular-nums">
                 {t.status === "pending" ? (
-                  <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={() => void act("cancel", t.id)} disabled={cancel.isPending} data-testid={`button-terminal-cancel-${t.id}`}>
+                  <span className="rounded bg-secondary px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-muted-foreground">resting</span>
+                ) : p ? (
+                  <span className={p.unrealized >= 0 ? "text-emerald-400" : "text-red-400"}>
+                    {fmtMoney(p.unrealized)}
+                    {rNow != null && <span className="ml-1 text-[10px] opacity-80">{rNow >= 0 ? "+" : ""}{rNow.toFixed(2)}R</span>}
+                  </span>
+                ) : (
+                  <span className="text-[10px] text-muted-foreground">no position yet</span>
+                )}
+              </span>
+              <span className="col-span-2 flex items-center gap-3 whitespace-nowrap font-mono text-[11px] sm:col-span-1">
+                <span className="flex items-center gap-1">
+                  <ShieldX className="h-3 w-3 text-red-400/80" />
+                  {br.stop?.stopPrice != null ? num(br.stop.stopPrice) : waiting ? <span className="text-muted-foreground">{num(Number(waiting.stop.stopPrice))} on fill</span> : <span className="font-semibold text-red-400">none</span>}
+                </span>
+                <span className="flex items-center gap-1">
+                  <Target className="h-3 w-3 text-emerald-400/80" />
+                  {br.targets.length ? br.targets.map((o) => num(o.stopPrice!)).join(" / ") : "—"}
+                </span>
+              </span>
+              <span className="col-start-3 row-start-1 flex items-center gap-1 whitespace-nowrap sm:col-start-auto sm:row-start-auto" onClick={(e) => e.stopPropagation()}>
+                {t.status === "pending" ? (
+                  <Button size="sm" variant="ghost" className={CHIP} onClick={() => void act("cancel", t.id)} disabled={cancel.isPending} data-testid={`button-terminal-cancel-${t.id}`}>
                     Cancel
                   </Button>
                 ) : (
                   <>
-                    {p && stop0 != null && (t.direction === "long" ? p.markPrice > t.entryPrice : p.markPrice < t.entryPrice) && br.stop?.stopPrice !== t.entryPrice && (
-                      <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[10px]" disabled={move.isPending} title="Stop to breakeven"
+                    {p && stop0 != null && (long ? p.markPrice > t.entryPrice : p.markPrice < t.entryPrice) && br.stop?.stopPrice !== t.entryPrice && (
+                      <Button size="sm" variant="ghost" className={CHIP} disabled={move.isPending} title="Stop to breakeven"
                         onClick={() => move.mutateAsync({ tradeId: t.id, kind: "stop", price: t.entryPrice }).then(() => toast({ title: "Stop at breakeven" })).catch((err: any) => toast({ title: "Not moved", description: String(err?.message ?? err).slice(0, 200), variant: "destructive" }))}
                         data-testid={`button-terminal-be-${t.id}`}>
                         BE
                       </Button>
                     )}
                     {p && (
-                      <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[10px]" disabled={reduce.isPending} title="Take half off at market"
+                      <Button size="sm" variant="ghost" className={CHIP} disabled={reduce.isPending} title="Take half off at market"
                         onClick={() => reduce.mutateAsync({ tradeId: t.id, fraction: 0.5 }).then(() => toast({ title: "Took 50%" })).catch((err: any) => toast({ title: "Not taken", description: String(err?.message ?? err).slice(0, 200), variant: "destructive" }))}
                         data-testid={`button-terminal-half-${t.id}`}>
                         50%
                       </Button>
                     )}
-                    <Button size="sm" variant="outline" className="h-6 px-2 text-[11px]" onClick={() => void act("close", t.id)} disabled={close.isPending} data-testid={`button-terminal-close-${t.id}`}>
+                    <Button size="sm" variant="outline" className={`${CHIP} border-red-500/30 text-red-400 hover:bg-red-500/10`} onClick={() => void act("close", t.id)} disabled={close.isPending} data-testid={`button-terminal-close-${t.id}`}>
                       Close
                     </Button>
                   </>
                 )}
-                <button type="button" className="ml-1 text-muted-foreground hover:text-foreground" title="Open the trade's page" onClick={() => navigate(`/trade/${t.id}`)} data-testid={`link-terminal-trade-${t.id}`}>
+                <button type="button" className="ml-1 text-muted-foreground transition-colors hover:text-foreground" title="Open the trade's page" onClick={() => navigate(`/trade/${t.id}`)} data-testid={`link-terminal-trade-${t.id}`}>
                   <ExternalLink className="h-3.5 w-3.5" />
                 </button>
               </span>
@@ -1094,30 +1177,33 @@ function Book({
           );
         })}
         {unmanaged.map((p) => (
-          <li key={`${p.symbol}-${p.positionSide}`} className="flex flex-wrap items-center gap-x-3 py-2 text-xs text-muted-foreground" data-testid={`row-terminal-unmanaged-${p.symbol}`}>
-            <span>{p.positionSide}</span>
-            <span className="font-mono">{p.symbol}</span>
-            <span className="font-mono">{num(Math.abs(p.amt))}</span>
-            <span className="font-mono">@ {num(p.entryPrice)}</span>
-            <span className={`font-mono ${p.unrealized >= 0 ? "text-emerald-400" : "text-red-400"}`}>{fmtMoney(p.unrealized)}</span>
-            <span className="text-[10px]">not from this terminal</span>
-            {(p.positionSide === "LONG" || p.positionSide === "SHORT") && (
-              <Button
-                size="sm"
-                variant="outline"
-                className="ml-auto h-6 px-2 text-[11px]"
-                disabled={adopt.isPending}
-                onClick={() =>
-                  adopt
-                    .mutateAsync({ account, symbol: p.symbol, positionSide: p.positionSide as "LONG" | "SHORT" })
-                    .then((r) => toast({ title: "Adopted", description: `Trade #${r.trade.id} now manages ${p.symbol} ${p.positionSide}.` }))
-                    .catch((err: any) => toast({ title: "Not adopted", description: String(err?.message ?? err).replace(/^\d+:\s*/, "").slice(0, 200), variant: "destructive" }))
-                }
-                data-testid={`button-terminal-adopt-${p.symbol}`}
-              >
-                Adopt
-              </Button>
-            )}
+          <li key={`${p.symbol}-${p.positionSide}`} className="grid grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-x-3 border-l-2 border-l-transparent px-3 py-2 text-xs text-muted-foreground" data-testid={`row-terminal-unmanaged-${p.symbol}`}>
+            <span className="rounded bg-secondary px-1.5 py-0.5 text-[10px] font-bold tracking-wider">{p.positionSide}</span>
+            <span className="font-mono">
+              <span className="font-semibold text-foreground/80">{p.symbol}</span>
+              <span className="ml-2">{num(Math.abs(p.amt))} @ {num(p.entryPrice)}</span>
+            </span>
+            <span className={`font-mono tabular-nums ${p.unrealized >= 0 ? "text-emerald-400" : "text-red-400"}`}>{fmtMoney(p.unrealized)}</span>
+            <span className="flex items-center gap-2">
+              <span className="text-[10px]">not from this terminal</span>
+              {(p.positionSide === "LONG" || p.positionSide === "SHORT") && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className={CHIP}
+                  disabled={adopt.isPending}
+                  onClick={() =>
+                    adopt
+                      .mutateAsync({ account, symbol: p.symbol, positionSide: p.positionSide as "LONG" | "SHORT" })
+                      .then((r) => toast({ title: "Adopted", description: `Trade #${r.trade.id} now manages ${p.symbol} ${p.positionSide}.` }))
+                      .catch((err: any) => toast({ title: "Not adopted", description: String(err?.message ?? err).replace(/^\d+:\s*/, "").slice(0, 200), variant: "destructive" }))
+                  }
+                  data-testid={`button-terminal-adopt-${p.symbol}`}
+                >
+                  Adopt
+                </Button>
+              )}
+            </span>
           </li>
         ))}
       </ul>
@@ -1157,25 +1243,31 @@ function Orders({
     return { trade: null, role: "not from this terminal" };
   };
   return (
-    <Card className="space-y-2 border-card-border bg-card p-3" data-testid="card-terminal-orders">
-      <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Open orders · {orders.length}</p>
-      <ul className="divide-y divide-border/60">
+    <Card className="overflow-hidden border-card-border bg-card" data-testid="card-terminal-orders">
+      <div className="flex items-center gap-2 border-b border-border/60 px-3 py-2">
+        <SectionLabel>Open orders</SectionLabel>
+        <span className="ml-auto font-mono text-[10px] text-muted-foreground/70">{orders.length}</span>
+      </div>
+      <ul className="divide-y divide-border/40">
         {[...orders]
           .sort((a, b) => b.time - a.time)
           .map((o) => {
             const r = roleOf(o);
             return (
-              <li key={`${o.symbol}-${o.orderId}`} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 py-1.5 font-mono text-[11px]" data-testid={`row-terminal-order-${o.orderId}`}>
-                <span className={o.side === "BUY" ? "text-emerald-400" : "text-red-400"}>{o.side}</span>
-                <span>{o.symbol}</span>
-                <span className="text-muted-foreground">{o.positionSide}</span>
-                <span className="text-muted-foreground">{o.type.replace(/_/g, " ").toLowerCase()}</span>
-                <span>{o.closePosition ? "all" : num(o.origQty)}</span>
-                <span className="text-muted-foreground">{o.stopPrice != null ? `trigger ${num(o.stopPrice)}` : o.price != null ? `at ${num(o.price)}` : ""}</span>
-                <span className={`text-[10px] ${r.trade == null ? "text-amber-500" : "text-muted-foreground"}`}>{r.trade != null ? `#${r.trade} ${r.role}` : r.role}</span>
+              <li key={`${o.symbol}-${o.orderId}`} className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3 px-3 py-1.5 font-mono text-[11px] sm:grid-cols-[44px_minmax(0,1fr)_minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,1.2fr)_24px]" data-testid={`row-terminal-order-${o.orderId}`}>
+                <span className={`font-semibold ${o.side === "BUY" ? "text-emerald-400" : "text-red-400"}`}>{o.side}</span>
+                <span className="truncate">
+                  {o.symbol} <span className="text-muted-foreground">{o.positionSide}</span>
+                </span>
+                <span className="hidden truncate text-muted-foreground sm:block">{o.type.replace(/_/g, " ").toLowerCase()}</span>
+                <span className="hidden tabular-nums sm:block">
+                  {o.closePosition ? "all" : num(o.origQty)}
+                  <span className="text-muted-foreground"> {o.stopPrice != null ? `@ ${num(o.stopPrice)}` : o.price != null ? `@ ${num(o.price)}` : ""}</span>
+                </span>
+                <span className={`hidden truncate text-[10px] sm:block ${r.trade == null ? "text-amber-500/90" : "text-muted-foreground"}`}>{r.trade != null ? `#${r.trade} · ${r.role}` : r.role}</span>
                 <button
                   type="button"
-                  className="ml-auto text-muted-foreground hover:text-red-400 disabled:opacity-50"
+                  className="justify-self-end text-muted-foreground transition-colors hover:text-red-400 disabled:opacity-50"
                   disabled={cancel.isPending}
                   title="Cancel this order"
                   onClick={() =>
