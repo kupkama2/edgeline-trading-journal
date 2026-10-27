@@ -129,7 +129,12 @@ export async function positions(v: Venue): Promise<VenuePosition[]> {
 
 export interface VenueOrder {
   symbol: string;
+  /** The order id — or, for a conditional order, its algo id. */
   orderId: number;
+  /** A conditional order that has fired spawns a plain order; this is its id. */
+  triggeredOrderId?: number | null;
+  /** The venue's record as sent, kept for the log when the shape is new to us. */
+  raw?: unknown;
   clientOrderId: string;
   side: "BUY" | "SELL";
   positionSide: "LONG" | "SHORT" | "BOTH";
@@ -169,9 +174,68 @@ export function parseOrder(r: any): VenueOrder | null {
   };
 }
 
+/*
+ * Conditional orders — a stop, a take-profit — live on the venue's Algo
+ * Order endpoints, not on /fapi/v1/order, which answers -4120 to them. They
+ * carry an algoId rather than an orderId, trigger at `triggerPrice`, and once
+ * fired place an ordinary order whose id is the one the fills then carry.
+ * Everything below reads them back into the same shape as a plain order,
+ * with the algo id in `orderId`, so the rest of the terminal need not care.
+ */
+const ALGO_TYPES = new Set(["STOP_MARKET", "TAKE_PROFIT_MARKET", "STOP", "TAKE_PROFIT", "TRAILING_STOP_MARKET"]);
+export const isAlgoType = (type: string | undefined) => ALGO_TYPES.has(String(type ?? "").toUpperCase());
+
+/** Tolerant on purpose: the field names are read from the venue's answer, with the plain-order names as fallbacks. */
+export function parseAlgoOrder(r: any): VenueOrder | null {
+  const algoId = n(r?.algoId) ?? n(r?.orderId);
+  if (algoId == null || typeof r?.symbol !== "string") return null;
+  const triggered = n(r.orderId);
+  return {
+    symbol: r.symbol.toUpperCase(),
+    orderId: algoId,
+    triggeredOrderId: triggered != null && triggered !== algoId ? triggered : null,
+    clientOrderId: String(r.clientAlgoId ?? r.clientOrderId ?? ""),
+    side: r.side === "SELL" ? "SELL" : "BUY",
+    positionSide: r.positionSide === "LONG" || r.positionSide === "SHORT" ? r.positionSide : "BOTH",
+    type: String(r.type ?? r.orderType ?? "").toUpperCase(),
+    status: String(r.algoStatus ?? r.status ?? "").toUpperCase(),
+    price: (n(r.price) ?? 0) > 0 ? n(r.price) : null,
+    stopPrice: (n(r.triggerPrice) ?? n(r.stopPrice) ?? 0) > 0 ? (n(r.triggerPrice) ?? n(r.stopPrice)) : null,
+    origQty: n(r.quantity) ?? n(r.origQty) ?? 0,
+    executedQty: n(r.executedQty) ?? 0,
+    avgPrice: n(r.avgPrice) ?? 0,
+    closePosition: r.closePosition === true || r.closePosition === "true",
+    reduceOnly: r.reduceOnly === true || r.reduceOnly === "true",
+    time: n(r.bookTime) ?? n(r.time) ?? n(r.updateTime) ?? 0,
+    updateTime: n(r.updateTime) ?? n(r.triggerTime) ?? n(r.bookTime) ?? 0,
+    raw: r,
+  };
+}
+
+/** Plain orders and resting conditional orders together, as one list. */
 export async function openOrders(v: Venue, symbol?: string): Promise<VenueOrder[]> {
   const j = await call(v, "GET", "/fapi/v1/openOrders", symbol ? { symbol } : {});
-  return Array.isArray(j) ? (j.map(parseOrder).filter(Boolean) as VenueOrder[]) : [];
+  const plain = Array.isArray(j) ? (j.map(parseOrder).filter(Boolean) as VenueOrder[]) : [];
+  let algo: VenueOrder[] = [];
+  try {
+    const a = await call(v, "GET", "/fapi/v1/openAlgoOrders", symbol ? { symbol } : {});
+    const list = Array.isArray(a) ? a : Array.isArray((a as any)?.orders) ? (a as any).orders : [];
+    algo = list.map(parseAlgoOrder).filter(Boolean) as VenueOrder[];
+  } catch (err) {
+    // A host without the algo endpoints answers 404; the plain list is still right.
+    if (!(err instanceof BinanceError && err.status === 404)) throw err;
+  }
+  return [...plain, ...algo];
+}
+
+/** One conditional order by its algo id, or null once the venue has forgotten it. */
+export async function algoOrderById(v: Venue, algoId: number): Promise<VenueOrder | null> {
+  try {
+    return parseAlgoOrder(await call(v, "GET", "/fapi/v1/algoOrder", { algoId }));
+  } catch (err) {
+    if (err instanceof BinanceError && (err.code === -2013 || err.status === 404 || err.status === 400)) return null;
+    throw err;
+  }
 }
 
 export async function orderById(v: Venue, symbol: string, orderId: number): Promise<VenueOrder | null> {
@@ -208,9 +272,32 @@ export async function usdBalance(v: Venue): Promise<{ asset: string; balance: nu
 /* ------------------------------ the orders ------------------------------ */
 
 export async function placeOrder(v: Venue, o: OrderParams): Promise<VenueOrder> {
+  if (isAlgoType(o.type)) {
+    // The same order in the algo endpoint's words: triggerPrice, clientAlgoId.
+    const { stopPrice, newClientOrderId, ...rest } = o;
+    const params: OrderParams = { ...rest, ...(stopPrice ? { triggerPrice: stopPrice } : {}), ...(newClientOrderId ? { clientAlgoId: newClientOrderId } : {}) };
+    const got = parseAlgoOrder(await call(v, "POST", "/fapi/v1/algoOrder", params));
+    if (!got) throw new Error("The venue accepted the conditional order but sent back nothing readable.");
+    return got;
+  }
   const got = parseOrder(await call(v, "POST", "/fapi/v1/order", o));
   if (!got) throw new Error("The venue accepted the order but sent back nothing readable.");
   return got;
+}
+
+/**
+ * Take a bracket off the book. It is an algo order on any current host; a
+ * trade sent before the venue moved them may still hold a plain one, so a
+ * refusal from the algo endpoint falls through to the plain cancel.
+ */
+export async function cancelBracket(v: Venue, symbol: string, id: number): Promise<void> {
+  try {
+    await call(v, "DELETE", "/fapi/v1/algoOrder", { algoId: id });
+    return;
+  } catch (err) {
+    if (!(err instanceof BinanceError)) throw err;
+  }
+  await cancelOrder(v, symbol, id);
 }
 
 export async function cancelOrder(v: Venue, symbol: string, orderId: number): Promise<void> {

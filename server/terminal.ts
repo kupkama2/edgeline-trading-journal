@@ -19,9 +19,11 @@ import type { Express, NextFunction, Request, Response } from "express";
 import { z } from "zod";
 import { storageFor, terminalUsers, type DatabaseStorage } from "./storage";
 import { open } from "./secrets";
-import { futuresBase, type BinanceEnv, type Creds } from "./binance-account";
+import { futuresBase, signedCall, type BinanceEnv, type Creds } from "./binance-account";
 import { fetchCandles, type Interval } from "./binance";
 import {
+  algoOrderById,
+  cancelBracket,
   cancelOrder,
   closeAtMarket,
   enableHedgeMode,
@@ -169,12 +171,42 @@ async function reconcileOne(s: DatabaseStorage, t: TradeWithTags, armed: Armed):
   const entry = ref.entryOrderId != null ? await orderById(v, ref.symbol, ref.entryOrderId) : null;
   const since = new Date(t.entryTime).getTime() - 5 * 60_000;
   const mine = new Set([ref.entryOrderId, ref.stopOrderId, ...ref.targetOrderIds, ...(ref.closeOrderIds ?? [])].filter((x): x is number => x != null));
+  /*
+   * A bracket that fired placed a plain order of its own, and the fills
+   * carry THAT id. Each bracket is asked what it became, and its fills are
+   * read back under the bracket's own id, so "the stop's fills" means what
+   * it says whichever id the venue stamped on them.
+   */
+  const alias = new Map<number, number>();
+  const brackets = [ref.stopOrderId, ...ref.targetOrderIds].filter((x): x is number => x != null);
+  const fired: { algoId: number; side: "BUY" | "SELL"; at: number }[] = [];
+  for (const id of brackets) {
+    const a = await algoOrderById(v, id).catch(() => null);
+    if (!a) continue;
+    if (a.triggeredOrderId != null) {
+      alias.set(a.triggeredOrderId, id);
+      mine.add(a.triggeredOrderId);
+    } else if (/TRIGGERED|FILLED/.test(a.status)) {
+      fired.push({ algoId: id, side: a.side, at: a.updateTime });
+    }
+  }
   const rows = await fillsSince(v, ref.symbol, since);
+  const closeSide = ref.positionSide === "LONG" ? "SELL" : "BUY";
   const fills = rows
-    .filter((r) => mine.has(r.orderId))
+    .filter((r) => {
+      if (mine.has(r.orderId)) return true;
+      // A fired bracket the venue did not name the order of: its fills are
+      // the closing-side fills from the moment it fired.
+      const f = fired.find((x) => x.side === closeSide && r.side === closeSide && r.time >= x.at - 5_000);
+      if (f && (r.positionSide === ref.positionSide || r.positionSide === "BOTH")) {
+        alias.set(r.orderId, f.algoId);
+        return true;
+      }
+      return false;
+    })
     .map((r) => ({
       tid: r.id,
-      orderId: r.orderId,
+      orderId: alias.get(r.orderId) ?? r.orderId,
       price: r.price,
       qty: r.qty,
       time: r.time,
@@ -359,6 +391,35 @@ export function registerTerminalRoutes(app: Express): void {
     }),
   );
 
+  /**
+   * What the venue literally answers, for a human to read. The order
+   * endpoints have moved before, and the only way to see a new shape from
+   * here is to ask for it raw. Truncated hard; nothing secret in it.
+   */
+  app.get(
+    "/api/terminal/probe",
+    wrap(async (req, res) => {
+      const { venue } = await arm(store(req), String(req.query.account ?? ""));
+      const symbol = String(req.query.symbol ?? "").toUpperCase() || undefined;
+      const algoId = Number(req.query.algoId);
+      const ask = async (method: "GET", path: string, params: Record<string, string | number | undefined>) => {
+        try {
+          const j = await signedCall(method, futuresBase(venue.env), path, params, venue.creds);
+          return JSON.stringify(j).slice(0, 1500);
+        } catch (err) {
+          return `ERROR ${said(err)}`;
+        }
+      };
+      res.json({
+        host: new URL(futuresBase(venue.env)).hostname,
+        openOrders: await ask("GET", "/fapi/v1/openOrders", symbol ? { symbol } : {}),
+        openAlgoOrders: await ask("GET", "/fapi/v1/openAlgoOrders", symbol ? { symbol } : {}),
+        algoOrder: Number.isFinite(algoId) && algoId > 0 ? await ask("GET", "/fapi/v1/algoOrder", { algoId }) : null,
+        positionRisk: await ask("GET", "/fapi/v2/positionRisk", symbol ? { symbol } : {}),
+      });
+    }),
+  );
+
   app.get(
     "/api/terminal/log",
     wrap(async (req, res) => {
@@ -454,7 +515,7 @@ export function registerTerminalRoutes(app: Express): void {
       const rules = await rulesFor(venue.env, ref.symbol);
       const side = ref.positionSide === "LONG" ? "long" : "short";
       const next = await logged(store(req), "move-stop", ref.account, t.id, { price }, async () => {
-        if (ref.stopOrderId != null) await cancelOrder(venue, ref.symbol, ref.stopOrderId);
+        if (ref.stopOrderId != null) await cancelBracket(venue, ref.symbol, ref.stopOrderId);
         return placeOrder(venue, bracketAt("stop", price, rules, side, `${ref.tag}-s${Date.now().toString(36)}`));
       });
       const at = new Date().toISOString();
@@ -487,7 +548,7 @@ export function registerTerminalRoutes(app: Express): void {
       const rules = await rulesFor(venue.env, ref.symbol);
       const side = ref.positionSide === "LONG" ? "long" : "short";
       const next = await logged(store(req), "move-target", ref.account, t.id, { price }, async () => {
-        for (const id of ref.targetOrderIds) await cancelOrder(venue, ref.symbol, id);
+        for (const id of ref.targetOrderIds) await cancelBracket(venue, ref.symbol, id);
         return placeOrder(venue, bracketAt("target", price, rules, side, `${ref.tag}-t${Date.now().toString(36)}`));
       });
       const to = Number(next.stopPrice ?? price);
@@ -514,9 +575,8 @@ export function registerTerminalRoutes(app: Express): void {
       if (t.status !== "pending") throw httpError(400, "Only a resting order can be cancelled. An open position is closed.");
       const { venue, acct } = await arm(store(req), ref.account);
       await logged(store(req), "cancel", ref.account, t.id, {}, async () => {
-        for (const id of [ref.entryOrderId, ref.stopOrderId, ...ref.targetOrderIds]) {
-          if (id != null) await cancelOrder(venue, ref.symbol, id);
-        }
+        if (ref.entryOrderId != null) await cancelOrder(venue, ref.symbol, ref.entryOrderId);
+        for (const id of [ref.stopOrderId, ...ref.targetOrderIds]) if (id != null) await cancelBracket(venue, ref.symbol, id);
         return { cancelled: true };
       });
       /*
@@ -551,7 +611,7 @@ export function registerTerminalRoutes(app: Express): void {
         );
       }
       await logged(store(req), "cancel-brackets", ref.account, t.id, {}, async () => {
-        for (const id of [ref.stopOrderId, ...ref.targetOrderIds]) if (id != null) await cancelOrder(venue, ref.symbol, id);
+        for (const id of [ref.stopOrderId, ...ref.targetOrderIds]) if (id != null) await cancelBracket(venue, ref.symbol, id);
         return { cancelled: true };
       });
       const nextRef: TerminalRef = { ...ref, closeOrderIds: [...(ref.closeOrderIds ?? []), ...(closeOrder ? [closeOrder.orderId] : [])] };
