@@ -14,6 +14,7 @@ import {
   type TerminalRef,
 } from "../shared/terminal";
 import { parseRestrictions } from "../shared/binance-account";
+import { streamUrl, worthAReadBack } from "../server/binance-stream";
 
 /**
  * The terminal, the half that can be wrong without a venue: what a plan
@@ -234,5 +235,23 @@ describe("what the venue's answer does to the trade", () => {
     const { patch } = reconcilePatch({ ...open, exitReason: "time" }, ref, { entry: filled, fills: [fill(1, 79990, 0.05, 1), fill(2, 79000, 0.05, 5)], positionAmt: 0, openOrderIds: [] });
     expect(patch?.status).toBe("closed");
     expect(patch?.exitReason).toBeUndefined();
+  });
+});
+
+describe("the user-data stream", () => {
+  it("joins the venue's private stream with the listen key, on the host the key belongs to", () => {
+    expect(streamUrl("live", "abc")).toBe("wss://fstream.binance.com/private/ws?listenKey=abc");
+    expect(streamUrl("testnet", "abc")).toBe("wss://fstream.binancefuture.com/private/ws?listenKey=abc");
+  });
+
+  it("reads back on a fill, a cancel or a fired bracket, and on nothing else", () => {
+    expect(worthAReadBack({ e: "ORDER_TRADE_UPDATE", o: { x: "TRADE", X: "PARTIALLY_FILLED" } })).toBe(true);
+    expect(worthAReadBack({ e: "ORDER_TRADE_UPDATE", o: { x: "NEW", X: "NEW" } })).toBe(false);
+    expect(worthAReadBack({ e: "ORDER_TRADE_UPDATE", o: { x: "CANCELED", X: "CANCELED" } })).toBe(true);
+    expect(worthAReadBack({ e: "ALGO_UPDATE", o: { X: "TRIGGERING" } })).toBe(false);
+    expect(worthAReadBack({ e: "ALGO_UPDATE", o: { X: "FINISHED" } })).toBe(true);
+    expect(worthAReadBack({ data: { e: "ALGO_UPDATE", o: { X: "TRIGGERED" } } })).toBe(true);
+    expect(worthAReadBack({ e: "ACCOUNT_UPDATE" })).toBe(false);
+    expect(worthAReadBack("nonsense")).toBe(false);
   });
 });

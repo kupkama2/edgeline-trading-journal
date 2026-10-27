@@ -737,6 +737,11 @@ const DEFAULT_STYLES: { name: string; color: string }[] = [
  * in, so it has to be able to ask across accounts; it then scopes every
  * write to the account it found.
  */
+/** Every account with a key that may trade, across every user — each gets a user-data stream. */
+export async function tradingAccountsEverywhere(): Promise<AccountSettings[]> {
+  return db.select().from(accountSettings).where(eq(accountSettings.binanceTrade, true));
+}
+
 export async function terminalUsers(): Promise<number[]> {
   const rows = await db
     .selectDistinct({ userId: trades.userId })

@@ -17,7 +17,9 @@
  */
 import type { Express, NextFunction, Request, Response } from "express";
 import { z } from "zod";
-import { storageFor, terminalUsers, type DatabaseStorage } from "./storage";
+import { storageFor, terminalUsers, tradingAccountsEverywhere, type DatabaseStorage } from "./storage";
+import { openUserStream, worthAReadBack, type StreamHandle } from "./binance-stream";
+import { oneAtATime } from "./venue-sync";
 import { open } from "./secrets";
 import { futuresBase, signedCall, type BinanceEnv, type Creds } from "./binance-account";
 import { fetchCandles, type Interval } from "./binance";
@@ -255,8 +257,16 @@ async function reconcileOne(s: DatabaseStorage, t: TradeWithTags, armed: Armed):
   return after ?? t;
 }
 
-/** Every live terminal trade of one person, read back. What the page polls and the watch runs. */
-async function reconcileAll(s: DatabaseStorage): Promise<{ id: number; status: string; error?: string }[]> {
+/**
+ * Every live terminal trade of one person, read back. What the page polls,
+ * the watch runs, and a stream event triggers. One pass at a time per person:
+ * two passes seeing the same fresh fill would both arm its brackets.
+ */
+function reconcileAll(s: DatabaseStorage, userId: number): Promise<{ id: number; status: string; error?: string }[]> {
+  return oneAtATime(`terminal:${userId}`, () => reconcilePass(s));
+}
+
+async function reconcilePass(s: DatabaseStorage): Promise<{ id: number; status: string; error?: string }[]> {
   const trades = await s.listTerminalTrades();
   const armedBy = new Map<string, Armed>();
   const out: { id: number; status: string; error?: string }[] = [];
@@ -289,15 +299,76 @@ async function reconcileAll(s: DatabaseStorage): Promise<{ id: number; status: s
  * next pass rather than stacking a second on top of it.
  */
 let watching = false;
+let watchTimer: NodeJS.Timeout | null = null;
+let streamsOn = false;
+/** One user-data stream per trading account, keyed so a changed key reopens it. */
+const streams = new Map<string, StreamHandle>();
+const readBackTimers = new Map<number, NodeJS.Timeout>();
+
+/** A read-back for this person, shortly — several events in a burst are one pass. */
+function readBackSoon(userId: number): void {
+  const pending = readBackTimers.get(userId);
+  if (pending) clearTimeout(pending);
+  const t = setTimeout(() => {
+    readBackTimers.delete(userId);
+    void reconcileAll(storageFor(userId), userId)
+      .then((out) => {
+        for (const o of out) if (o.error) console.error(`[terminal] stream read-back trade #${o.id}: ${o.error}`);
+      })
+      .catch((err) => console.error("[terminal] stream read-back:", said(err)));
+  }, 250);
+  t.unref?.();
+  readBackTimers.set(userId, t);
+}
+
+/**
+ * Streams for every account that may trade: opened for new ones, closed for
+ * ones whose key is gone. A fill, a cancel or a bracket firing on any of
+ * them runs that person's read-back within the second — which is what puts
+ * a limit's stop on the book the moment it fills, tab open or not.
+ */
+export async function ensureStreams(): Promise<void> {
+  if (!streamsOn) return;
+  const wanted = new Set<string>();
+  for (const a of await tradingAccountsEverywhere()) {
+    if (!a.binanceKey || !a.binanceSecret) continue;
+    const secret = open(a.binanceSecret);
+    if (!secret) continue;
+    const env: BinanceEnv = a.binanceEnv === "testnet" ? "testnet" : "live";
+    const id = `${a.userId}:${a.name}:${env}:${a.binanceKey.slice(-8)}`;
+    wanted.add(id);
+    if (streams.has(id)) continue;
+    const userId = a.userId;
+    streams.set(
+      id,
+      openUserStream({
+        creds: { key: a.binanceKey, secret },
+        env,
+        label: `${a.name} (${env})`,
+        onEvent: (msg) => {
+          if (worthAReadBack(msg)) readBackSoon(userId);
+        },
+      }),
+    );
+  }
+  for (const [id, h] of Array.from(streams.entries())) {
+    if (wanted.has(id)) continue;
+    h.close();
+    streams.delete(id);
+  }
+}
+
 export function startTerminalWatch(intervalMs = 20_000): void {
   if (TERMINAL_EMAILS.length === 0) return;
+  streamsOn = true;
   const tick = async () => {
     if (watching) return;
     watching = true;
     try {
+      await ensureStreams().catch((err) => console.error("[terminal] streams:", said(err)));
       for (const userId of await terminalUsers()) {
         const s = storageFor(userId);
-        const out = await reconcileAll(s).catch((err) => {
+        const out = await reconcileAll(s, userId).catch((err) => {
           console.error("[terminal] watch:", said(err));
           return [] as { id: number; status: string; error?: string }[];
         });
@@ -307,9 +378,20 @@ export function startTerminalWatch(intervalMs = 20_000): void {
       watching = false;
     }
   };
-  const timer = setInterval(() => void tick(), intervalMs);
-  timer.unref();
+  watchTimer = setInterval(() => void tick(), intervalMs);
+  watchTimer.unref();
   void tick();
+}
+
+/** Everything the watch holds open, let go — for tests and a clean shutdown. */
+export function stopTerminalWatch(): void {
+  if (watchTimer) clearInterval(watchTimer);
+  watchTimer = null;
+  streamsOn = false;
+  for (const h of Array.from(streams.values())) h.close();
+  streams.clear();
+  for (const t of Array.from(readBackTimers.values())) clearTimeout(t);
+  readBackTimers.clear();
 }
 
 /* ------------------------------ the routes ------------------------------ */
@@ -515,6 +597,8 @@ export function registerTerminalRoutes(app: Express): void {
         response: JSON.stringify({ tradeId: trade.id, placed: ref }),
         ok: true,
       });
+      // The account's stream, if it is not open yet, so this trade's fill is heard at once.
+      void ensureStreams().catch(() => {});
       res.status(201).json({ trade, placed: ref, refused: placed.refused, sized });
     }),
   );
@@ -668,7 +752,7 @@ export function registerTerminalRoutes(app: Express): void {
   app.post(
     "/api/terminal/reconcile",
     wrap(async (req, res) => {
-      res.json({ checked: await reconcileAll(store(req)) });
+      res.json({ checked: await reconcileAll(store(req), req.userId!) });
     }),
   );
 }

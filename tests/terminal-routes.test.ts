@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createServer, type Server } from "node:http";
 import { createHmac } from "node:crypto";
+import { WebSocketServer, type WebSocket } from "ws";
 
 /**
  * The terminal against a stub Binance: a plan sent, the orders that leave
@@ -23,6 +24,10 @@ const ACCOUNT = "Binance Testnet";
 let venue: Server;
 let app: Server;
 let base = "";
+/** The venue's user-data stream, as a socket the test can speak into. */
+let wss: WebSocketServer;
+const streamSockets: WebSocket[] = [];
+const streamUrls: string[] = [];
 
 /* ------------------------------ the stub venue ------------------------------ */
 
@@ -125,6 +130,11 @@ function startVenue(): Promise<string> {
         });
       }
       if (u.pathname === "/api/v3/exchangeInfo") return json({ symbols: [] });
+
+      // The listen key: the API key alone, no signature (USER_STREAM).
+      if (u.pathname === "/fapi/v1/listenKey") {
+        return req.headers["x-mbx-apikey"] === KEY ? json({ listenKey: "lk-test" }) : json({ code: -2015, msg: "Invalid API-key, IP, or permissions for action." }, 401);
+      }
 
       const key = req.headers["x-mbx-apikey"] as string | undefined;
       // Like the algo service: a POST's parameters are read from the body
@@ -240,6 +250,13 @@ let stranger: { userId: number; email: string };
 describe.skipIf(!DB)("the terminal against a stub venue", () => {
   beforeAll(async () => {
     const stub = await startVenue();
+    wss = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+    wss.on("connection", (socket, req) => {
+      streamSockets.push(socket);
+      streamUrls.push(req.url ?? "");
+    });
+    await new Promise<void>((r) => wss.once("listening", r));
+    process.env.BINANCE_TESTNET_FUTURES_WS = `ws://127.0.0.1:${(wss.address() as any).port}`;
     process.env.BINANCE_BASE = stub;
     process.env.BINANCE_FUTURES_BASE = stub;
     process.env.BINANCE_TESTNET_FUTURES_BASE = stub;
@@ -278,10 +295,26 @@ describe.skipIf(!DB)("the terminal against a stub venue", () => {
   });
 
   afterAll(async () => {
+    const { stopTerminalWatch } = await import("../server/terminal");
+    stopTerminalWatch();
+    for (const sock of streamSockets) sock.terminate();
+    await new Promise<void>((r) => wss.close(() => r()));
     const shut = (x: Server | undefined) => new Promise<void>((r) => (x ? x.close(() => r()) : r()));
     await shut(venue);
     await shut(app);
   });
+
+  /** Poll until `check` holds, or fail with what was last seen. */
+  async function waitFor<T>(check: () => Promise<T>, ok: (v: T) => boolean, ms = 4_000): Promise<T> {
+    const until = Date.now() + ms;
+    let last: T;
+    do {
+      last = await check();
+      if (ok(last)) return last;
+      await new Promise((r) => setTimeout(r, 50));
+    } while (Date.now() < until);
+    return last;
+  }
 
   const fees = { name: ACCOUNT, feeMode: "percent", makerFee: 0.02, takerFee: 0.05 };
 
@@ -303,6 +336,14 @@ describe.skipIf(!DB)("the terminal against a stub venue", () => {
     expect(body).toMatchObject({ binanceEnv: "testnet", binanceTrade: true, binanceKeyHint: `…${KEY.slice(-4)}` });
     expect(body.binanceSecret).toBeUndefined();
     expect(body.binanceKey).toBeUndefined();
+  });
+
+  it("opens a user-data stream for the trading account, with the listen key it was given", async () => {
+    const { startTerminalWatch } = await import("../server/terminal");
+    startTerminalWatch(600_000);
+    const n = await waitFor(async () => streamSockets.length, (x) => x >= 1);
+    expect(n).toBe(1);
+    expect(streamUrls[0]).toBe("/private/ws?listenKey=lk-test");
   });
 
   it("reports the account, its host, hedge mode and balance", async () => {
@@ -503,6 +544,29 @@ describe.skipIf(!DB)("the terminal against a stub venue", () => {
     t = await store.getTrade(trade.id);
     expect(t).toMatchObject({ status: "closed", exitPrice: 81000, exitReason: "target", size: 0.02 });
     expect(t.fills).toHaveLength(1);
+  });
+
+  it("arms a limit's brackets on the venue's fill event, without being asked", async () => {
+    const r = await send("POST", "/api/terminal/send", {
+      account: ACCOUNT,
+      plan: { symbol: "BTCUSDT", side: "long", entryType: "limit", entryPrice: 79000, stop: 78000, targets: [81000], qty: 0.01, leverage: 2 },
+    });
+    expect(r.status).toBe(201);
+    const { trade, placed } = await r.json();
+    expect(placed.armOnFill).toBeTruthy();
+    calls.length = 0;
+    fillOrder(placed.entryOrderId, 79000);
+    // What the venue says on the stream when a limit fills: nothing here calls /reconcile.
+    streamSockets[0].send(JSON.stringify({ e: "ORDER_TRADE_UPDATE", T: Date.now(), E: Date.now(), o: { s: "BTCUSDT", i: placed.entryOrderId, c: `${placed.tag}-e`, x: "TRADE", X: "FILLED", ps: "LONG", l: "0.01", z: "0.01", L: "79000" } }));
+    const t = await waitFor(() => store.getTrade(trade.id), (x: any) => x.status === "open" && JSON.parse(x.terminal).stopOrderId != null);
+    expect(t.status).toBe("open");
+    const ref = JSON.parse(t.terminal);
+    expect(ref.armOnFill).toBeUndefined();
+    expect(ref.targetOrderIds).toHaveLength(1);
+    expect(calls.filter((c) => c.method === "POST" && c.path === "/fapi/v1/algoOrder").map((c) => c.params.type)).toEqual(["STOP_MARKET", "TAKE_PROFIT_MARKET"]);
+    // Tidy: flatten it so the later tests start from a flat book.
+    await send("POST", `/api/terminal/trades/${trade.id}/close`, {});
+    expect(position.amt).toBe(0);
   });
 
   it("cancels a resting plan: every order off, the trade marked pulled", async () => {
