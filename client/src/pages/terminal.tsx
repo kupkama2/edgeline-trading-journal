@@ -230,9 +230,43 @@ function Desk({ account, env, hedge }: { account: string; env: "live" | "testnet
   const armedToSend = env !== "live" || typed.trim().toUpperCase() === "SEND";
 
   // A market entry is priced where the market is; the field follows the tape.
+  // A limit starts there too, as a line to drag — not as a blank to fill.
   useEffect(() => {
     if (entryType === "market" && last != null) setEntry(String(last));
+    if (entryType === "limit" && last != null && numOrNull(entry) == null) setEntry(String(last));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entryType, last]);
+
+  /*
+   * How far a stop sits when it is added from the chart: about two bars'
+   * worth of range, which is what a stop that is not inside the noise has
+   * to be. The target is twice that. Both are a starting line to drag.
+   */
+  const typicalRange = useMemo(() => {
+    const recent = candles.slice(-20);
+    if (recent.length === 0) return null;
+    return recent.reduce((s, k) => s + (k.h - k.l), 0) / recent.length;
+  }, [candles]);
+  const snap = (p: number) => (rule ? Number(p.toFixed(Math.max(0, Math.round(-Math.log10(rule.tickSize))))) : p);
+  const entryActions = useMemo(() => {
+    if (live) return null;
+    const e = numOrNull(entry);
+    if (e == null) return null;
+    const dist = Math.max(typicalRange != null ? typicalRange * 2 : e * 0.005, rule?.tickSize ?? 0);
+    const dir = side === "long" ? 1 : -1;
+    return {
+      price: e,
+      hasSl: numOrNull(stop) != null,
+      hasTp: numOrNull(targets[0] ?? "") != null,
+      onSl: () => setStop(String(snap(e - dir * dist))),
+      onTp: () => {
+        const s = numOrNull(stop);
+        const risk = s != null ? Math.abs(e - s) : dist;
+        setTargets((xs) => [String(snap(e + dir * risk * 2)), ...xs.slice(1)]);
+      },
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [live, entry, stop, targets, side, typicalRange, rule]);
   // A new symbol is a new drawing.
   useEffect(() => {
     setStop("");
@@ -272,7 +306,7 @@ function Desk({ account, env, hedge }: { account: string; env: "live" | "testnet
     const out: Level[] = [];
     const e = numOrNull(entry);
     const s = numOrNull(stop);
-    if (e != null) out.push({ price: e, label: entryType === "market" ? "entry · market" : "entry", color: "entry", dashed: entryType === "market", field: entryType === "limit" ? "entryPrice" : undefined });
+    if (e != null) out.push({ price: e, label: entryType === "market" ? `${side} · market` : `${side} · limit`, color: "entry", dashed: entryType === "market", field: entryType === "limit" ? "entryPrice" : undefined });
     if (s != null) out.push({ price: s, label: "stop", color: "stop", dashed: true, field: "initialStop" });
     const t1 = numOrNull(targets[0] ?? "");
     if (t1 != null) out.push({ price: t1, label: "target", color: "target", dashed: true, field: "initialTarget" });
@@ -380,6 +414,7 @@ function Desk({ account, env, hedge }: { account: string; env: "live" | "testnet
               onLevel={onLevel}
               loadPage={(before) => fetchTerminalPage(symbol, interval, before)}
               height={420}
+              entryActions={entryActions}
             />
           </Suspense>
         )}

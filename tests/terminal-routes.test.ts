@@ -45,6 +45,14 @@ interface StubOrder {
   updateTime: number;
 }
 const orders: StubOrder[] = [];
+/** Conditional orders live on the venue's algo endpoints, in their own words. */
+const algos: any[] = [];
+const ALGO = new Set(["STOP_MARKET", "TAKE_PROFIT_MARKET"]);
+/** Everything resting under a tag, plain and conditional. */
+const restingFor = (tag: string) => [
+  ...orders.filter((o) => o.status === "NEW" && o.clientOrderId.startsWith(tag)),
+  ...algos.filter((a) => a.algoStatus === "NEW" && String(a.clientAlgoId).startsWith(tag)),
+];
 const fills: any[] = [];
 const position = { amt: 0, entryPrice: 0 };
 let dual = true;
@@ -55,6 +63,21 @@ const calls: { method: string; path: string; params: Record<string, string> }[] 
 
 /** The test's hand on the venue: fill an order, and move the position accordingly. */
 function fillOrder(orderId: number, price: number, qty?: number) {
+  // A conditional order that fires places a plain order of its own; the
+  // fills carry that order's id and the algo record points at it.
+  const a = algos.find((x) => x.algoId === orderId);
+  if (a) {
+    const spawned: StubOrder = {
+      orderId: nextId++, clientOrderId: "", symbol: a.symbol, side: a.side, positionSide: a.positionSide, type: "MARKET", status: "NEW",
+      price: "0", stopPrice: "0", origQty: a.quantity, executedQty: "0", avgPrice: "0", closePosition: a.closePosition, reduceOnly: false,
+      time: Date.now(), updateTime: Date.now(),
+    };
+    orders.push(spawned);
+    a.orderId = spawned.orderId;
+    a.algoStatus = "FILLED";
+    a.updateTime = Date.now();
+    return fillOrder(spawned.orderId, price, qty);
+  }
   const o = orders.find((x) => x.orderId === orderId)!;
   const q = qty ?? (o.closePosition ? Math.abs(position.amt) : Number(o.origQty));
   o.status = "FILLED";
@@ -119,6 +142,8 @@ function startVenue(): Promise<string> {
           return json({ symbol: params.symbol, leverage: Number(params.leverage), maxNotionalValue: "1000000" });
         case "POST /fapi/v1/order": {
           if (!params.positionSide) return json({ code: -4061, msg: "Order's position side does not match user's setting." }, 400);
+          // As the real testnet answers since conditional orders moved.
+          if (ALGO.has(params.type)) return json({ code: -4120, msg: "Order type not supported for this endpoint. Please use the Algo Order API endpoints instead." }, 400);
           const o: StubOrder = {
             orderId: nextId++, clientOrderId: params.newClientOrderId ?? `auto${nextId}`, symbol: params.symbol, side: params.side,
             positionSide: params.positionSide, type: params.type, status: "NEW", price: params.price ?? "0", stopPrice: params.stopPrice ?? "0",
@@ -142,6 +167,29 @@ function startVenue(): Promise<string> {
         }
         case "GET /fapi/v1/openOrders":
           return json(orders.filter((o) => o.status === "NEW" && (!params.symbol || o.symbol === params.symbol)));
+        case "POST /fapi/v1/algoOrder": {
+          if (!ALGO.has(params.type)) return json({ code: -1116, msg: "Invalid orderType." }, 400);
+          if (params.stopPrice || params.newClientOrderId) return json({ code: -1104, msg: "Not all sent parameters were read." }, 400);
+          const a = {
+            algoId: nextId++, clientAlgoId: params.clientAlgoId ?? `algo${nextId}`, symbol: params.symbol, side: params.side, positionSide: params.positionSide,
+            type: params.type, algoType: "CONDITIONAL", algoStatus: "NEW", quantity: params.quantity ?? "0", triggerPrice: params.triggerPrice,
+            closePosition: params.closePosition === "true", workingType: params.workingType, bookTime: Date.now(), updateTime: Date.now(), orderId: null as number | null,
+          };
+          algos.push(a);
+          return json(a);
+        }
+        case "GET /fapi/v1/algoOrder": {
+          const a = algos.find((x) => x.algoId === Number(params.algoId));
+          return a ? json(a) : json({ code: -2013, msg: "Order does not exist." }, 400);
+        }
+        case "DELETE /fapi/v1/algoOrder": {
+          const a = algos.find((x) => x.algoId === Number(params.algoId));
+          if (!a) return json({ code: -2011, msg: "Unknown order sent." }, 400);
+          a.algoStatus = "CANCELED";
+          return json(a);
+        }
+        case "GET /fapi/v1/openAlgoOrders":
+          return json(algos.filter((a) => a.algoStatus === "NEW" && (!params.symbol || a.symbol === params.symbol)));
         case "GET /fapi/v2/positionRisk":
           return json([
             { symbol: "BTCUSDT", positionSide: "LONG", positionAmt: String(position.amt), entryPrice: String(position.entryPrice), markPrice: "80020", unRealizedProfit: "1.5", leverage: "5", liquidationPrice: "0" },
@@ -287,17 +335,19 @@ describe.skipIf(!DB)("the terminal against a stub venue", () => {
     expect(body.sized.qty).toBe("0.050");
 
     const writes = calls.filter((c) => c.method === "POST");
-    expect(writes.map((c) => c.path)).toEqual(["/fapi/v1/leverage", "/fapi/v1/order", "/fapi/v1/order", "/fapi/v1/order"]);
+    // Brackets go to the algo endpoint in its words; the entry to the plain one.
+    expect(writes.map((c) => c.path)).toEqual(["/fapi/v1/leverage", "/fapi/v1/algoOrder", "/fapi/v1/order", "/fapi/v1/algoOrder"]);
     expect(writes[0].params).toMatchObject({ symbol: "BTCUSDT", leverage: "7" });
-    expect(writes[1].params).toMatchObject({ type: "STOP_MARKET", side: "SELL", positionSide: "LONG", stopPrice: "79000.0", closePosition: "true" });
+    expect(writes[1].params).toMatchObject({ type: "STOP_MARKET", side: "SELL", positionSide: "LONG", triggerPrice: "79000.0", closePosition: "true", clientAlgoId: `${ref.tag}-s` });
+    expect(writes[1].params.stopPrice).toBeUndefined();
     expect(writes[2].params).toMatchObject({ type: "LIMIT", side: "BUY", positionSide: "LONG", price: "80000.0", quantity: "0.050", timeInForce: "GTC" });
-    expect(writes[3].params).toMatchObject({ type: "TAKE_PROFIT_MARKET", side: "SELL", stopPrice: "82500.0", closePosition: "true" });
+    expect(writes[3].params).toMatchObject({ type: "TAKE_PROFIT_MARKET", side: "SELL", triggerPrice: "82500.0", closePosition: "true" });
     expect(writes[2].params.newClientOrderId).toBe(`${ref.tag}-e`);
 
     const t = await store.getTrade(tradeId);
     expect(t).toMatchObject({ symbol: "BTC", direction: "long", size: 0.05, entryPrice: 80000, initialStop: 79000, initialTarget: 82500, status: "pending", account: ACCOUNT });
     expect(ref).toMatchObject({ symbol: "BTCUSDT", positionSide: "LONG", leverage: 7, unprotected: false });
-    expect(ref.stopOrderId).toBe(orders.find((o) => o.type === "STOP_MARKET")!.orderId);
+    expect(ref.stopOrderId).toBe(algos.find((a) => a.type === "STOP_MARKET")!.algoId);
     expect(ref.entryOrderId).toBe(orders.find((o) => o.type === "LIMIT")!.orderId);
 
     const log = await get("/api/terminal/log");
@@ -326,10 +376,10 @@ describe.skipIf(!DB)("the terminal against a stub venue", () => {
     const r = await send("POST", `/api/terminal/trades/${tradeId}/stop`, { price: 79600.04 });
     expect(r.status).toBe(200);
     const body = await r.json();
-    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(["DELETE /fapi/v1/order", "POST /fapi/v1/order"]);
-    expect(calls[0].params.orderId).toBe(String(oldStop));
-    expect(calls[1].params).toMatchObject({ type: "STOP_MARKET", stopPrice: "79600.0", closePosition: "true", positionSide: "LONG" });
-    expect(orders.find((o) => o.orderId === oldStop)!.status).toBe("CANCELED");
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(["DELETE /fapi/v1/algoOrder", "POST /fapi/v1/algoOrder"]);
+    expect(calls[0].params.algoId).toBe(String(oldStop));
+    expect(calls[1].params).toMatchObject({ type: "STOP_MARKET", triggerPrice: "79600.0", closePosition: "true", positionSide: "LONG" });
+    expect(algos.find((a) => a.algoId === oldStop)!.algoStatus).toBe("CANCELED");
     const nextRef = JSON.parse(body.trade.terminal);
     expect(nextRef.stopOrderId).toBe(body.order.orderId);
     expect(nextRef.stopOrderId).not.toBe(oldStop);
@@ -351,7 +401,7 @@ describe.skipIf(!DB)("the terminal against a stub venue", () => {
   });
 
   it("flags a trade whose stop stopped resting, without touching the plan", async () => {
-    orders.find((o) => o.orderId === ref.stopOrderId)!.status = "CANCELED";
+    algos.find((a) => a.algoId === ref.stopOrderId)!.algoStatus = "CANCELED";
     await send("POST", "/api/terminal/reconcile", {});
     const t = await store.getTrade(tradeId);
     expect(JSON.parse(t.terminal).unprotected).toBe(true);
@@ -383,7 +433,7 @@ describe.skipIf(!DB)("the terminal against a stub venue", () => {
     const body = await r.json();
     const id = body.trade.id;
     expect(body.trade.status).toBe("open");
-    expect(calls.filter((c) => c.method === "POST" && c.path === "/fapi/v1/order").map((c) => c.params.type)).toEqual(["STOP_MARKET", "MARKET"]);
+    expect(calls.filter((c) => c.method === "POST" && /\/fapi\/v1\/(algo)?[oO]rder$/.test(c.path)).map((c) => c.params.type)).toEqual(["STOP_MARKET", "MARKET"]);
     expect(position.amt).toBeCloseTo(0.1);
 
     calls.length = 0;
@@ -432,11 +482,10 @@ describe.skipIf(!DB)("the terminal against a stub venue", () => {
     expect(r.status).toBe(201);
     const body = await r.json();
     expect(body.placed.targetOrderIds).toHaveLength(2);
-    const resting = orders.filter((o) => o.status === "NEW" && o.clientOrderId.startsWith(body.placed.tag));
-    expect(resting).toHaveLength(4);
+    expect(restingFor(body.placed.tag)).toHaveLength(4);
     const c = await send("POST", `/api/terminal/trades/${body.trade.id}/cancel`, {});
     expect((await c.json()).trade).toMatchObject({ status: "cancelled", cancelReason: "pulled" });
-    expect(orders.filter((o) => o.status === "NEW" && o.clientOrderId.startsWith(body.placed.tag))).toHaveLength(0);
+    expect(restingFor(body.placed.tag)).toHaveLength(0);
   });
 
   it("keeps the venue sync off the terminal's trades, and the terminal's trades out of the claim", async () => {

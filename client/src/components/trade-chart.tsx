@@ -353,6 +353,7 @@ export function Candles({
   loadPage,
   seriesKey,
   height = HEIGHT,
+  entryActions,
 }: {
   /** The trade whose candle route pages history. Omit it and pass `loadPage`. */
   tradeId?: number;
@@ -369,6 +370,13 @@ export function Candles({
   /** What "a new set of bars" means when there is no trade id: the symbol. */
   seriesKey?: string;
   height?: number;
+  /**
+   * Buttons that ride the entry line — "+TP" and "+SL", the way a charting
+   * terminal offers them — so a bracket is added where the entry is and
+   * dragged from there, rather than typed. Each is offered only until it
+   * exists.
+   */
+  entryActions?: { price: number; hasTp: boolean; hasSl: boolean; onTp: () => void; onSl: () => void } | null;
 }) {
   const { theme } = useTheme();
   const hostRef = useRef<HTMLDivElement>(null);
@@ -431,6 +439,27 @@ export function Candles({
   /* Bumped when the engine is rebuilt, so the drawing pass below knows to run
      again against the new chart rather than against a removed one. */
   const [epoch, setEpoch] = useState(0);
+  /*
+   * Where the entry line is, in pixels, for the buttons that sit on it. The
+   * engine has no event for "the price scale moved", so this is polled —
+   * cheaply, a few times a second, and only while there are buttons to place.
+   */
+  const [actionY, setActionY] = useState<number | null>(null);
+  const actionPrice = entryActions?.price ?? null;
+  useEffect(() => {
+    if (actionPrice == null) {
+      setActionY(null);
+      return;
+    }
+    const place = () => {
+      const y = api.current?.series.priceToCoordinate(actionPrice);
+      const next = y == null ? null : Math.round(Number(y));
+      setActionY((was) => (was === next ? was : next));
+    };
+    place();
+    const id = window.setInterval(place, 150);
+    return () => window.clearInterval(id);
+  }, [actionPrice, epoch]);
 
   /*
    * A new timeframe is a new set of bars, so the pages scrolled into on the
@@ -846,6 +875,34 @@ export function Candles({
         className="pointer-events-none absolute left-1 top-1 z-10 font-mono text-[10px] text-muted-foreground"
         data-testid="chart-ohlc"
       />
+      {entryActions && actionY != null && actionY > 8 && actionY < height - 8 && (!entryActions.hasTp || !entryActions.hasSl) && (
+        <div
+          className="absolute left-2 z-10 flex -translate-y-1/2 gap-1"
+          style={{ top: actionY }}
+          data-testid="chart-entry-actions"
+        >
+          {!entryActions.hasTp && (
+            <button
+              type="button"
+              onClick={entryActions.onTp}
+              className="rounded border border-emerald-500/50 bg-background/90 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-emerald-400 shadow-sm backdrop-blur transition-colors hover:bg-emerald-500/15"
+              data-testid="button-chart-add-tp"
+            >
+              +TP
+            </button>
+          )}
+          {!entryActions.hasSl && (
+            <button
+              type="button"
+              onClick={entryActions.onSl}
+              className="rounded border border-red-500/50 bg-background/90 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-red-400 shadow-sm backdrop-blur transition-colors hover:bg-red-500/15"
+              data-testid="button-chart-add-sl"
+            >
+              +SL
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
