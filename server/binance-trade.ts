@@ -176,28 +176,40 @@ export function parseOrder(r: any): VenueOrder | null {
 
 /*
  * Conditional orders — a stop, a take-profit — live on the venue's Algo
- * Order endpoints, not on /fapi/v1/order, which answers -4120 to them. They
- * carry an algoId rather than an orderId, trigger at `triggerPrice`, and once
- * fired place an ordinary order whose id is the one the fills then carry.
- * Everything below reads them back into the same shape as a plain order,
- * with the algo id in `orderId`, so the rest of the terminal need not care.
+ * Order endpoints, not on /fapi/v1/order, which answers -4120 to them.
+ *
+ * Per Binance's own USDⓈ-M futures SDK (generated from the API spec):
+ *   POST /fapi/v1/algoOrder   required: algoType=CONDITIONAL, symbol, side, type
+ *                             optional: positionSide, quantity, price, triggerPrice,
+ *                             closePosition (STOP_MARKET / TAKE_PROFIT_MARKET),
+ *                             reduceOnly (not in hedge mode, not with closePosition),
+ *                             workingType, priceProtect, timeInForce, clientAlgoId
+ *   GET/DELETE /fapi/v1/algoOrder   algoId or clientAlgoId
+ *   GET /fapi/v1/openAlgoOrders     symbol optional
+ * The record comes back with algoId, clientAlgoId, algoStatus, orderType,
+ * triggerPrice, quantity, closePosition, createTime/updateTime/triggerTime,
+ * and — once fired — actualOrderId: the ordinary order whose id the fills
+ * then carry. Everything below reads that record into the same shape as a
+ * plain order, with the algo id in `orderId`, so the rest need not care.
  */
 const ALGO_TYPES = new Set(["STOP_MARKET", "TAKE_PROFIT_MARKET", "STOP", "TAKE_PROFIT", "TRAILING_STOP_MARKET"]);
 export const isAlgoType = (type: string | undefined) => ALGO_TYPES.has(String(type ?? "").toUpperCase());
 
 /** Tolerant on purpose: the field names are read from the venue's answer, with the plain-order names as fallbacks. */
 export function parseAlgoOrder(r: any): VenueOrder | null {
-  const algoId = n(r?.algoId) ?? n(r?.orderId);
+  const algoId = n(r?.algoId);
   if (algoId == null || typeof r?.symbol !== "string") return null;
-  const triggered = n(r.orderId);
+  // "Empty string if not triggered; orderId if triggered."
+  const actual = n(r.actualOrderId);
+  const triggered = actual != null && actual > 0 ? actual : null;
   return {
     symbol: r.symbol.toUpperCase(),
     orderId: algoId,
-    triggeredOrderId: triggered != null && triggered !== algoId ? triggered : null,
+    triggeredOrderId: triggered,
     clientOrderId: String(r.clientAlgoId ?? r.clientOrderId ?? ""),
     side: r.side === "SELL" ? "SELL" : "BUY",
     positionSide: r.positionSide === "LONG" || r.positionSide === "SHORT" ? r.positionSide : "BOTH",
-    type: String(r.type ?? r.orderType ?? "").toUpperCase(),
+    type: String(r.orderType ?? r.type ?? "").toUpperCase(),
     status: String(r.algoStatus ?? r.status ?? "").toUpperCase(),
     price: (n(r.price) ?? 0) > 0 ? n(r.price) : null,
     stopPrice: (n(r.triggerPrice) ?? n(r.stopPrice) ?? 0) > 0 ? (n(r.triggerPrice) ?? n(r.stopPrice)) : null,
@@ -206,8 +218,8 @@ export function parseAlgoOrder(r: any): VenueOrder | null {
     avgPrice: n(r.avgPrice) ?? 0,
     closePosition: r.closePosition === true || r.closePosition === "true",
     reduceOnly: r.reduceOnly === true || r.reduceOnly === "true",
-    time: n(r.bookTime) ?? n(r.time) ?? n(r.updateTime) ?? 0,
-    updateTime: n(r.updateTime) ?? n(r.triggerTime) ?? n(r.bookTime) ?? 0,
+    time: n(r.createTime) ?? n(r.bookTime) ?? n(r.time) ?? n(r.updateTime) ?? 0,
+    updateTime: n(r.triggerTime) ?? n(r.updateTime) ?? n(r.createTime) ?? 0,
     raw: r,
   };
 }
@@ -273,9 +285,17 @@ export async function usdBalance(v: Venue): Promise<{ asset: string; balance: nu
 
 export async function placeOrder(v: Venue, o: OrderParams): Promise<VenueOrder> {
   if (isAlgoType(o.type)) {
-    // The same order in the algo endpoint's words: triggerPrice, clientAlgoId.
+    // The same order in the algo endpoint's words: algoType, triggerPrice, clientAlgoId.
     const { stopPrice, newClientOrderId, ...rest } = o;
-    const params: OrderParams = { ...rest, ...(stopPrice ? { triggerPrice: stopPrice } : {}), ...(newClientOrderId ? { clientAlgoId: newClientOrderId } : {}) };
+    const params: OrderParams = {
+      algoType: "CONDITIONAL",
+      ...rest,
+      ...(stopPrice ? { triggerPrice: stopPrice } : {}),
+      ...(newClientOrderId ? { clientAlgoId: newClientOrderId } : {}),
+      // The algo endpoint's enums spell these in lower case ("true"/"false").
+      ...(rest.priceProtect ? { priceProtect: String(rest.priceProtect).toLowerCase() } : {}),
+      ...(rest.closePosition ? { closePosition: String(rest.closePosition).toLowerCase() } : {}),
+    };
     const got = parseAlgoOrder(await call(v, "POST", "/fapi/v1/algoOrder", params));
     if (!got) throw new Error("The venue accepted the conditional order but sent back nothing readable.");
     return got;
