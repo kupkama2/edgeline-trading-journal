@@ -276,3 +276,67 @@ export function useLiveKlines(symbol: string | null, interval: string, history: 
   }, [history, tail]);
   return { candles, live };
 }
+
+export function useReviewTrade() {
+  return useMutation({
+    mutationFn: async (tradeId: number) =>
+      (await apiRequest("POST", `/api/terminal/trades/${tradeId}/review`, {})).json() as Promise<{ trade: TradeWithTags; review: unknown }>,
+    onSuccess: () => invalidateTrades(),
+  });
+}
+
+/*
+ * The original levels being reached, said out loud: a toast in the terminal
+ * and, when allowed, a notification that reaches a tab in the background.
+ * Each hit is said once; what was already said is remembered in the browser.
+ */
+const ALERTS_KEY = "edgeline.terminal.planAlerts";
+
+export function notificationsAllowed(): boolean {
+  return typeof Notification !== "undefined" && Notification.permission === "granted";
+}
+
+export function usePlanAlerts(
+  mine: { t: TradeWithTags; ref: TerminalRef }[],
+  say: (title: string, body: string, tone: "stop" | "target") => void,
+): void {
+  useEffect(() => {
+    let seen: string[] = [];
+    try {
+      seen = JSON.parse(localStorage.getItem(ALERTS_KEY) ?? "[]");
+    } catch {
+      /* say it again, then */
+    }
+    const seenSet = new Set(seen);
+    let changed = false;
+    for (const { t, ref } of mine) {
+      const w = ref.planWatch;
+      if (!w) continue;
+      const idea = ref.idea;
+      for (const kind of ["stop", "target"] as const) {
+        const at = kind === "stop" ? w.stopHitAt : w.targetHitAt;
+        if (!at) continue;
+        const key = `${t.id}:${kind}:${at}`;
+        if (seenSet.has(key)) continue;
+        seenSet.add(key);
+        changed = true;
+        // Only news from the last day is worth a sound: an old hit on a first open is history.
+        if (Date.now() - new Date(at).getTime() > 24 * 60 * 60_000) continue;
+        const price = kind === "stop" ? w.stopHitPrice : w.targetHitPrice;
+        const planR = kind === "stop" ? -1 : idea && idea.stop != null && idea.targets[0] != null ? Math.abs(idea.targets[0] - idea.entry) / Math.abs(idea.entry - idea.stop) : null;
+        say(
+          `Original ${kind} hit — ${ref.symbol} #${t.id}`,
+          `The tape reached ${price ?? "the level"}${planR != null ? `; set and forget would be ${planR >= 0 ? "+" : ""}${planR.toFixed(2)}R` : ""}. The position is ${t.status === "open" ? "still on" : t.status}.`,
+          kind,
+        );
+      }
+    }
+    if (changed) {
+      try {
+        localStorage.setItem(ALERTS_KEY, JSON.stringify(Array.from(seenSet).slice(-200)));
+      } catch {
+        /* nothing to do */
+      }
+    }
+  }, [mine, say]);
+}

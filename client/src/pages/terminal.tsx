@@ -13,9 +13,9 @@
  * The page exists only for the emails the server lists. Everyone else sees
  * one line saying so, and the API behind it answers 404.
  */
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, Crosshair, Loader2, Radio, ShieldX, Target } from "lucide-react";
+import { AlertTriangle, Bell, BellOff, Crosshair, Loader2, Radio, ShieldX, Target } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -36,6 +36,8 @@ import {
   useLiveKlines,
   useMoveBracket,
   useMoveEntry,
+  usePlanAlerts,
+  notificationsAllowed,
   useReconcile,
   useReduce,
   useSendPlan,
@@ -48,7 +50,7 @@ import {
   type VenueOrder,
 } from "@/lib/terminal";
 import { fmtAmount, fmtMoney } from "@shared/metrics";
-import { parseTerminalRef, sizePlan, type SymbolRules, type TerminalPlan } from "@shared/terminal";
+import { parseTerminalRef, planVerdictOf, rAt, sizePlan, type SymbolRules, type TerminalPlan } from "@shared/terminal";
 import type { TradeWithTags } from "@shared/schema";
 
 const Candles = lazy(() => import("@/components/trade-chart").then((m) => ({ default: m.Candles })));
@@ -107,6 +109,7 @@ export default function TerminalPage() {
               </SelectContent>
             </Select>
           )}
+          <AlertsBell />
           {acct?.balance && (
             <span className="font-mono text-xs text-muted-foreground" data-testid="text-terminal-balance">
               {acct.balance.asset} {num(acct.balance.available)} free
@@ -219,6 +222,22 @@ function Desk({ account, env, hedge }: { account: string; env: "live" | "testnet
     [trades, account],
   );
   const live = mine.find((x) => x.ref.symbol === symbol) ?? null;
+
+  // The original stop or target being reached while a trade is on: said once, here and on the desktop.
+  const say = useCallback(
+    (title: string, body: string, tone: "stop" | "target") => {
+      toast({ title, description: body, variant: tone === "stop" ? "destructive" : "default", duration: 15_000 });
+      if (notificationsAllowed()) {
+        try {
+          new Notification(title, { body, tag: title });
+        } catch {
+          /* no desktop notifications here */
+        }
+      }
+    },
+    [toast],
+  );
+  usePlanAlerts(mine, say);
 
   /* ---------------- the ticket ---------------- */
   const [side, setSide] = useState<"long" | "short">("long");
@@ -586,6 +605,30 @@ function Desk({ account, env, hedge }: { account: string; env: "live" | "testnet
   );
 }
 
+/** Desktop notifications for the original stop or target being hit: asked for with a click, as browsers require. */
+function AlertsBell() {
+  const [state, setState] = useState<NotificationPermission | "unsupported">(() => (typeof Notification === "undefined" ? "unsupported" : Notification.permission));
+  if (state === "unsupported") return null;
+  const on = state === "granted";
+  return (
+    <Button
+      size="sm"
+      variant="ghost"
+      className={`h-8 px-2 text-[11px] ${on ? "text-emerald-400" : "text-muted-foreground"}`}
+      title={on ? "Desktop alerts on: you are told when an original stop or target is hit." : state === "denied" ? "Desktop alerts are blocked in this browser's site settings." : "Turn on desktop alerts for original stop/target hits"}
+      disabled={state === "denied"}
+      onClick={() => {
+        if (on) return;
+        void Notification.requestPermission().then((p) => setState(p));
+      }}
+      data-testid="button-terminal-alerts"
+    >
+      {on ? <Bell className="mr-1 h-3.5 w-3.5" /> : <BellOff className="mr-1 h-3.5 w-3.5" />}
+      {on ? "alerts on" : "alerts"}
+    </Button>
+  );
+}
+
 /* ------------------------------ managing a trade ------------------------------ */
 
 type Live = { t: TradeWithTags; ref: NonNullable<ReturnType<typeof parseTerminalRef>> };
@@ -658,10 +701,12 @@ function ManagePanel({ live, book, rule, last }: { live: Live; book: BookData | 
         <span className="ml-auto text-[10px] text-muted-foreground">trade #{t.id} · {ref.leverage}×</span>
       </div>
 
-      {/* The plan as drawn, for reference: it is what the journal keeps. */}
+      {/* The idea as drawn — it is what everything after is measured against — and where the tape stands against it. */}
       <p className="font-mono text-[10px] text-muted-foreground">
-        plan: entry {num(t.entryPrice)} · stop {t.initialStop != null ? num(t.initialStop) : "—"} · target {t.initialTarget != null ? num(t.initialTarget) : "—"}
+        idea: entry {num(ref.idea?.entry ?? t.entryPrice)} · stop {(ref.idea?.stop ?? t.initialStop) != null ? num((ref.idea?.stop ?? t.initialStop)!) : "—"} · target{" "}
+        {(ref.idea?.targets[0] ?? t.initialTarget) != null ? num((ref.idea?.targets[0] ?? t.initialTarget)!) : "—"}
       </p>
+      {!resting && <PlanWatchLine t={t} ref_={ref} mark={pos?.markPrice ?? last} />}
 
       {resting && (
         <div className="grid grid-cols-[1fr_auto_auto] items-end gap-2">
@@ -746,6 +791,30 @@ function ManagePanel({ live, book, rule, last }: { live: Live; book: BookData | 
         </ul>
       )}
     </Card>
+  );
+}
+
+/** Which original level the tape has reached, and what set-and-forget would be worth now. */
+function PlanWatchLine({ t, ref_, mark }: { t: TradeWithTags; ref_: NonNullable<ReturnType<typeof parseTerminalRef>>; mark: number | null }) {
+  const w = ref_.planWatch;
+  const plan = planVerdictOf(t, ref_);
+  const idea = ref_.idea;
+  const nowR = rAt(mark, t.entryPrice, idea?.stop ?? t.initialStop, t.direction);
+  const hhmm = (iso: string) => new Date(iso).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+  if (plan.verdict) {
+    const stop = plan.verdict === "stop_first";
+    return (
+      <p className={`text-[11px] font-medium ${stop ? "text-red-400" : "text-emerald-400"}`} data-testid="text-manage-plan-hit">
+        Original {stop ? "stop" : "target"} hit{plan.at ? ` at ${hhmm(plan.at)}` : ""} — set and forget {plan.planR != null ? `${plan.planR >= 0 ? "+" : ""}${plan.planR.toFixed(2)}R` : ""}
+        {nowR != null && <span className="text-muted-foreground">; you are at {nowR >= 0 ? "+" : ""}{nowR.toFixed(2)}R</span>}
+      </p>
+    );
+  }
+  return (
+    <p className="text-[10px] text-muted-foreground" data-testid="text-manage-plan-watch">
+      {w ? "Neither original level reached yet" : "Watching the tape for the original levels"}
+      {nowR != null && ` · ${nowR >= 0 ? "+" : ""}${nowR.toFixed(2)}R now`}
+    </p>
   );
 }
 

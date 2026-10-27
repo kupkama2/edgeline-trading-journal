@@ -47,21 +47,33 @@ import {
 } from "./binance-trade";
 import {
   addNote,
+  advancePlanWatch,
   bracketAt,
   formatTerminalRef,
   fmtPrice,
   fmtQty,
+  ideaOf,
+  managementBrief,
+  managementReviewPrompt,
   ordersForPlan,
+  parseManagementReview,
   parseTerminalRef,
   partialNote,
+  planTouches,
+  planVerdictOf,
+  rAt,
   reconcilePatch,
   sizePlan,
   MAX_TARGETS,
+  type MoveKind,
+  type TerminalMove,
   type TerminalPlan,
   type TerminalRef,
   type VenueSnapshot,
 } from "@shared/terminal";
 import { addStopMove, currentStop, formatStopMoves } from "@shared/stops";
+import { computeMetrics } from "@shared/metrics";
+import { parseNoteRead } from "@shared/note-read";
 import { USD_COMMISSION } from "@shared/binance-account";
 import type { AccountSettings, TradeWithTags } from "@shared/schema";
 
@@ -72,6 +84,21 @@ const TERMINAL_EMAILS = (process.env.TERMINAL_EMAILS ?? "")
 
 /** A ceiling on one order's notional, in dollars. Unset means none. */
 const MAX_NOTIONAL = Number(process.env.TERMINAL_MAX_NOTIONAL_USD ?? "0") || 0;
+
+/** How long after its exit a trade's original levels are still watched for. */
+const PLAN_HORIZON_MS = 7 * 24 * 60 * 60_000;
+/** How long a finished trade waits for the plan's answer before it is reviewed without one. */
+const REVIEW_WAIT_MS = 3 * 24 * 60 * 60_000;
+const HOUR_MS = 60 * 60_000;
+/** How often a live trade's tape is read for the original levels. One klines call each. */
+const PLAN_WATCH_GAP_MS = Number(process.env.TERMINAL_PLAN_WATCH_GAP_MS ?? "30000");
+
+/**
+ * The model, lent by the routes module: one function from a prompt to its
+ * text. Kept out of here so the terminal does not depend on how the keys
+ * and the fallbacks are arranged over there.
+ */
+let llm: ((prompt: string) => Promise<string>) | null = null;
 
 /** Whether this person may see the terminal at all. */
 export function terminalAllowed(email: string | null | undefined): boolean {
@@ -171,6 +198,142 @@ const refOf = (t: TradeWithTags): TerminalRef => {
  * this one's average. A trade with no stop resting is flagged `unprotected`,
  * which the terminal shows in red; the position is still real.
  */
+/** The mark on this position side now, or nothing when the venue holds none. */
+async function markOf(v: Venue, ref: TerminalRef): Promise<number | null> {
+  try {
+    const pos = (await positions(v)).find((p) => p.symbol === ref.symbol && p.positionSide === ref.positionSide);
+    return pos?.markPrice ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** A management event with the mark and the open R it was made at. */
+function moveAt(t: TradeWithTags, ref: TerminalRef, kind: MoveKind, mark: number | null, fields: Omit<TerminalMove, "at" | "kind" | "mark" | "r"> = {}): TerminalMove {
+  const idea = ideaOf(t, ref);
+  return { at: new Date().toISOString(), kind, ...fields, mark, r: rAt(mark, t.entryPrice, idea.stop, t.direction) };
+}
+
+/** The JSON object in a model's answer, fenced or bare. */
+function jsonIn(text: string): unknown {
+  const fenced = /```(?:json)?\s*([\s\S]*?)```/.exec(text);
+  const raw = fenced ? fenced[1] : text;
+  const start = raw.indexOf("{");
+  const end = raw.lastIndexOf("}");
+  if (start === -1 || end === -1) throw new Error("the model returned no JSON object");
+  return JSON.parse(raw.slice(start, end + 1));
+}
+
+/**
+ * The original stop and target, watched on the tape.
+ *
+ * The question every managed trade leaves open is what the untouched plan
+ * would have done, and for a perpetual the answer is public: the minute
+ * bars from the entry on. So each live trade's tape is read forward on
+ * every pass, from where the last read stopped, and the first original
+ * level it reaches is written down — while the trade is still on, which is
+ * when knowing it matters, and for a week after it closes, so a trade taken
+ * off early still gets its answer. Nothing is guessed: both levels inside
+ * one minute stays "ambiguous", and a verdict somebody typed by hand is
+ * never overwritten.
+ */
+async function watchPlan(
+  s: DatabaseStorage,
+  t: TradeWithTags,
+  ref: TerminalRef,
+): Promise<{ ref: TerminalRef; patch: Record<string, unknown>; news: ("stop" | "target")[] }> {
+  const none = { ref, patch: {}, news: [] as ("stop" | "target")[] };
+  if (t.status !== "open" && t.status !== "closed") return none;
+  const idea = ideaOf(t, ref);
+  const target = idea.targets[0] ?? null;
+  if (idea.stop == null && target == null) return none;
+  const w = ref.planWatch;
+  if (w?.first) return none;
+  const now = Date.now();
+  const entryMs = new Date(t.entryTime).getTime();
+  if (!Number.isFinite(entryMs)) return none;
+  if (t.status === "closed") {
+    const exitMs = t.exitTime ? new Date(t.exitTime).getTime() : entryMs;
+    if (now - exitMs > PLAN_HORIZON_MS) return none;
+  }
+  const gap = t.status === "closed" ? HOUR_MS : PLAN_WATCH_GAP_MS;
+  if (w?.checkedAt && now - new Date(w.checkedAt).getTime() < gap) return none;
+  const from = Math.max(w?.coveredTo ?? 0, entryMs - 60_000);
+  const bars = await fetchCandles({ symbol: ref.symbol, market: "futures" }, "1m", from, now, 1500);
+  // The entry's own minute counts only from the entry: a print before the fill is not a touch.
+  const after = bars.filter((c) => c.t + 60_000 > entryMs);
+  const touches = planTouches(after, { direction: t.direction, stop: idea.stop, target });
+  // A touch inside the entry's own minute is stamped at the entry, not at the minute's open.
+  if (touches.stop) touches.stop.at = Math.max(touches.stop.at, entryMs);
+  if (touches.target) touches.target.at = Math.max(touches.target.at, entryMs);
+  const last = bars.length ? bars[bars.length - 1].t : from;
+  // The bar still forming is read again next time.
+  const coveredTo = Math.max(from, Math.min(last, now - 60_000));
+  const { next, news } = advancePlanWatch(w, touches, coveredTo, new Date(now).toISOString());
+  const patch: Record<string, unknown> = {};
+  if (next.first === "stop" || next.first === "target") {
+    const fromNote = t.noManagementOutcome != null && parseNoteRead(t.noteRead)?.set.noManagementOutcome === t.noManagementOutcome;
+    const writable = t.noManagementOutcome == null || t.noManagementOutcome === "undetermined" || t.outcomeSource === "auto" || fromNote;
+    if (writable) {
+      patch.noManagementOutcome = next.first === "stop" ? "stop_first" : "target_first";
+      patch.outcomeSource = "auto";
+      patch.outcomeHitAt = next.firstAt;
+    }
+  }
+  for (const kind of news) {
+    const at = kind === "stop" ? next.stopHitAt : next.targetHitAt;
+    const price = kind === "stop" ? next.stopHitPrice : next.targetHitPrice;
+    await s.logTerminal({
+      at: new Date().toISOString(),
+      account: ref.account,
+      action: "plan-hit",
+      tradeId: t.id,
+      request: JSON.stringify({ kind, price, at }),
+      response: JSON.stringify({ first: next.first ?? null, status: t.status }),
+      ok: true,
+    });
+  }
+  return { ref: { ...ref, planWatch: next }, patch, news };
+}
+
+/**
+ * The read on the management, once per finished trade: the whole timeline,
+ * what the plan would have done, what was made — put to the model, and its
+ * verdict kept on the record. Waits for the plan's answer, up to a few days;
+ * a trade that has not reached either original level by then is read as it
+ * stands.
+ */
+async function reviewIfDue(s: DatabaseStorage, t: TradeWithTags, ref: TerminalRef, force = false): Promise<TerminalRef> {
+  if (!llm || t.status !== "closed" || t.exitPrice == null) return ref;
+  if (ref.review && !force) return ref;
+  const now = Date.now();
+  if (!force && ref.reviewTriedAt && now - new Date(ref.reviewTriedAt).getTime() < HOUR_MS) return ref;
+  const plan = planVerdictOf(t, ref);
+  const exitMs = t.exitTime ? new Date(t.exitTime).getTime() : now;
+  if (!force && !plan.verdict && now - exitMs < REVIEW_WAIT_MS) return ref;
+  const actualR = computeMetrics(t).actualR;
+  const brief = managementBrief(t, ref, actualR);
+  const prompt = managementReviewPrompt(brief, { symbol: ref.symbol, direction: t.direction });
+  try {
+    const review = await logged(s, "review", ref.account, t.id, { brief }, async () =>
+      parseManagementReview(jsonIn(await llm!(prompt)), { actualR, planR: plan.planR, planVerdict: plan.verdict }, new Date().toISOString()),
+    );
+    const { reviewTriedAt: _t, ...rest } = ref;
+    return { ...rest, review };
+  } catch {
+    return { ...ref, reviewTriedAt: new Date().toISOString() };
+  }
+}
+
+/** A finished trade's errands: the plan watched to its answer, then the review. */
+async function afterClose(s: DatabaseStorage, t: TradeWithTags): Promise<void> {
+  let ref = refOf(t);
+  const watched = await watchPlan(s, t, ref);
+  const reviewed = await reviewIfDue(s, t, watched.ref);
+  const changed = formatTerminalRef(reviewed) !== formatTerminalRef(ref) || Object.keys(watched.patch).length > 0;
+  if (changed) await s.updateTrade(t.id, { ...watched.patch, terminal: formatTerminalRef(reviewed) } as any);
+}
+
 async function reconcileOne(s: DatabaseStorage, t: TradeWithTags, armed: Armed): Promise<TradeWithTags> {
   let ref = refOf(t);
   const v = armed.venue;
@@ -276,9 +439,14 @@ async function reconcileOne(s: DatabaseStorage, t: TradeWithTags, armed: Armed):
     if (placed.stop) snap.openOrderIds.push(placed.stop.orderId);
   }
   const stopResting = withBrackets.stopOrderId != null && snap.openOrderIds.includes(withBrackets.stopOrderId);
-  const nextRef: TerminalRef = { ...withBrackets, unprotected: nowOpen && !stopResting, checkedAt: new Date().toISOString() };
+  let nextRef: TerminalRef = { ...withBrackets, unprotected: nowOpen && !stopResting, checkedAt: new Date().toISOString() };
+  // The original levels, watched while the trade is on. A feed that is down costs the watch, not the read-back.
+  const watched = await watchPlan(s, { ...t, ...(patch as any) }, nextRef).catch(() => ({ ref: nextRef, patch: {} as Record<string, unknown>, news: [] as ("stop" | "target")[] }));
+  nextRef = watched.ref;
+  Object.assign(patch, watched.patch);
   const before = refOf(t);
-  const changed = Object.keys(patch).length > 0 || partials.length > 0 || adds.length > 0 || formatTerminalRef(nextRef) !== formatTerminalRef({ ...before, checkedAt: nextRef.checkedAt });
+  const quiet = (r: TerminalRef) => formatTerminalRef({ ...r, checkedAt: undefined, planWatch: r.planWatch ? { ...r.planWatch, checkedAt: "", coveredTo: 0 } : undefined });
+  const changed = Object.keys(patch).length > 0 || partials.length > 0 || adds.length > 0 || quiet(nextRef) !== quiet(before);
   if (!changed && before.checkedAt && Date.now() - new Date(before.checkedAt).getTime() < 60_000) return t;
   const after = await s.updateTrade(t.id, { ...patch, terminal: formatTerminalRef(nextRef) } as any);
   return after ?? t;
@@ -298,7 +466,15 @@ async function reconcilePass(s: DatabaseStorage): Promise<{ id: number; status: 
   const armedBy = new Map<string, Armed>();
   const out: { id: number; status: string; error?: string }[] = [];
   for (const t of trades) {
-    if (t.status === "closed") continue;
+    if (t.status === "closed") {
+      // Finished, but still owed the plan's answer and the review.
+      try {
+        await afterClose(s, t);
+      } catch (err) {
+        out.push({ id: t.id, status: t.status, error: said(err) });
+      }
+      continue;
+    }
     try {
       const ref = refOf(t);
       let armed = armedBy.get(ref.account);
@@ -423,7 +599,8 @@ export function stopTerminalWatch(): void {
 
 /* ------------------------------ the routes ------------------------------ */
 
-export function registerTerminalRoutes(app: Express): void {
+export function registerTerminalRoutes(app: Express, deps: { llm?: (prompt: string) => Promise<string> } = {}): void {
+  if (deps.llm) llm = deps.llm;
   // To anyone not on the list, none of this exists.
   app.use("/api/terminal", (req: Request, res: Response, next: NextFunction) => {
     if (!terminalAllowed(req.account?.email)) return res.status(404).json({ message: "Not found" });
@@ -596,6 +773,7 @@ export function registerTerminalRoutes(app: Express): void {
         // A resting entry has no position to protect yet; its brackets wait.
         unprotected: !rests && !placed.stop,
         closeOrderIds: [],
+        idea: { entry: plan.entryPrice, stop: plan.stop, targets: plan.targets, qty: sized.qtyNumber, riskDollars: sized.riskDollars, at: new Date().toISOString() },
         ...(rests ? { armOnFill: { stop: orders.stop, targets: orders.targets } } : {}),
       };
       const [first, ...rest] = plan.targets;
@@ -658,6 +836,7 @@ export function registerTerminalRoutes(app: Express): void {
         } as any);
         return res.json({ trade: after, order: null });
       }
+      const mark = await markOf(venue, ref);
       const next = await logged(store(req), "move-stop", ref.account, t.id, { price }, async () => {
         if (ref.stopOrderId != null) await cancelBracket(venue, ref.symbol, ref.stopOrderId);
         return placeOrder(venue, bracketAt("stop", price, rules, side, `${ref.tag}-s${Date.now().toString(36)}`));
@@ -670,7 +849,7 @@ export function registerTerminalRoutes(app: Express): void {
           ...ref,
           stopOrderId: next.orderId,
           unprotected: false,
-          moves: [...(ref.moves ?? []), { at, kind: "stop", from: currentStop(t), to }],
+          moves: [...(ref.moves ?? []), moveAt(t, ref, "stop", mark, { from: currentStop(t), to })],
         }),
       } as any);
       res.json({ trade: after, order: next });
@@ -702,6 +881,7 @@ export function registerTerminalRoutes(app: Express): void {
         } as any);
         return res.json({ trade: after, order: null });
       }
+      const mark = await markOf(venue, ref);
       const next = await logged(store(req), "move-target", ref.account, t.id, { price }, async () => {
         for (const id of ref.targetOrderIds) await cancelBracket(venue, ref.symbol, id);
         return placeOrder(venue, bracketAt("target", price, rules, side, `${ref.tag}-t${Date.now().toString(36)}`));
@@ -712,7 +892,7 @@ export function registerTerminalRoutes(app: Express): void {
         terminal: formatTerminalRef({
           ...ref,
           targetOrderIds: [next.orderId],
-          moves: [...(ref.moves ?? []), { at: new Date().toISOString(), kind: "target", from: lastTarget, to }],
+          moves: [...(ref.moves ?? []), moveAt(t, ref, "target", mark, { from: lastTarget, to })],
         }),
       } as any);
       res.json({ trade: after, order: next });
@@ -760,6 +940,7 @@ export function registerTerminalRoutes(app: Express): void {
       const rules = await rulesFor(venue.env, ref.symbol);
       const pos = (await positions(venue)).find((p) => p.symbol === ref.symbol && p.positionSide === ref.positionSide);
       let closeOrder: VenueOrder | null = null;
+      const mark = pos?.markPrice ?? null;
       if (pos && Math.abs(pos.amt) > 0) {
         closeOrder = await logged(store(req), "close", ref.account, t.id, { qty: Math.abs(pos.amt) }, () =>
           closeAtMarket(venue, ref.symbol, ref.positionSide, fmtQty(Math.abs(pos.amt), rules), `${ref.tag}-x${Date.now().toString(36)}`),
@@ -771,7 +952,11 @@ export function registerTerminalRoutes(app: Express): void {
         for (const id of ref.addOrderIds ?? []) await cancelOrder(venue, ref.symbol, id);
         return { cancelled: true };
       });
-      const nextRef: TerminalRef = { ...ref, closeOrderIds: [...(ref.closeOrderIds ?? []), ...(closeOrder ? [closeOrder.orderId] : [])] };
+      const nextRef: TerminalRef = {
+        ...ref,
+        closeOrderIds: [...(ref.closeOrderIds ?? []), ...(closeOrder ? [closeOrder.orderId] : [])],
+        ...(closeOrder ? { moves: [...(ref.moves ?? []), moveAt(t, ref, "close", mark, { qty: Math.abs(pos!.amt) })] } : {}),
+      };
       const stamped = (await s.updateTrade(t.id, { terminal: formatTerminalRef(nextRef) } as any)) ?? t;
       res.json({ trade: await reconcileOne(store(req), stamped, { venue, acct }) });
     }),
@@ -797,7 +982,11 @@ export function registerTerminalRoutes(app: Express): void {
       const order = await logged(store(req), "reduce", ref.account, t.id, { qty }, () =>
         closeAtMarket(venue, ref.symbol, ref.positionSide, qty, `${ref.tag}-r${Date.now().toString(36)}`),
       );
-      const nextRef: TerminalRef = { ...ref, closeOrderIds: [...(ref.closeOrderIds ?? []), order.orderId] };
+      const nextRef: TerminalRef = {
+        ...ref,
+        closeOrderIds: [...(ref.closeOrderIds ?? []), order.orderId],
+        moves: [...(ref.moves ?? []), moveAt(t, ref, "reduce", pos.markPrice, { qty: Number(qty) })],
+      };
       const stamped = (await s.updateTrade(t.id, { terminal: formatTerminalRef(nextRef) } as any)) ?? t;
       res.json({ trade: await reconcileOne(s, stamped, { venue, acct }), order });
     }),
@@ -823,7 +1012,11 @@ export function registerTerminalRoutes(app: Express): void {
       const order = await logged(store(req), "add", ref.account, t.id, { qty, price }, () =>
         addToPosition(venue, ref.symbol, ref.positionSide, qty, price, `${ref.tag}-a${Date.now().toString(36)}`),
       );
-      const nextRef: TerminalRef = { ...ref, addOrderIds: [...(ref.addOrderIds ?? []), order.orderId] };
+      const nextRef: TerminalRef = {
+        ...ref,
+        addOrderIds: [...(ref.addOrderIds ?? []), order.orderId],
+        moves: [...(ref.moves ?? []), moveAt(t, ref, "add", await markOf(venue, ref), { qty: Number(qty), price: price != null ? Number(price) : null })],
+      };
       const stamped = (await s.updateTrade(t.id, { terminal: formatTerminalRef(nextRef) } as any)) ?? t;
       res.json({ trade: await reconcileOne(s, stamped, { venue, acct }), order });
     }),
@@ -869,6 +1062,24 @@ export function registerTerminalRoutes(app: Express): void {
         }),
       } as any);
       res.json({ trade: after, order: next });
+    }),
+  );
+
+  /** The management read on one finished trade, now — again, if it was read before. */
+  app.post(
+    "/api/terminal/trades/:id/review",
+    wrap(async (req, res) => {
+      const s = store(req);
+      const t = await s.getTrade(Number(req.params.id));
+      if (!t) throw httpError(404, "Trade not found");
+      if (t.status !== "closed") throw httpError(400, "A trade is reviewed once it is over.");
+      if (!llm) throw httpError(503, "No model is configured on this server.");
+      const ref = refOf(t);
+      const watched = await watchPlan(s, t, ref).catch(() => ({ ref, patch: {} as Record<string, unknown> }));
+      const reviewed = await reviewIfDue(s, t, watched.ref, true);
+      if (!reviewed.review) throw httpError(502, "The model did not answer. The trade is unchanged.");
+      const after = await s.updateTrade(t.id, { ...watched.patch, terminal: formatTerminalRef(reviewed) } as any);
+      res.json({ trade: after, review: reviewed.review });
     }),
   );
 

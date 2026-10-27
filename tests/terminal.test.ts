@@ -16,6 +16,7 @@ import {
 import { parseRestrictions } from "../shared/binance-account";
 import { streamUrl, worthAReadBack } from "../server/binance-stream";
 import { parseAlgoOrder } from "../server/binance-trade";
+import { advancePlanWatch, managementBrief, managementTimeline, parseManagementReview, planTouches, planVerdictOf, rAt } from "../shared/terminal";
 
 /**
  * The terminal, the half that can be wrong without a venue: what a plan
@@ -289,5 +290,79 @@ describe("the venue's algo-order answers", () => {
 
   it("names the plain order a fired bracket became", () => {
     expect(parseAlgoOrder({ algoId: 56, symbol: "BTCUSDT", orderType: "TAKE_PROFIT_MARKET", algoStatus: "FINISHED", actualOrderId: "9001", triggerTime: 20 })).toMatchObject({ triggeredOrderId: 9001, status: "FINISHED", updateTime: 20 });
+  });
+});
+
+describe("the idea, watched on the tape", () => {
+  const bar = (t: number, h: number, l: number) => ({ t, o: (h + l) / 2, h, l, c: (h + l) / 2 });
+  const long = { direction: "long", stop: 79000, target: 81000 };
+
+  it("names the first minute to reach the stop and the first to reach the target, by the wick", () => {
+    const touches = planTouches([bar(0, 80100, 79900), bar(60_000, 81050, 80000), bar(120_000, 80500, 78900)], long);
+    expect(touches).toEqual({ target: { at: 60_000, price: 81000 }, stop: { at: 120_000, price: 79000 } });
+    expect(planTouches([bar(0, 80100, 79900)], long)).toEqual({});
+    // A short is the mirror.
+    expect(planTouches([bar(0, 80100, 78900)], { direction: "short", stop: 81000, target: 79000 })).toMatchObject({ target: { at: 0 } });
+  });
+
+  it("calls both levels inside one minute ambiguous rather than picking one", () => {
+    const touches = planTouches([bar(0, 81100, 78900)], long);
+    expect(touches.sameBar).toBe(true);
+    const { next } = advancePlanWatch(undefined, touches, 0, "2026-10-27T10:00:00.000Z");
+    expect(next.first).toBe("ambiguous");
+  });
+
+  it("settles the first level as soon as one is reached without the other, and never un-settles it", () => {
+    const first = advancePlanWatch(undefined, planTouches([bar(0, 81050, 80000)], long), 0, "2026-10-27T10:01:00.000Z");
+    expect(first.news).toEqual(["target"]);
+    expect(first.next).toMatchObject({ first: "target", firstAt: new Date(0).toISOString(), targetHitPrice: 81000 });
+    // The stop reached later changes nothing about which came first.
+    const later = advancePlanWatch(first.next, planTouches([bar(120_000, 80500, 78900)], long), 120_000, "2026-10-27T10:03:00.000Z");
+    expect(later.news).toEqual(["stop"]);
+    expect(later.next.first).toBe("target");
+    expect(later.next.coveredTo).toBe(120_000);
+    // Read again with nothing new: no news.
+    expect(advancePlanWatch(later.next, {}, 180_000, "x").news).toEqual([]);
+  });
+
+  it("reads the plan's verdict off the watch first, then the trade's own answer, and prices it in R", () => {
+    const ref: TerminalRef = { venue: "binance", env: "testnet", account: "T", symbol: "BTCUSDT", positionSide: "LONG", tag: "e", leverage: 1, qty: 1, entryOrderId: 1, stopOrderId: null, targetOrderIds: [],
+      idea: { entry: 80000, stop: 79000, targets: [82000], qty: 1, riskDollars: 1000, at: "2026-10-27T09:00:00.000Z" } };
+    const t = { direction: "long", entryPrice: 80000, noManagementOutcome: null } as any;
+    expect(planVerdictOf(t, ref)).toEqual({ verdict: null, source: null, at: null, planR: null });
+    expect(planVerdictOf({ ...t, noManagementOutcome: "stop_first", outcomeHitAt: "2026-10-27T09:30:00.000Z" }, ref)).toMatchObject({ verdict: "stop_first", source: "trade", planR: -1 });
+    expect(planVerdictOf(t, { ...ref, planWatch: { coveredTo: 0, checkedAt: "x", first: "target", firstAt: "2026-10-27T09:20:00.000Z" } })).toMatchObject({ verdict: "target_first", source: "watch", planR: 2 });
+    expect(rAt(80500, 80000, 79000, "long")).toBe(0.5);
+    expect(rAt(80500, 80000, 79000, "short")).toBe(-0.5);
+    expect(rAt(80500, 80000, null, "long")).toBeNull();
+  });
+
+  it("tells the trade's life as one timeline, and the brief says what management was worth", () => {
+    const ref: TerminalRef = { venue: "binance", env: "testnet", account: "T", symbol: "BTCUSDT", positionSide: "LONG", tag: "e", leverage: 1, qty: 1, entryOrderId: 1, stopOrderId: null, targetOrderIds: [],
+      idea: { entry: 80000, stop: 79000, targets: [82000], qty: 1, riskDollars: 1000, at: "2026-10-27T09:00:00.000Z" },
+      moves: [{ at: "2026-10-27T09:30:00.000Z", kind: "stop", from: 79000, to: 80000, mark: 80700, r: 0.7 }, { at: "2026-10-27T09:40:00.000Z", kind: "reduce", qty: 0.5, mark: 80900, r: 0.9 }],
+      planWatch: { coveredTo: 0, checkedAt: "x", first: "target", firstAt: "2026-10-27T10:10:00.000Z", targetHitAt: "2026-10-27T10:10:00.000Z", targetHitPrice: 82000 } };
+    const t = {
+      direction: "long", status: "closed", entryPrice: 80000, entryTime: "2026-10-27T09:00:00.000Z", size: 1, exitPrice: 80000, exitTime: "2026-10-27T09:55:00.000Z", exitReason: "breakeven",
+      fills: [{ kind: "partial", price: 80900, size: 0.5, time: "2026-10-27T09:40:01.000Z", note: "terminal · fill 1" }],
+    } as any;
+    const rows = managementTimeline(t, ref);
+    expect(rows.map((r) => r.kind)).toEqual(["entry-fill", "stop", "reduce", "reduce", "exit", "plan-hit"]);
+    expect(rows[1].text).toContain("(breakeven)");
+    expect(rows[1].text).toContain("+0.70R");
+    expect(rows[3].text).toContain("Partial filled: 0.5 at 80900 (+0.90R)");
+    const brief = managementBrief(t, ref, 0.45);
+    expect(brief).toContain("would have hit the target first");
+    expect(brief).toContain("+2.00R");
+    expect(brief).toContain("As managed, the trade made +0.45R");
+    expect(brief).toContain("Management cost 1.55R");
+  });
+
+  it("takes a model's verdict only as far as it fits", () => {
+    const basis = { actualR: 0.45, planR: 2, planVerdict: "target_first" };
+    expect(parseManagementReview({ verdict: "HURT", summary: "You moved the stop to breakeven at +0.7R and were taken out on the pullback that then ran to target.", lesson: "Give it the room the plan drew." }, basis, "now"))
+      .toMatchObject({ verdict: "hurt", lesson: "Give it the room the plan drew.", basis });
+    expect(parseManagementReview({ verdict: "brilliant" }, basis, "now").verdict).toBe("unknown");
+    expect(parseManagementReview(null, basis, "now")).toMatchObject({ verdict: "unknown", summary: "", lesson: null });
   });
 });

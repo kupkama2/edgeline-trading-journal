@@ -60,6 +60,20 @@ const restingFor = (tag: string) => [
 ];
 const fills: any[] = [];
 const position = { amt: 0, entryPrice: 0 };
+/** The tape: flat at 80010 unless a minute is given a spike. */
+const spikes = new Map<number, { h: number; l: number }>();
+const minuteOf = (ms: number) => Math.floor(ms / 60_000) * 60_000;
+function klines(start: number, end: number) {
+  const out: any[] = [];
+  for (let t = minuteOf(start); t <= end && out.length < 1000; t += 60_000) {
+    const s = spikes.get(t);
+    out.push([t, "80010", String(s?.h ?? 80012), String(s?.l ?? 80008), "80010", "1", t + 59_999, "0", 0, "0", "0", "0"]);
+  }
+  return out;
+}
+/** A stand-in for the model: answers the management review from the brief it is given. */
+let model: Server;
+let modelCalls: string[] = [];
 let dual = true;
 let nextId = 100;
 let nextTid = 5000;
@@ -130,6 +144,7 @@ function startVenue(): Promise<string> {
         });
       }
       if (u.pathname === "/api/v3/exchangeInfo") return json({ symbols: [] });
+      if (u.pathname === "/fapi/v1/klines") return json(klines(Number(u.searchParams.get("startTime") ?? 0), Number(u.searchParams.get("endTime") ?? Date.now())));
 
       // The listen key: the API key alone, no signature (USER_STREAM).
       if (u.pathname === "/fapi/v1/listenKey") {
@@ -265,6 +280,23 @@ describe.skipIf(!DB)("the terminal against a stub venue", () => {
     process.env.HYPERLIQUID_BASE = stub;
     process.env.SESSION_SECRET = `test-${stamp}-session-secret-long-enough`;
     process.env.TERMINAL_EMAILS = ` Other@x.test, ${EMAIL.toUpperCase()} `;
+    process.env.TERMINAL_PLAN_WATCH_GAP_MS = "0";
+    model = createServer((req, res) => {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        const asked = JSON.parse(body || "{}").messages?.[0]?.content?.map((c: any) => c.text ?? "").join("") ?? "";
+        modelCalls.push(asked);
+        const reply = /Management cost/.test(asked)
+          ? { verdict: "hurt", summary: "You took half off at +0.0R and closed the rest; left alone it reached the target.", lesson: "Let the plan run to its target." }
+          : { verdict: "neutral", summary: "Nothing was changed.", lesson: null };
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify({ id: "msg_test", type: "message", role: "assistant", model: "claude-test", content: [{ type: "text", text: JSON.stringify(reply) }], stop_reason: "end_turn", stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } }));
+      });
+    });
+    await new Promise<void>((r) => model.listen(0, "127.0.0.1", r));
+    process.env.ANTHROPIC_API_KEY = "test-key";
+    process.env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${(model.address() as any).port}`;
 
     const { initSchema, accounts, storageFor } = await import("../server/storage");
     await initSchema();
@@ -301,6 +333,7 @@ describe.skipIf(!DB)("the terminal against a stub venue", () => {
     await new Promise<void>((r) => wss.close(() => r()));
     const shut = (x: Server | undefined) => new Promise<void>((r) => (x ? x.close(() => r()) : r()));
     await shut(venue);
+    await shut(model);
     await shut(app);
   });
 
@@ -447,9 +480,11 @@ describe.skipIf(!DB)("the terminal against a stub venue", () => {
     const r = await send("POST", `/api/terminal/trades/${tradeId}/stop`, { price: 79600.04 });
     expect(r.status).toBe(200);
     const body = await r.json();
-    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(["DELETE /fapi/v1/algoOrder", "POST /fapi/v1/algoOrder"]);
-    expect(calls[0].params.algoId).toBe(String(oldStop));
-    expect(calls[1].params).toMatchObject({ type: "STOP_MARKET", triggerPrice: "79600.0", closePosition: "true", positionSide: "LONG" });
+    // The mark is read for the record first; what moves money is the old bracket off and the new one on.
+    const writes = calls.filter((c) => c.method !== "GET");
+    expect(writes.map((c) => `${c.method} ${c.path}`)).toEqual(["DELETE /fapi/v1/algoOrder", "POST /fapi/v1/algoOrder"]);
+    expect(writes[0].params.algoId).toBe(String(oldStop));
+    expect(writes[1].params).toMatchObject({ type: "STOP_MARKET", triggerPrice: "79600.0", closePosition: "true", positionSide: "LONG" });
     expect(algos.find((a) => a.algoId === oldStop)!.algoStatus).toBe("CANCELED");
     const nextRef = JSON.parse(body.trade.terminal);
     expect(nextRef.stopOrderId).toBe(body.order.orderId);
@@ -656,6 +691,74 @@ describe.skipIf(!DB)("the terminal against a stub venue", () => {
     const open = await send("POST", `/api/terminal/trades/${trade.id}/reduce`, {});
     expect(open.status).toBe(400);
     await send("POST", `/api/terminal/trades/${trade.id}/cancel`, {});
+  });
+
+  it("pins the idea, logs each move with the mark and R it was made at, sees the original target hit on the tape, and reviews the management once closed", async () => {
+    spikes.clear();
+    const r = await send("POST", "/api/terminal/send", {
+      account: ACCOUNT,
+      plan: { symbol: "BTCUSDT", side: "long", entryType: "market", entryPrice: 80010, stop: 79010, targets: [81010], qty: 0.02, leverage: 3 },
+    });
+    expect(r.status).toBe(201);
+    const { trade, placed } = await r.json();
+    expect(placed.idea).toMatchObject({ entry: 80010, stop: 79010, targets: [81010], qty: 0.02 });
+    // Watched from the first read-back: nothing reached yet.
+    await send("POST", "/api/terminal/reconcile", {});
+    let t = await store.getTrade(trade.id);
+    let ref = JSON.parse(t.terminal);
+    expect(ref.planWatch).toBeTruthy();
+    expect(ref.planWatch.first).toBeUndefined();
+    expect(t.noManagementOutcome).toBeNull();
+
+    // The stop moved to breakeven: the move carries the mark (80020 on the stub) and the R at it.
+    const m = await send("POST", `/api/terminal/trades/${trade.id}/stop`, { price: 80010 });
+    expect(m.status).toBe(200);
+    ref = JSON.parse((await m.json()).trade.terminal);
+    expect(ref.moves).toHaveLength(1);
+    expect(ref.moves[0]).toMatchObject({ kind: "stop", from: 79010, to: 80010, mark: 80020 });
+    expect(ref.moves[0].r).toBeCloseTo(0.01, 2);
+
+    // Half off: a reduce on the record too.
+    await send("POST", `/api/terminal/trades/${trade.id}/reduce`, { fraction: 0.5 });
+    t = await store.getTrade(trade.id);
+    ref = JSON.parse(t.terminal);
+    expect(ref.moves.map((x: any) => x.kind)).toEqual(["stop", "reduce"]);
+
+    // The tape reaches the original target this minute.
+    spikes.set(minuteOf(Date.now()), { h: 81020, l: 80000 });
+    await send("POST", "/api/terminal/reconcile", {});
+    t = await store.getTrade(trade.id);
+    ref = JSON.parse(t.terminal);
+    expect(ref.planWatch.first).toBe("target");
+    expect(ref.planWatch.targetHitPrice).toBe(81010);
+    // Written as the plan's answer, by the market, while the trade is still on.
+    expect(t.status).toBe("open");
+    expect(t).toMatchObject({ noManagementOutcome: "target_first", outcomeSource: "auto" });
+    const log = await store.listTerminalLog(50);
+    expect(log.some((l: any) => l.tradeId === trade.id && l.action === "plan-hit" && /"kind":"target"/.test(l.request ?? ""))).toBe(true);
+
+    // Closed by hand: the review runs on the next pass, against the plan's answer.
+    modelCalls = [];
+    const c = await send("POST", `/api/terminal/trades/${trade.id}/close`, {});
+    expect(c.status).toBe(200);
+    expect((await c.json()).trade.status).toBe("closed");
+    await send("POST", "/api/terminal/reconcile", {});
+    t = await store.getTrade(trade.id);
+    ref = JSON.parse(t.terminal);
+    expect(ref.moves.map((x: any) => x.kind)).toEqual(["stop", "reduce", "close"]);
+    expect(ref.review).toMatchObject({ verdict: "hurt", basis: { planVerdict: "target_first", planR: 1 } });
+    expect(ref.review.lesson).toBe("Let the plan run to its target.");
+    expect(modelCalls).toHaveLength(1);
+    expect(modelCalls[0]).toContain("Stop 79010 → 80010 (breakeven)");
+    expect(modelCalls[0]).toContain("Tape reached the original target 81010");
+    // Once: a second pass does not ask again.
+    await send("POST", "/api/terminal/reconcile", {});
+    expect(modelCalls).toHaveLength(1);
+    // Asked by name, it reads again.
+    const again = await send("POST", `/api/terminal/trades/${trade.id}/review`, {});
+    expect(again.status).toBe(200);
+    expect(modelCalls).toHaveLength(2);
+    spikes.clear();
   });
 
   it("cancels a resting plan: every order off, the trade marked pulled", async () => {

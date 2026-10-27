@@ -292,8 +292,25 @@ export interface TerminalRef {
   closeOrderIds?: number[];
   /** Adds sent from the terminal: fills on these grow the position and go to the ledger as adds. */
   addOrderIds?: number[];
-  /** Every level moved from the terminal: what it was, what it became, when. */
-  moves?: { at: string; kind: "stop" | "target" | "entry"; from: number | null; to: number }[];
+  /**
+   * The idea, pinned the moment it was sent and never edited: the entry,
+   * stop and targets as drawn, the size, the dollars at risk. Everything
+   * that happens afterwards is measured against this.
+   */
+  idea?: TerminalIdea;
+  /**
+   * Everything done to the trade while it was on, in order: a level moved, a
+   * take, an add, a close — each with the mark and the open R at that
+   * moment, so "moved the stop to breakeven at +1.4R" is on the record, not
+   * reconstructed.
+   */
+  moves?: TerminalMove[];
+  /** The original stop and target, watched on the tape: which was touched first, and when. */
+  planWatch?: PlanWatch;
+  /** The read on the management, once the trade is over and the plan's answer is in. */
+  review?: ManagementReview;
+  /** When a review was last attempted and failed, so it is retried on a clock rather than every pass. */
+  reviewTriedAt?: string;
   /**
    * Brackets waiting for a resting entry to fill. The venue will not hold a
    * close-position order for a position that does not exist, so the stop
@@ -305,6 +322,53 @@ export interface TerminalRef {
   unprotected?: boolean;
   /** When the terminal last read this trade back from the venue. */
   checkedAt?: string;
+}
+
+export interface TerminalIdea {
+  entry: number;
+  stop: number | null;
+  targets: number[];
+  qty: number;
+  riskDollars: number | null;
+  at: string;
+}
+
+export type MoveKind = "stop" | "target" | "entry" | "reduce" | "add" | "close";
+
+export interface TerminalMove {
+  at: string;
+  kind: MoveKind;
+  /** For a level: what it was and what it became. */
+  from?: number | null;
+  to?: number | null;
+  /** For a take, an add or a close: how much, at what (null = at market). */
+  qty?: number;
+  price?: number | null;
+  /** The mark when it was done, and the trade's open R at that mark against the original risk. */
+  mark?: number | null;
+  r?: number | null;
+}
+
+export interface PlanWatch {
+  /** The tape has been read up to here (ms). The next read starts here. */
+  coveredTo: number;
+  checkedAt: string;
+  stopHitAt?: string;
+  stopHitPrice?: number;
+  targetHitAt?: string;
+  targetHitPrice?: number;
+  /** Which original level the tape reached first. "ambiguous": both inside one minute. */
+  first?: "stop" | "target" | "ambiguous";
+  firstAt?: string;
+}
+
+export interface ManagementReview {
+  at: string;
+  verdict: "helped" | "hurt" | "neutral" | "unknown";
+  summary: string;
+  lesson?: string | null;
+  /** The numbers the read was given, so it can be judged later. */
+  basis: { actualR: number | null; planR: number | null; planVerdict: string | null };
 }
 
 export function parseTerminalRef(raw: string | null | undefined): TerminalRef | null {
@@ -488,3 +552,278 @@ export function reconcilePatch(
 
 /** An add logged from the terminal carries the venue's fill id, as a partial does. */
 export const addNote = (tid: number) => `terminal · add ${tid}`;
+
+/* ------------------------------ the idea, watched ------------------------------ */
+
+/** The original levels, from the pin when there is one, from the trade's own fields when not. */
+export function ideaOf(
+  t: { entryPrice: number; initialStop?: number | null; initialTarget?: number | null; size: number; riskAmount?: number | null; entryTime: string },
+  ref: TerminalRef,
+): TerminalIdea {
+  return (
+    ref.idea ?? {
+      entry: t.entryPrice,
+      stop: t.initialStop ?? null,
+      targets: t.initialTarget != null ? [t.initialTarget] : [],
+      qty: t.size,
+      riskDollars: t.riskAmount ?? null,
+      at: t.entryTime,
+    }
+  );
+}
+
+/** The open R at a mark: distance from the entry over the original risk, signed by the side. */
+export function rAt(mark: number | null | undefined, entry: number, stop: number | null | undefined, direction: string): number | null {
+  if (mark == null || stop == null) return null;
+  const risk = Math.abs(entry - stop);
+  if (!(risk > 0)) return null;
+  const sign = direction === "short" ? -1 : 1;
+  return (sign * (mark - entry)) / risk;
+}
+
+export interface Touches {
+  stop?: { at: number; price: number };
+  target?: { at: number; price: number };
+  /** Both levels inside one bar, with no earlier touch of either: the order is not knowable at this width. */
+  sameBar?: boolean;
+}
+
+/**
+ * The first bar to reach the original stop and the first to reach the
+ * original target, over the bars given. Touch means the wick: a stop is
+ * taken by the low, a target by the high (reversed for a short). The bars
+ * are the tape after the entry; what came before is the caller's to cut.
+ */
+export function planTouches(
+  bars: { t: number; h: number; l: number }[],
+  plan: { direction: string; stop: number | null; target: number | null },
+): Touches {
+  const long = plan.direction !== "short";
+  const out: Touches = {};
+  for (const c of bars) {
+    const hitStop = plan.stop != null && (long ? c.l <= plan.stop : c.h >= plan.stop);
+    const hitTarget = plan.target != null && (long ? c.h >= plan.target : c.l <= plan.target);
+    if (hitStop && !out.stop) out.stop = { at: c.t, price: plan.stop! };
+    if (hitTarget && !out.target) out.target = { at: c.t, price: plan.target! };
+    if (hitStop && hitTarget && out.stop!.at === c.t && out.target!.at === c.t) out.sameBar = true;
+    if (out.stop && out.target) break;
+  }
+  return out;
+}
+
+/**
+ * The watch, advanced by one read of the tape. Earlier touches are kept —
+ * bars only go forward — and the first level reached is settled the moment
+ * one is known without the other, or both are known.
+ */
+export function advancePlanWatch(
+  prev: PlanWatch | undefined,
+  touches: Touches,
+  coveredTo: number,
+  now: string,
+): { next: PlanWatch; news: ("stop" | "target")[] } {
+  const next: PlanWatch = { ...(prev ?? { coveredTo }), coveredTo: Math.max(prev?.coveredTo ?? 0, coveredTo), checkedAt: now };
+  const news: ("stop" | "target")[] = [];
+  if (touches.stop && !next.stopHitAt) {
+    next.stopHitAt = new Date(touches.stop.at).toISOString();
+    next.stopHitPrice = touches.stop.price;
+    news.push("stop");
+  }
+  if (touches.target && !next.targetHitAt) {
+    next.targetHitAt = new Date(touches.target.at).toISOString();
+    next.targetHitPrice = touches.target.price;
+    news.push("target");
+  }
+  if (!next.first) {
+    const s = next.stopHitAt ? new Date(next.stopHitAt).getTime() : null;
+    const g = next.targetHitAt ? new Date(next.targetHitAt).getTime() : null;
+    if (s != null && g != null) {
+      if (s === g) next.first = "ambiguous";
+      else next.first = s < g ? "stop" : "target";
+      next.firstAt = new Date(Math.min(s, g)).toISOString();
+    } else if (s != null || g != null) {
+      // One reached, the other not yet: the one reached came first.
+      next.first = s != null ? "stop" : "target";
+      next.firstAt = new Date((s ?? g)!).toISOString();
+    }
+  }
+  return { next, news };
+}
+
+/* ------------------------------ idea against management ------------------------------ */
+
+export interface PlanVerdict {
+  verdict: "target_first" | "stop_first" | null;
+  /** Where the verdict came from: the terminal's own watch, the trade's recorded answer, or nothing yet. */
+  source: "watch" | "trade" | null;
+  at: string | null;
+  /** What the idea would have made left alone, gross, in R. */
+  planR: number | null;
+}
+
+/** Which original level came first, and what that was worth left alone. */
+export function planVerdictOf(
+  t: { direction: string; entryPrice: number; noManagementOutcome?: string | null; outcomeHitAt?: string | null },
+  ref: TerminalRef,
+): PlanVerdict {
+  const idea = ideaOf(t as any, ref);
+  const target = idea.targets[0] ?? null;
+  const risk = idea.stop != null ? Math.abs(idea.entry - idea.stop) : 0;
+  const targetR = target != null && risk > 0 ? Math.abs(target - idea.entry) / risk : null;
+  const w = ref.planWatch;
+  if (w?.first === "stop" || w?.first === "target") {
+    const verdict = w.first === "stop" ? "stop_first" : "target_first";
+    return { verdict, source: "watch", at: w.firstAt ?? null, planR: verdict === "stop_first" ? -1 : targetR };
+  }
+  if (t.noManagementOutcome === "stop_first" || t.noManagementOutcome === "target_first") {
+    return {
+      verdict: t.noManagementOutcome,
+      source: "trade",
+      at: t.outcomeHitAt ?? null,
+      planR: t.noManagementOutcome === "stop_first" ? -1 : targetR,
+    };
+  }
+  return { verdict: null, source: null, at: null, planR: null };
+}
+
+export interface TimelineRow {
+  at: string;
+  kind: MoveKind | "entry-fill" | "exit" | "plan-hit";
+  /** One line, in the trader's words. */
+  text: string;
+  mark?: number | null;
+  r?: number | null;
+}
+
+const fmtN = (v: number | null | undefined) => (v == null ? "—" : String(Number(v.toFixed(6))));
+const fmtR = (v: number | null | undefined) => (v == null ? "" : ` (${v >= 0 ? "+" : ""}${v.toFixed(2)}R)`);
+
+/**
+ * The life of the trade, as one list: the idea, every move with the R it
+ * was made at, every take and add from the ledger, the original levels being
+ * reached, the exit. The card draws it; the review reads it.
+ */
+export function managementTimeline(
+  t: {
+    direction: string;
+    status: string;
+    entryPrice: number;
+    entryTime: string;
+    size: number;
+    exitPrice?: number | null;
+    exitTime?: string | null;
+    exitReason?: string | null;
+    initialStop?: number | null;
+    initialTarget?: number | null;
+    riskAmount?: number | null;
+    fills?: { kind: string; price: number; size: number; time: string; note?: string | null }[];
+  },
+  ref: TerminalRef,
+): TimelineRow[] {
+  const idea = ideaOf(t, ref);
+  const rows: TimelineRow[] = [];
+  const target = idea.targets[0] ?? null;
+  const rr = idea.stop != null && target != null && Math.abs(idea.entry - idea.stop) > 0 ? Math.abs(target - idea.entry) / Math.abs(idea.entry - idea.stop) : null;
+  rows.push({
+    at: idea.at,
+    kind: "entry-fill",
+    text: `Idea: ${t.direction} ${fmtN(idea.qty)} at ${fmtN(idea.entry)}, stop ${fmtN(idea.stop)}, target ${fmtN(target)}${rr != null ? ` (${rr.toFixed(1)}R)` : ""}${idea.targets.length > 1 ? `, then ${idea.targets.slice(1).map(fmtN).join(", ")}` : ""}`,
+  });
+  if (Math.abs(t.entryPrice - idea.entry) > 1e-9 && t.status !== "pending") {
+    rows.push({ at: t.entryTime, kind: "entry-fill", text: `Filled at ${fmtN(t.entryPrice)}` });
+  }
+  for (const m of ref.moves ?? []) {
+    let text: string;
+    switch (m.kind) {
+      case "stop":
+        text = `Stop ${fmtN(m.from)} → ${fmtN(m.to)}${idea.entry != null && m.to != null && Math.abs(m.to - idea.entry) < 1e-9 ? " (breakeven)" : ""}`;
+        break;
+      case "target":
+        text = `Target ${fmtN(m.from)} → ${fmtN(m.to)}`;
+        break;
+      case "entry":
+        text = `Resting entry ${fmtN(m.from)} → ${fmtN(m.to)}`;
+        break;
+      case "reduce":
+        text = `Took ${fmtN(m.qty)} off at market`;
+        break;
+      case "add":
+        text = m.price != null ? `Added ${fmtN(m.qty)}, resting at ${fmtN(m.price)}` : `Added ${fmtN(m.qty)} at market`;
+        break;
+      case "close":
+        text = `Closed at market`;
+        break;
+    }
+    rows.push({ at: m.at, kind: m.kind, text: `${text}${m.mark != null ? ` · mark ${fmtN(m.mark)}` : ""}${fmtR(m.r)}`, mark: m.mark, r: m.r });
+  }
+  const w = ref.planWatch;
+  if (w?.stopHitAt) rows.push({ at: w.stopHitAt, kind: "plan-hit", text: `Tape reached the original stop ${fmtN(w.stopHitPrice)}` });
+  if (w?.targetHitAt) rows.push({ at: w.targetHitAt, kind: "plan-hit", text: `Tape reached the original target ${fmtN(w.targetHitPrice)}` });
+  for (const f of t.fills ?? []) {
+    if (!(f.note ?? "").startsWith("terminal")) continue;
+    // Every R here is against the same footing as the moves: the fill, over the original risk.
+    const r = rAt(f.price, t.entryPrice, idea.stop, t.direction);
+    rows.push({ at: f.time, kind: f.kind === "add" ? "add" : "reduce", text: `${f.kind === "add" ? "Add filled" : "Partial filled"}: ${fmtN(f.size)} at ${fmtN(f.price)}${fmtR(r)}`, mark: f.price, r });
+  }
+  if (t.status === "closed" && t.exitPrice != null && t.exitTime) {
+    const r = rAt(t.exitPrice, t.entryPrice, idea.stop, t.direction);
+    rows.push({ at: t.exitTime, kind: "exit", text: `Exit at ${fmtN(t.exitPrice)}${t.exitReason ? ` — ${t.exitReason}` : ""}${fmtR(r)}`, mark: t.exitPrice, r });
+  }
+  // In time order, the exit last among anything stamped the same second.
+  const rank = (r: TimelineRow) => (r.kind === "exit" ? 1 : 0);
+  return rows.sort((a, b) => a.at.localeCompare(b.at) || rank(a) - rank(b));
+}
+
+/** The timeline and the comparison, as the text a reader — human or model — gets. */
+export function managementBrief(
+  t: Parameters<typeof managementTimeline>[0] & { noManagementOutcome?: string | null; outcomeHitAt?: string | null },
+  ref: TerminalRef,
+  actualR: number | null,
+): string {
+  const rows = managementTimeline(t, ref);
+  const plan = planVerdictOf(t, ref);
+  const lines = rows.map((r) => `${r.at.slice(0, 16).replace("T", " ")}  ${r.text}`);
+  lines.push("");
+  lines.push(
+    plan.verdict
+      ? `Left alone, the original plan would have hit the ${plan.verdict === "stop_first" ? "stop" : "target"} first${plan.at ? ` (${plan.at.slice(0, 16).replace("T", " ")})` : ""}: ${plan.planR != null ? `${plan.planR >= 0 ? "+" : ""}${plan.planR.toFixed(2)}R` : "unknown R"}.`
+      : "Left alone, the original plan has not reached either level yet.",
+  );
+  lines.push(actualR != null ? `As managed, the trade made ${actualR >= 0 ? "+" : ""}${actualR.toFixed(2)}R.` : "The trade is still open.");
+  if (actualR != null && plan.planR != null) {
+    const d = actualR - plan.planR;
+    lines.push(`Management ${d >= 0 ? "added" : "cost"} ${Math.abs(d).toFixed(2)}R against set-and-forget.`);
+  }
+  return lines.join("\n");
+}
+
+/** The question put to the model about one finished trade's management. */
+export function managementReviewPrompt(brief: string, ctx: { symbol: string; direction: string }): string {
+  return `You are a trading coach reading the full record of one ${ctx.direction} trade in ${ctx.symbol}, sent from the trader's own terminal. The record has the idea as it was drawn, every change the trader made while the trade was on — with the open R at the moment of each change — and what the untouched plan would have done.
+
+Judge the MANAGEMENT only: the decisions after the entry. Not whether the idea was good, not the result on its own. A move that lost money can be right and a move that made money can be wrong; say which this was and why, from the record. Be specific: name the move and the R it was made at.
+
+Return ONLY a JSON object with exactly these keys:
+- verdict: "helped" if the management beat leaving the plan alone, "hurt" if leaving it alone would have paid more, "neutral" if it made no material difference (under 0.1R either way), "unknown" if the plan's own outcome is not known yet.
+- summary: one or two plain sentences on what the trader did and what it was worth, in the second person.
+- lesson: one sentence the trader can act on next time, or null if there is nothing to change.
+
+The record:
+"""
+${brief.slice(0, 4000)}
+"""`;
+}
+
+/** A model's answer, taken only as far as it fits. */
+export function parseManagementReview(raw: unknown, basis: ManagementReview["basis"], at: string): ManagementReview {
+  const j = (raw ?? {}) as any;
+  const v = String(j.verdict ?? "").toLowerCase();
+  const verdict = v === "helped" || v === "hurt" || v === "neutral" ? v : "unknown";
+  return {
+    at,
+    verdict,
+    summary: String(j.summary ?? "").slice(0, 600),
+    lesson: j.lesson == null ? null : String(j.lesson).slice(0, 300),
+    basis,
+  };
+}

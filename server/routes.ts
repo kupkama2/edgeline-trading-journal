@@ -48,6 +48,8 @@ import { normalizeSetupRead } from "@shared/setup-read";
 import { debriefTrades, normalizeDebrief } from "@shared/debrief";
 import { syncBinance, verifyKey, verifyTradingKey } from "./binance-account";
 import { registerTerminalRoutes } from "./terminal";
+import { managementBrief, parseTerminalRef } from "@shared/terminal";
+import { computeMetrics } from "@shared/metrics";
 import { seal } from "./secrets";
 import { hlAsset, splitHlAsset, venueOfAccount } from "@shared/hyperliquid";
 
@@ -269,6 +271,8 @@ function closeNotePrompt(
     initialStop?: number | null;
     initialTarget?: number | null;
     exitPrice?: number | null;
+    /** For a trade sent from the terminal: what was done to it while it was on, as the record has it. */
+    management?: string | null;
   },
   demons: string[],
   highlights: string[],
@@ -277,7 +281,10 @@ function closeNotePrompt(
   return `You are reading a trader's own note on one trade, and turning it into their journal's fields. The note was written over the life of the trade — why they took it, how they managed it, how it ended, and sometimes a later look back. Where a later line changes an earlier one ("UPDATE: actually…"), the later line wins.
 
 The trade: ${ctx.direction} from ${n(ctx.entryPrice)}, stop ${n(ctx.initialStop)}, target ${n(ctx.initialTarget)}, exited at ${n(ctx.exitPrice)}.
-
+${ctx.management ? `
+What the terminal recorded while it was on (facts, not the note; the note still decides the fields below, but read it knowing this):
+${ctx.management}
+` : ""}
 Return ONLY a JSON object with exactly these keys: exitReason, entryGrade, stopGrade, exitGrade, demons, highlights, noManagementOutcome, verdict. Use null (or [] for the lists) for anything the note does not say. The note is the source; never infer a value from the numbers alone.
 
 exitReason, one of:
@@ -590,7 +597,7 @@ export async function registerRoutes(
   app: Express,
 ): Promise<Server> {
   // The terminal's own routes, behind their own allowlist (server/terminal.ts).
-  registerTerminalRoutes(app);
+  registerTerminalRoutes(app, { llm: (prompt) => callLLM(prompt) });
 
   /* ------------------------------- trades ------------------------------- */
   app.get("/api/trades", async (req, res) => {
@@ -2188,6 +2195,10 @@ export async function registerRoutes(
         initialStop: t.initialStop,
         initialTarget: t.initialTarget,
         exitPrice: t.exitPrice,
+        management: (() => {
+          const ref = parseTerminalRef(t.terminal);
+          return ref ? managementBrief(t, ref, computeMetrics(t).actualR) : null;
+        })(),
       },
       demons.map((d) => d.name),
       Array.from(new Set([...HIGHLIGHT_TAXONOMY, ...extra])),

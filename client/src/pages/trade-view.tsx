@@ -92,6 +92,7 @@ import { FillDialog } from "@/components/fill-dialog";
 import { ResolveTradeDialog } from "@/components/resolve-trade";
 import { maskIfQuote } from "@shared/redact";
 import { PlanHitPrompt } from "@/components/plan-hit";
+import { ManagementCard } from "@/components/management-card";
 
 /** A figure the page will let you correct without opening the editor. */
 export interface Editable {
@@ -1519,6 +1520,10 @@ export function TradeBody({
       {/* The question a finished trade is most often missing, asked where its
           answer is on screen. Gone once answered. */}
       <PlanHitPrompt trade={trade} />
+
+      {/* A trade sent from the terminal: the idea, every move on it, and
+          whether leaving it alone would have paid more. */}
+      <ManagementCard trade={trade} />
 
       {/* ------------------------------ the plan ---------------------------- */}
       {/*
