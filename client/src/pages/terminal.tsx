@@ -26,10 +26,11 @@ import { Segmented, num } from "@/components/trade-shared";
 import type { SessionResponse } from "@/components/login-gate";
 import type { Level, LevelField } from "@/components/chart-levels";
 import { pill } from "@/components/trade-chart";
-import { useTrades } from "@/lib/data";
 import {
   fetchTerminalPage,
   useAddSize,
+  useAdoptPosition,
+  useTerminalTrades,
   useCancelTerminalTrade,
   useCloseTerminalTrade,
   useEnableHedgeMode,
@@ -212,7 +213,7 @@ function Desk({ account, env, hedge }: { account: string; env: "live" | "testnet
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [account]);
 
-  const { data: trades = [] } = useTrades();
+  const { data: trades = [] } = useTerminalTrades();
   const mine = useMemo(
     () =>
       trades
@@ -318,7 +319,7 @@ function Desk({ account, env, hedge }: { account: string; env: "live" | "testnet
   const sized = plan && rule ? sizePlan(plan, rule) : null;
 
   /* ---------------- the chart's lines ---------------- */
-  const liveBrackets = useMemo(() => bracketsOf(live?.ref.tag ?? null, book.data?.orders ?? []), [live, book.data]);
+  const liveBrackets = useMemo(() => bracketsOf(live?.ref ?? null, book.data?.orders ?? []), [live, book.data]);
   const levels = useMemo<Level[]>(() => {
     if (live) {
       const t = live.t;
@@ -644,7 +645,7 @@ function ManagePanel({ live, book, rule, last }: { live: Live; book: BookData | 
   const { t, ref } = live;
   const resting = t.status === "pending";
   const pos = (book?.positions ?? []).find((p) => p.symbol === ref.symbol && p.positionSide === ref.positionSide) ?? null;
-  const br = bracketsOf(ref.tag, book?.orders ?? []);
+  const br = bracketsOf(ref, book?.orders ?? []);
   const waiting = resting ? ref.armOnFill : undefined;
   const currentStop = br.stop?.stopPrice ?? (waiting ? Number(waiting.stop.stopPrice) : null);
   const currentTarget = br.targets[0]?.stopPrice ?? (waiting?.targets[0] ? Number(waiting.targets[0].stopPrice) : null);
@@ -851,9 +852,11 @@ function Field({
 }
 
 /** The resting brackets that carry a trade's tag. */
-function bracketsOf(tag: string | null, orders: VenueOrder[]): { stop: VenueOrder | null; targets: VenueOrder[] } {
-  if (!tag) return { stop: null, targets: [] };
-  const mine = orders.filter((o) => o.clientOrderId.startsWith(tag));
+/** The brackets on the book for a trade: by the tag its own orders carry, or by the ids an adopted one was given. */
+function bracketsOf(ref: { tag: string; stopOrderId?: number | null; targetOrderIds?: number[] } | null, orders: VenueOrder[]): { stop: VenueOrder | null; targets: VenueOrder[] } {
+  if (!ref) return { stop: null, targets: [] };
+  const ids = new Set([ref.stopOrderId, ...(ref.targetOrderIds ?? [])].filter((x): x is number => x != null));
+  const mine = orders.filter((o) => o.clientOrderId.startsWith(ref.tag) || ids.has(o.orderId));
   return {
     stop: mine.find((o) => o.type === "STOP_MARKET") ?? null,
     targets: mine.filter((o) => o.type === "TAKE_PROFIT_MARKET"),
@@ -874,6 +877,7 @@ function Book({
   const { toast } = useToast();
   const close = useCloseTerminalTrade();
   const cancel = useCancelTerminalTrade();
+  const adopt = useAdoptPosition();
   const act = (what: "close" | "cancel", id: number) =>
     (what === "close" ? close : cancel)
       .mutateAsync(id)
@@ -891,7 +895,7 @@ function Book({
       <ul className="divide-y divide-border/60">
         {mine.map(({ t, ref }) => {
           const p = posFor(ref.symbol, ref.positionSide);
-          const br = bracketsOf(ref.tag, book?.orders ?? []);
+          const br = bracketsOf(ref, book?.orders ?? []);
           const waiting = t.status === "pending" ? ref.armOnFill : undefined;
           return (
             <li key={t.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2 text-xs" data-testid={`row-terminal-trade-${t.id}`}>
@@ -936,6 +940,23 @@ function Book({
             <span className="font-mono">@ {num(p.entryPrice)}</span>
             <span className={`font-mono ${p.unrealized >= 0 ? "text-emerald-400" : "text-red-400"}`}>{fmtMoney(p.unrealized)}</span>
             <span className="text-[10px]">not from this terminal</span>
+            {(p.positionSide === "LONG" || p.positionSide === "SHORT") && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="ml-auto h-6 px-2 text-[11px]"
+                disabled={adopt.isPending}
+                onClick={() =>
+                  adopt
+                    .mutateAsync({ account, symbol: p.symbol, positionSide: p.positionSide as "LONG" | "SHORT" })
+                    .then((r) => toast({ title: "Adopted", description: `Trade #${r.trade.id} now manages ${p.symbol} ${p.positionSide}.` }))
+                    .catch((err: any) => toast({ title: "Not adopted", description: String(err?.message ?? err).replace(/^\d+:\s*/, "").slice(0, 200), variant: "destructive" }))
+                }
+                data-testid={`button-terminal-adopt-${p.symbol}`}
+              >
+                Adopt
+              </Button>
+            )}
           </li>
         ))}
       </ul>

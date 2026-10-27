@@ -264,6 +264,7 @@ ALTER TABLE account_settings ADD COLUMN IF NOT EXISTS binance_env TEXT NOT NULL 
 ALTER TABLE account_settings ADD COLUMN IF NOT EXISTS binance_trade BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE account_settings ADD COLUMN IF NOT EXISTS binance_ip_locked BOOLEAN;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS terminal TEXT;
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS paper BOOLEAN NOT NULL DEFAULT FALSE;
 CREATE TABLE IF NOT EXISTS terminal_log (
   id SERIAL PRIMARY KEY,
   user_id INTEGER NOT NULL,
@@ -1282,11 +1283,12 @@ export class DatabaseStorage implements IStorage {
 
   /* ------------------------------- trades ------------------------------- */
 
-  async listTrades(): Promise<TradeWithTags[]> {
+  /** The journal: every trade but the paper ones, unless asked for those too (the terminal is). */
+  async listTrades(includePaper = false): Promise<TradeWithTags[]> {
     const rows = await db
       .select()
       .from(trades)
-      .where(this.owns(trades))
+      .where(includePaper ? this.owns(trades) : and(this.owns(trades), eq(trades.paper, false)))
       .orderBy(desc(trades.entryTime));
     if (rows.length === 0) return [];
     const ids = rows.map((t) => t.id);
@@ -1620,7 +1622,7 @@ export class DatabaseStorage implements IStorage {
 
   /** Every trade the terminal sent and is still responsible for reading back. */
   async listTerminalTrades(): Promise<TradeWithTags[]> {
-    return (await this.listTrades()).filter((t) => t.terminal && t.status !== "cancelled");
+    return (await this.listTrades(true)).filter((t) => t.terminal && t.status !== "cancelled");
   }
 
   async logTerminal(row: Omit<typeof terminalLog.$inferInsert, "userId" | "id">): Promise<void> {

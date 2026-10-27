@@ -22,6 +22,7 @@ import { equityAt, fmtPercent, riskPercent } from "@shared/equity";
  */
 import { useEffect, useMemo, useRef, useState, Suspense, lazy } from "react";
 import { useLocation, useRoute } from "wouter";
+import { useQuery } from "@tanstack/react-query";
 import { Card } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -447,10 +448,16 @@ export default function TradeView({ under = "/" }: { under?: string }) {
   const [resolving, setResolving] = useState(false);
   const [filling, setFilling] = useState<"add" | "partial" | null>(null);
 
-  const trade = useMemo(
-    () => (trades ?? []).find((t) => t.id === id) ?? null,
-    [trades, id],
-  );
+  // A paper trade — one the terminal sent to a testnet — is kept out of the
+  // journal's list, so its own page asks for it by id.
+  const listed = useMemo(() => (trades ?? []).find((t) => t.id === id) ?? null, [trades, id]);
+  const single = useQuery<TradeWithTags>({
+    queryKey: [`/api/trades/${id}`],
+    enabled: Number.isFinite(id) && !isLoading && !listed,
+    refetchInterval: 5_000,
+    retry: false,
+  });
+  const trade = listed ?? single.data ?? null;
 
   /*
    * Ctrl-V while VIEWING a live trade means the same thing as while editing
@@ -590,7 +597,7 @@ export default function TradeView({ under = "/" }: { under?: string }) {
               onOrdersDetected={() => {}}
               onCreated={(newId) => navigate(`/trade/${newId}`, { replace: true })}
             />
-          ) : isLoading ? (
+          ) : isLoading || (!listed && single.isLoading) ? (
             <div className="space-y-4">
               <Skeleton className="h-8 w-40" />
               <Skeleton className="h-64 w-full" />
