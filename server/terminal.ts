@@ -20,6 +20,8 @@ import { z } from "zod";
 import { storageFor, terminalUsers, tradingAccountsEverywhere, type DatabaseStorage } from "./storage";
 import { openUserStream, worthAReadBack, type StreamHandle } from "./binance-stream";
 import { oneAtATime } from "./venue-sync";
+import { fetch as undiciFetch } from "undici";
+import { egressFor } from "./egress";
 import { open } from "./secrets";
 import { futuresBase, signedCall, type BinanceEnv, type Creds } from "./binance-account";
 import { fetchCandles, type Interval } from "./binance";
@@ -198,6 +200,19 @@ const refOf = (t: TradeWithTags): TerminalRef => {
  * this one's average. A trade with no stop resting is flagged `unprotected`,
  * which the terminal shows in red; the position is still real.
  */
+/** A public read off the venue: no key, no signature. */
+async function publicGet(base: string, path: string): Promise<any> {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 10_000);
+  try {
+    const res = await undiciFetch(`${base}${path}`, { headers: { accept: "application/json" }, signal: ctl.signal, dispatcher: egressFor(base) } as any);
+    if (!res.ok) throw new Error(`${new URL(base).hostname} → HTTP ${res.status} on ${path.split("?")[0]}`);
+    return res.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** The mark on this position side now, or nothing when the venue holds none. */
 async function markOf(v: Venue, ref: TerminalRef): Promise<number | null> {
   try {
@@ -810,6 +825,38 @@ export function registerTerminalRoutes(app: Express, deps: { llm?: (prompt: stri
     }),
   );
 
+  /** The strip over the chart: last, mark, the day's change and range, funding. Public data, from the account's own host. */
+  app.get(
+    "/api/terminal/ticker",
+    wrap(async (req, res) => {
+      const { account, symbol } = z.object({ account: z.string().min(1), symbol: z.string().min(1) }).parse(req.query);
+      const acct = (await store(req).listAccountSettings()).find((a) => a.name === account);
+      if (!acct) throw httpError(404, "No such account");
+      const base = futuresBase(acct.binanceEnv);
+      const sym = symbol.toUpperCase();
+      const n = (x: unknown) => (x == null || x === "" || !Number.isFinite(Number(x)) ? null : Number(x));
+      const [day, prem] = await Promise.all([
+        publicGet(base, `/fapi/v1/ticker/24hr?symbol=${encodeURIComponent(sym)}`).catch(() => null),
+        publicGet(base, `/fapi/v1/premiumIndex?symbol=${encodeURIComponent(sym)}`).catch(() => null),
+      ]);
+      if (!day && !prem) throw httpError(502, "The venue did not answer for that symbol.");
+      res.json({
+        symbol: sym,
+        last: n(day?.lastPrice),
+        change: n(day?.priceChange),
+        changePct: n(day?.priceChangePercent),
+        high: n(day?.highPrice),
+        low: n(day?.lowPrice),
+        volume: n(day?.volume),
+        quoteVolume: n(day?.quoteVolume),
+        mark: n(prem?.markPrice),
+        index: n(prem?.indexPrice),
+        fundingRate: n(prem?.lastFundingRate),
+        nextFundingTime: n(prem?.nextFundingTime),
+      });
+    }),
+  );
+
   /** Every trade this terminal has a record of, paper included — the journal's own list leaves those out. */
   app.get(
     "/api/terminal/trades",
@@ -989,6 +1036,82 @@ export function registerTerminalRoutes(app: Express, deps: { llm?: (prompt: stri
         }),
       } as any);
       res.json({ trade: after, order: next });
+    }),
+  );
+
+  /**
+   * A partial take-profit, resting: a take-profit order for part of the
+   * position at a price, beside whatever target already rests. Its fill is
+   * a partial in the ledger like any target that takes its share.
+   */
+  app.post(
+    "/api/terminal/trades/:id/take",
+    wrap(async (req, res) => {
+      const body = z.object({ qty: z.number().positive(), price: z.number().positive() }).parse(req.body);
+      const s = store(req);
+      const t = await s.getTrade(Number(req.params.id));
+      if (!t) throw httpError(404, "Trade not found");
+      const ref = refOf(t);
+      if (t.status !== "open") throw httpError(400, "Only an open position can have a take resting.");
+      const { venue } = await arm(s, ref.account);
+      const rules = await rulesFor(venue.env, ref.symbol);
+      const pos = (await positions(venue)).find((p) => p.symbol === ref.symbol && p.positionSide === ref.positionSide);
+      if (!pos || Math.abs(pos.amt) <= 0) throw httpError(409, "The venue holds no position on this side.");
+      const qty = fmtQty(Math.min(body.qty, Math.abs(pos.amt)), rules);
+      if (Number(qty) <= 0) throw httpError(400, `That rounds to nothing at ${ref.symbol}'s step.`);
+      const long = ref.positionSide === "LONG";
+      if (long ? body.price <= pos.markPrice : body.price >= pos.markPrice) throw httpError(400, `A take has to sit on the profit side of the mark (${pos.markPrice}).`);
+      const side = long ? "long" : "short";
+      const order = { ...bracketAt("target", body.price, rules, side, `${ref.tag}-t${Date.now().toString(36)}`), quantity: qty };
+      delete (order as any).closePosition;
+      const placed = await logged(s, "take-at", ref.account, t.id, { qty, price: body.price }, () => placeOrder(venue, order));
+      const nextRef: TerminalRef = {
+        ...ref,
+        targetOrderIds: [...ref.targetOrderIds, placed.orderId],
+        moves: [...(ref.moves ?? []), moveAt(t, ref, "target", pos.markPrice, { to: Number(placed.stopPrice ?? body.price), qty: Number(qty) })],
+      };
+      const after = await s.updateTrade(t.id, { terminal: formatTerminalRef(nextRef) } as any);
+      res.json({ trade: after, order: placed });
+    }),
+  );
+
+  /**
+   * One order off the book, whatever it is — a leftover bracket, a resting
+   * add, something placed from the venue's app. A trade that was counting
+   * on it is told: its stop gone means it is unprotected, its target or
+   * add gone means the list no longer names it.
+   */
+  app.post(
+    "/api/terminal/orders/cancel",
+    wrap(async (req, res) => {
+      const { account, symbol, orderId } = z.object({ account: z.string().min(1), symbol: z.string().min(1), orderId: z.number().int() }).parse(req.body);
+      const s = store(req);
+      const { venue } = await arm(s, account);
+      const sym = symbol.toUpperCase();
+      await logged(s, "cancel-order", account, null, { symbol: sym, orderId }, async () => {
+        await cancelBracket(venue, sym, orderId);
+        return { cancelled: true };
+      });
+      const touched: number[] = [];
+      for (const t of await s.listTerminalTrades()) {
+        const ref = parseTerminalRef(t.terminal);
+        if (!ref || ref.account !== account || ref.symbol !== sym) continue;
+        const had = ref.stopOrderId === orderId || ref.targetOrderIds.includes(orderId) || (ref.addOrderIds ?? []).includes(orderId) || ref.entryOrderId === orderId;
+        if (!had) continue;
+        const next: TerminalRef = {
+          ...ref,
+          stopOrderId: ref.stopOrderId === orderId ? null : ref.stopOrderId,
+          unprotected: ref.stopOrderId === orderId && t.status === "open" ? true : ref.unprotected,
+          targetOrderIds: ref.targetOrderIds.filter((id) => id !== orderId),
+          addOrderIds: (ref.addOrderIds ?? []).filter((id) => id !== orderId),
+        };
+        // A resting entry pulled by hand: the trade is cancelled, as the cancel route would.
+        const patch: Record<string, unknown> = { terminal: formatTerminalRef(next) };
+        if (ref.entryOrderId === orderId && t.status === "pending") Object.assign(patch, { status: "cancelled", cancelReason: "pulled" });
+        await s.updateTrade(t.id, patch as any);
+        touched.push(t.id);
+      }
+      res.json({ cancelled: orderId, trades: touched });
     }),
   );
 

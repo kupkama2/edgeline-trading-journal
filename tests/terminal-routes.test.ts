@@ -144,6 +144,8 @@ function startVenue(): Promise<string> {
         });
       }
       if (u.pathname === "/api/v3/exchangeInfo") return json({ symbols: [] });
+      if (u.pathname === "/fapi/v1/ticker/24hr") return json({ symbol: u.searchParams.get("symbol"), lastPrice: "80010.0", priceChange: "-410.0", priceChangePercent: "-0.51", highPrice: "80900.0", lowPrice: "79500.0", volume: "12345.6", quoteVolume: "987654321.0" });
+      if (u.pathname === "/fapi/v1/premiumIndex") return json({ symbol: u.searchParams.get("symbol"), markPrice: "80020.0", indexPrice: "80015.0", lastFundingRate: "0.0001", nextFundingTime: 1793120000000 });
       if (u.pathname === "/fapi/v1/klines") return json(klines(Number(u.searchParams.get("startTime") ?? 0), Number(u.searchParams.get("endTime") ?? Date.now())));
 
       // The listen key: the API key alone, no signature (USER_STREAM).
@@ -806,6 +808,68 @@ describe.skipIf(!DB)("the terminal against a stub venue", () => {
     t = (await c.json()).trade;
     expect(t).toMatchObject({ status: "closed", exitReason: "discretion" });
     expect(position.amt).toBe(0);
+  });
+
+  it("rests a partial take at a price, and cancels one order off the book with the trade told", async () => {
+    const r = await send("POST", "/api/terminal/send", {
+      account: ACCOUNT,
+      plan: { symbol: "BTCUSDT", side: "long", entryType: "market", entryPrice: 80010, stop: 79010, targets: [], qty: 0.04, leverage: 3 },
+    });
+    expect(r.status).toBe(201);
+    const { trade, placed } = await r.json();
+    expect(placed.stopOrderId).toBeTruthy();
+
+    // A take for a quarter at 80500: a take-profit with a quantity, not a close-position one.
+    calls.length = 0;
+    const take = await send("POST", `/api/terminal/trades/${trade.id}/take`, { qty: 0.01, price: 80500 });
+    expect(take.status).toBe(200);
+    const sent = calls.find((c) => c.method === "POST" && c.path === "/fapi/v1/algoOrder")!;
+    expect(sent.params).toMatchObject({ type: "TAKE_PROFIT_MARKET", quantity: "0.010", triggerPrice: "80500.0", positionSide: "LONG", side: "SELL" });
+    expect(sent.params.closePosition).toBeUndefined();
+    const { order } = await take.json();
+    let ref = JSON.parse((await store.getTrade(trade.id)).terminal);
+    expect(ref.targetOrderIds).toContain(order.orderId);
+    expect(ref.moves.at(-1)).toMatchObject({ kind: "target", to: 80500, qty: 0.01 });
+    // On the wrong side of the mark it is refused before it is sent.
+    expect((await send("POST", `/api/terminal/trades/${trade.id}/take`, { qty: 0.01, price: 79900 })).status).toBe(400);
+
+    // It fires: a partial in the ledger, the position still on.
+    fillOrder(order.orderId, 80500);
+    await send("POST", "/api/terminal/reconcile", {});
+    let t = await store.getTrade(trade.id);
+    expect(t.status).toBe("open");
+    expect(t.fills).toMatchObject([{ kind: "partial", size: 0.01, price: 80500 }]);
+
+    // A resting add, then cancelled from the orders list: the trade no longer names it.
+    const added = await send("POST", `/api/terminal/trades/${trade.id}/add`, { qty: 0.01, price: 79500 });
+    const addId = (await added.json()).order.orderId;
+    ref = JSON.parse((await store.getTrade(trade.id)).terminal);
+    expect(ref.addOrderIds).toEqual([addId]);
+    const c1 = await send("POST", "/api/terminal/orders/cancel", { account: ACCOUNT, symbol: "BTCUSDT", orderId: addId });
+    expect(c1.status).toBe(200);
+    expect((await c1.json()).trades).toEqual([trade.id]);
+    ref = JSON.parse((await store.getTrade(trade.id)).terminal);
+    expect(ref.addOrderIds).toEqual([]);
+    expect(orders.find((o) => o.orderId === addId)!.status).toBe("CANCELED");
+
+    // The stop cancelled the same way: the trade is unprotected and says so.
+    const c2 = await send("POST", "/api/terminal/orders/cancel", { account: ACCOUNT, symbol: "BTCUSDT", orderId: placed.stopOrderId });
+    expect(c2.status).toBe(200);
+    ref = JSON.parse((await store.getTrade(trade.id)).terminal);
+    expect(ref.stopOrderId).toBeNull();
+    expect(ref.unprotected).toBe(true);
+    const log = await store.listTerminalLog(20);
+    expect(log.filter((l: any) => l.action === "cancel-order" && l.ok)).toHaveLength(2);
+
+    await send("POST", `/api/terminal/trades/${trade.id}/close`, {});
+    t = await store.getTrade(trade.id);
+    expect(t.status).toBe("closed");
+    expect(position.amt).toBe(0);
+  });
+
+  it("reads the ticker strip off the account's own host", async () => {
+    const t = await get(`/api/terminal/ticker?account=${encodeURIComponent(ACCOUNT)}&symbol=btcusdt`);
+    expect(t).toMatchObject({ symbol: "BTCUSDT", last: 80010, changePct: -0.51, high: 80900, low: 79500, mark: 80020, fundingRate: 0.0001, nextFundingTime: 1793120000000 });
   });
 
   it("cancels a resting plan: every order off, the trade marked pulled", async () => {

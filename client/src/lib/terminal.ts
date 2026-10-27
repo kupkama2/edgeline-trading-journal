@@ -358,3 +358,43 @@ export function usePlanAlerts(
     }
   }, [mine, say]);
 }
+
+export function useTakeAt() {
+  return useMutation({
+    mutationFn: async (v: { tradeId: number; qty: number; price: number }) =>
+      (await apiRequest("POST", `/api/terminal/trades/${v.tradeId}/take`, { qty: v.qty, price: v.price })).json() as Promise<{ trade: TradeWithTags; order: VenueOrder }>,
+    onSuccess: afterWrite,
+  });
+}
+
+export function useCancelOrder() {
+  return useMutation({
+    mutationFn: async (v: { account: string; symbol: string; orderId: number }) =>
+      (await apiRequest("POST", "/api/terminal/orders/cancel", v)).json() as Promise<{ cancelled: number; trades: number[] }>,
+    onSuccess: afterWrite,
+  });
+}
+
+export interface Ticker {
+  symbol: string;
+  last: number | null;
+  change: number | null;
+  changePct: number | null;
+  high: number | null;
+  low: number | null;
+  volume: number | null;
+  quoteVolume: number | null;
+  mark: number | null;
+  index: number | null;
+  fundingRate: number | null;
+  nextFundingTime: number | null;
+}
+
+export function useTicker(account: string | null, symbol: string | null) {
+  return useQuery<Ticker>({
+    queryKey: [`/api/terminal/ticker?account=${encodeURIComponent(account ?? "")}&symbol=${encodeURIComponent(symbol ?? "")}`],
+    enabled: !!account && !!symbol,
+    refetchInterval: 5_000,
+    retry: false,
+  });
+}
