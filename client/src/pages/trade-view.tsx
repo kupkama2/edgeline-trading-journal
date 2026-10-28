@@ -561,7 +561,7 @@ export default function TradeView({ under = "/" }: { under?: string }) {
         <DialogContent
           /* Narrower while a form is open: four columns of prices at the
              reading width made every box twice the width of its number. */
-          className={`max-h-[90vh] overflow-y-auto ${isNew || editing ? "max-w-3xl" : "max-w-4xl"}`}
+          className={`max-h-[90vh] overflow-y-auto ${isNew || editing ? "max-w-3xl" : "max-w-4xl"} ${editing ? "pb-0" : ""}`}
           onInteractOutside={(e) => innerOpen && e.preventDefault()}
           /* Always declined here; the listener below owns Escape. Sharing the
              key with the primitive lost a race: closing a stacked dialog
@@ -628,6 +628,7 @@ export default function TradeView({ under = "/" }: { under?: string }) {
               <TradeEditor
                 trade={trade}
                 card={pastedCard}
+                inset="dialog"
                 onClose={() => {
                   setEditing(false);
                   setPastedCard(null);

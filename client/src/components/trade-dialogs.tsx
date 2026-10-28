@@ -85,11 +85,14 @@ export function TradeEditor({
   trade,
   onClose,
   card,
+  inset = "panel",
 }: {
   trade: TradeWithTags | null;
   onClose: () => void;
   /** A closed-position card pasted before the editor opened. */
   card?: CloseCard | null;
+  /** What pads the host: the trade window (six) or an inline panel (three, four on wider screens). The footer reaches out to match. */
+  inset?: "dialog" | "panel";
 }) {
   const { toast } = useToast();
   const { data: tags = [] } = useMistakeTags();
@@ -1169,18 +1172,25 @@ export function TradeEditor({
             {/* The trade's one note (shared/notes.ts). Its first paragraph is
                 the why; once the trade is closed the grades, the exit reason,
                 the demons and green flags are read out of it. */}
-            <Textarea
-              value={f.notes ?? ""}
-              onChange={set("notes")}
-              placeholder={"Why you took it — first line. Then how you managed it, how it ended, and anything you see later."}
-              className="min-h-[72px] text-sm"
-              data-testid="input-edit-notes"
-            />
-            <p className="text-[10px] leading-snug text-muted-foreground">
-              {lifecycle === "closed"
-                ? "Read into the grades, exit reason, demons and flags when saved. What you set by hand stays."
-                : "Read into the grades and the rest once the trade is closed."}
-            </p>
+            <div className="overflow-hidden rounded-lg border border-border/60 bg-secondary/15 transition-colors focus-within:border-primary/50" data-testid="field-edit-notes">
+              <Textarea
+                value={f.notes ?? ""}
+                onChange={set("notes")}
+                placeholder={"Why you took it.\nHow you managed it, how it ended.\nAnything you see later."}
+                className="min-h-[112px] resize-y rounded-none border-0 bg-transparent px-3.5 py-3 text-sm leading-relaxed shadow-none focus-visible:border-0 focus-visible:ring-0"
+                data-testid="input-edit-notes"
+              />
+              <div className="flex items-center justify-between gap-3 border-t border-border/40 bg-secondary/20 px-3 py-1.5 text-[10px] leading-snug text-muted-foreground">
+                <span>
+                  {lifecycle === "closed"
+                    ? "Read into the grades, exit reason, demons and flags when saved. What you set by hand stays."
+                    : "Read into the grades and the rest once the trade is closed."}
+                </span>
+                <span className="shrink-0 font-mono tabular-nums" data-testid="text-edit-notes-words">
+                  {(f.notes ?? "").trim() ? `${(f.notes ?? "").trim().split(/\s+/).length} words` : "empty"}
+                </span>
+              </div>
+            </div>
 
             {/* Setup tags come out of the note's first paragraph (the why),
                 on save; they show on the trade beside it. */}
@@ -1466,8 +1476,15 @@ export function TradeEditor({
               how a wrong number gets read as a right one. The negative margins
               let it span the full width of a padded parent.
             */}
+            {/* Flush with the window it lives in: the dialog pads by six on
+                the sides and, while the editor is open, not at all at the
+                bottom (trade-view), so the bar reaches out by six and takes
+                the window's bottom corners whether it is stuck to the
+                viewport floor or settled at the end of the form. */}
             <div
-              className="sticky bottom-0 z-20 -mx-4 border-t border-border/70 bg-card/95 px-4 pb-3 pt-2 backdrop-blur sm:-mx-5 sm:px-5"
+              className={`sticky bottom-0 z-20 border-t border-border/70 bg-background/95 py-3 backdrop-blur ${
+                inset === "dialog" ? "-mx-6 px-6 sm:rounded-b-lg" : "-mx-3 rounded-b-md px-3 sm:-mx-4 sm:px-4"
+              }`}
               data-testid="bar-edit-footer"
             >
             {/* The editor is long enough that the fields you correct most

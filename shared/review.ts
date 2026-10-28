@@ -140,7 +140,12 @@ export function dayLabel(d: Date): string {
   return d.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" });
 }
 
-export const isReviewed = (t: TradeWithTags) => Boolean(t.reviewedAt);
+/**
+ * Reviewed means written about. The stamp records that you went over the
+ * trade; a note on it IS going over it, so a trade with words on it is never
+ * owed a review it has already had.
+ */
+export const isReviewed = (t: Pick<TradeWithTags, "reviewedAt" | "notes">) => Boolean(t.reviewedAt) || Boolean(t.notes?.trim());
 
 export interface ReviewProgress {
   /** The start of the scope — Monday for a week, midnight for a day. */

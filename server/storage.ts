@@ -1350,6 +1350,8 @@ export class DatabaseStorage implements IStorage {
     // Every writer comes through here — the form, an import, a sync — so the
     // 1R default is applied once, here, for all of them.
     const withTarget = { ...(t as any), ...targetFields(t as any), ...noteFields(t as any) };
+    // A finished trade logged with its note has been gone over in the logging.
+    if (withTarget.status === "closed" && String(withTarget.notes ?? "").trim() && !withTarget.reviewedAt) withTarget.reviewedAt = new Date().toISOString();
     const [row] = await db
       .insert(trades)
       .values({ ...withTarget, userId: this.userId })
@@ -1394,6 +1396,20 @@ export class DatabaseStorage implements IStorage {
             .from(trades)
             .where(and(eq(trades.id, id), this.owns(trades)));
     if (!row) return undefined;
+    /*
+     * The note is the review (shared/review.ts): a closed trade that has
+     * words on it carries the stamp too, so every count that reads the
+     * stamp — the week's debt, the XP — agrees with the one that reads the
+     * note. Written once, after the row is what it will be.
+     */
+    if (row.status === "closed" && String(row.notes ?? "").trim() && !row.reviewedAt) {
+      const [stamped] = await db
+        .update(trades)
+        .set({ reviewedAt: new Date().toISOString() })
+        .where(and(eq(trades.id, id), this.owns(trades)))
+        .returning();
+      if (stamped) Object.assign(row, stamped);
+    }
     if (tagIds) await this.setTags(id, tagIds);
     return {
       ...row,
