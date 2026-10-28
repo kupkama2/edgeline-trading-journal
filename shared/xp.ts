@@ -77,7 +77,7 @@ export function tradeXp(t: TradeWithTags): XpEvent[] {
     if (isWellTraded(t)) add("well-traded", "Traded it well", 5);
     // Going back over it cold, days later, is the hardest part of keeping a
     // journal and the only part that changes the next week.
-    if (t.reviewedAt) add("reviewed", "Went over it again afterwards", 5);
+    if (t.reviewedAt || t.notes?.trim()) add("reviewed", "Went over it again afterwards", 5);
   }
   return ev;
 }

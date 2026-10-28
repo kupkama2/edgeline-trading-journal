@@ -65,6 +65,13 @@ describe.skipIf(!DB)("reading a trade's note", () => {
       } as any);
     gold = (await mk("GOLD", "2026-10-20T09:00:00.000Z", "stopped out, the stop was too tight")).id;
     other = (await mk("SOL", "2026-10-21T09:00:00.000Z", "chased it")).id;
+    // A closed trade logged with a note is gone over in the logging: the stamp is on it.
+    expect((await store.getTrade(gold))?.reviewedAt).toBeTruthy();
+    const blank = await mk("ETH", "2026-10-21T10:00:00.000Z", null);
+    expect(blank.reviewedAt).toBeNull();
+    // ...and a note written later stamps it then.
+    expect((await store.updateTrade(blank.id, { notes: "late to it" } as any))?.reviewedAt).toBeTruthy();
+    await store.deleteTrade(blank.id);
 
     const e = express();
     e.use(express.json());

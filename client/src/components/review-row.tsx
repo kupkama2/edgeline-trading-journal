@@ -389,7 +389,7 @@ export function ReviewRow({
           ) : (
             <Check className="mr-1.5 h-3.5 w-3.5" />
           )}
-          {done ? "Gone over" : "Mark gone over"}
+          {done ? (t.reviewedAt ? "Gone over" : "Gone over · the note counts") : "Mark gone over"}
         </Button>
       </div>
 

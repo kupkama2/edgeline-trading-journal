@@ -67,6 +67,9 @@ describe("how far through the week you are", () => {
     expect(p.left.map((t) => t.id)).toEqual([2, 3]);
     expect(isReviewed(ts[0])).toBe(true);
     expect(isReviewed(ts[1])).toBe(false);
+    // Words on the trade are the review: a note counts without the stamp, a blank one does not.
+    expect(isReviewed({ ...ts[1], notes: "took it on the retest, cut it when it stalled" })).toBe(true);
+    expect(isReviewed({ ...ts[1], notes: "   " })).toBe(false);
   });
 
   it("is done when every trade has been gone over, and when there were none", () => {
