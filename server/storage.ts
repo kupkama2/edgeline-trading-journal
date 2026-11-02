@@ -16,6 +16,7 @@ import {
   terminalLog,
   chapters,
   readPrefs,
+  type UpdateUserPrefs,
 } from "@shared/schema";
 import type {
   InsertTrade,
@@ -790,9 +791,10 @@ export const accounts = {
    * moment, which is what decides which trades may close the record; any
    * other change leaves the stamp alone.
    */
-  async setPrefs(id: number, patch: Partial<Pick<UserPrefs, "reviewMode">>): Promise<UserPrefs> {
+  async setPrefs(id: number, patch: UpdateUserPrefs): Promise<UserPrefs> {
     const current = await accounts.prefs(id);
-    const next: UserPrefs = { ...current, ...patch };
+    const { guard, ...rest } = patch;
+    const next: UserPrefs = { ...current, ...rest, guard: { ...current.guard, ...(guard ?? {}) } };
     if (patch.reviewMode === "enforce" && current.reviewMode !== "enforce") {
       next.reviewEnforcedSince = new Date().toISOString();
     }

@@ -17,6 +17,7 @@ import {
   trailingLosses,
 } from "../shared/tilt";
 import type { TradingStyle } from "../shared/schema";
+import { DEFAULT_GUARDRAILS } from "../shared/guardrails";
 import { localIso, trade } from "./helpers";
 
 /**
@@ -112,6 +113,17 @@ describe("what is wrong with the next trade", () => {
     expect(kinds(tiltSignals(cand(9), three, style()))).toEqual([]);
     const stop = [loss(1, 9, { size: 100 })]; // −$500
     expect(kinds(tiltSignals(cand(12), stop, style()))).toEqual(["daily-stop"]);
+  });
+
+  it("reads the person's own rails: a tighter streak and a wider stop", () => {
+    const rails = { ...DEFAULT_GUARDRAILS, lossStreakLimit: 2, dailyLossStop: 900 };
+    const two = [loss(1, 9), loss(2, 10)];
+    expect(kinds(tiltSignals(cand(12), two, style(), rails))).toEqual(["loss-streak"]);
+    expect(kinds(tiltSignals(cand(12), two, style()))).toEqual([]);
+    const stop = [loss(1, 9, { size: 100 })]; // −$500: under a $900 stop
+    expect(kinds(tiltSignals(cand(12), stop, style(), rails))).toEqual([]);
+    const m = tiltMeter([loss(1, 9), loss(2, 10)], NOW, rails);
+    expect(m.reasons.map((r) => r.kind)).toEqual(["loss-streak"]);
   });
 });
 

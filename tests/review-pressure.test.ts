@@ -3,6 +3,7 @@ import express from "express";
 import { createServer, type Server } from "node:http";
 import type { TradeWithTags } from "../shared/schema";
 import { readPrefs } from "../shared/schema";
+import { DEFAULT_GUARDRAILS, readGuardRails } from "../shared/guardrails";
 import { canSnooze, debtSentence, gateShut, reviewDebt, SNOOZE_MS } from "../shared/review-pressure";
 
 /**
@@ -111,13 +112,18 @@ describe("the gate", () => {
 
 describe("stored prefs", () => {
   it("default to reminding, and survive junk", () => {
-    expect(readPrefs(null)).toEqual({ reviewMode: "remind", reviewEnforcedSince: null });
-    expect(readPrefs("{not json")).toEqual({ reviewMode: "remind", reviewEnforcedSince: null });
-    expect(readPrefs(JSON.stringify({ reviewMode: "nag", reviewEnforcedSince: 5 }))).toEqual({ reviewMode: "remind", reviewEnforcedSince: null });
+    const base = { reviewMode: "remind", reviewEnforcedSince: null, guard: DEFAULT_GUARDRAILS };
+    expect(readPrefs(null)).toEqual(base);
+    expect(readPrefs("{not json")).toEqual(base);
+    expect(readPrefs(JSON.stringify({ reviewMode: "nag", reviewEnforcedSince: 5 }))).toEqual(base);
     expect(readPrefs(JSON.stringify({ reviewMode: "enforce", reviewEnforcedSince: "2026-10-17T00:00:00.000Z" }))).toEqual({
+      ...base,
       reviewMode: "enforce",
       reviewEnforcedSince: "2026-10-17T00:00:00.000Z",
     });
+    // The rails, field by field: a good one is kept, a bad one takes its default.
+    expect(readGuardRails({ dailyLossStop: 250, lossStreakLimit: "two", walkMinutes: -5 })).toEqual({ ...DEFAULT_GUARDRAILS, dailyLossStop: 250 });
+    expect(readPrefs(JSON.stringify({ guard: { dailyLossAlert: 100, dailyLossStop: 200 } })).guard).toMatchObject({ dailyLossAlert: 100, dailyLossStop: 200, lossStreakLimit: 3 });
   });
 });
 
@@ -154,7 +160,22 @@ describe.skipIf(!DB)("prefs over the wire", () => {
     fetch(`${base}/api/prefs`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 
   it("starts at the default", async () => {
-    expect(await (await fetch(`${base}/api/prefs`)).json()).toEqual({ reviewMode: "remind", reviewEnforcedSince: null });
+    expect(await (await fetch(`${base}/api/prefs`)).json()).toEqual({ reviewMode: "remind", reviewEnforcedSince: null, guard: DEFAULT_GUARDRAILS });
+  });
+
+  it("takes the person's own guard rails a field at a time, and refuses a warning past the stop", async () => {
+    const some = await (await patch({ guard: { dailyLossStop: 800, lossStreakLimit: 2 } })).json();
+    expect(some.guard).toEqual({ ...DEFAULT_GUARDRAILS, dailyLossStop: 800, lossStreakLimit: 2 });
+    // A later change keeps what was set before.
+    const more = await (await patch({ guard: { walkMinutes: 45 } })).json();
+    expect(more.guard).toEqual({ ...DEFAULT_GUARDRAILS, dailyLossStop: 800, lossStreakLimit: 2, walkMinutes: 45 });
+    expect(await (await fetch(`${base}/api/prefs`)).json()).toEqual(more);
+    expect((await patch({ guard: { dailyLossAlert: 900 } })).status).toBe(400);
+    expect((await patch({ guard: { lossStreakLimit: 0 } })).status).toBe(400);
+    expect((await patch({ guard: { nonsense: 1 } })).status).toBe(400);
+    // Back to the defaults is just the defaults, written.
+    const back = await (await patch({ guard: DEFAULT_GUARDRAILS })).json();
+    expect(back.guard).toEqual(DEFAULT_GUARDRAILS);
   });
 
   it("stamps the moment enforcement is switched on, and keeps it on a repeat", async () => {

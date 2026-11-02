@@ -1,7 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { Footprints, Skull } from "lucide-react";
 import { fmtMoney } from "@shared/metrics";
-import { TILT_SEGMENTS, WALK_MINUTES, type TiltMeter as Meter } from "@shared/tilt";
+import { TILT_SEGMENTS, type TiltMeter as Meter } from "@shared/tilt";
 import type { TiltGuard } from "@/components/daily-guard";
 
 /**
@@ -128,4 +128,4 @@ export function fmtCountdown(ms: number): string {
   return `${mm}:${String(ss).padStart(2, "0")}`;
 }
 
-export { WALK_MINUTES };
+

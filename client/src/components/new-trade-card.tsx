@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
+import { useGuardRails } from "@/lib/prefs";
 import { ArrowDownRight, ArrowUpRight, Ban, CheckCircle2, ChevronDown, ClipboardList, Clock3, Loader2, Skull, Sparkles } from "lucide-react";
 import { useTrades, useMistakeTags, useStyles, useCreateTrade, useAddTradeImage, archiveDataUrl, parseScreenshot, fileToDownscaledDataUrl, analyzeRationale } from "@/lib/data";
 import { OWN_IDEA, styleColor, styleName, useStyleFilter } from "@/lib/style-filter";
@@ -329,6 +330,7 @@ export function NewTradeCard({
     );
   hasDraftRef.current = hasDraft;
 
+  const rails = useGuardRails();
   const tiltSigns = useMemo(() => {
     const typed = v.entryTime ? new Date(v.entryTime) : new Date();
     return tiltSignals(
@@ -339,8 +341,9 @@ export function NewTradeCard({
       },
       allTrades,
       styles.find((s) => s.id === styleId) ?? null,
+      rails,
     );
-  }, [v.symbol, v.entryTime, styleId, allTrades, styles]);
+  }, [v.symbol, v.entryTime, styleId, allTrades, styles, rails]);
   const tiltStrict =
     tiltGuard.meter.state === "strict" ||
     (tiltGuard.meter.state === "locked" && !tiltGuard.locked) ||

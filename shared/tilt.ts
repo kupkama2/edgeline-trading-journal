@@ -22,8 +22,9 @@
  * the card and the tests all read the same rules.
  */
 import type { TradeWithTags, TradingStyle } from "./schema";
-import { computeMetrics, DAILY_LOSS_STOP, LOSS_STREAK_LIMIT } from "./metrics";
+import { computeMetrics } from "./metrics";
 import { inSessionWindow, windowLabel } from "./session";
+import { DEFAULT_GUARDRAILS, type GuardRails } from "./guardrails";
 
 /** The bar has five segments. */
 export const TILT_SEGMENTS = 5;
@@ -31,10 +32,10 @@ export const TILT_SEGMENTS = 5;
 export const TILT_STRICT = 3;
 /** Five filled: locked. Go take a walk. */
 export const TILT_LOCK = 5;
-/** How long the walk is. The lock holds at least this long past the last sign. */
-export const WALK_MINUTES = 30;
-/** Back into the same symbol this soon after losing on it is a re-entry. */
-export const REENTRY_MINUTES = 15;
+/** How long the walk is by default. The lock holds at least this long past the last sign; the person's own is in their rails. */
+export const WALK_MINUTES = DEFAULT_GUARDRAILS.walkMinutes;
+/** Back into the same symbol this soon after losing on it is a re-entry, by default. */
+export const REENTRY_MINUTES = DEFAULT_GUARDRAILS.reentryMinutes;
 
 const MINUTE = 60_000;
 
@@ -123,6 +124,7 @@ export function tiltSignals(
   candidate: { symbol: string; styleId: number | null; entryTime: Date },
   trades: TradeWithTags[],
   style: TradingStyle | null | undefined,
+  rails: GuardRails = DEFAULT_GUARDRAILS,
 ): TiltSignal[] {
   const out: TiltSignal[] = [];
   const at = candidate.entryTime.getTime();
@@ -145,7 +147,7 @@ export function tiltSignals(
         t.exitTime &&
         t.symbol.toUpperCase() === symbol &&
         ms(t.exitTime) <= at &&
-        at - ms(t.exitTime) <= REENTRY_MINUTES * MINUTE,
+        at - ms(t.exitTime) <= rails.reentryMinutes * MINUTE,
     )
     .sort((a, b) => b.exitTime!.localeCompare(a.exitTime!))[0];
   if (lastOnSymbol && pnlOf(lastOnSymbol) < 0) {
@@ -162,10 +164,10 @@ export function tiltSignals(
 
   const closes = closesOn(trades, candidate.entryTime).filter((t) => ms(t.exitTime) <= at);
   const streak = trailingLosses(closes);
-  if (streak >= LOSS_STREAK_LIMIT) out.push({ kind: "loss-streak", streak });
+  if (streak >= rails.lossStreakLimit) out.push({ kind: "loss-streak", streak });
 
   const pnl = closes.reduce((s, t) => s + pnlOf(t), 0);
-  if (pnl <= -DAILY_LOSS_STOP) out.push({ kind: "daily-stop", pnl });
+  if (pnl <= -rails.dailyLossStop) out.push({ kind: "daily-stop", pnl });
 
   return out;
 }
@@ -212,13 +214,13 @@ export interface TiltMeter {
  * at the guard's limit, and all of them for the daily stop — a day that has
  * hit its stop is over, whatever else it says. Capped at the bar.
  */
-export function tiltMeter(trades: TradeWithTags[], now: Date = new Date()): TiltMeter {
+export function tiltMeter(trades: TradeWithTags[], now: Date = new Date(), rails: GuardRails = DEFAULT_GUARDRAILS): TiltMeter {
   const entries = entriesOn(trades, now);
   const closes = closesOn(trades, now);
   const tilts = entries.filter(isTilt);
   const lossStreak = trailingLosses(closes);
   const pnlToday = closes.reduce((s, t) => s + pnlOf(t), 0);
-  const stopHit = pnlToday <= -DAILY_LOSS_STOP;
+  const stopHit = pnlToday <= -rails.dailyLossStop;
 
   const reasons: TiltReason[] = [];
   if (tilts.length) {
@@ -228,7 +230,7 @@ export function tiltMeter(trades: TradeWithTags[], now: Date = new Date()): Tilt
       label: `${tilts.length} tilt ${tilts.length === 1 ? "trade" : "trades"}`,
     });
   }
-  if (lossStreak >= LOSS_STREAK_LIMIT) {
+  if (lossStreak >= rails.lossStreakLimit) {
     reasons.push({ kind: "loss-streak", segments: 1, label: `${lossStreak} losses in a row` });
   }
   if (stopHit) {
@@ -248,7 +250,7 @@ export function tiltMeter(trades: TradeWithTags[], now: Date = new Date()): Tilt
     const lastSign = Math.max(lastTilt, lastLoss);
     walkEndsAt = stopHit
       ? endOfLocalDay(now)
-      : (Number.isFinite(lastSign) ? lastSign : now.getTime()) + WALK_MINUTES * MINUTE;
+      : (Number.isFinite(lastSign) ? lastSign : now.getTime()) + rails.walkMinutes * MINUTE;
     lockKey = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}:${filled}:${Number.isFinite(lastSign) ? lastSign : 0}`;
   }
 
