@@ -8,6 +8,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { CalendarDays, Camera, ChevronDown, Clock, Loader2, X, type LucideIcon } from "lucide-react";
@@ -129,6 +130,52 @@ export function toLocalInput(iso: string | null | undefined) {
  * one that cannot be squeezed.
  */
 export const LABEL_ROW = "flex h-5 items-center";
+
+/**
+ * The trade's note as one framed block: the text with room to breathe, and
+ * a footer inside the frame with what the note is read into and how much
+ * is written. The same field in the entry card and the editor.
+ */
+export function NoteField({
+  value,
+  onChange,
+  onBlur,
+  name,
+  placeholder = "Why you took it.\nHow you managed it, how it ended.\nAnything you see later.",
+  hint,
+  minHeight = "min-h-[96px]",
+  testId,
+}: {
+  value: string;
+  onChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
+  onBlur?: () => void;
+  name?: string;
+  placeholder?: string;
+  hint: ReactNode;
+  minHeight?: string;
+  testId: string;
+}) {
+  const words = value.trim() ? value.trim().split(/\s+/).length : 0;
+  return (
+    <div className="overflow-hidden rounded-lg border border-border/60 bg-secondary/15 transition-colors focus-within:border-primary/50" data-testid={`field-${testId}`}>
+      <Textarea
+        value={value}
+        onChange={onChange}
+        onBlur={onBlur}
+        name={name}
+        placeholder={placeholder}
+        className={`${minHeight} resize-y rounded-none border-0 bg-transparent px-3.5 py-3 text-sm leading-relaxed shadow-none focus-visible:border-0 focus-visible:ring-0`}
+        data-testid={testId}
+      />
+      <div className="flex items-center justify-between gap-3 border-t border-border/40 bg-secondary/20 px-3 py-1.5 text-[10px] leading-snug text-muted-foreground">
+        <span>{hint}</span>
+        <span className="shrink-0 font-mono tabular-nums" data-testid={`text-${testId}-words`}>
+          {words ? `${words} words` : "empty"}
+        </span>
+      </div>
+    </div>
+  );
+}
 
 /** "14:30" from "1430", "9:5", "14.30" — or null while it is not a time yet. */
 export function parseTime24(raw: string): string | null {

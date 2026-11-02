@@ -1,5 +1,4 @@
 import { useAccountBalances } from "@/lib/data";
-import { Textarea } from "@/components/ui/textarea";
 import { joinNote, whyOf } from "@shared/notes";
 import type { PositionRow } from "@shared/positions-read";
 import { toInstant } from "@shared/import-parse";
@@ -38,7 +37,7 @@ import {
   pointValueFor,
 } from "@shared/symbols";
 import { dropBracketLegs, type ImportCandidate } from "@shared/import-parse";
-import { DateTime24, Dropzone, EXIT_REASONS, RationaleTags, Segmented, TimeField, localNow, num, parseTags, toIso } from "@/components/trade-shared";
+import { DateTime24, Dropzone, EXIT_REASONS, RationaleTags, Segmented, TimeField, localNow, num, parseTags, toIso, LABEL_ROW, NoteField } from "@/components/trade-shared";
 import { EMPTY_GRADES, GradePicker, type GradeState } from "@/components/grade-picker";
 import { AccountPicker, StylePicker } from "@/components/trade-pickers";
 import { TradeOutcomeFields } from "@/components/trade-outcome";
@@ -1145,7 +1144,7 @@ export function NewTradeCard({
               name="symbol"
               render={({ field }) => (
                 <FormItem className="space-y-1">
-                  <FormLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  <FormLabel className={`${LABEL_ROW} text-[10px] uppercase tracking-wider text-muted-foreground`}>
                     Symbol
                   </FormLabel>
                   <FormControl>
@@ -1170,7 +1169,7 @@ export function NewTradeCard({
               name="direction"
               render={({ field }) => (
                 <FormItem className="min-w-0 space-y-1">
-                  <div className="flex items-center justify-between gap-2">
+                  <div className={`${LABEL_ROW} justify-between gap-2`}>
                     <FormLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
                       Direction
                     </FormLabel>
@@ -1180,11 +1179,11 @@ export function NewTradeCard({
                         the one field whose sign flips every R in the trade. */}
                     {!directionPicked && levelRead.implied && (
                       <span
-                        className="text-[9px] uppercase tracking-wider text-muted-foreground/70"
+                        className="min-w-0 truncate text-[9px] uppercase tracking-wider text-muted-foreground/70"
                         title={`Read from your ${levelRead.from.join(" and ")}`}
                         data-testid="text-direction-auto"
                       >
-                        from your {levelRead.from.join(" + ")}
+                        from the {levelRead.from.join(" + ")}
                       </span>
                     )}
                   </div>
@@ -1286,37 +1285,6 @@ export function NewTradeCard({
                   </FormControl>
                   )}
                   <FormMessage className="text-[10px]" />
-                  {/* The other half of the pair, worked out. */}
-                  {sizeMode === "auto" ? (
-                    sized ? (
-                      <p className="font-mono text-[10px] text-muted-foreground" data-testid="text-sized-from-risk">
-                        ={" "}
-                        <span className="text-foreground">
-                          {sized.sizeUnit === "base"
-                            ? `${sized.size} ${isFutures ? (sized.size === 1 ? "contract" : "contracts") : "units"}`
-                            : fmtAmount(sized.size, 0)}
-                        </span>
-                        {sized.sizeUnit === "base" && sized.size > 0 && isFutures && <> · risks {fmtAmount(sized.actualRiskDollars, 0)}</>}
-                        {sized.sizeUnit === "base" && sized.size === 0 && (
-                          <span className="text-amber-500" data-testid="text-stop-too-far">
-                            {" "}— stop too far: 1 contract risks {fmtAmount(sized.perUnitRisk, 0)}
-                          </span>
-                        )}
-                      </p>
-                    ) : (
-                      <p className="text-[10px] text-muted-foreground">size follows from entry and stop</p>
-                    )
-                  ) : preview ? (
-                    <p className="font-mono text-[10px] text-muted-foreground" data-testid="text-derived-risk">
-                      risk <span className="text-foreground">{fmtAmount(preview.riskDollars, 0)}</span>
-                      {sizeReadout && <> · {maskAmount() ?? sizeReadout}</>}
-                      {spec && <> · {spec.label}</>}
-                    </p>
-                  ) : sizeReadout ? (
-                    <p className="font-mono text-[10px] text-muted-foreground" data-testid="text-size-readout">
-                      {maskAmount() ?? sizeReadout}
-                    </p>
-                  ) : null}
                 </FormItem>
               )}
             />
@@ -1425,6 +1393,50 @@ export function NewTradeCard({
               </div>
             ))}
 
+            {/* The other half of the size pair, worked out, in the cell the
+                row has left: what the figures above come to. Under the Size
+                field it broke the row's line; here it completes it. */}
+            <div className="space-y-1" data-testid="field-position">
+              <div className={`${LABEL_ROW} text-[10px] uppercase tracking-wider text-muted-foreground`}>Position</div>
+              <div className="flex h-9 min-w-0 flex-col justify-center overflow-hidden rounded-md border border-border/60 bg-secondary/20 px-3 font-mono text-[11px] leading-tight tabular-nums">
+                {sizeMode === "auto" ? (
+                  sized ? (
+                    <>
+                      <span className="truncate" data-testid="text-sized-from-risk">
+                        {sized.sizeUnit === "base"
+                          ? `${sized.size} ${isFutures ? (sized.size === 1 ? "contract" : "contracts") : "units"}`
+                          : fmtAmount(sized.size, 0)}
+                      </span>
+                      {sized.sizeUnit === "base" && sized.size > 0 && isFutures && <span className="truncate text-[10px] text-muted-foreground">risks {fmtAmount(sized.actualRiskDollars, 0)}</span>}
+                      {sized.sizeUnit === "base" && sized.size === 0 && (
+                        <span className="truncate text-[10px] text-amber-500" data-testid="text-stop-too-far">
+                          stop too far: 1 contract risks {fmtAmount(sized.perUnitRisk, 0)}
+                        </span>
+                      )}
+                    </>
+                  ) : (
+                    <span className="truncate text-muted-foreground">from entry and stop</span>
+                  )
+                ) : preview ? (
+                  <>
+                    <span className="truncate" data-testid="text-derived-risk">
+                      {sizeReadout ? (maskAmount() ?? sizeReadout.replace(/ at entry$/, "")) : `risk ${fmtAmount(preview.riskDollars, 0)}`}
+                    </span>
+                    <span className="truncate text-[10px] text-muted-foreground">
+                      {sizeReadout ? `risk ${fmtAmount(preview.riskDollars, 0)}` : ""}
+                      {spec && <>{sizeReadout ? " · " : ""}{spec.label}</>}
+                    </span>
+                  </>
+                ) : sizeReadout ? (
+                  <span className="truncate" data-testid="text-size-readout">
+                    {maskAmount() ?? sizeReadout.replace(/ at entry$/, "")}
+                  </span>
+                ) : (
+                  <span className="text-muted-foreground">—</span>
+                )}
+              </div>
+            </div>
+
             {/* The plan, to scale, the moment there is a plan to draw. Two
                 prices are two numbers to subtract; a risk leg nearly as long
                 as the reward leg is a trade you want to notice BEFORE you take
@@ -1495,51 +1507,44 @@ export function NewTradeCard({
             name="rationale"
             render={({ field }) => (
               <FormItem className="space-y-1">
-                <FormLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                <FormLabel className={`${LABEL_ROW} text-[10px] uppercase tracking-wider text-muted-foreground`}>
                   Note
                 </FormLabel>
                 <FormControl>
-                  <Textarea
-                    {...field}
-                    placeholder="vah, 786 retest, bla bla…"
-                    className="min-h-[60px] text-sm"
-                    data-testid="input-rationale"
+                  <NoteField
+                    value={(field.value as string) ?? ""}
+                    onChange={field.onChange}
+                    onBlur={field.onBlur}
+                    name={field.name}
+                    placeholder={"Why you are taking it — the level, the read, the trigger.\nKeep adding as you manage and close it."}
+                    hint="Start with the why, then keep adding as you manage and close it. Tags, source and grades are read from it."
+                    minHeight="min-h-[88px]"
+                    testId="input-rationale"
                   />
                 </FormControl>
-                <p className="text-[10px] leading-snug text-muted-foreground">
-                  Start with the why, then keep adding as you manage and close it. Tags, source and
-                  grades are read from it.
-                </p>
               </FormItem>
             )}
           />
 
-          {/* Where it ran and which book it belongs to: one row. */}
-          <div className="flex flex-wrap items-end gap-x-5 gap-y-3">
-          {styles.length > 0 && (
-            <div className="space-y-1" data-testid="section-style-picker">
-              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                Style
-              </p>
-              <StylePicker styles={styles} value={styleId} onChange={(id) => id != null && setPickedStyleId(id)} />
+          {/* Where it ran, which book it belongs to, whose call it was: one
+              row on the same grid as the figures above, labels one height. */}
+          <div className={`grid gap-3 ${narrow ? "grid-cols-2" : "grid-cols-2 sm:grid-cols-4"}`}>
+            {styles.length > 0 && (
+              <div className="min-w-0 space-y-1" data-testid="section-style-picker">
+                <p className={`${LABEL_ROW} text-[10px] uppercase tracking-wider text-muted-foreground`}>Style</p>
+                <StylePicker styles={styles} value={styleId} onChange={(id) => id != null && setPickedStyleId(id)} size="h-9 w-full" />
+              </div>
+            )}
+            <div className="min-w-0 space-y-1" data-testid="section-account-picker">
+              <p className={`${LABEL_ROW} text-[10px] uppercase tracking-wider text-muted-foreground`}>Account</p>
+              <AccountPicker value={account} onChange={setAccount} known={knownAccounts} size="h-9 w-full" />
             </div>
-          )}
-
-          <div className="flex flex-wrap gap-4">
-            <div className="space-y-1" data-testid="section-account-picker">
-              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                Account
-              </p>
-              <AccountPicker value={account} onChange={setAccount} known={knownAccounts} />
-            </div>
-            {/* Whose call it was. Usually said in the rationale and pulled
-                out from there; the picker is one click away for when the
-                name is not one the journal knows yet. */}
-            {showSource || source.trim() ? (
-              <div className="space-y-1" data-testid="section-source-picker">
-                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                  Source
-                </p>
+            {/* Whose call it was. Usually said in the note and pulled out
+                from there; the picker is one click away for when the name
+                is not one the journal knows yet. */}
+            <div className="min-w-0 space-y-1" data-testid="section-source-picker">
+              <p className={`${LABEL_ROW} text-[10px] uppercase tracking-wider text-muted-foreground`}>Source</p>
+              {showSource || source.trim() ? (
                 <AccountPicker
                   value={source}
                   onChange={setSource}
@@ -1548,19 +1553,19 @@ export function NewTradeCard({
                   placeholder="e.g. Daniel, Severin, CBS, UB"
                   emptyLabel="My own idea"
                   newLabel="+ New source…"
+                  size="h-9 w-full"
                 />
-              </div>
-            ) : (
-              <button
-                type="button"
-                onClick={() => setShowSource(true)}
-                className="self-end pb-2 text-[10px] text-muted-foreground underline decoration-dotted underline-offset-2 hover:text-foreground"
-                data-testid="button-show-source"
-              >
-                + whose call
-              </button>
-            )}
-          </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setShowSource(true)}
+                  className="flex h-9 w-full items-center rounded-md border border-dashed border-border/70 px-3 text-xs text-muted-foreground transition-colors hover:border-border hover:text-foreground"
+                  data-testid="button-show-source"
+                >
+                  + whose call
+                </button>
+              )}
+            </div>
           </div>
 
           {closedMode && (
