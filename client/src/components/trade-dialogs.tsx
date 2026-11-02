@@ -12,7 +12,6 @@ import { useEffect, useMemo, useState, Suspense, lazy, useRef } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { ArrowDownRight, ArrowUpRight, Ban, CheckCircle2, Clock3, Loader2, Minus, Pencil, Plus, Trash2 } from "lucide-react";
@@ -44,7 +43,7 @@ import { ClipboardList, Image as ImageIcon, Layers, LineChart, NotebookPen } fro
 import { AverageCloseSolver } from "@/components/average-close";
 import { useCloseCardPaste } from "@/lib/close-paste";
 import { computeMetrics, fmtFees, fmtMoney, fmtR, EXIT_REASON_LABELS } from "@shared/metrics";
-import { DateTime24, Dropzone, EXIT_REASONS, FormSection, LABEL_ROW, Segmented, RationaleTags, TimeField, localNow, num, parseTags, toIso, toLocalInput } from "@/components/trade-shared";
+import { DateTime24, Dropzone, EXIT_REASONS, FormSection, LABEL_ROW, Segmented, RationaleTags, TimeField, localNow, num, parseTags, toIso, toLocalInput, NoteField } from "@/components/trade-shared";
 import { EMPTY_GRADES, GradePicker, type GradeState } from "@/components/grade-picker";
 import {
   TradeOutcomeFields,
@@ -1172,25 +1171,17 @@ export function TradeEditor({
             {/* The trade's one note (shared/notes.ts). Its first paragraph is
                 the why; once the trade is closed the grades, the exit reason,
                 the demons and green flags are read out of it. */}
-            <div className="overflow-hidden rounded-lg border border-border/60 bg-secondary/15 transition-colors focus-within:border-primary/50" data-testid="field-edit-notes">
-              <Textarea
-                value={f.notes ?? ""}
-                onChange={set("notes")}
-                placeholder={"Why you took it.\nHow you managed it, how it ended.\nAnything you see later."}
-                className="min-h-[112px] resize-y rounded-none border-0 bg-transparent px-3.5 py-3 text-sm leading-relaxed shadow-none focus-visible:border-0 focus-visible:ring-0"
-                data-testid="input-edit-notes"
-              />
-              <div className="flex items-center justify-between gap-3 border-t border-border/40 bg-secondary/20 px-3 py-1.5 text-[10px] leading-snug text-muted-foreground">
-                <span>
-                  {lifecycle === "closed"
-                    ? "Read into the grades, exit reason, demons and flags when saved. What you set by hand stays."
-                    : "Read into the grades and the rest once the trade is closed."}
-                </span>
-                <span className="shrink-0 font-mono tabular-nums" data-testid="text-edit-notes-words">
-                  {(f.notes ?? "").trim() ? `${(f.notes ?? "").trim().split(/\s+/).length} words` : "empty"}
-                </span>
-              </div>
-            </div>
+            <NoteField
+              value={f.notes ?? ""}
+              onChange={set("notes")}
+              minHeight="min-h-[112px]"
+              hint={
+                lifecycle === "closed"
+                  ? "Read into the grades, exit reason, demons and flags when saved. What you set by hand stays."
+                  : "Read into the grades and the rest once the trade is closed."
+              }
+              testId="input-edit-notes"
+            />
 
             {/* Setup tags come out of the note's first paragraph (the why),
                 on save; they show on the trade beside it. */}

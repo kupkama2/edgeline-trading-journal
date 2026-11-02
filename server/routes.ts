@@ -49,6 +49,7 @@ import { debriefTrades, normalizeDebrief } from "@shared/debrief";
 import { syncBinance, verifyKey, verifyTradingKey } from "./binance-account";
 import { registerTerminalRoutes } from "./terminal";
 import { managementBrief, parseTerminalRef } from "@shared/terminal";
+import { guardRailsProblem } from "@shared/guardrails";
 import { computeMetrics } from "@shared/metrics";
 import { seal } from "./secrets";
 import { hlAsset, splitHlAsset, venueOfAccount } from "@shared/hyperliquid";
@@ -1036,6 +1037,12 @@ export async function registerRoutes(
     const parsed = updateUserPrefsSchema.safeParse(req.body);
     if (!parsed.success)
       return res.status(400).json({ message: "Invalid settings", issues: parsed.error.issues });
+    // The rails are judged together, as they will be after the change.
+    if (parsed.data.guard) {
+      const current = await accounts.prefs(req.userId!);
+      const problem = guardRailsProblem({ ...current.guard, ...parsed.data.guard });
+      if (problem) return res.status(400).json({ message: problem });
+    }
     res.json(await accounts.setPrefs(req.userId!, parsed.data));
   });
 

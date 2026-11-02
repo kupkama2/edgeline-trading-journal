@@ -14,11 +14,12 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
-import { BookOpen, Check, Eye, EyeOff, Pencil, Plus, RotateCcw, Trash2, X } from "lucide-react";
+import { BookOpen, Check, Eye, EyeOff, Pencil, Plus, RotateCcw, Trash2, X, ShieldAlert, Loader2 } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { spanLabel, spanRange, useChapters, useDeleteChapter, useStartChapter } from "@/lib/chapters";
 import { inSpan } from "@shared/chapters";
 import { usePrefs, useSetPrefs } from "@/lib/prefs";
+import { DEFAULT_GUARDRAILS, guardRailsProblem, type GuardRails } from "@shared/guardrails";
 import type { ReviewMode } from "@shared/review-pressure";
 import { DateTime24, Segmented, localNow, toIso } from "@/components/trade-shared";
 import {
@@ -38,10 +39,6 @@ import {
 } from "@/lib/data";
 import { STYLE_COLOR_NAMES, styleColor } from "@/lib/style-filter";
 import {
-  DAILY_LOSS_ALERT,
-  DAILY_LOSS_STOP,
-  LOSS_STREAK_LIMIT,
-  COOLDOWN_SECONDS,
   getPrestige,
   fmtMoney,
   mistakeCostLeaderboard,
@@ -1122,25 +1119,7 @@ export default function Settings() {
         </div>
       </Card>
 
-      <Card className="border-card-border bg-card p-4 sm:p-5">
-        <h2 className="text-sm font-semibold tracking-tight">Risk guardrails</h2>
-        <p className="mt-0.5 text-[11px] text-muted-foreground">
-          Carried over from the old tap-counter, now driven by real closed trades.
-        </p>
-        <dl className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
-          {[
-            { k: "Daily warning", v: fmtMoney(-DAILY_LOSS_ALERT) },
-            { k: "Daily hard stop", v: fmtMoney(-DAILY_LOSS_STOP) },
-            { k: "Loss-streak halt", v: `${LOSS_STREAK_LIMIT} in a row` },
-            { k: "Forced cooldown", v: `${COOLDOWN_SECONDS}s` },
-          ].map((r) => (
-            <div key={r.k} className="rounded-md border border-border/60 bg-secondary/25 p-2.5">
-              <dt className="text-[10px] uppercase tracking-wider text-muted-foreground">{r.k}</dt>
-              <dd className="mt-0.5 font-mono text-sm font-bold">{r.v}</dd>
-            </div>
-          ))}
-        </dl>
-      </Card>
+      <GuardRailsCard />
 
       <Card className="border-card-border bg-card p-4 sm:p-5">
         <h2 className="text-sm font-semibold tracking-tight">How the metrics work</h2>
@@ -1264,6 +1243,113 @@ function ReviewDisciplineCard() {
           ))}
         </div>
       </div>
+    </Card>
+  );
+}
+
+/**
+ * The person's own loss and tilt limits. Kept with their prefs, so the
+ * daily guard, the tilt meter and the entry form read the same line on
+ * every device; the defaults are what the journal shipped with.
+ */
+function GuardRailsCard() {
+  const prefs = usePrefs();
+  const set = useSetPrefs();
+  const { toast } = useToast();
+  const [draft, setDraft] = useState<Record<keyof GuardRails, string> | null>(null);
+  const rails = prefs.guard;
+  const shown = (k: keyof GuardRails) => draft?.[k] ?? String(rails[k]);
+  const begin = () =>
+    setDraft(
+      Object.fromEntries((Object.keys(DEFAULT_GUARDRAILS) as (keyof GuardRails)[]).map((k) => [k, String(rails[k])])) as Record<keyof GuardRails, string>,
+    );
+  const change = (k: keyof GuardRails, v: string) => {
+    if (!draft) begin();
+    setDraft((d) => ({ ...(d ?? (Object.fromEntries((Object.keys(DEFAULT_GUARDRAILS) as (keyof GuardRails)[]).map((kk) => [kk, String(rails[kk])])) as Record<keyof GuardRails, string>)), [k]: v }));
+  };
+  const parsed = (): GuardRails | string => {
+    const out = { ...rails };
+    for (const k of Object.keys(DEFAULT_GUARDRAILS) as (keyof GuardRails)[]) {
+      const n = Number(String(shown(k)).replace(/[,$\s]/g, ""));
+      if (!Number.isFinite(n) || n < 0) return `${FIELDS.find((f) => f.key === k)?.label ?? k} needs a number.`;
+      out[k] = k === "dailyLossAlert" || k === "dailyLossStop" ? n : Math.round(n);
+    }
+    const problem = guardRailsProblem(out);
+    if (problem) return problem;
+    if (out.lossStreakLimit < 1) return "The streak limit has to be at least one loss.";
+    return out;
+  };
+  const result = draft ? parsed() : null;
+  const problem = typeof result === "string" ? result : null;
+  const dirty = draft != null && (Object.keys(DEFAULT_GUARDRAILS) as (keyof GuardRails)[]).some((k) => shown(k) !== String(rails[k]));
+  const save = async (next: GuardRails) => {
+    try {
+      await set.mutateAsync({ guard: next });
+      setDraft(null);
+      toast({ title: "Guard rails saved", description: `Day stops at ${fmtMoney(-next.dailyLossStop)}, ${next.lossStreakLimit} losses in a row halt it.` });
+    } catch (err: any) {
+      toast({ title: "Not saved", description: String(err?.message ?? err).replace(/^\d+:\s*/, "").slice(0, 200), variant: "destructive" });
+    }
+  };
+  const FIELDS: { key: keyof GuardRails; label: string; unit: string; says: string }[] = [
+    { key: "dailyLossAlert", label: "Daily warning", unit: "$", says: "down on the day: the guard turns amber" },
+    { key: "dailyLossStop", label: "Daily hard stop", unit: "$", says: "down on the day: the day is over, the meter locks until midnight" },
+    { key: "lossStreakLimit", label: "Losses in a row", unit: "trades", says: "halts the day and lights a segment on the meter" },
+    { key: "cooldownSeconds", label: "Cooldown", unit: "s", says: "the forced break after that streak" },
+    { key: "walkMinutes", label: "Walk", unit: "min", says: "how long the meter's lock holds past the last sign" },
+    { key: "reentryMinutes", label: "Re-entry window", unit: "min", says: "back into a symbol this soon after losing on it is flagged" },
+  ];
+  const isDefault = (Object.keys(DEFAULT_GUARDRAILS) as (keyof GuardRails)[]).every((k) => rails[k] === DEFAULT_GUARDRAILS[k]);
+  return (
+    <Card className="border-card-border bg-card p-4 sm:p-5" data-testid="card-guard-rails">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="flex items-center gap-2 text-sm font-semibold tracking-tight">
+            <ShieldAlert className="h-4 w-4" />
+            Risk guard rails
+          </h2>
+          <p className="mt-0.5 max-w-prose text-[11px] leading-snug text-muted-foreground">
+            Your limits, read off real closed trades: the daily guard, the tilt meter and the entry form all hold this line. Yours alone — every
+            account signed in sets its own.
+          </p>
+        </div>
+        {!isDefault && !draft && (
+          <Button size="sm" variant="ghost" className="h-7 text-[11px] text-muted-foreground" onClick={() => void save(DEFAULT_GUARDRAILS)} disabled={set.isPending} data-testid="button-guard-defaults">
+            Back to defaults
+          </Button>
+        )}
+      </div>
+      <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
+        {FIELDS.map((f) => (
+          <label key={f.key} className="block min-w-0 space-y-1" title={f.says}>
+            <span className="block text-[10px] uppercase tracking-wider text-muted-foreground">{f.label}</span>
+            <span className="flex h-9 items-center gap-2 rounded-md border border-border/60 bg-secondary/20 px-2.5 focus-within:border-primary/60">
+              {f.unit === "$" && <span className="text-[11px] text-muted-foreground">$</span>}
+              <input
+                value={shown(f.key)}
+                onChange={(e) => change(f.key, e.target.value)}
+                inputMode="decimal"
+                className="min-w-0 flex-1 bg-transparent font-mono text-sm tabular-nums outline-none"
+                data-testid={`input-guard-${f.key}`}
+              />
+              {f.unit !== "$" && <span className="shrink-0 text-[11px] text-muted-foreground">{f.unit}</span>}
+            </span>
+            <span className="block text-[10px] leading-snug text-muted-foreground/80">{f.says}</span>
+          </label>
+        ))}
+      </div>
+      {draft && (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <Button size="sm" className="h-8 text-xs" disabled={!dirty || !!problem || set.isPending} onClick={() => typeof result === "object" && result && void save(result)} data-testid="button-guard-save">
+            {set.isPending && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
+            Save guard rails
+          </Button>
+          <Button size="sm" variant="ghost" className="h-8 text-xs text-muted-foreground" onClick={() => setDraft(null)} data-testid="button-guard-cancel">
+            Cancel
+          </Button>
+          {problem && <span className="text-[11px] text-amber-500" data-testid="text-guard-problem">{problem}</span>}
+        </div>
+      )}
     </Card>
   );
 }

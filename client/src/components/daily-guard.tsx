@@ -1,3 +1,4 @@
+import { useGuardRails } from "@/lib/prefs";
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -7,10 +8,6 @@ import { useMistakeTags, useStyles, useTrades } from "@/lib/data";
 import {
   computeMetrics,
   fmtMoney,
-  DAILY_LOSS_ALERT,
-  DAILY_LOSS_STOP,
-  LOSS_STREAK_LIMIT,
-  COOLDOWN_SECONDS,
 } from "@shared/metrics";
 import { DEMON_GUARDRAIL_STREAK, demonStats, type DemonStat } from "@shared/demons";
 import { closesOn, tiltCost, tiltLocked, tiltMeter, type TiltCost, type TiltMeter } from "@shared/tilt";
@@ -131,7 +128,8 @@ export interface TiltGuard {
 export function useTiltGuard(trades: TradeWithTags[]): TiltGuard {
   const { acked, acknowledge } = useContext(AckCtx);
   const [now, setNow] = useState(() => Date.now());
-  const meter = useMemo(() => tiltMeter(trades, new Date(now)), [trades, now]);
+  const rails = useGuardRails();
+  const meter = useMemo(() => tiltMeter(trades, new Date(now), rails), [trades, now, rails]);
   // Seconds while a walk is being counted down, minutes otherwise (the day rolls over).
   useEffect(() => {
     const every = meter.state === "locked" ? 1000 : 60_000;
@@ -165,6 +163,7 @@ function isToday(iso: string | null) {
 }
 
 export function useDailyStats(trades: TradeWithTags[]) {
+  const rails = useGuardRails();
   return useMemo(() => {
     const today = trades
       .filter((t) => t.status === "closed" && isToday(t.exitTime))
@@ -201,11 +200,12 @@ export function useDailyStats(trades: TradeWithTags[]) {
       streak,
       streakType,
       lastExit,
-      isDailyWarning: pnl <= -DAILY_LOSS_ALERT && pnl > -DAILY_LOSS_STOP,
-      isDailyStopHit: pnl <= -DAILY_LOSS_STOP,
-      isLossStreakHalt: streakType === "loss" && streak >= LOSS_STREAK_LIMIT,
+      isDailyWarning: pnl <= -rails.dailyLossAlert && pnl > -rails.dailyLossStop,
+      isDailyStopHit: pnl <= -rails.dailyLossStop,
+      isLossStreakHalt: streakType === "loss" && streak >= rails.lossStreakLimit,
+      rails,
     };
-  }, [trades]);
+  }, [trades, rails]);
 }
 
 export function DailyGuardCard({
@@ -230,7 +230,7 @@ export function DailyGuardCard({
       setRemaining(0);
       return;
     }
-    const end = new Date(s.lastExit).getTime() + COOLDOWN_SECONDS * 1000;
+    const end = new Date(s.lastExit).getTime() + s.rails.cooldownSeconds * 1000;
     const tick = () => setRemaining(Math.max(0, Math.ceil((end - Date.now()) / 1000)));
     tick();
     timer.current = setInterval(tick, 1000);
@@ -277,7 +277,7 @@ export function DailyGuardCard({
         />
         <Stat
           label="Daily stop"
-          value={`${fmtMoney(-DAILY_LOSS_STOP)}`}
+          value={`${fmtMoney(-s.rails.dailyLossStop)}`}
           tone={s.isDailyStopHit ? "down" : undefined}
         />
       </div>
@@ -321,13 +321,13 @@ export function DailyGuardCard({
           ) : s.isLossStreakHalt ? (
             <p className="flex items-center gap-1.5 text-[11px] font-semibold text-primary" data-testid="text-halt">
               <Timer className="h-3.5 w-3.5 shrink-0" />
-              {LOSS_STREAK_LIMIT} losses in a row —{" "}
+              {s.rails.lossStreakLimit} losses in a row —{" "}
               {cooling ? `forced break: ${remaining}s left.` : "cooldown complete. Trade carefully."}
             </p>
           ) : (
             <p className="flex items-center gap-1.5 text-[11px] font-medium text-amber-500" data-testid="text-halt">
               <ShieldAlert className="h-3.5 w-3.5 shrink-0" />
-              Warning zone — {fmtMoney(-DAILY_LOSS_ALERT)} breached. One more loser ends the day.
+              Warning zone — {fmtMoney(-s.rails.dailyLossAlert)} breached. One more loser ends the day.
             </p>
           )}
         </div>

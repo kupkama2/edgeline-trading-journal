@@ -1,6 +1,7 @@
 import type { Trade, TradeFill, TradeWithTags } from "./schema";
 import { totalPnLWithFills } from "./fills";
 import { maskAmount } from "./redact";
+import { DEFAULT_GUARDRAILS } from "./guardrails";
 
 export interface TradeMetrics {
   risk: number; // per-unit risk in price terms
@@ -471,11 +472,11 @@ export const EXIT_REASON_LABELS: Record<string, string> = {
   manual_late: "Closed by hand",
 };
 
-/* ===== Risk-guardrail config (carried over from the reference app) ===== */
-export const DAILY_LOSS_ALERT = 300;
-export const DAILY_LOSS_STOP = 500;
-export const LOSS_STREAK_LIMIT = 3;
-export const COOLDOWN_SECONDS = 60;
+/* ===== Risk-guardrail defaults: the person's own are in their prefs (shared/guardrails.ts) ===== */
+export const DAILY_LOSS_ALERT = DEFAULT_GUARDRAILS.dailyLossAlert;
+export const DAILY_LOSS_STOP = DEFAULT_GUARDRAILS.dailyLossStop;
+export const LOSS_STREAK_LIMIT = DEFAULT_GUARDRAILS.lossStreakLimit;
+export const COOLDOWN_SECONDS = DEFAULT_GUARDRAILS.cooldownSeconds;
 
 /* ===== Prestige tiers — now driven by mistake-tag hit counts ===== */
 export interface PrestigeTier {

@@ -9,6 +9,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
+import { DEFAULT_GUARDRAILS, guardRailsPatchSchema, guardRailsSchema, readGuardRails } from "./guardrails";
 
 /* =============================== users ============================== */
 
@@ -57,10 +58,13 @@ export const userPrefsSchema = z.object({
    * a backlog they never agreed to be held to.
    */
   reviewEnforcedSince: z.string().nullable(),
+  /** The signed-in person's own loss and tilt limits (shared/guardrails.ts). */
+  guard: guardRailsSchema,
 });
 export type UserPrefs = z.infer<typeof userPrefsSchema>;
-export const DEFAULT_PREFS: UserPrefs = { reviewMode: "remind", reviewEnforcedSince: null };
-export const updateUserPrefsSchema = z.object({ reviewMode: reviewModeEnum }).partial().strict();
+export const DEFAULT_PREFS: UserPrefs = { reviewMode: "remind", reviewEnforcedSince: null, guard: DEFAULT_GUARDRAILS };
+export const updateUserPrefsSchema = z.object({ reviewMode: reviewModeEnum, guard: guardRailsPatchSchema }).partial().strict();
+export type UpdateUserPrefs = z.infer<typeof updateUserPrefsSchema>;
 
 /** Stored prefs, read leniently: a field that is missing or malformed takes its default. */
 export function readPrefs(raw: string | null | undefined): UserPrefs {
@@ -75,6 +79,7 @@ export function readPrefs(raw: string | null | undefined): UserPrefs {
   return {
     reviewMode: mode.success ? mode.data : DEFAULT_PREFS.reviewMode,
     reviewEnforcedSince: typeof o.reviewEnforcedSince === "string" ? o.reviewEnforcedSince : null,
+    guard: readGuardRails(o.guard),
   };
 }
 
