@@ -221,7 +221,10 @@ async function publicGet(base: string, path: string): Promise<any> {
 /** The mark on this position side now, or nothing when the venue holds none. */
 async function markOf(v: Venue, ref: TerminalRef): Promise<number | null> {
   try {
-    const pos = (await positions(v)).find((p) => p.symbol === ref.symbol && p.positionSide === ref.positionSide);
+    // One-way mode reports the position as BOTH, signed; it is this side's when the sign agrees.
+  const pos = (await positions(v)).find(
+    (p) => p.symbol === ref.symbol && (p.positionSide === ref.positionSide || (p.positionSide === "BOTH" && p.amt > 0 === (ref.positionSide === "LONG"))),
+  );
     return pos?.markPrice ?? null;
   } catch {
     return null;

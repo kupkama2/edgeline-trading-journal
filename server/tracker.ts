@@ -58,6 +58,9 @@ export async function trackUser(userId: number): Promise<TrackSummary[]> {
   });
 }
 
+/** The last thing said about each account, so a venue that is down is logged once, not every pass. */
+const lastSaid = new Map<string, string>();
+
 /** Every watched account of everyone, for the server's watch. */
 export async function trackEverywhere(): Promise<void> {
   const byUser = new Map<number, AccountSettings[]>();
@@ -67,7 +70,14 @@ export async function trackEverywhere(): Promise<void> {
     await oneAtATime(`terminal:${userId}`, async () => {
       for (const a of accounts) {
         const r = await trackAccount(s, a);
-        if (r.error) console.error(`[tracker] ${a.name}: ${r.error}`);
+        const key = `${userId}:${a.name}`;
+        if (r.error) {
+          if (lastSaid.get(key) !== r.error) console.error(`[tracker] ${a.name}: ${r.error}`);
+          lastSaid.set(key, r.error);
+        } else if (lastSaid.has(key)) {
+          console.error(`[tracker] ${a.name}: reading again`);
+          lastSaid.delete(key);
+        }
       }
     });
   }
