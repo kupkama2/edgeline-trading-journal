@@ -23,6 +23,9 @@ import { fetchCandlePage, useTradeCandles } from "@/lib/data";
 import { num } from "@/components/trade-shared";
 import type { TradeWithTags } from "@shared/schema";
 import { chartLevels, type Level, type LevelDraft, type LevelField } from "@/components/chart-levels";
+import { eventsInBar, levelsAt, replayEvents, type ReplayEvent } from "@shared/replay";
+import { parseTerminalRef } from "@shared/terminal";
+import { Pause, Play, SkipForward, StepForward, X } from "lucide-react";
 
 export type { LevelDraft, LevelField } from "@/components/chart-levels";
 
@@ -163,6 +166,7 @@ export function TradeChart({
     trade.id,
     tf === "auto" ? undefined : tf,
   );
+  const replay = useReplay(trade, data?.candles ?? []);
 
   /* Spread into the deps rather than the object itself: a caller that builds
      its draft inline hands us a new object on every keystroke, and a memo
@@ -247,6 +251,7 @@ export function TradeChart({
   }
 
   const candles = data.candles ?? [];
+  const replaying = replay.on;
 
   return (
     <Card className="border-card-border bg-card p-4" data-testid="trade-chart">
@@ -310,8 +315,16 @@ export function TradeChart({
               {f.label}
             </button>
           ))}
+          {/* The trade as it was lived: bar by bar, pausing on each decision. Not for a scalp, which has no path of its own. */}
+          {!trade.scalp && candles.length > 0 && !replaying && (
+            <button type="button" onClick={replay.start} className={`${pill(false)} ml-1 flex items-center gap-1`} data-testid="button-replay">
+              <Play className="h-2.5 w-2.5" /> Replay
+            </button>
+          )}
         </div>
       </div>
+
+      {replaying && <ReplayBar replay={replay} />}
 
       {candles.length === 0 ? (
         /* A timeframe with nothing in it must not take the buttons down with
@@ -324,14 +337,197 @@ export function TradeChart({
           tradeId={trade.id}
           interval={data.interval ?? "1h"}
           candles={candles}
-          levels={levels}
-          onLevel={onLevel}
+          levels={replaying ? replay.levels : levels}
+          onLevel={replaying ? undefined : onLevel}
           direction={trade.direction}
           entryMs={new Date(trade.entryTime).getTime()}
           exitMs={trade.exitTime ? new Date(trade.exitTime).getTime() : null}
+          visibleUntil={replaying ? replay.untilMs : null}
+          events={replaying ? replay.shown : undefined}
         />
       )}
     </Card>
+  );
+}
+
+/* ------------------------------- the replay ------------------------------- */
+
+const SPEEDS = [
+  { id: 1, label: "1×", ms: 700 },
+  { id: 2, label: "2×", ms: 350 },
+  { id: 5, label: "5×", ms: 140 },
+] as const;
+/** Bars shown before the entry when the replay starts: enough context to read the setup. */
+const RUNWAY = 30;
+
+/**
+ * The replay's clock. The tape is revealed one bar at a time; before a bar
+ * is shown, every event that falls inside it is announced and the clock
+ * stops, so the moment is read with the levels as they stood — the stop
+ * before it moved, the target before it was taken — and resumes on request.
+ */
+function useReplay(trade: TradeWithTags, candles: Candle[]) {
+  const [on, setOn] = useState(false);
+  const [cursor, setCursor] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const [speed, setSpeed] = useState<(typeof SPEEDS)[number]["id"]>(1);
+  /** The events the clock stopped on, read until the trader continues. */
+  const [pausedOn, setPausedOn] = useState<ReplayEvent[]>([]);
+  const ref = useMemo(() => parseTerminalRef(trade.terminal), [trade.terminal]);
+  const events = useMemo(() => replayEvents(trade, ref), [trade, ref]);
+  const entryMs = new Date(trade.entryTime).getTime();
+  const entryIndex = useMemo(() => {
+    const i = candles.findIndex((k) => k.t > entryMs);
+    return Math.max(0, (i === -1 ? candles.length : i) - 1);
+  }, [candles, entryMs]);
+  const barMs = candles.length > 1 ? candles[1].t - candles[0].t : 60_000;
+  const untilMs = candles.length ? candles[Math.min(cursor, candles.length - 1)].t + barMs - 1 : 0;
+  const atEnd = cursor >= candles.length - 1;
+
+  const start = () => {
+    setCursor(Math.max(0, entryIndex - RUNWAY));
+    setPausedOn([]);
+    setPlaying(true);
+    setOn(true);
+  };
+  const stop = () => {
+    setOn(false);
+    setPlaying(false);
+    setPausedOn([]);
+  };
+  /** One bar on. Returns false, and stops the clock, when the next bar holds an event. */
+  const step = (announce = true) => {
+    if (atEnd) {
+      setPlaying(false);
+      return false;
+    }
+    const next = cursor + 1;
+    const prevEnd = untilMs;
+    const nextEnd = candles[next].t + barMs - 1;
+    const inside = eventsInBar(events, prevEnd, nextEnd);
+    setCursor(next);
+    if (announce && inside.length) {
+      setPausedOn(inside);
+      setPlaying(false);
+      return false;
+    }
+    setPausedOn([]);
+    return true;
+  };
+  /** Straight to the next event, wherever it is. */
+  const nextEvent = () => {
+    const after = events.find((e) => e.at > untilMs);
+    if (!after) {
+      setCursor(candles.length - 1);
+      setPlaying(false);
+      return;
+    }
+    const i = candles.findIndex((k) => k.t + barMs - 1 >= after.at);
+    const target = i === -1 ? candles.length - 1 : i;
+    setCursor(target);
+    setPausedOn(eventsInBar(events, untilMs, candles[target].t + barMs - 1));
+    setPlaying(false);
+  };
+  const resume = () => {
+    setPausedOn([]);
+    setPlaying(true);
+  };
+
+  useEffect(() => {
+    if (!on || !playing) return;
+    const ms = SPEEDS.find((x) => x.id === speed)?.ms ?? 700;
+    const id = window.setInterval(() => step(), ms);
+    return () => window.clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [on, playing, speed, cursor, candles]);
+
+  // Leaving the trade, or a new set of bars (another timeframe), ends the replay rather than
+  // replaying the wrong tape. A refetch of the same window is not a new set.
+  const tape = `${trade.id}:${candles[0]?.t ?? 0}:${barMs}`;
+  useEffect(() => {
+    setOn(false);
+    setPlaying(false);
+    setPausedOn([]);
+  }, [tape]);
+
+  const now = levelsAt(events, untilMs);
+  const shown = useMemo(() => events.filter((e) => e.at <= untilMs), [events, untilMs]);
+  const levels = useMemo<Level[]>(() => {
+    const out: Level[] = [];
+    const original = events[0]?.stop ?? null;
+    out.push({ price: trade.entryPrice, label: "entry", color: "entry", dashed: false });
+    if (now.stop != null) out.push({ price: now.stop, label: "stop", color: "stop", dashed: false });
+    if (original != null && now.stop != null && Math.abs(original - now.stop) > 1e-9) out.push({ price: original, label: "stop at entry", color: "stop", dashed: true, faint: true });
+    now.targets.forEach((p, i) => out.push({ price: p, label: i === 0 ? "target" : `tp${i + 1}`, color: "target", dashed: i > 0 }));
+    if (now.done && trade.exitPrice != null) out.push({ price: trade.exitPrice, label: "exit", color: "exit", dashed: false });
+    return out;
+  }, [events, now.stop, now.targets, now.done, trade.entryPrice, trade.exitPrice]);
+
+  const when = candles.length ? new Date(candles[Math.min(cursor, candles.length - 1)].t) : null;
+  return { on, start, stop, step: () => step(false), nextEvent, resume, playing, setPlaying, speed, setSpeed, pausedOn, cursor, total: candles.length, atEnd, untilMs, when, levels, shown, events, inTrade: now.inTrade, done: now.done };
+}
+
+const kindTone: Record<ReplayEvent["kind"], string> = {
+  entry: "text-sky-400",
+  stop: "text-red-400",
+  target: "text-emerald-400",
+  partial: "text-amber-400",
+  add: "text-sky-300",
+  exit: "text-foreground",
+  "plan-hit": "text-muted-foreground",
+};
+
+function ReplayBar({ replay }: { replay: ReturnType<typeof useReplay> }) {
+  const r = replay;
+  const bar = "flex h-6 w-6 items-center justify-center rounded border border-border text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground disabled:opacity-40";
+  const passed = r.shown.length;
+  return (
+    <div className="mb-2 rounded-md border border-border/70 bg-secondary/30 px-2 py-1.5" data-testid="replay-bar">
+      <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
+        <button type="button" onClick={() => (r.playing ? r.setPlaying(false) : r.pausedOn.length ? r.resume() : r.setPlaying(true))} className={bar} disabled={r.atEnd} title={r.playing ? "Pause" : "Play"} data-testid="button-replay-play">
+          {r.playing ? <Pause className="h-3 w-3" /> : <Play className="h-3 w-3" />}
+        </button>
+        <button type="button" onClick={r.step} className={bar} disabled={r.atEnd} title="One bar" data-testid="button-replay-step">
+          <StepForward className="h-3 w-3" />
+        </button>
+        <button type="button" onClick={r.nextEvent} className={bar} disabled={r.atEnd || passed >= r.events.length} title="Next event" data-testid="button-replay-next">
+          <SkipForward className="h-3 w-3" />
+        </button>
+        <span className="ml-1 flex items-center gap-0.5" data-testid="replay-speeds">
+          {SPEEDS.map((sp) => (
+            <button key={sp.id} type="button" onClick={() => r.setSpeed(sp.id)} className={pill(r.speed === sp.id)} aria-pressed={r.speed === sp.id} data-testid={`button-replay-speed-${sp.id}`}>
+              {sp.label}
+            </button>
+          ))}
+        </span>
+        <span className="ml-2 font-mono text-muted-foreground" data-testid="replay-clock">
+          {r.when ? r.when.toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: false }) : ""}
+        </span>
+        <span className="text-muted-foreground">
+          {r.done ? "closed" : r.inTrade ? "in the trade" : "before the entry"} · {passed}/{r.events.length} events
+        </span>
+        <span className="ml-auto flex items-center gap-1">
+          <span className="h-1 w-24 overflow-hidden rounded bg-border">
+            <span className="block h-full bg-primary/70" style={{ width: `${r.total > 1 ? Math.round((r.cursor / (r.total - 1)) * 100) : 0}%` }} />
+          </span>
+          <button type="button" onClick={r.stop} className={bar} title="Leave the replay" data-testid="button-replay-exit">
+            <X className="h-3 w-3" />
+          </button>
+        </span>
+      </div>
+      {r.pausedOn.length > 0 && (
+        <div className="mt-1.5 space-y-0.5 border-t border-border/50 pt-1.5" data-testid="replay-paused">
+          {r.pausedOn.map((e, i) => (
+            <div key={i} className="flex items-baseline gap-2 text-[11px]">
+              <span className={`font-mono text-[10px] uppercase tracking-wider ${kindTone[e.kind]}`}>{e.kind === "plan-hit" ? "tape" : e.kind}</span>
+              <span className="text-foreground/90">{e.text}</span>
+            </div>
+          ))}
+          <p className="text-[10px] text-muted-foreground">Paused here. Play or step to go on.</p>
+        </div>
+      )}
+      {r.atEnd && r.pausedOn.length === 0 && <p className="mt-1 text-[10px] text-muted-foreground">End of the tape.</p>}
+    </div>
   );
 }
 
@@ -354,6 +550,8 @@ export function Candles({
   seriesKey,
   height = HEIGHT,
   entryActions,
+  visibleUntil,
+  events,
 }: {
   /** The trade whose candle route pages history. Omit it and pass `loadPage`. */
   tradeId?: number;
@@ -377,6 +575,10 @@ export function Candles({
    * exists.
    */
   entryActions?: { price: number; hasTp: boolean; hasSl: boolean; onTp: () => void; onSl: () => void } | null;
+  /** The replay: only bars up to this instant are drawn, and the view follows the last of them. */
+  visibleUntil?: number | null;
+  /** The replay's events so far, marked on the bars they fell in. */
+  events?: ReplayEvent[];
 }) {
   const { theme } = useTheme();
   const hostRef = useRef<HTMLDivElement>(null);
@@ -478,8 +680,11 @@ export function Candles({
     loadingRef.current = false;
   }, [tradeId, seriesKey, interval]);
 
-  /** Everything drawn: pages scrolled into, then the trade's own window. */
-  const bars = () => (olderRef.current.length ? [...olderRef.current, ...candles] : candles);
+  /** Everything drawn: pages scrolled into, then the trade's own window — cut at the replay's clock when there is one. */
+  const bars = () => {
+    const all = olderRef.current.length ? [...olderRef.current, ...candles] : candles;
+    return visibleUntil == null ? all : all.filter((k) => k.t <= visibleUntil);
+  };
 
   /**
    * Scrolled off the left edge — go and get the bars that were never asked for.
@@ -653,27 +858,48 @@ export function Candles({
       return (best.t / 1000) as UTCTimestamp;
     };
     const long = direction === "long";
-    const marks: SeriesMarker<Time>[] = entryMs == null ? [] : [
-      {
+    const shownBars = bars();
+    const drawnUntil = shownBars.length ? shownBars[shownBars.length - 1].t + (candles.length > 1 ? candles[1].t - candles[0].t : 60_000) - 1 : -Infinity;
+    const marks: SeriesMarker<Time>[] = [];
+    if (events) {
+      /* The replay: each thing that happened, on the bar it happened in, as
+         it happens — a stop moved, a piece off, an add, the exit. */
+      const tone = (k: ReplayEvent["kind"]) => (k === "stop" ? colors.stop : k === "target" || k === "partial" ? colors.target : k === "exit" ? colors.exit : k === "plan-hit" ? colors.text : colors.entry);
+      const label = (e: ReplayEvent) =>
+        e.kind === "entry" ? "in" : e.kind === "exit" ? "out" : e.kind === "stop" ? `SL ${e.stop != null ? num(e.stop) : ""}` : e.kind === "target" ? `TP ${e.targets[0] != null ? num(e.targets[0]) : ""}` : e.kind === "partial" ? "took" : e.kind === "add" ? "add" : "tape";
+      for (const e of events) {
+        if (e.at > drawnUntil) continue;
+        const above = e.kind === "stop" ? !long : e.kind === "entry" ? !long : long;
+        marks.push({
+          time: snap(e.at),
+          position: above ? "aboveBar" : "belowBar",
+          shape: e.kind === "entry" ? (long ? "arrowUp" : "arrowDown") : e.kind === "exit" ? "circle" : "square",
+          color: tone(e.kind),
+          text: label(e),
+          size: e.kind === "plan-hit" ? 0 : 1,
+        });
+      }
+    } else if (entryMs != null && entryMs <= drawnUntil) {
+      marks.push({
         time: snap(entryMs),
         position: long ? "belowBar" : "aboveBar",
         shape: long ? "arrowUp" : "arrowDown",
         color: colors.entry,
         text: "in",
-      },
-      ...(exitMs != null
-        ? [
-            {
-              time: snap(exitMs),
-              position: (long ? "aboveBar" : "belowBar") as "aboveBar" | "belowBar",
-              shape: "circle" as const,
-              color: colors.exit,
-              text: "out",
-            },
-          ]
-        : []),
-    ];
+      });
+      if (exitMs != null && exitMs <= drawnUntil) {
+        marks.push({
+          time: snap(exitMs),
+          position: long ? "aboveBar" : "belowBar",
+          shape: "circle",
+          color: colors.exit,
+          text: "out",
+        });
+      }
+    }
     a.markers.setMarkers(marks);
+    // The replay's view follows the newest bar, as a live chart would, with room on the right for its marks.
+    if (visibleUntil != null) a.chart.timeScale().scrollToPosition(6, false);
 
     /*
      * Fit only when the window itself changed — a new trade, a new timeframe.
@@ -688,7 +914,7 @@ export function Candles({
       a.shape = shape;
       a.chart.timeScale().fitContent();
     }
-  }, [candles, direction, entryMs, exitMs, epoch]);
+  }, [candles, direction, entryMs, exitMs, epoch, visibleUntil, events]);
 
   useEffect(() => {
     const a = api.current;

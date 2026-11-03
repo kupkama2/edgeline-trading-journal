@@ -205,14 +205,16 @@ function Desk({ account, env, hedge, free, quote }: { account: string; env: "liv
   const book = useTerminalBook(account);
   const ticker = useTicker(account, rule ? symbol : null);
 
-  // The journal's own copy of what this terminal has on: read back every few seconds.
+  // The journal's own copy of what this terminal has on. The server's stream
+  // reads a fill back within the second; this is the net under it, and the
+  // refresh of what the page shows.
   const reconcile = useReconcile();
   useEffect(() => {
     const tick = () => {
       if (!reconcile.isPending) reconcile.mutate();
     };
     tick();
-    const id = window.setInterval(tick, 5_000);
+    const id = window.setInterval(tick, 15_000);
     return () => window.clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [account]);
