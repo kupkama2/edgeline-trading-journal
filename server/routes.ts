@@ -52,7 +52,7 @@ import { trackUser } from "./tracker";
 import { managementBrief, parseTerminalRef } from "@shared/terminal";
 import { guardRailsProblem } from "@shared/guardrails";
 import { computeMetrics } from "@shared/metrics";
-import { seal } from "./secrets";
+import { open, seal } from "./secrets";
 import { hlAsset, splitHlAsset, venueOfAccount } from "@shared/hyperliquid";
 
 import {
@@ -1781,6 +1781,10 @@ export async function registerRoutes(
     return {
       ...rest,
       binanceKeyHint: binanceKey ? `…${binanceKey.slice(-4)}` : null,
+      // Whether THIS server can open the sealed secret. False after a move to
+      // a server with a new SESSION_SECRET: the key is there and unusable, and
+      // the row should say so rather than let every read fail downstream.
+      binanceKeyReadable: binanceKey ? open(_secret) != null : null,
     };
   };
 

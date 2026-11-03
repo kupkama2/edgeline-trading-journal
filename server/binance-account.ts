@@ -35,6 +35,7 @@ import {
 import { marketsSeen, tradesFromFills } from "@shared/hyperliquid";
 import { tradingKeyRefusal } from "@shared/terminal";
 import { egressFor } from "./egress";
+import { assertNotBanned, noteRateLimit } from "./binance-ban";
 import { ensureCatalogue } from "./outcomes";
 import { open } from "./secrets";
 import { storageFor } from "./storage";
@@ -130,6 +131,8 @@ export async function signedCall(
   const signed = `${q}&signature=${signature}`;
   const inBody = method === "POST" || method === "PUT";
   const url = inBody ? `${base}${path}` : `${base}${path}?${signed}`;
+  // A host that has banned this IP is not asked: asking extends the ban.
+  assertNotBanned(new URL(base).hostname);
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), 20_000);
   try {
@@ -157,6 +160,7 @@ export async function signedCall(
       } catch {
         /* no body worth reading */
       }
+      noteRateLimit(host, res.status, said, Number(res.headers.get("retry-after")) || null);
       throw new BinanceError(
         `${host} → HTTP ${res.status} on ${path}${code != null ? ` (${code})` : ""}${said}.${adviceFor(code, path)}`,
         res.status,

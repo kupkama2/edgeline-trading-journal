@@ -276,7 +276,7 @@ function bracketsOnBinance(
 async function trackBinance(s: DatabaseStorage, acct: AccountSettings): Promise<TrackSummary> {
   const out: TrackSummary = { account: acct.name, venue: "binance", opened: [], read: 0 };
   const rc = readCreds(acct);
-  if (!rc) return { ...out, error: "The stored key could not be opened." };
+  if (!rc) return { ...out, error: "The stored key could not be opened — the server's SESSION_SECRET has changed since it was saved (a new server, say). Enter the key again in Settings." };
   const v: Venue = { creds: rc.creds, env: rc.env };
   const { openOrders } = await import("./binance-trade");
   const held = (await positions(v)).filter((p) => p.positionSide === "LONG" || p.positionSide === "SHORT" || p.positionSide === "BOTH");
