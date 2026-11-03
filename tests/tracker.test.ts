@@ -326,6 +326,30 @@ describe.skipIf(!DB)("the journal following an account on its venue", () => {
     expect(eth.exitReason).toBe("stop");
   });
 
+  it("takes the first stop and target a bare position gets as its idea, not as moves", async () => {
+    // XRP went on with nothing resting. The brackets placed later are the plan, however late.
+    bnAlgos.push(
+      { algoId: 6101, clientAlgoId: "web_xrp_sl", symbol: "XRPUSDT", side: "SELL", positionSide: "LONG", orderType: "STOP_MARKET", algoType: "CONDITIONAL", algoStatus: "NEW", quantity: "0", triggerPrice: "0.48", closePosition: true, createTime: now, updateTime: now, triggerTime: 0, actualOrderId: "" },
+      { algoId: 6102, clientAlgoId: "web_xrp_tp", symbol: "XRPUSDT", side: "SELL", positionSide: "LONG", orderType: "TAKE_PROFIT_MARKET", algoType: "CONDITIONAL", algoStatus: "NEW", quantity: "0", triggerPrice: "0.6", closePosition: true, createTime: now, updateTime: now, triggerTime: 0, actualOrderId: "" },
+    );
+    await run();
+    let [xrp] = await tradesOf("XRP", BN);
+    expect(xrp.initialStop).toBe(0.48);
+    expect(xrp.initialTarget).toBe(0.6);
+    expect(xrp.riskAmount).toBeCloseTo(2);
+    let x = ref(xrp);
+    expect(x.idea).toMatchObject({ stop: 0.48, targets: [0.6] });
+    expect(x.moves ?? []).toEqual([]);
+    expect(x.unprotected).toBe(false);
+    // Now a change to a level it has: that is a move.
+    bnAlgos.find((a) => a.algoId === 6101)!.triggerPrice = "0.49";
+    await run();
+    [xrp] = await tradesOf("XRP", BN);
+    x = ref(xrp);
+    expect(x.moves).toMatchObject([{ kind: "stop", from: 0.48, to: 0.49 }]);
+    expect(xrp.initialStop).toBe(0.48);
+  });
+
   it("stops following an account when asked, and leaves what it wrote", async () => {
     await send("PUT", "/api/account-settings", { name: BN, feeMode: "percent", makerFee: 0, takerFee: 0, track: false });
     const out = await run();

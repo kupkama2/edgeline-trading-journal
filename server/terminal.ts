@@ -522,27 +522,48 @@ export async function applySnapshot(
     let stopMoves = t.stopMoves;
     const seen = withBrackets.seen;
     const diff = bracketMoves(seen, b);
-    if (seen && diff.stop && b.stopPrice != null) {
-      moves.push({ at, kind: "stop", from: diff.stop.from, to: b.stopPrice, mark, r: rAt(mark, t.entryPrice, idea.stop, t.direction) });
+    /*
+     * The first stop the trade ever has IS its stop, and the first target
+     * its target — the idea, the levels the management is measured against
+     * — however long after the entry they went on. A position opened bare
+     * and bracketed a minute later was not "moved from nothing"; it was
+     * planned a minute late. Only a level the trade already had, at a new
+     * price, is a move.
+     */
+    let ideaStop = idea.stop;
+    let ideaTargets = idea.targets;
+    // A record from before this rule: a "— → price" move is the level it should have been.
+    const legacy = moves.filter((m) => (m.kind === "stop" || m.kind === "target") && m.from == null && m.to != null);
+    if (legacy.length) {
+      for (const m of legacy) {
+        if (m.kind === "stop" && ideaStop == null) ideaStop = m.to ?? null;
+        if (m.kind === "target" && ideaTargets.length === 0) ideaTargets = [m.to!];
+      }
+      moves.splice(0, moves.length, ...moves.filter((m) => !legacy.includes(m)));
+    }
+    const stopIsNew = ideaStop == null && b.stopPrice != null;
+    const targetIsNew = ideaTargets.length === 0 && b.targetPrices.length > 0;
+    if (stopIsNew) ideaStop = b.stopPrice;
+    if (targetIsNew) ideaTargets = b.targetPrices;
+    if (seen && diff.stop && b.stopPrice != null && !stopIsNew) {
+      moves.push({ at, kind: "stop", from: diff.stop.from, to: b.stopPrice, mark, r: rAt(mark, t.entryPrice, ideaStop, t.direction) });
       stopMoves = formatStopMoves(addStopMove(stopMoves, b.stopPrice, at, "venue"));
     }
-    if (seen && diff.target && b.targetPrices[0] != null) {
-      moves.push({ at, kind: "target", from: diff.target.from, to: b.targetPrices[0], mark, r: rAt(mark, t.entryPrice, idea.stop, t.direction) });
+    if (seen && diff.target && b.targetPrices[0] != null && !targetIsNew) {
+      moves.push({ at, kind: "target", from: diff.target.from, to: b.targetPrices[0], mark, r: rAt(mark, t.entryPrice, ideaStop, t.direction) });
     }
-    const firstSight = !seen;
     withBrackets = {
       ...withBrackets,
       stopOrderId: b.stopId ?? (nowOpen ? null : withBrackets.stopOrderId),
       targetOrderIds: b.targetIds.length ? b.targetIds : nowOpen ? [] : withBrackets.targetOrderIds,
       moves,
       seen: { stop: b.stopPrice, targets: b.targetPrices },
-      idea: firstSight && withBrackets.idea ? { ...withBrackets.idea, stop: withBrackets.idea.stop ?? b.stopPrice, targets: withBrackets.idea.targets.length ? withBrackets.idea.targets : b.targetPrices } : withBrackets.idea,
+      idea: { ...idea, stop: ideaStop, targets: ideaTargets, riskDollars: idea.riskDollars ?? (ideaStop != null ? Math.abs(idea.entry - ideaStop) * idea.qty : null) },
     };
     if (stopMoves !== t.stopMoves) Object.assign(patch, { stopMoves });
-    if (firstSight) {
-      if (t.initialStop == null && b.stopPrice != null) Object.assign(patch, { initialStop: b.stopPrice, riskAmount: Math.abs(t.entryPrice - b.stopPrice) * t.size });
-      if (t.initialTarget == null && b.targetPrices[0] != null) Object.assign(patch, { initialTarget: b.targetPrices[0] });
-    }
+    // The trade's own fields follow the idea: a stop or target it never had, now that it has one.
+    if (t.initialStop == null && ideaStop != null) Object.assign(patch, { initialStop: ideaStop, riskAmount: t.riskAmount ?? Math.abs(t.entryPrice - ideaStop) * t.size });
+    if (t.initialTarget == null && ideaTargets[0] != null) Object.assign(patch, { initialTarget: ideaTargets[0] });
     // How it ended, when the fills did not name the order that did it.
     if (patch.status === "closed" && !patch.exitReason && patch.exitPrice != null && (!t.exitReason || t.exitReason === "other")) {
       Object.assign(patch, { exitReason: trackedExitReason({ ...t, initialStop: (patch as any).initialStop ?? t.initialStop }, seen ?? { stop: b.stopPrice, targets: b.targetPrices }, patch.exitPrice, !!stopMoves && stopMoves !== "[]") });
