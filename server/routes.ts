@@ -48,6 +48,7 @@ import { normalizeSetupRead } from "@shared/setup-read";
 import { debriefTrades, normalizeDebrief } from "@shared/debrief";
 import { syncBinance, verifyKey, verifyTradingKey } from "./binance-account";
 import { registerTerminalRoutes } from "./terminal";
+import { trackUser } from "./tracker";
 import { managementBrief, parseTerminalRef } from "@shared/terminal";
 import { guardRailsProblem } from "@shared/guardrails";
 import { computeMetrics } from "@shared/metrics";
@@ -999,6 +1000,22 @@ export async function registerRoutes(
     const only = typeof req.body?.account === "string" ? req.body.account : undefined;
     try {
       res.json(await oneAtATime(`sync:${userId}`, () => syncHyperliquid(userId, only)));
+    } catch (err: any) {
+      res.status(502).json({ message: loggableError(err) });
+    }
+  });
+
+  /*
+   * One tracking pass now, for every account the person asked the journal
+   * to watch: positions the journal does not have become trades, tracked
+   * trades are read back (server/tracker.ts). The server does the same on
+   * its own every few seconds; this is for "did it see it?".
+   */
+  app.post("/api/tracking/run", async (req, res) => {
+    const userId = (req as any).userId as number | undefined;
+    if (!userId) return res.status(401).json({ message: "No account on request" });
+    try {
+      res.json({ accounts: await trackUser(userId) });
     } catch (err: any) {
       res.status(502).json({ message: loggableError(err) });
     }

@@ -830,6 +830,24 @@ export function useHyperliquidSync() {
   });
 }
 
+export interface TrackSummary {
+  account: string;
+  venue: "binance" | "hyperliquid";
+  /** Trade ids the pass wrote or took under watch. */
+  opened: number[];
+  /** Tracked trades read back. */
+  read: number;
+  error?: string;
+}
+
+/** One tracking pass over every watched account, now (server/tracker.ts). */
+export function useTrackNow() {
+  return useMutation({
+    mutationFn: async () => (await apiRequest("POST", "/api/tracking/run", {})).json() as Promise<{ accounts: TrackSummary[] }>,
+    onSuccess: invalidateTrades,
+  });
+}
+
 /* ------------------------------ balances ------------------------------ */
 
 const invalidateBalances = () =>

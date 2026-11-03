@@ -36,6 +36,7 @@ import {
   useAccountSettings,
   useMergeAccounts,
   useSaveAccountSettings,
+  useTrackNow,
 } from "@/lib/data";
 import { STYLE_COLOR_NAMES, styleColor } from "@/lib/style-filter";
 import {
@@ -69,6 +70,8 @@ function AccountFeesRow({
         binanceKeyHint?: string | null;
         binanceEnv?: string;
         binanceTrade?: boolean;
+        /** The journal follows this account on its venue and writes what it does. */
+        track?: boolean;
       }
     | undefined;
   /** The other accounts, for folding a passed evaluation into one of them. */
@@ -77,6 +80,7 @@ function AccountFeesRow({
   const save = useSaveAccountSettings();
   const sync = useHyperliquidSync();
   const bnSync = useBinanceSync();
+  const trackNow = useTrackNow();
   const { data: balances = [] } = useAccountBalances();
   const addBalance = useAddAccountBalance();
   const [wallet, setWallet] = useState(existing?.wallet ?? "");
@@ -224,6 +228,29 @@ function AccountFeesRow({
     const t = Number(taker) || 0;
     if (!(await attempt("Fees not saved", () => save.mutateAsync({ name, feeMode: mode, makerFee: m, takerFee: t })))) return;
     toast({ title: "Fees saved", description: `${name} — schedule updated.` });
+  }
+
+  /** Watch this account on its venue, or stop. */
+  async function setTrack(track: boolean) {
+    if (!(await attempt("Not changed", () => save.mutateAsync({ ...storedFees(), track })))) return;
+    toast({
+      title: track ? "Tracking on" : "Tracking off",
+      description: track
+        ? `${name} is read every few seconds: positions become trades, moves and partials are written as they happen.`
+        : `${name} is no longer followed. Trades already written stay.`,
+    });
+  }
+
+  async function runTrackNow() {
+    const r = await attempt("Tracking pass failed", () => trackNow.mutateAsync());
+    if (!r) return;
+    const mine = r.value.accounts.find((a) => a.account === name);
+    if (!mine) return toast({ title: "Nothing to track", description: `${name} is not being watched.` });
+    if (mine.error) return toast({ title: `${name} could not be read`, description: mine.error, variant: "destructive" });
+    toast({
+      title: "Tracking pass done",
+      description: `${mine.opened.length} ${mine.opened.length === 1 ? "position" : "positions"} newly written, ${mine.read} ${mine.read === 1 ? "open trade" : "open trades"} read back.`,
+    });
   }
 
   async function setKind(kind: "live" | "evaluation") {
@@ -509,6 +536,55 @@ function AccountFeesRow({
       </div>
       {report && (
         <SyncReportDialog venue={report.venue} account={report.account} onClose={() => setReport(null)} />
+      )}
+
+      {/*
+        Whether the journal FOLLOWS the account, not only reads it when asked.
+
+        A sync writes what has already happened. Tracking reads the venue
+        every few seconds: a position that appears becomes an open trade, the
+        stop and the target resting against it are its idea, and each move,
+        partial and add is written as it happens with the mark at the time —
+        so a trade made in the venue's own app, or in any terminal, is in the
+        record as one trade with its management, the same as one sent from here.
+      */}
+      {(existing?.wallet || existing?.binanceKeyHint) && (
+        <div className="flex w-full flex-wrap items-center gap-2 border-t border-border/40 pt-1.5 text-[10px]" data-testid={`track-row-${name}`}>
+          <button
+            type="button"
+            onClick={() => setTrack(!existing?.track)}
+            disabled={save.isPending}
+            className={`rounded-full border px-2 py-0.5 transition-colors ${
+              existing?.track
+                ? "border-emerald-500/50 bg-emerald-500/10 text-emerald-500"
+                : "border-border text-muted-foreground hover:border-primary/40 hover:text-foreground"
+            }`}
+            data-testid={`button-track-${name}`}
+          >
+            {existing?.track ? "tracking live — every position is logged as it is managed" : "track live"}
+          </button>
+          {existing?.track ? (
+            <>
+              <span className="text-muted-foreground">
+                {existing.wallet ? "Read by wallet address." : existing.binanceTrade ? "Read with the trading key." : "Read with the read-only key."} Stops, targets, partials and adds are written as they change.
+              </span>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="ml-auto h-6 px-2 text-[10px]"
+                onClick={runTrackNow}
+                disabled={trackNow.isPending}
+                data-testid={`button-track-now-${name}`}
+              >
+                {trackNow.isPending ? "Reading…" : "Read now"}
+              </Button>
+            </>
+          ) : (
+            <span className="text-muted-foreground">
+              Positions opened anywhere — the venue's app, any terminal — become trades here, with how they were managed.
+            </span>
+          )}
+        </div>
       )}
 
       {/*

@@ -20,11 +20,13 @@ import { z } from "zod";
 import { storageFor, terminalUsers, tradingAccountsEverywhere, type DatabaseStorage } from "./storage";
 import { openUserStream, worthAReadBack, type StreamHandle } from "./binance-stream";
 import { oneAtATime } from "./venue-sync";
+import { trackEverywhere, trackUser } from "./tracker";
 import { fetch as undiciFetch } from "undici";
 import { egressFor } from "./egress";
 import { open } from "./secrets";
 import { futuresBase, signedCall, type BinanceEnv, type Creds } from "./binance-account";
 import { fetchCandles, type Interval } from "./binance";
+import { fetchCandlesAt } from "./candles";
 import {
   addToPosition,
   algoOrderById,
@@ -51,6 +53,9 @@ import {
   addNote,
   advancePlanWatch,
   bracketAt,
+  bracketMoves,
+  trackedExitReason,
+  type Brackets,
   formatTerminalRef,
   fmtPrice,
   fmtQty,
@@ -140,9 +145,9 @@ const priceSchema = z.object({ price: z.number().positive() });
 const accountSchema = z.object({ account: z.string().min(1) });
 
 /** A client order id the venue accepts (≤36 of [A-Za-z0-9_-]) that is recognisably ours. */
-const newTag = () => `edg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+export const newTag = () => `edg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
-interface Armed {
+export interface Armed {
   venue: Venue;
   acct: AccountSettings;
 }
@@ -184,7 +189,7 @@ async function logged<T>(
   }
 }
 
-const refOf = (t: TradeWithTags): TerminalRef => {
+export const refOf = (t: TradeWithTags): TerminalRef => {
   const ref = parseTerminalRef(t.terminal);
   if (!ref) throw httpError(400, "That trade was not sent from the terminal.");
   return ref;
@@ -216,7 +221,10 @@ async function publicGet(base: string, path: string): Promise<any> {
 /** The mark on this position side now, or nothing when the venue holds none. */
 async function markOf(v: Venue, ref: TerminalRef): Promise<number | null> {
   try {
-    const pos = (await positions(v)).find((p) => p.symbol === ref.symbol && p.positionSide === ref.positionSide);
+    // One-way mode reports the position as BOTH, signed; it is this side's when the sign agrees.
+  const pos = (await positions(v)).find(
+    (p) => p.symbol === ref.symbol && (p.positionSide === ref.positionSide || (p.positionSide === "BOTH" && p.amt > 0 === (ref.positionSide === "LONG"))),
+  );
     return pos?.markPrice ?? null;
   } catch {
     return null;
@@ -274,7 +282,8 @@ async function watchPlan(
   const gap = t.status === "closed" ? HOUR_MS : PLAN_WATCH_GAP_MS;
   if (w?.checkedAt && now - new Date(w.checkedAt).getTime() < gap) return none;
   const from = Math.max(w?.coveredTo ?? 0, entryMs - 60_000);
-  const bars = await fetchCandles({ symbol: ref.symbol, market: "futures" }, "1m", from, now, 1500);
+  // The tape of the venue the trade is on: a Hyperliquid coin's minutes come from Hyperliquid.
+  const bars = await fetchCandlesAt({ symbol: ref.symbol, market: "futures", venue: ref.venue === "hyperliquid" ? "hyperliquid" : "binance" }, "1m", from, now, 1500);
   // The entry's own minute counts only from the entry: a print before the fill is not a touch.
   const after = bars.filter((c) => c.t + 60_000 > entryMs);
   const touches = planTouches(after, { direction: t.direction, stop: idea.stop, target });
@@ -349,7 +358,7 @@ async function afterClose(s: DatabaseStorage, t: TradeWithTags): Promise<void> {
   if (changed) await s.updateTrade(t.id, { ...watched.patch, terminal: formatTerminalRef(reviewed) } as any);
 }
 
-async function reconcileOne(s: DatabaseStorage, t: TradeWithTags, armed: Armed): Promise<TradeWithTags> {
+export async function reconcileOne(s: DatabaseStorage, t: TradeWithTags, armed: Armed): Promise<TradeWithTags> {
   let ref = refOf(t);
   const v = armed.venue;
   const entry = ref.entryOrderId != null ? await orderById(v, ref.symbol, ref.entryOrderId) : null;
@@ -375,9 +384,9 @@ async function reconcileOne(s: DatabaseStorage, t: TradeWithTags, armed: Armed):
    * it says whichever id the venue stamped on them.
    */
   const alias = new Map<number, number>();
-  const brackets = [ref.stopOrderId, ...ref.targetOrderIds].filter((x): x is number => x != null);
+  const bracketIds = [ref.stopOrderId, ...ref.targetOrderIds].filter((x): x is number => x != null);
   const fired: { algoId: number; side: "BUY" | "SELL"; at: number }[] = [];
-  for (const id of brackets) {
+  for (const id of bracketIds) {
     const a = await algoOrderById(v, id).catch(() => null);
     if (!a) continue;
     if (a.triggeredOrderId != null) {
@@ -389,7 +398,24 @@ async function reconcileOne(s: DatabaseStorage, t: TradeWithTags, armed: Armed):
   }
   const rows = await fillsSince(v, ref.symbol, since);
   const closeSide = ref.positionSide === "LONG" ? "SELL" : "BUY";
+  const openSide = closeSide === "SELL" ? "BUY" : "SELL";
   const entryAt = new Date(t.entryTime).getTime();
+  /*
+   * A tracked trade IS the position: every fill on its side is its own,
+   * whoever placed the order. Opening fills beyond the entry are adds,
+   * closing fills are takes or the exit — the same reading as a sent trade,
+   * with the ids learned from the fills instead of from the sending.
+   */
+  const onSide = (r: { positionSide: string }) => r.positionSide === ref.positionSide || r.positionSide === "BOTH";
+  if (ref.tracked) {
+    for (const r of rows) {
+      if (!onSide(r) || r.time < entryAt - 5_000) continue;
+      mine.add(r.orderId);
+      if (r.side === openSide && r.orderId !== ref.entryOrderId && !(ref.addOrderIds ?? []).includes(r.orderId)) {
+        ref = { ...ref, addOrderIds: [...(ref.addOrderIds ?? []), r.orderId] };
+      }
+    }
+  }
   const fills = rows
     .filter((r) => {
       if (mine.has(r.orderId)) return true;
@@ -426,6 +452,32 @@ async function reconcileOne(s: DatabaseStorage, t: TradeWithTags, armed: Armed):
     positionAmt: pos?.amt ?? 0,
     openOrderIds: resting.map((o) => o.orderId),
   };
+  // What rests on the book for this side now: for a tracked trade, that is the stop and the target.
+  const restingHere = resting.filter((o) => o.positionSide === ref.positionSide || o.positionSide === "BOTH");
+  const stopNow = restingHere.filter((o) => o.side === closeSide && /STOP/.test(o.type) && o.stopPrice != null).sort((a, b) => b.time - a.time)[0] ?? null;
+  const targetsNow = restingHere
+    .filter((o) => o.side === closeSide && ((/TAKE_PROFIT/.test(o.type) && o.stopPrice != null) || (o.type === "LIMIT" && o.price != null)))
+    .map((o) => ({ id: o.orderId, price: (o.stopPrice ?? o.price)! }))
+    .sort((a, b) => (ref.positionSide === "LONG" ? a.price - b.price : b.price - a.price));
+  const brackets: Brackets = { stopId: stopNow?.orderId ?? null, stopPrice: stopNow?.stopPrice ?? null, targetIds: targetsNow.map((x) => x.id), targetPrices: targetsNow.map((x) => x.price) };
+  return applySnapshot(s, t, ref, snap, { v, brackets, mark: pos?.markPrice ?? null });
+}
+
+/**
+ * The venue's word applied to the trade: the ledger, the brackets, the
+ * record. Shared by the Binance read-back above and the tracker's
+ * Hyperliquid read (server/tracker.ts), which build the snapshot each in
+ * their venue's terms and hand it here.
+ */
+export async function applySnapshot(
+  s: DatabaseStorage,
+  t: TradeWithTags,
+  refIn: TerminalRef,
+  snap: VenueSnapshot,
+  opts: { v?: Venue; brackets?: Brackets; mark?: number | null } = {},
+): Promise<TradeWithTags> {
+  let ref = refIn;
+  const v = opts.v;
   const { patch: read, partials, adds } = reconcilePatch(t, ref, snap);
   const patch = read ?? {};
   // A target that took its share while the rest stayed on, a take from here,
@@ -446,12 +498,55 @@ async function reconcileOne(s: DatabaseStorage, t: TradeWithTags, armed: Armed):
    * shown in red; the position is real either way.
    */
   let withBrackets: TerminalRef = ref;
-  if (ref.armOnFill && nowOpen && Math.abs(snap.positionAmt) > 1e-9) {
+  if (v && ref.armOnFill && nowOpen && Math.abs(snap.positionAmt) > 1e-9) {
     const brackets = ref.armOnFill;
     const placed = await logged(s, "arm-brackets", ref.account, t.id, brackets, () => placeBrackets(v, brackets));
     const { armOnFill: _done, ...rest } = ref;
     withBrackets = { ...rest, stopOrderId: placed.stop?.orderId ?? null, targetOrderIds: placed.targets.map((o) => o.orderId) };
     if (placed.stop) snap.openOrderIds.push(placed.stop.orderId);
+  }
+  /*
+   * A tracked trade's brackets are whatever rests on the book this pass. A
+   * stop or target at a different price than last pass is a move, written
+   * with the mark and the R it was made at — the same record a move from
+   * this terminal gets, read instead of sent. The first sighting fills in
+   * an idea that had no levels yet; the trade's own stop and target follow
+   * when they were never set.
+   */
+  if (ref.tracked && opts.brackets) {
+    const b = opts.brackets;
+    const idea = ideaOf(t, withBrackets);
+    const mark = opts.mark ?? null;
+    const moves: TerminalMove[] = [...(withBrackets.moves ?? [])];
+    const at = new Date().toISOString();
+    let stopMoves = t.stopMoves;
+    const seen = withBrackets.seen;
+    const diff = bracketMoves(seen, b);
+    if (seen && diff.stop && b.stopPrice != null) {
+      moves.push({ at, kind: "stop", from: diff.stop.from, to: b.stopPrice, mark, r: rAt(mark, t.entryPrice, idea.stop, t.direction) });
+      stopMoves = formatStopMoves(addStopMove(stopMoves, b.stopPrice, at, "venue"));
+    }
+    if (seen && diff.target && b.targetPrices[0] != null) {
+      moves.push({ at, kind: "target", from: diff.target.from, to: b.targetPrices[0], mark, r: rAt(mark, t.entryPrice, idea.stop, t.direction) });
+    }
+    const firstSight = !seen;
+    withBrackets = {
+      ...withBrackets,
+      stopOrderId: b.stopId ?? (nowOpen ? null : withBrackets.stopOrderId),
+      targetOrderIds: b.targetIds.length ? b.targetIds : nowOpen ? [] : withBrackets.targetOrderIds,
+      moves,
+      seen: { stop: b.stopPrice, targets: b.targetPrices },
+      idea: firstSight && withBrackets.idea ? { ...withBrackets.idea, stop: withBrackets.idea.stop ?? b.stopPrice, targets: withBrackets.idea.targets.length ? withBrackets.idea.targets : b.targetPrices } : withBrackets.idea,
+    };
+    if (stopMoves !== t.stopMoves) Object.assign(patch, { stopMoves });
+    if (firstSight) {
+      if (t.initialStop == null && b.stopPrice != null) Object.assign(patch, { initialStop: b.stopPrice, riskAmount: Math.abs(t.entryPrice - b.stopPrice) * t.size });
+      if (t.initialTarget == null && b.targetPrices[0] != null) Object.assign(patch, { initialTarget: b.targetPrices[0] });
+    }
+    // How it ended, when the fills did not name the order that did it.
+    if (patch.status === "closed" && !patch.exitReason && patch.exitPrice != null && (!t.exitReason || t.exitReason === "other")) {
+      Object.assign(patch, { exitReason: trackedExitReason({ ...t, initialStop: (patch as any).initialStop ?? t.initialStop }, seen ?? { stop: b.stopPrice, targets: b.targetPrices }, patch.exitPrice, !!stopMoves && stopMoves !== "[]") });
+    }
   }
   const stopResting = withBrackets.stopOrderId != null && snap.openOrderIds.includes(withBrackets.stopOrderId);
   let nextRef: TerminalRef = { ...withBrackets, unprotected: nowOpen && !stopResting, checkedAt: new Date().toISOString() };
@@ -492,6 +587,8 @@ async function reconcilePass(s: DatabaseStorage): Promise<{ id: number; status: 
     }
     try {
       const ref = refOf(t);
+      // Watched trades are read by the tracker, with read credentials, whether or not the account may trade.
+      if (ref.tracked) continue;
       let armed = armedBy.get(ref.account);
       if (!armed) {
         armed = await arm(s, ref.account);
@@ -533,6 +630,7 @@ function readBackSoon(userId: number): void {
       .then((out) => {
         for (const o of out) if (o.error) console.error(`[terminal] stream read-back trade #${o.id}: ${o.error}`);
       })
+      .then(() => trackUser(userId))
       .catch((err) => console.error("[terminal] stream read-back:", said(err)));
   }, 250);
   t.unref?.();
@@ -577,12 +675,14 @@ export async function ensureStreams(): Promise<void> {
 }
 
 export function startTerminalWatch(intervalMs = 20_000): void {
-  if (TERMINAL_EMAILS.length === 0) return;
-  streamsOn = true;
+  streamsOn = TERMINAL_EMAILS.length > 0;
   const tick = async () => {
     if (watching) return;
     watching = true;
     try {
+      // The tracker first: everyone's watched accounts, read-only, no allowlist.
+      await trackEverywhere().catch((err) => console.error("[tracker]", said(err)));
+      if (TERMINAL_EMAILS.length === 0) return;
       await ensureStreams().catch((err) => console.error("[terminal] streams:", said(err)));
       for (const userId of await terminalUsers()) {
         const s = storageFor(userId);

@@ -912,6 +912,13 @@ export const accountSettings = pgTable("account_settings", {
    * explicit server setting, and the terminal says so in red.
    */
   binanceIpLocked: boolean("binance_ip_locked"),
+  /**
+   * Whether the journal watches this account's venue on its own: a position
+   * that appears becomes a trade, and every stop or target moved, every
+   * take and add, is written as it happens (server/tracker.ts). Read-only —
+   * a wallet address or any Binance key is enough.
+   */
+  track: boolean("track").notNull().default(false),
 });
 
 /**
@@ -1009,6 +1016,8 @@ export const upsertAccountSettingsSchema = z.object({
   binanceTrade: z.boolean().optional(),
   /** Set by the server from the venue's answer, never by the client. */
   binanceIpLocked: z.boolean().nullable().optional(),
+  /** Watch the venue for this account and journal what it does. */
+  track: z.boolean().optional(),
 });
 
 /** Move every trade from one account onto another — an eval that got funded. */
