@@ -25,6 +25,10 @@ import {
   type HlFill,
   type HlOrder,
   type HyperliquidPerp,
+  parseClearinghouseState,
+  parseFrontendOpenOrders,
+  type HlPosition,
+  type HlOpenOrder,
 } from "@shared/hyperliquid";
 import type { Candle } from "@shared/binance";
 import type { CandleRead, Interval } from "./binance";
@@ -280,6 +284,21 @@ export async function hyperliquidFetchedAt(): Promise<string | null> {
 /** The most recent fills of a wallet — the venue keeps the last two thousand. */
 export async function fetchUserFills(address: string): Promise<HlFill[]> {
   return parseUserFills(await info({ type: "userFills", user: address }, 20_000));
+}
+
+/** The wallet's fills from a moment on: what the live tracker reads every pass. */
+export async function fetchUserFillsSince(address: string, startTime: number): Promise<HlFill[]> {
+  return parseUserFills(await info({ type: "userFillsByTime", user: address, startTime: Math.max(0, Math.floor(startTime)) }, 20_000));
+}
+
+/** The wallet's open positions now. */
+export async function fetchClearinghouseState(address: string): Promise<HlPosition[]> {
+  return parseClearinghouseState(await info({ type: "clearinghouseState", user: address }));
+}
+
+/** The wallet's resting orders now, trigger prices included. */
+export async function fetchFrontendOpenOrders(address: string): Promise<HlOpenOrder[]> {
+  return parseFrontendOpenOrders(await info({ type: "frontendOpenOrders", user: address }));
 }
 
 /**

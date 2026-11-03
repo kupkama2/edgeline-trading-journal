@@ -322,6 +322,63 @@ export interface TerminalRef {
   unprotected?: boolean;
   /** When the terminal last read this trade back from the venue. */
   checkedAt?: string;
+  /**
+   * Watched rather than sent: the position was opened somewhere else — the
+   * venue's own app, another terminal — and the journal follows it. Every
+   * fill on its side is its own, and the brackets are whatever rests on the
+   * book, re-read each pass.
+   */
+  tracked?: boolean;
+  /** The brackets as last seen on the book, so a change is a move. */
+  seen?: { stop: number | null; targets: number[] };
+}
+
+/** What rests on the book for a position right now, in the terms the tracker compares. */
+export interface Brackets {
+  stopId: number | null;
+  stopPrice: number | null;
+  targetIds: number[];
+  targetPrices: number[];
+}
+
+/**
+ * The moves between what was last seen on the book and what rests now.
+ * The stop is one price; a different one is a move. The targets are
+ * compared by their first (nearest) level, which is what the journal keeps
+ * as the target; the rest are the plan's extra levels.
+ */
+export function bracketMoves(
+  seen: { stop: number | null; targets: number[] } | undefined,
+  now: Brackets,
+): { stop?: { from: number | null; to: number | null }; target?: { from: number | null; to: number | null } } {
+  const out: { stop?: { from: number | null; to: number | null }; target?: { from: number | null; to: number | null } } = {};
+  if (!seen) return out;
+  const near = (a: number | null, b: number | null) => (a == null && b == null) || (a != null && b != null && Math.abs(a - b) <= Math.abs(b) * 1e-9);
+  if (!near(seen.stop, now.stopPrice)) out.stop = { from: seen.stop, to: now.stopPrice };
+  const t0 = seen.targets[0] ?? null;
+  const t1 = now.targetPrices[0] ?? null;
+  if (!near(t0, t1)) out.target = { from: t0, to: t1 };
+  return out;
+}
+
+/** How a tracked trade ended, read off the prices when the fills do not name the order. */
+export function trackedExitReason(
+  trade: { direction: string; entryPrice: number; initialStop?: number | null },
+  seen: { stop: number | null; targets: number[] } | undefined,
+  exitPrice: number,
+  stopMoved: boolean,
+): "stop" | "target" | "breakeven" | "trailed" | "discretion" {
+  const risk = trade.initialStop != null ? Math.abs(trade.entryPrice - trade.initialStop) : Math.abs(trade.entryPrice) * 0.005;
+  const slack = Math.max(risk * 0.25, Math.abs(trade.entryPrice) * 0.0005);
+  const sign = trade.direction === "short" ? -1 : 1;
+  if (seen?.stop != null && Math.abs(exitPrice - seen.stop) <= slack) {
+    if (!stopMoved) return "stop";
+    const edge = (sign * (exitPrice - trade.entryPrice)) / trade.entryPrice;
+    if (Math.abs(edge) <= 0.0005) return "breakeven";
+    return edge > 0 ? "trailed" : "stop";
+  }
+  if ((seen?.targets ?? []).some((p) => Math.abs(exitPrice - p) <= slack)) return "target";
+  return "discretion";
 }
 
 export interface TerminalIdea {

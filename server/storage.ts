@@ -264,6 +264,7 @@ ALTER TABLE account_settings ADD COLUMN IF NOT EXISTS binance_secret TEXT;
 ALTER TABLE account_settings ADD COLUMN IF NOT EXISTS binance_env TEXT NOT NULL DEFAULT 'live';
 ALTER TABLE account_settings ADD COLUMN IF NOT EXISTS binance_trade BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE account_settings ADD COLUMN IF NOT EXISTS binance_ip_locked BOOLEAN;
+ALTER TABLE account_settings ADD COLUMN IF NOT EXISTS track BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS terminal TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS paper BOOLEAN NOT NULL DEFAULT FALSE;
 CREATE TABLE IF NOT EXISTS terminal_log (
@@ -742,6 +743,11 @@ const DEFAULT_STYLES: { name: string; color: string }[] = [
 /** Every account with a key that may trade, across every user — each gets a user-data stream. */
 export async function tradingAccountsEverywhere(): Promise<AccountSettings[]> {
   return db.select().from(accountSettings).where(eq(accountSettings.binanceTrade, true));
+}
+
+/** Every account anybody asked the journal to watch (server/tracker.ts). */
+export async function trackedAccountsEverywhere(): Promise<AccountSettings[]> {
+  return db.select().from(accountSettings).where(eq(accountSettings.track, true));
 }
 
 export async function terminalUsers(): Promise<number[]> {
@@ -1528,6 +1534,7 @@ export class DatabaseStorage implements IStorage {
           // Omitted means "leave it as it is": the fee editor saves without
           // knowing about kinds, and it must not quietly relive an account.
           ...(s.kind ? { kind: s.kind } : {}),
+          ...(s.track !== undefined ? { track: s.track } : {}),
           ...(s.wallet !== undefined ? { wallet: s.wallet } : {}),
           // The route has already sealed the secret and checked the key's
           // permissions by the time it gets here; null on the key clears both.
@@ -1555,6 +1562,7 @@ export class DatabaseStorage implements IStorage {
         makerFee: s.makerFee,
         takerFee: s.takerFee,
         kind: s.kind ?? "live",
+        track: s.track ?? false,
         wallet: s.wallet ?? null,
         binanceKey: s.binanceKey ?? null,
         binanceSecret: s.binanceKey ? (s.binanceSecret ?? null) : null,

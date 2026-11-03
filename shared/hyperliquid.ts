@@ -708,3 +708,81 @@ export function parseAllMids(json: unknown): Record<string, number> {
   }
   return out;
 }
+
+/* ------------------------------ the live account ------------------------------ */
+
+/** One open position, as `clearinghouseState` reports it. */
+export interface HlPosition {
+  coin: string;
+  /** Signed size: negative is short. */
+  szi: number;
+  entryPx: number;
+  liquidationPx: number | null;
+  unrealizedPnl: number;
+  leverage: number;
+}
+
+/** Read `clearinghouseState`: `{ assetPositions: [{ position: {…} }] }`. Flat positions are left out. */
+export function parseClearinghouseState(json: unknown): HlPosition[] {
+  const rows = (json as any)?.assetPositions;
+  if (!Array.isArray(rows)) return [];
+  const out: HlPosition[] = [];
+  for (const row of rows) {
+    const p = (row as any)?.position ?? row;
+    const coin = typeof p?.coin === "string" ? p.coin.trim() : "";
+    const szi = num(p?.szi);
+    const entryPx = num(p?.entryPx);
+    if (!coin || szi == null || entryPx == null || Math.abs(szi) < 1e-12) continue;
+    out.push({
+      coin,
+      szi,
+      entryPx,
+      liquidationPx: num(p?.liquidationPx),
+      unrealizedPnl: num(p?.unrealizedPnl) ?? 0,
+      leverage: num(p?.leverage?.value) ?? num(p?.leverage) ?? 0,
+    });
+  }
+  return out;
+}
+
+/** One resting order, as `frontendOpenOrders` reports it: a limit, or a trigger with its price. */
+export interface HlOpenOrder {
+  coin: string;
+  oid: number;
+  side: "B" | "A";
+  limitPx: number | null;
+  sz: number;
+  isTrigger: boolean;
+  triggerPx: number | null;
+  /** "Limit", "Stop Market", "Take Profit Market", "Take Profit Limit"… */
+  orderType: string;
+  reduceOnly: boolean;
+  isPositionTpsl: boolean;
+  timestamp: number;
+}
+
+export function parseFrontendOpenOrders(json: unknown): HlOpenOrder[] {
+  if (!Array.isArray(json)) return [];
+  const out: HlOpenOrder[] = [];
+  for (const o of json as Array<Record<string, unknown>>) {
+    const coin = typeof o?.coin === "string" ? o.coin.trim() : "";
+    const oid = num(o?.oid);
+    const ts = num(o?.timestamp);
+    if (!coin || oid == null || ts == null) continue;
+    if (o.side !== "B" && o.side !== "A") continue;
+    out.push({
+      coin,
+      oid,
+      side: o.side,
+      limitPx: num(o.limitPx),
+      sz: num(o.sz) ?? 0,
+      isTrigger: o.isTrigger === true,
+      triggerPx: num(o.triggerPx),
+      orderType: typeof o.orderType === "string" ? o.orderType : "",
+      reduceOnly: o.reduceOnly === true,
+      isPositionTpsl: o.isPositionTpsl === true,
+      timestamp: ts,
+    });
+  }
+  return out.sort((a, b) => a.timestamp - b.timestamp);
+}
