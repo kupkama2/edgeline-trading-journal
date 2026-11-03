@@ -20,6 +20,7 @@
  */
 import { fetch as undiciFetch } from "undici";
 import { egressFor } from "./egress";
+import { assertNotBanned, forgetRateBans, noteRateLimit, rateBans } from "./binance-ban";
 import { archiveCandles } from "./binance-archive";
 import { fetchListedPerps, listingStatus, type ListingStatus } from "./binance-listing";
 import type { BinanceSymbol, Candle, Market } from "@shared/binance";
@@ -100,8 +101,10 @@ export interface FeedStatus {
   futuresSource: "fapi" | "listing" | "none";
   /** The bucket listing's own record: names fetched, census run, errors. */
   listing: ListingStatus;
+  /** Hosts rate-banning this server's IP right now, and until when (server/binance-ban.ts). */
+  rateBans: { host: string; until: string; why: string }[];
 }
-const status: Omit<FeedStatus, "listing"> = {
+const status: Omit<FeedStatus, "listing" | "rateBans"> = {
   lastError: null,
   lastTriedAt: null,
   lastOkAt: null,
@@ -110,7 +113,7 @@ const status: Omit<FeedStatus, "listing"> = {
   archiveOkAt: null,
   futuresSource: "none",
 };
-export const feedStatus = (): FeedStatus => ({ ...status, listing: listingStatus() });
+export const feedStatus = (): FeedStatus => ({ ...status, listing: listingStatus(), rateBans: rateBans() });
 
 /** Perp symbols the last catalogue fetch took from the bucket listing. */
 let listed: string[] = [];
@@ -137,6 +140,7 @@ const refusals = new Map<string, { at: number; error: string }>();
 const bookOf = (path: string) => (path.startsWith("/fapi") ? "/fapi" : "/api");
 export function forgetRefusals(): void {
   refusals.clear();
+  forgetRateBans();
   // The held ticker book too: "ask again" has to mean everything, or a
   // refresh pressed because prices looked wrong would hand back the same
   // wrong prices.
@@ -173,6 +177,9 @@ const klinePath = (m: Market) => (m === "futures" ? "/fapi/v1/klines" : "/api/v3
 
 
 async function get(base: string, path: string, timeoutMs = 12_000): Promise<any> {
+  const host = new URL(base).hostname;
+  // A host that has banned this IP is not asked: asking extends the ban.
+  assertNotBanned(host);
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), timeoutMs);
   try {
@@ -184,8 +191,19 @@ async function get(base: string, path: string, timeoutMs = 12_000): Promise<any>
     if (!res.ok) {
       // The status and the host both matter: 451 from api.binance.com is a
       // geo-block, and saying which host said it is the difference between a
-      // diagnosis and a shrug.
-      throw new Error(`${new URL(base).hostname} → HTTP ${res.status} on ${path.split("?")[0]}`);
+      // diagnosis and a shrug. A 429 or 418 is remembered until the end the
+      // venue names, so the next request waits instead of making it longer.
+      let said = "";
+      if (res.status === 429 || res.status === 418) {
+        try {
+          const j: any = await res.json();
+          said = j?.msg ? ` — ${String(j.msg)}` : "";
+        } catch {
+          /* no body worth reading */
+        }
+        noteRateLimit(host, res.status, said, Number(res.headers.get("retry-after")) || null);
+      }
+      throw new Error(`${host} → HTTP ${res.status} on ${path.split("?")[0]}${said}`);
     }
     /*
      * A 200 whose body is not JSON.

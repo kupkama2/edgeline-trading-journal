@@ -271,7 +271,17 @@ describe.skipIf(!DB)("a Binance account, synced", () => {
     const listed: any[] = await get("/api/account-settings");
     const mine = listed.find((a) => a.name === ACCOUNT);
     expect(mine.binanceKeyHint).toBe(`…${KEY.slice(-4)}`);
+    expect(mine.binanceKeyReadable).toBe(true);
     expect(JSON.stringify(listed)).not.toContain(SECRET);
+    // A secret sealed under another SESSION_SECRET — another server's — is
+    // reported as unreadable, so the row can say "enter it again".
+    const sealedHere = (await store.listAccountSettings()).find((a: any) => a.name === ACCOUNT).binanceSecret;
+    const foreign = "v1." + Buffer.from("not-sealed-by-this-server-at-all-0123456789").toString("base64url");
+    await store.upsertAccountSettings({ ...fees, binanceKey: KEY, binanceSecret: foreign });
+    const broken: any[] = await get("/api/account-settings");
+    expect(broken.find((a) => a.name === ACCOUNT).binanceKeyReadable).toBe(false);
+    await store.upsertAccountSettings({ ...fees, binanceKey: KEY, binanceSecret: sealedHere });
+    expect((await get("/api/account-settings")).find((a: any) => a.name === ACCOUNT).binanceKeyReadable).toBe(true);
 
     // On disk: the key as given, the secret as ciphertext.
     const rows = await store.listAccountSettings();

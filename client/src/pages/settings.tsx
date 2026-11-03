@@ -68,6 +68,8 @@ function AccountFeesRow({
         wallet?: string | null;
         /** "…ab12" when a Binance key is held. The key itself never comes back. */
         binanceKeyHint?: string | null;
+        /** False when the key is stored but this server cannot open its secret (SESSION_SECRET changed). */
+        binanceKeyReadable?: boolean | null;
         binanceEnv?: string;
         binanceTrade?: boolean;
         /** The journal follows this account on its venue and writes what it does. */
@@ -434,6 +436,11 @@ function AccountFeesRow({
                 <span className="font-mono text-[11px] text-muted-foreground" data-testid={`text-binance-key-${name}`}>
                   key {existing.binanceKeyHint}
                 </span>
+                {existing.binanceKeyReadable === false && (
+                  <span className="rounded bg-red-500/15 px-1.5 py-0.5 text-[10px] text-red-400" data-testid={`text-binance-key-unreadable-${name}`}>
+                    cannot be opened on this server — enter it again
+                  </span>
+                )}
                 {existing.binanceTrade && (
                   <span
                     className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider ${
