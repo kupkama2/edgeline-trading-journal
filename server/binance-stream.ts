@@ -11,8 +11,11 @@
  * As Binance's SDK and ccxt have it: POST /fapi/v1/listenKey (API key
  * header, unsigned) returns a key good for sixty minutes, PUT renews it,
  * and the stream is wss://<host>/private/ws?listenKey=<key>. The events are
- * ORDER_TRADE_UPDATE for plain orders and ALGO_UPDATE for conditional ones;
- * listenKeyExpired means fetch a new key and reconnect.
+ * ORDER_TRADE_UPDATE for plain orders, ALGO_UPDATE for conditional ones
+ * (NEW, CANCELED, TRIGGERING, TRIGGERED, FINISHED, REJECTED, EXPIRED) and
+ * ACCOUNT_UPDATE for balances and positions; listenKeyExpired means fetch a
+ * new key and reconnect. The key is issued to the API key alone, unsigned,
+ * so a read-only key opens a stream as well as a trading one.
  */
 import WebSocket from "ws";
 import { fetch as undiciFetch } from "undici";
@@ -30,16 +33,20 @@ const KEEPALIVE_MS = 20 * 60_000;
 const BACKOFF_MIN_MS = 1_000;
 const BACKOFF_MAX_MS = 30_000;
 
-/** An order event worth a read-back: something filled, fired, or went away. */
+/**
+ * An event worth a read-back. Any order event, plain or conditional, and any
+ * position change: a fill or a cancel on a sent trade, and on a tracked one
+ * also a NEW order — a stop placed late or moved IS the management the
+ * tracker is there to write. Several events in a burst are one pass; the
+ * read-back debounces them.
+ */
 export function worthAReadBack(msg: unknown): boolean {
   const m = msg as any;
   const e = m?.e ?? m?.data?.e;
-  const o = m?.o ?? m?.data?.o;
-  if (e === "ORDER_TRADE_UPDATE") {
-    return o?.x === "TRADE" || ["FILLED", "PARTIALLY_FILLED", "CANCELED", "EXPIRED"].includes(String(o?.X ?? ""));
-  }
-  if (e === "ALGO_UPDATE") {
-    return ["TRIGGERED", "FINISHED", "CANCELED", "EXPIRED", "REJECTED"].includes(String(o?.X ?? ""));
+  if (e === "ORDER_TRADE_UPDATE" || e === "ALGO_UPDATE") return true;
+  if (e === "ACCOUNT_UPDATE") {
+    const positions = m?.a?.P ?? m?.data?.a?.P;
+    return Array.isArray(positions) && positions.length > 0;
   }
   return false;
 }

@@ -17,7 +17,7 @@
  */
 import type { Express, NextFunction, Request, Response } from "express";
 import { z } from "zod";
-import { storageFor, terminalUsers, tradingAccountsEverywhere, type DatabaseStorage } from "./storage";
+import { storageFor, terminalUsers, trackedAccountsEverywhere, tradingAccountsEverywhere, type DatabaseStorage } from "./storage";
 import { openUserStream, worthAReadBack, type StreamHandle } from "./binance-stream";
 import { oneAtATime } from "./venue-sync";
 import { trackEverywhere, trackUser } from "./tracker";
@@ -588,14 +588,48 @@ export async function applySnapshot(
  * the watch runs, and a stream event triggers. One pass at a time per person:
  * two passes seeing the same fresh fill would both arm its brackets.
  */
-function reconcileAll(s: DatabaseStorage, userId: number): Promise<{ id: number; status: string; error?: string }[]> {
-  return oneAtATime(`terminal:${userId}`, () => reconcilePass(s));
+export function reconcileAll(s: DatabaseStorage, userId: number, mode: PassMode = "full"): Promise<{ id: number; status: string; error?: string }[]> {
+  return oneAtATime(`terminal:${userId}`, () => reconcilePass(s, userId, mode));
 }
 
-async function reconcilePass(s: DatabaseStorage): Promise<{ id: number; status: string; error?: string }[]> {
+/**
+ * How much a pass asks the venue.
+ *
+ * "full": every live trade read back over the signed API. "light": an account
+ * whose user-data stream is open, and which was read in full not long ago, is
+ * left alone — the stream will say when something happens, and the read-back
+ * it triggers is full. Only the plan watch runs for its trades, off public
+ * candles. The timed watch runs light; a stream event, the page's button and
+ * the route run full. On a shared outbound IP every signed request counts
+ * against a limit other tenants are also spending; the stream costs none.
+ */
+export type PassMode = "full" | "light";
+/** How long a full read holds while the stream is open. */
+const FULL_EVERY_MS = Number(process.env.TERMINAL_FULL_READ_MS ?? String(5 * 60_000));
+const lastFullRead = new Map<string, number>();
+const accountKey = (userId: number, account: string) => `${userId}:${account}`;
+
+/** Whether the timed pass may lean on the stream for this account right now. */
+export function restingOnStream(userId: number, a: { name: string; binanceKey?: string | null; binanceEnv?: string | null }): boolean {
+  if (!a.binanceKey) return false;
+  const env: BinanceEnv = a.binanceEnv === "testnet" ? "testnet" : "live";
+  const h = streams.get(streamId(userId, a.name, env, a.binanceKey));
+  if (!h?.connected) return false;
+  const at = lastFullRead.get(accountKey(userId, a.name));
+  return at != null && Date.now() - at < FULL_EVERY_MS;
+}
+
+/** A full read of this account just happened: the stream carries it from here. */
+export function noteFullRead(userId: number, account: string): void {
+  lastFullRead.set(accountKey(userId, account), Date.now());
+}
+
+async function reconcilePass(s: DatabaseStorage, userId: number, mode: PassMode): Promise<{ id: number; status: string; error?: string }[]> {
   const trades = await s.listTerminalTrades();
   const armedBy = new Map<string, Armed>();
+  const settings = mode === "light" ? await s.listAccountSettings() : [];
   const out: { id: number; status: string; error?: string }[] = [];
+  const readInFull = new Set<string>();
   for (const t of trades) {
     if (t.status === "closed") {
       // Finished, but still owed the plan's answer and the review.
@@ -610,17 +644,29 @@ async function reconcilePass(s: DatabaseStorage): Promise<{ id: number; status: 
       const ref = refOf(t);
       // Watched trades are read by the tracker, with read credentials, whether or not the account may trade.
       if (ref.tracked) continue;
+      const acct = settings.find((a) => a.name === ref.account);
+      if (mode === "light" && acct && restingOnStream(userId, acct)) {
+        // The stream is awake for this account: only the tape is read.
+        const watched = await watchPlan(s, t, ref).catch(() => ({ ref, patch: {} as Record<string, unknown> }));
+        if (Object.keys(watched.patch).length || formatTerminalRef(watched.ref) !== formatTerminalRef(ref)) {
+          await s.updateTrade(t.id, { ...watched.patch, terminal: formatTerminalRef(watched.ref) } as any);
+        }
+        out.push({ id: t.id, status: t.status });
+        continue;
+      }
       let armed = armedBy.get(ref.account);
       if (!armed) {
         armed = await arm(s, ref.account);
         armedBy.set(ref.account, armed);
       }
       const after = await reconcileOne(s, t, armed);
+      readInFull.add(ref.account);
       out.push({ id: t.id, status: after.status });
     } catch (err) {
       out.push({ id: t.id, status: t.status, error: said(err) });
     }
   }
+  for (const account of Array.from(readInFull)) noteFullRead(userId, account);
   return out;
 }
 
@@ -664,15 +710,21 @@ function readBackSoon(userId: number): void {
  * them runs that person's read-back within the second — which is what puts
  * a limit's stop on the book the moment it fills, tab open or not.
  */
+const streamId = (userId: number, name: string, env: BinanceEnv, key: string) => `${userId}:${name}:${env}:${key.slice(-8)}`;
+
 export async function ensureStreams(): Promise<void> {
   if (!streamsOn) return;
   const wanted = new Set<string>();
-  for (const a of await tradingAccountsEverywhere()) {
+  // Every account that may trade, and every account somebody asked the journal to follow.
+  const accounts = new Map<number, AccountSettings>();
+  for (const a of await tradingAccountsEverywhere()) accounts.set(a.id, a);
+  for (const a of await trackedAccountsEverywhere()) if (a.binanceKey) accounts.set(a.id, a);
+  for (const a of Array.from(accounts.values())) {
     if (!a.binanceKey || !a.binanceSecret) continue;
     const secret = open(a.binanceSecret);
     if (!secret) continue;
     const env: BinanceEnv = a.binanceEnv === "testnet" ? "testnet" : "live";
-    const id = `${a.userId}:${a.name}:${env}:${a.binanceKey.slice(-8)}`;
+    const id = streamId(a.userId, a.name, env, a.binanceKey);
     wanted.add(id);
     if (streams.has(id)) continue;
     const userId = a.userId;
@@ -696,18 +748,18 @@ export async function ensureStreams(): Promise<void> {
 }
 
 export function startTerminalWatch(intervalMs = 20_000): void {
-  streamsOn = TERMINAL_EMAILS.length > 0;
+  streamsOn = true;
   const tick = async () => {
     if (watching) return;
     watching = true;
     try {
-      // The tracker first: everyone's watched accounts, read-only, no allowlist.
-      await trackEverywhere().catch((err) => console.error("[tracker]", said(err)));
-      if (TERMINAL_EMAILS.length === 0) return;
+      // Streams first, so a pass can lean on them; then the tracker, for everyone, no allowlist.
       await ensureStreams().catch((err) => console.error("[terminal] streams:", said(err)));
+      await trackEverywhere("light").catch((err) => console.error("[tracker]", said(err)));
+      if (TERMINAL_EMAILS.length === 0) return;
       for (const userId of await terminalUsers()) {
         const s = storageFor(userId);
-        const out = await reconcileAll(s, userId).catch((err) => {
+        const out = await reconcileAll(s, userId, "light").catch((err) => {
           console.error("[terminal] watch:", said(err));
           return [] as { id: number; status: string; error?: string }[];
         });

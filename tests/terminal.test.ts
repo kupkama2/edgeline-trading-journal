@@ -271,11 +271,15 @@ describe("the user-data stream", () => {
 
   it("reads back on a fill, a cancel or a fired bracket, and on nothing else", () => {
     expect(worthAReadBack({ e: "ORDER_TRADE_UPDATE", o: { x: "TRADE", X: "PARTIALLY_FILLED" } })).toBe(true);
-    expect(worthAReadBack({ e: "ORDER_TRADE_UPDATE", o: { x: "NEW", X: "NEW" } })).toBe(false);
+    // A NEW order is a stop placed or moved on a tracked trade: management, read at once.
+    expect(worthAReadBack({ e: "ORDER_TRADE_UPDATE", o: { x: "NEW", X: "NEW" } })).toBe(true);
     expect(worthAReadBack({ e: "ORDER_TRADE_UPDATE", o: { x: "CANCELED", X: "CANCELED" } })).toBe(true);
-    expect(worthAReadBack({ e: "ALGO_UPDATE", o: { X: "TRIGGERING" } })).toBe(false);
+    expect(worthAReadBack({ e: "ALGO_UPDATE", o: { X: "NEW" } })).toBe(true);
     expect(worthAReadBack({ e: "ALGO_UPDATE", o: { X: "FINISHED" } })).toBe(true);
     expect(worthAReadBack({ data: { e: "ALGO_UPDATE", o: { X: "TRIGGERED" } } })).toBe(true);
+    // A position changed; a balance-only update is not worth a read.
+    expect(worthAReadBack({ e: "ACCOUNT_UPDATE", a: { P: [{ s: "BTCUSDT", pa: "0.01" }] } })).toBe(true);
+    expect(worthAReadBack({ e: "ACCOUNT_UPDATE", a: { P: [] } })).toBe(false);
     expect(worthAReadBack({ e: "ACCOUNT_UPDATE" })).toBe(false);
     expect(worthAReadBack("nonsense")).toBe(false);
   });

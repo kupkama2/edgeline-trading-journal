@@ -274,6 +274,7 @@ describe.skipIf(!DB)("the terminal against a stub venue", () => {
     });
     await new Promise<void>((r) => wss.once("listening", r));
     process.env.BINANCE_TESTNET_FUTURES_WS = `ws://127.0.0.1:${(wss.address() as any).port}`;
+    process.env.BINANCE_FUTURES_WS = process.env.BINANCE_TESTNET_FUTURES_WS;
     process.env.BINANCE_BASE = stub;
     process.env.BINANCE_FUTURES_BASE = stub;
     process.env.BINANCE_TESTNET_FUTURES_BASE = stub;
@@ -604,6 +605,39 @@ describe.skipIf(!DB)("the terminal against a stub venue", () => {
     // Tidy: flatten it so the later tests start from a flat book.
     await send("POST", `/api/terminal/trades/${trade.id}/close`, {});
     expect(position.amt).toBe(0);
+  });
+
+  it("leans on the stream: a light pass asks the venue nothing, and an event on the stream brings a full read", async () => {
+    const { reconcileAll, ensureStreams } = await import("../server/terminal");
+    // A tracked read-only account gets a stream of its own, opened to the same stub.
+    const before = streamSockets.length;
+    const r = await send("PUT", "/api/account-settings", { name: "Binance Watched", feeMode: "percent", makerFee: 0, takerFee: 0, binanceKey: KEY, binanceSecret: SECRET, track: true }, me);
+    expect(r.status).toBe(200);
+    expect((await r.json()).binanceTrade).toBe(false);
+    await ensureStreams();
+    await waitFor(async () => streamSockets.length, (x) => x >= before + 1);
+    expect(streamSockets.length).toBe(before + 1);
+
+    // A trade on, read in full once (the route is a full read).
+    const sent = await send("POST", "/api/terminal/send", {
+      account: ACCOUNT,
+      plan: { symbol: "BTCUSDT", side: "long", entryType: "market", entryPrice: 80010, stop: 79500, targets: [82000], riskDollars: 51, leverage: 3 },
+    });
+    const sentText = await sent.text();
+    expect(sent.status, sentText).toBe(201);
+    const { trade } = JSON.parse(sentText);
+    await send("POST", "/api/terminal/reconcile", {});
+    // The timed pass, light: the stream is open and the full read is fresh, so nothing signed leaves.
+    calls.length = 0;
+    await reconcileAll(store, me.userId, "light");
+    expect(calls.map((c) => c.path)).toEqual([]);
+    // The venue speaks on the stream: a full read follows within the second.
+    streamSockets[0].send(JSON.stringify({ e: "ALGO_UPDATE", T: Date.now(), E: Date.now(), o: { s: "BTCUSDT", aid: 1, X: "NEW" } }));
+    await waitFor(async () => calls.length, (n) => n > 0);
+    expect(calls.some((c) => c.path === "/fapi/v2/positionRisk" || c.path === "/fapi/v1/openOrders")).toBe(true);
+    // Tidy.
+    await send("POST", `/api/terminal/trades/${trade.id}/close`, {});
+    await send("PUT", "/api/account-settings", { name: "Binance Watched", feeMode: "percent", makerFee: 0, takerFee: 0, track: false }, me);
   });
 
   it("takes some off at market as a partial, and adds more as an add in the ledger", async () => {

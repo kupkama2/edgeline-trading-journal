@@ -30,7 +30,7 @@ import type { BinanceEnv, Creds } from "./binance-account";
 import { fillsSince, positions, rulesFor, type Venue } from "./binance-trade";
 import { fetchAllMids, fetchClearinghouseState, fetchFrontendOpenOrders, fetchUserFillsSince } from "./hyperliquid";
 import { oneAtATime } from "./venue-sync";
-import { applySnapshot, newTag, reconcileOne, refOf } from "./terminal";
+import { applySnapshot, newTag, noteFullRead, reconcileOne, refOf, restingOnStream, type PassMode } from "./terminal";
 
 /** How far back the fills are read to find a position's opening. Binance serves seven days of userTrades. */
 const WINDOW_MS = 7 * 24 * 60 * 60_000;
@@ -61,14 +61,21 @@ export async function trackUser(userId: number): Promise<TrackSummary[]> {
 /** The last thing said about each account, so a venue that is down is logged once, not every pass. */
 const lastSaid = new Map<string, string>();
 
-/** Every watched account of everyone, for the server's watch. */
-export async function trackEverywhere(): Promise<void> {
+/**
+ * Every watched account of everyone, for the server's watch. A light pass
+ * leaves a Binance account alone while its user-data stream is open and a
+ * full read is recent — the stream says when something happens, and the
+ * read it triggers is full. Hyperliquid has no stream here and is read each
+ * time; its public API has no ban to spend.
+ */
+export async function trackEverywhere(mode: PassMode = "full"): Promise<void> {
   const byUser = new Map<number, AccountSettings[]>();
   for (const a of await trackedAccountsEverywhere()) byUser.set(a.userId, [...(byUser.get(a.userId) ?? []), a]);
   for (const [userId, accounts] of Array.from(byUser.entries())) {
     const s = storageFor(userId);
     await oneAtATime(`terminal:${userId}`, async () => {
       for (const a of accounts) {
+        if (mode === "light" && !a.wallet && restingOnStream(userId, a)) continue;
         const r = await trackAccount(s, a);
         const key = `${userId}:${a.name}`;
         if (r.error) {
@@ -319,6 +326,7 @@ async function trackBinance(s: DatabaseStorage, acct: AccountSettings): Promise<
     await reconcileOne(s, t, { venue: v, acct });
     out.read += 1;
   }
+  noteFullRead(acct.userId, acct.name);
   return out;
 }
 
