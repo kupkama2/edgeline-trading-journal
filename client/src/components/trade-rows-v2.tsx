@@ -27,7 +27,7 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import { useUpdateTrade, useTrades } from "@/lib/data";
+import { useUpdateTrade, useTrades, prefetchTradeCandles } from "@/lib/data";
 import { tiltFromHere } from "@shared/tilt";
 import { markNote, standingOf, type Mark } from "@shared/marks";
 import { lockedIn, riskLeft, stopWasMoved } from "@shared/stops";
@@ -106,6 +106,7 @@ export function ClosedTradeRowV2({
   return (
     <div
       onClick={onSelect}
+      onPointerEnter={() => prefetchTradeCandles(t.id)}
       role="button"
       tabIndex={0}
       onKeyDown={(e) => {
@@ -414,6 +415,7 @@ export function OpenTradeRowV2({
   return (
     <div
       onClick={onSelect}
+      onPointerEnter={() => prefetchTradeCandles(t.id)}
       role="button"
       tabIndex={0}
       onKeyDown={(e) => {

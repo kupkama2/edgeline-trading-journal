@@ -319,6 +319,15 @@ export async function fetchCatalogue(): Promise<BinanceSymbol[]> {
 }
 
 export type Interval = "1m" | "5m" | "15m" | "1h" | "4h" | "1d";
+/** How wide one bar is, per timeframe. */
+export const BAR_MS: Record<Interval, number> = {
+  "1m": 60_000,
+  "5m": 300_000,
+  "15m": 900_000,
+  "1h": 3_600_000,
+  "4h": 14_400_000,
+  "1d": 86_400_000,
+};
 
 /**
  * Candles for a window, following Binance's pagination to the end of it.

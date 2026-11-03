@@ -166,6 +166,8 @@ let backfilled = false;
  */
 export type Census = "background" | "await" | "skip";
 const defaultCensus = (): Census => (process.env.NODE_ENV === "test" ? "skip" : "background");
+/** The catalogue refresh in flight, if any, so two callers do not start two. */
+let refreshing: Promise<void> | null = null;
 
 /** Ask the bucket which listed perps still publish, and demote the rest. */
 async function runCensus(symbols: string[]): Promise<void> {
@@ -187,19 +189,33 @@ export async function ensureCatalogue(
   const ttl = partial ? PARTIAL_TTL_MS : CATALOGUE_TTL_MS;
   const stale = force || !last || Date.now() - new Date(last).getTime() > ttl;
   if (stale) {
-    try {
-      const rows = await fetchCatalogue();
-      if (rows.length) await catalogue.replace(rows);
-      const listed = lastListed();
-      if (rows.length && listed.length && census !== "skip") {
-        const run = runCensus(listed);
-        if (census === "await") await run;
+    const refresh = async () => {
+      try {
+        const rows = await fetchCatalogue();
+        if (rows.length) await catalogue.replace(rows);
+        const listed = lastListed();
+        if (rows.length && listed.length && census !== "skip") {
+          const run = runCensus(listed);
+          if (census === "await") await run;
+        }
+      } catch {
+        // A failed refresh falls back to whatever is cached. An out-of-date
+        // catalogue costs at worst a coin listed this week going unmatched,
+        // which is the same as the honest "don't know" this returns anyway.
+      } finally {
+        refreshing = null;
       }
-    } catch {
-      // A failed refresh falls back to whatever is cached. An out-of-date
-      // catalogue costs at worst a coin listed this week going unmatched,
-      // which is the same as the honest "don't know" this returns anyway.
-    }
+    };
+    /*
+     * A stale list that EXISTS is served as it is, and refreshed behind the
+     * answer: a chart should not wait on two exchangeInfo downloads, or on
+     * the bucket listing a refused book falls back to, for a list that is a
+     * day old and almost certainly the same. Forced, or with nothing cached
+     * at all, the refresh is waited for. One refresh at a time.
+     */
+    const have = last != null && (await catalogue.list()).length > 0;
+    if (!refreshing) refreshing = refresh();
+    if (force || !have) await refreshing;
   }
   const stored = (await catalogue.list()).map((r) => ({
     symbol: r.symbol,

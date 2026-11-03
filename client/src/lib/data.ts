@@ -194,6 +194,15 @@ export function useTradeCandles(tradeId: number | null, interval?: string) {
  * replacing it. A query keyed by scroll position would cache a page per
  * position and re-render the world on each one.
  */
+/**
+ * The chart's bars asked for before the trade is opened — on a row the
+ * pointer rests on — so the chart is there when it is. Cheap: a row the
+ * pointer only crosses asks once, and a trade already held asks nothing.
+ */
+export function prefetchTradeCandles(tradeId: number): void {
+  void queryClient.prefetchQuery({ queryKey: [`/api/trades/${tradeId}/candles`], staleTime: 5 * 60 * 1000 });
+}
+
 export async function fetchCandlePage(
   tradeId: number,
   interval: string,
