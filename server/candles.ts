@@ -25,6 +25,7 @@ import { hlAssetFor, splitHlAsset, venueOfAccount } from "@shared/hyperliquid";
 import { parsePricePair } from "@shared/price-pair";
 import { fetchCandles, readCandles, type CandleRead, type Interval } from "./binance";
 import { readHlCandles } from "./hyperliquid";
+import { BAR_MS } from "./binance";
 
 /** The pair a trade is read against, on the venue its account names. */
 export function pairForTradeAt(
@@ -88,8 +89,57 @@ export async function readCandlesAt(
    */
   allowLateStart = false,
 ): Promise<CandleRead> {
-  if (pair.venue === "hyperliquid") return readHlCandles(pair.symbol, interval, startMs, endMs, maxBars);
-  return readCandles(pair, interval, startMs, endMs, maxBars, allowLateStart);
+  const bar = BAR_MS[interval] ?? 60_000;
+  // A window that ends in the past is the same bars every time it is asked
+  // for; one that runs to now is the same bars until the current bar closes.
+  const liveEnd = endMs > Date.now() - bar;
+  const key = `${pair.venue ?? "binance"}:${pair.symbol}:${pair.market}:${interval}:${Math.floor(startMs)}:${liveEnd ? Math.floor(endMs / bar) : Math.floor(endMs)}:${maxBars}:${allowLateStart ? 1 : 0}`;
+  const held = candleCache.get(key);
+  if (held && held.until > Date.now()) return held.read;
+  const flying = inFlight.get(key);
+  if (flying) return flying;
+  const run = (async () => {
+    const read = pair.venue === "hyperliquid" ? await readHlCandles(pair.symbol, interval, startMs, endMs, maxBars) : await readCandles(pair, interval, startMs, endMs, maxBars, allowLateStart);
+    remember(key, read, liveEnd ? Math.min(bar, LIVE_TTL_MS) : CLOSED_TTL_MS);
+    return read;
+  })();
+  inFlight.set(key, run);
+  try {
+    return await run;
+  } finally {
+    inFlight.delete(key);
+  }
+}
+
+/*
+ * Bars already read, kept in memory.
+ *
+ * Opening a trade used to cost a round trip to the venue every time, and a
+ * venue that refuses — a US host, a rate ban — turned that into an archive
+ * read of a dozen day-files. The bars of a window that ended in the past do
+ * not change, so they are kept for the life of the process; a window that
+ * runs to now is kept until the bar closes. Two charts asking for the same
+ * window at once share one read.
+ */
+const CLOSED_TTL_MS = 12 * 60 * 60_000;
+const LIVE_TTL_MS = 60_000;
+const CACHE_MAX = 500;
+const candleCache = new Map<string, { read: CandleRead; until: number }>();
+const inFlight = new Map<string, Promise<CandleRead>>();
+function remember(key: string, read: CandleRead, ttl: number): void {
+  // Nothing worth keeping: an empty read is asked again next time.
+  if (read.candles.length === 0) return;
+  candleCache.delete(key);
+  candleCache.set(key, { read, until: Date.now() + ttl });
+  while (candleCache.size > CACHE_MAX) {
+    const oldest = candleCache.keys().next().value;
+    if (oldest == null) break;
+    candleCache.delete(oldest);
+  }
+}
+/** For tests and ?refresh=1: every held window forgotten. */
+export function forgetCandles(): void {
+  candleCache.clear();
 }
 
 /** Just the bars, for callers that do not care where they came from. */

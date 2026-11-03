@@ -447,12 +447,17 @@ export async function ensureHyperliquid(force = false): Promise<HyperliquidPerp[
   const triedRecently =
     status.lastTriedAt != null && Date.now() - new Date(status.lastTriedAt).getTime() < RETRY_MS;
   if (stale && (force || !triedRecently)) {
-    try {
-      const perps = await fetchHyperliquidPerps();
-      if (perps.length) await universe.replace(perps);
-    } catch {
-      // The cache, or nothing. The status endpoint carries the reason.
-    }
+    const refresh = (async () => {
+      try {
+        const perps = await fetchHyperliquidPerps();
+        if (perps.length) await universe.replace(perps);
+      } catch {
+        // The cache, or nothing. The status endpoint carries the reason.
+      }
+    })();
+    // A list that exists is served now and refreshed behind the answer; see ensureCatalogue.
+    const have = last != null && (await universe.list()).length > 0;
+    if (force || !have) await refresh;
   }
   return universe.list();
 }
