@@ -70,6 +70,9 @@ function AccountFeesRow({
         binanceKeyHint?: string | null;
         /** False when the key is stored but this server cannot open its secret (SESSION_SECRET changed). */
         binanceKeyReadable?: boolean | null;
+        /** The relay's token, when the account's Binance calls go through a relay on the trader's own machine. */
+        relayToken?: string | null;
+        relay?: { connected: boolean; lastSeenAt: string | null; env: string | null; canTrade: boolean | null } | null;
         binanceEnv?: string;
         binanceTrade?: boolean;
         /** The journal follows this account on its venue and writes what it does. */
@@ -231,6 +234,16 @@ function AccountFeesRow({
     if (!(await attempt("Fees not saved", () => save.mutateAsync({ name, feeMode: mode, makerFee: m, takerFee: t })))) return;
     toast({ title: "Fees saved", description: `${name} — schedule updated.` });
   }
+
+  /** Route this account's Binance calls through a relay on the trader's own machine, or stop. */
+  async function setRelay(relay: boolean) {
+    if (!(await attempt("Not changed", () => save.mutateAsync({ ...storedFees(), relay })))) return;
+    toast({
+      title: relay ? "Relay ready" : "Relay removed",
+      description: relay ? "Run the relay on your machine with the command shown; the key stays there." : `${name} will use a key stored here again, once you save one.`,
+    });
+  }
+  const [relayOpen, setRelayOpen] = useState(false);
 
   /** Watch this account on its venue, or stop. */
   async function setTrack(track: boolean) {
@@ -429,7 +442,8 @@ function AccountFeesRow({
           the same way a wallet does. The secret is typed, sent, and gone:
           what comes back is the key's last four characters and nothing else.
         */}
-        {(looksBn || existing?.binanceKeyHint) && (
+        {/* Not while a relay holds the key: there is nothing here to replace or remove. */}
+        {(looksBn || existing?.binanceKeyHint) && !existing?.relayToken && (
           <span className="ml-auto flex flex-wrap items-center gap-1.5" data-testid={`binance-key-${name}`}>
             {existing?.binanceKeyHint && !bnOpen ? (
               <>
@@ -546,6 +560,73 @@ function AccountFeesRow({
       )}
 
       {/*
+        The relay: Binance asked from the trader's own machine.
+
+        A hosted server is refused by Binance for its address — a US host,
+        or an outbound IP it shares with strangers who got it rate-banned.
+        The trader's own connection is refused nothing. So the key can live
+        on their machine, in a small program that keeps one connection open
+        to here and makes every Binance call for this account from there.
+      */}
+      {(looksBn || existing?.binanceKeyHint || existing?.relayToken) && (
+        <div className="flex w-full flex-wrap items-center gap-2 border-t border-border/40 pt-1.5 text-[10px]" data-testid={`relay-row-${name}`}>
+          {existing?.relayToken ? (
+            <>
+              <span
+                className={`rounded-full border px-2 py-0.5 ${existing.relay?.connected ? "border-emerald-500/50 bg-emerald-500/10 text-emerald-500" : "border-amber-500/50 bg-amber-500/10 text-amber-500"}`}
+                data-testid={`text-relay-status-${name}`}
+              >
+                {existing.relay?.connected
+                  ? `relay connected${existing.relay.env === "testnet" ? " · testnet" : ""}${existing.relay.canTrade ? " · may trade" : " · read-only"}`
+                  : existing.relay?.lastSeenAt
+                    ? `relay not connected — last seen ${new Date(existing.relay.lastSeenAt).toLocaleString(undefined, { hour: "2-digit", minute: "2-digit", day: "numeric", month: "short", hour12: false })}`
+                    : "relay not connected yet"}
+              </span>
+              <span className="text-muted-foreground">Binance is asked from your machine; the key stays there.</span>
+              <Button size="sm" variant="ghost" className="h-6 px-2 text-[10px]" onClick={() => setRelayOpen((v) => !v)} data-testid={`button-relay-how-${name}`}>
+                {relayOpen ? "Hide" : "How to run it"}
+              </Button>
+              <Button size="sm" variant="ghost" className="ml-auto h-6 px-2 text-[10px] text-muted-foreground" onClick={() => setRelay(false)} disabled={save.isPending} data-testid={`button-relay-off-${name}`}>
+                Stop using the relay
+              </Button>
+              {relayOpen && (
+                <div className="basis-full space-y-1.5 rounded-md border border-border/60 bg-background/60 p-2" data-testid={`relay-howto-${name}`}>
+                  <p className="text-muted-foreground">
+                    On any machine that stays on — your PC, a Raspberry Pi, a free VM — with Node 22 or newer. The key is typed there and never sent here.
+                  </p>
+                  <pre className="overflow-x-auto whitespace-pre-wrap break-all rounded bg-secondary/60 p-2 font-mono text-[10px] leading-relaxed" data-testid={`text-relay-command-${name}`}>
+{`curl -O ${window.location.origin}/relay/edgeline-relay.mjs
+EDGELINE_URL=${window.location.origin} \
+EDGELINE_RELAY_TOKEN=${existing.relayToken} \
+BINANCE_KEY=<your api key> BINANCE_SECRET=<your secret> \
+node edgeline-relay.mjs`}
+                  </pre>
+                  <p className="text-muted-foreground">
+                    Add <span className="font-mono">BINANCE_ENV=testnet</span> for a testnet key. The row turns green when the relay is connected; tracking and the terminal then work through it.
+                  </p>
+                </div>
+              )}
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={() => setRelay(true)}
+                disabled={save.isPending}
+                className="rounded-full border border-border px-2 py-0.5 text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+                data-testid={`button-relay-on-${name}`}
+              >
+                use a relay instead of a key here
+              </button>
+              <span className="text-muted-foreground">
+                For when Binance refuses this server&apos;s address: a small program on your own machine makes the calls, and the key never leaves it.
+              </span>
+            </>
+          )}
+        </div>
+      )}
+
+      {/*
         Whether the journal FOLLOWS the account, not only reads it when asked.
 
         A sync writes what has already happened. Tracking reads the venue
@@ -555,7 +636,7 @@ function AccountFeesRow({
         so a trade made in the venue's own app, or in any terminal, is in the
         record as one trade with its management, the same as one sent from here.
       */}
-      {(existing?.wallet || existing?.binanceKeyHint) && (
+      {(existing?.wallet || existing?.binanceKeyHint || existing?.relayToken) && (
         <div className="flex w-full flex-wrap items-center gap-2 border-t border-border/40 pt-1.5 text-[10px]" data-testid={`track-row-${name}`}>
           <button
             type="button"
@@ -573,7 +654,7 @@ function AccountFeesRow({
           {existing?.track ? (
             <>
               <span className="text-muted-foreground">
-                {existing.wallet ? "Read by wallet address." : existing.binanceTrade ? "Read with the trading key." : "Read with the read-only key."} Stops, targets, partials and adds are written as they change.
+                {existing.wallet ? "Read by wallet address." : existing.relayToken ? "Read through your relay." : existing.binanceTrade ? "Read with the trading key." : "Read with the read-only key."} Stops, targets, partials and adds are written as they change.
               </span>
               <Button
                 size="sm"

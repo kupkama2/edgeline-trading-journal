@@ -19,6 +19,7 @@ import type { Express, NextFunction, Request, Response } from "express";
 import { z } from "zod";
 import { storageFor, terminalUsers, trackedAccountsEverywhere, tradingAccountsEverywhere, type DatabaseStorage } from "./storage";
 import { openUserStream, worthAReadBack, type StreamHandle } from "./binance-stream";
+import { relayConnected, setRelayEventHandler } from "./relay";
 import { oneAtATime } from "./venue-sync";
 import { trackEverywhere, trackUser } from "./tracker";
 import { fetch as undiciFetch } from "undici";
@@ -156,6 +157,12 @@ export interface Armed {
 async function arm(s: DatabaseStorage, accountName: string): Promise<Armed> {
   const acct = (await s.listAccountSettings()).find((a) => a.name === accountName);
   if (!acct) throw httpError(404, `No account called ${accountName}.`);
+  if (acct.relayToken) {
+    if (!relayConnected(acct.userId, acct.name)) throw httpError(503, `${acct.name}'s relay is not connected. Start it on your machine.`);
+    if (!acct.binanceTrade) throw httpError(400, `${acct.name}'s relay holds a read-only key. Give the relay a trading key.`);
+    const creds: Creds = { key: "", secret: "", relay: { userId: acct.userId, account: acct.name } };
+    return { venue: { creds, env: (acct.binanceEnv === "testnet" ? "testnet" : "live") as BinanceEnv }, acct };
+  }
   if (!acct.binanceKey || !acct.binanceSecret) throw httpError(400, `${acct.name} holds no Binance key.`);
   if (!acct.binanceTrade) throw httpError(400, `${acct.name}'s key is read-only. Save a trading key on it in Settings.`);
   const secret = open(acct.binanceSecret);
@@ -610,11 +617,14 @@ const lastFullRead = new Map<string, number>();
 const accountKey = (userId: number, account: string) => `${userId}:${account}`;
 
 /** Whether the timed pass may lean on the stream for this account right now. */
-export function restingOnStream(userId: number, a: { name: string; binanceKey?: string | null; binanceEnv?: string | null }): boolean {
-  if (!a.binanceKey) return false;
-  const env: BinanceEnv = a.binanceEnv === "testnet" ? "testnet" : "live";
-  const h = streams.get(streamId(userId, a.name, env, a.binanceKey));
-  if (!h?.connected) return false;
+export function restingOnStream(userId: number, a: { name: string; binanceKey?: string | null; binanceEnv?: string | null; relayToken?: string | null }): boolean {
+  // A relay carries the account's user-data stream itself: connected means streaming.
+  const streaming = a.relayToken ? relayConnected(userId, a.name) : (() => {
+    if (!a.binanceKey) return false;
+    const env: BinanceEnv = a.binanceEnv === "testnet" ? "testnet" : "live";
+    return !!streams.get(streamId(userId, a.name, env, a.binanceKey))?.connected;
+  })();
+  if (!streaming) return false;
   const at = lastFullRead.get(accountKey(userId, a.name));
   return at != null && Date.now() - at < FULL_EVERY_MS;
 }
@@ -720,6 +730,8 @@ export async function ensureStreams(): Promise<void> {
   for (const a of await tradingAccountsEverywhere()) accounts.set(a.id, a);
   for (const a of await trackedAccountsEverywhere()) if (a.binanceKey) accounts.set(a.id, a);
   for (const a of Array.from(accounts.values())) {
+    // A relayed account's stream is opened by the relay, from where it is, and its events arrive through it.
+    if (a.relayToken) continue;
     if (!a.binanceKey || !a.binanceSecret) continue;
     const secret = open(a.binanceSecret);
     if (!secret) continue;
@@ -749,6 +761,10 @@ export async function ensureStreams(): Promise<void> {
 
 export function startTerminalWatch(intervalMs = 20_000): void {
   streamsOn = true;
+  // A user-data event forwarded by a relay is read back exactly like one from a stream opened here.
+  setRelayEventHandler((userId, _account, msg) => {
+    if (worthAReadBack(msg)) readBackSoon(userId);
+  });
   const tick = async () => {
     if (watching) return;
     watching = true;

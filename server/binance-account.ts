@@ -36,6 +36,7 @@ import { marketsSeen, tradesFromFills } from "@shared/hyperliquid";
 import { tradingKeyRefusal } from "@shared/terminal";
 import { egressFor } from "./egress";
 import { assertNotBanned, noteRateLimit } from "./binance-ban";
+import { relayCall } from "./relay";
 import { ensureCatalogue } from "./outcomes";
 import { open } from "./secrets";
 import { storageFor } from "./storage";
@@ -107,6 +108,16 @@ function adviceFor(code: number | null, path: string): string {
 export interface Creds {
   key: string;
   secret: string;
+  /** Set when the calls go through the trader's own relay (server/relay.ts) instead of from here. The key then lives there. */
+  relay?: { userId: number; account: string };
+}
+
+/** The credentials an account calls Binance with: its own key here, or its relay. Null when it has neither. */
+export function credsFor(a: { userId: number; name: string; binanceKey?: string | null; binanceSecret?: string | null; relayToken?: string | null }, openSecret: (sealed: string | null | undefined) => string | null): Creds | null {
+  if (a.relayToken) return { key: "", secret: "", relay: { userId: a.userId, account: a.name } };
+  if (!a.binanceKey || !a.binanceSecret) return null;
+  const secret = openSecret(a.binanceSecret);
+  return secret ? { key: a.binanceKey, secret } : null;
 }
 
 /**
@@ -126,6 +137,7 @@ export async function signedCall(
   params: Record<string, string | number | undefined>,
   creds: Creds,
 ): Promise<unknown> {
+  if (creds.relay) return viaRelay(method, base, path, params, creds.relay);
   const q = signedQuery(params, Date.now());
   const signature = createHmac("sha256", creds.secret).update(q).digest("hex");
   const signed = `${q}&signature=${signature}`;
@@ -175,6 +187,32 @@ export async function signedCall(
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** The same call, made by the trader's relay from where it is; the answer read the same way. */
+async function viaRelay(
+  method: "GET" | "POST" | "PUT" | "DELETE",
+  base: string,
+  path: string,
+  params: Record<string, string | number | undefined>,
+  relay: { userId: number; account: string },
+): Promise<unknown> {
+  const host = new URL(base).hostname;
+  const { status, body } = await relayCall(relay.userId, relay.account, method, base, path, params);
+  let parsed: any = null;
+  try {
+    parsed = body ? JSON.parse(body) : null;
+  } catch {
+    parsed = null;
+  }
+  if (status < 200 || status >= 300) {
+    const said = parsed?.msg ? ` — ${String(parsed.msg)}` : "";
+    const code = typeof parsed?.code === "number" ? parsed.code : null;
+    noteRateLimit(host, status, said, null);
+    throw new BinanceError(`${host} → HTTP ${status} on ${path}${code != null ? ` (${code})` : ""}${said}.${adviceFor(code, path)}`, status, code);
+  }
+  if (parsed == null && body) throw new Error(`${host} → unreadable reply on ${path} (via the relay)`);
+  return parsed;
 }
 
 const signedGet = (base: string, path: string, params: Record<string, string | number | undefined>, creds: Creds) =>
@@ -347,7 +385,7 @@ export async function fetchUserTrades(
 export async function syncBinance(userId: number, onlyAccount?: string): Promise<SyncSummary> {
   const store = storageFor(userId);
   const accounts = (await store.listAccountSettings()).filter(
-    (a) => a.binanceKey && a.binanceSecret && (!onlyAccount || a.name === onlyAccount),
+    (a) => (a.relayToken || (a.binanceKey && a.binanceSecret)) && (!onlyAccount || a.name === onlyAccount),
   );
   if (accounts.length === 0) {
     return {
@@ -361,15 +399,14 @@ export async function syncBinance(userId: number, onlyAccount?: string): Promise
   for (const acct of accounts) {
     const row = emptySync(acct.name);
     try {
-      const secret = open(acct.binanceSecret);
-      if (!secret) {
+      const creds = credsFor(acct, open);
+      if (!creds) {
         throw new Error(
           "The stored key could not be opened — the server's SESSION_SECRET has changed since it was saved. Save the key again.",
         );
       }
-      const creds: Creds = { key: acct.binanceKey!, secret };
       const base = futuresBase(acct.binanceEnv);
-      row.source = `…${acct.binanceKey!.slice(-4)}${acct.binanceEnv === "testnet" ? " (testnet)" : ""}`;
+      row.source = creds.relay ? `relay${acct.binanceEnv === "testnet" ? " (testnet)" : ""}` : `…${acct.binanceKey!.slice(-4)}${acct.binanceEnv === "testnet" ? " (testnet)" : ""}`;
 
       const now = Date.now();
       const positions = await fetchPositions(creds, base);

@@ -51,6 +51,7 @@ import { debriefTrades, normalizeDebrief } from "@shared/debrief";
 import { syncBinance, verifyKey, verifyTradingKey } from "./binance-account";
 import { registerTerminalRoutes } from "./terminal";
 import { trackUser } from "./tracker";
+import { attachRelay, relayStatus } from "./relay";
 import { managementBrief, parseTerminalRef } from "@shared/terminal";
 import { guardRailsProblem } from "@shared/guardrails";
 import { computeMetrics } from "@shared/metrics";
@@ -582,6 +583,8 @@ export async function registerRoutes(
 ): Promise<Server> {
   // The terminal's own routes, behind their own allowlist (server/terminal.ts).
   registerTerminalRoutes(app, { llm: (prompt) => callLLM(prompt) });
+  // The relay's socket: a trader's own machine asking Binance for the server (server/relay.ts).
+  attachRelay(httpServer);
 
   /* ------------------------------- trades ------------------------------- */
   app.get("/api/trades", async (req, res) => {
@@ -1705,10 +1708,12 @@ export async function registerRoutes(
     return {
       ...rest,
       binanceKeyHint: binanceKey ? `…${binanceKey.slice(-4)}` : null,
+      // The relay, when the account has one: whether it is here right now, and what it brought.
+      relay: a.relayToken ? relayStatus(a.userId, a.name) : null,
       // Whether THIS server can open the sealed secret. False after a move to
       // a server with a new SESSION_SECRET: the key is there and unusable, and
       // the row should say so rather than let every read fail downstream.
-      binanceKeyReadable: binanceKey ? open(_secret) != null : null,
+      binanceKeyReadable: binanceKey && !a.relayToken ? open(_secret) != null : null,
     };
   };
 
@@ -1721,6 +1726,11 @@ export async function registerRoutes(
     if (!parsed.success)
       return res.status(400).json({ message: "Invalid account settings", issues: parsed.error.issues });
     const data = { ...parsed.data };
+    // Taking a relay: the key, if any, leaves this server — the relay holds its own.
+    if (data.relay === true) {
+      data.binanceKey = null;
+      delete data.binanceSecret;
+    }
     if (data.binanceKey) {
       /*
        * A key is asked what it may do BEFORE it is kept, and refused if the

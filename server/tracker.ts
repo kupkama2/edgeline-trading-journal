@@ -26,7 +26,8 @@ import { formatTerminalRef, parseTerminalRef, type Brackets, type TerminalRef, t
 import { USD_COMMISSION, type BinanceUserTrade } from "@shared/binance-account";
 import { storageFor, trackedAccountsEverywhere, type DatabaseStorage } from "./storage";
 import { open } from "./secrets";
-import type { BinanceEnv, Creds } from "./binance-account";
+import { credsFor, type BinanceEnv, type Creds } from "./binance-account";
+import { relayConnected } from "./relay";
 import { fillsSince, positions, rulesFor, type Venue } from "./binance-trade";
 import { fetchAllMids, fetchClearinghouseState, fetchFrontendOpenOrders, fetchUserFillsSince } from "./hyperliquid";
 import { oneAtATime } from "./venue-sync";
@@ -93,8 +94,8 @@ export async function trackEverywhere(mode: PassMode = "full"): Promise<void> {
 /** One account, one pass: new positions adopted, tracked trades read back. */
 export async function trackAccount(s: DatabaseStorage, acct: AccountSettings): Promise<TrackSummary> {
   if (acct.wallet) return trackHyperliquid(s, acct).catch((err) => ({ account: acct.name, venue: "hyperliquid" as const, opened: [], read: 0, error: said(err) }));
-  if (acct.binanceKey && acct.binanceSecret) return trackBinance(s, acct).catch((err) => ({ account: acct.name, venue: "binance" as const, opened: [], read: 0, error: said(err) }));
-  return { account: acct.name, venue: "binance", opened: [], read: 0, error: "No key or wallet on the account." };
+  if (acct.relayToken || (acct.binanceKey && acct.binanceSecret)) return trackBinance(s, acct).catch((err) => ({ account: acct.name, venue: "binance" as const, opened: [], read: 0, error: said(err) }));
+  return { account: acct.name, venue: "binance", opened: [], read: 0, error: "No key, relay or wallet on the account." };
 }
 
 /** This account's tracked trades still on. */
@@ -220,10 +221,9 @@ async function adoptExisting(s: DatabaseStorage, t: TradeWithTags, o: Opening): 
 /* -------------------------------- Binance -------------------------------- */
 
 const readCreds = (a: AccountSettings): { creds: Creds; env: BinanceEnv } | null => {
-  if (!a.binanceKey || !a.binanceSecret) return null;
-  const secret = open(a.binanceSecret);
-  if (!secret) return null;
-  return { creds: { key: a.binanceKey, secret }, env: a.binanceEnv === "testnet" ? "testnet" : "live" };
+  const creds = credsFor(a, open);
+  if (!creds) return null;
+  return { creds, env: a.binanceEnv === "testnet" ? "testnet" : "live" };
 };
 
 /**
@@ -282,6 +282,7 @@ function bracketsOnBinance(
 
 async function trackBinance(s: DatabaseStorage, acct: AccountSettings): Promise<TrackSummary> {
   const out: TrackSummary = { account: acct.name, venue: "binance", opened: [], read: 0 };
+  if (acct.relayToken && !relayConnected(acct.userId, acct.name)) return { ...out, error: "The relay is not connected. Start it on your machine." };
   const rc = readCreds(acct);
   if (!rc) return { ...out, error: "The stored key could not be opened — the server's SESSION_SECRET has changed since it was saved (a new server, say). Enter the key again in Settings." };
   const v: Venue = { creds: rc.creds, env: rc.env };
