@@ -133,6 +133,41 @@ changed something.
 refused. `source: "seed"` means neither book answered and the pair list is the
 hardcoded fallback — symbols still resolve, prices will not.
 
+## When Binance refuses the server's address: the relay
+
+Binance limits and bans by IP, and a hosted server's outbound IP is shared
+with every other tenant of its region. If the journal shows `HTTP 418 …
+banned until …` from `fapi.binance.com`, somebody on that IP earned a ban
+and everybody shares it. The journal honours the ban (it stops asking until
+the end Binance names) but cannot shorten it.
+
+The way round it that needs no paid plan is the **relay**: a single-file
+Node program (`/relay/edgeline-relay.mjs`, served by the site) that runs on
+any machine of yours that stays on — a PC, a Raspberry Pi, a free VM — and
+holds the Binance key there. It keeps one outbound WebSocket open to the
+journal; every Binance call for that account is made from the relay's
+address, and the account's user-data stream is opened by the relay and
+forwarded. The key never reaches the server.
+
+Settings → the account → **use a relay instead of a key here** mints the
+token and shows the exact command. The row turns green when the relay is
+connected; tracking, the sync and the terminal then work through it.
+`BINANCE_ENV=testnet` for a testnet key. Node 22 or newer; no packages.
+
+The relay reads the *account*, not a device: trades placed from a phone,
+a laptop or another terminal are all seen, as long as the relay is running
+somewhere. For "somewhere" that is always on and free, an Oracle Cloud
+Always Free VM (any region Binance serves; Frankfurt works) with the
+service installer:
+
+```
+curl -fsSL https://<your-journal>/relay/install.sh | sudo   EDGELINE_URL=https://<your-journal> EDGELINE_RELAY_TOKEN=<token>   BINANCE_KEY=<key> BINANCE_SECRET=<secret> bash
+```
+
+It installs Node 22 if needed, puts the key in `/etc/edgeline-relay.env`
+(root-only), and runs the relay as a systemd service that starts at boot
+and restarts itself. `journalctl -u edgeline-relay -f` watches it.
+
 ## Verifying a deploy
 
 - `GET /` returns 200 without a cookie — this is what `healthCheckPath` pings,

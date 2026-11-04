@@ -519,10 +519,22 @@ const wavg = (xs: { price: number; qty: number }[]) => {
  * cancelled here. Nothing else is touched: the stop and target the person
  * drew are the plan, whatever the brackets did since.
  */
+/**
+ * What the ledger already holds for the trade, so a fill that has aged out
+ * of the venue's seven-day window is still counted. Only tids tell the two
+ * apart: a ledger row whose fill is in the snapshot is counted once, from
+ * the snapshot.
+ */
+export interface Ledger {
+  adds: { tid: number; qty: number }[];
+  partials: { tid: number; qty: number }[];
+}
+
 export function reconcilePatch(
   trade: { status: string; entryPrice: number; size: number; fees: number | null; direction?: string; stopMoves?: string | null; exitReason?: string | null },
   ref: TerminalRef,
   snap: VenueSnapshot,
+  ledger: Ledger = { adds: [], partials: [] },
 ): { patch: ReconcilePatch | null; partials: Partial[]; adds: Partial[] } {
   const partials: Partial[] = [];
   const patch: ReconcilePatch = {};
@@ -531,19 +543,25 @@ export function reconcilePatch(
   const entryFills = own.filter((f) => f.orderId === ref.entryOrderId);
   // Adds grow the position: the ledger takes them, the walk below counts them as held.
   const adds: Partial[] = own
-    .filter((f) => addIds.has(f.orderId))
+    .filter((f) => addIds.has(f.orderId) && f.orderId !== ref.entryOrderId)
     .map((f) => ({ tid: f.tid, orderId: f.orderId, price: f.price, qty: f.qty, time: f.time }));
   const byTime = (a: { time: number; tid: number }, b: { time: number; tid: number }) => a.time - b.time || a.tid - b.tid;
   const closing = own.filter((f) => f.orderId !== ref.entryOrderId && !addIds.has(f.orderId)).sort(byTime);
   const foreignClosing = snap.fills.filter((f) => f.foreign).sort(byTime);
-  const feesKnown = own.every((f) => f.commissionUsd);
+  const feesKnown = own.length > 0 && own.every((f) => f.commissionUsd);
   const fees = feesKnown ? own.reduce((s, f) => s + f.commission, 0) : null;
+  // Fills the window no longer shows but the ledger remembers.
+  const seen = new Set(snap.fills.map((f) => f.tid));
+  const agedAdds = ledger.adds.filter((a) => !seen.has(a.tid)).reduce((s, a) => s + a.qty, 0);
+  const agedPartials = ledger.partials.filter((a) => !seen.has(a.tid)).reduce((s, a) => s + a.qty, 0);
 
   const filledQty = entryFills.reduce((s, f) => s + f.qty, 0);
-  const entryDone = snap.entry?.status === "FILLED" || (snap.entry?.status === "PARTIALLY_FILLED" && filledQty > 0);
+  const entryEnded = !!snap.entry && (snap.entry.status === "CANCELED" || snap.entry.status === "EXPIRED" || snap.entry.status === "REJECTED");
+  // A resting entry that filled in part and was then pulled is a position all the same, of the part that filled.
+  const entryDone = snap.entry?.status === "FILLED" || (snap.entry?.status === "PARTIALLY_FILLED" && filledQty > 0) || (entryEnded && filledQty > 0);
 
   if (trade.status === "pending") {
-    if (snap.entry && (snap.entry.status === "CANCELED" || snap.entry.status === "EXPIRED" || snap.entry.status === "REJECTED") && filledQty === 0) {
+    if (entryEnded && filledQty === 0) {
       return { patch: { status: "cancelled", cancelReason: "not_filled" }, partials, adds };
     }
     if (!entryDone) return { patch: null, partials, adds };
@@ -573,8 +591,8 @@ export function reconcilePatch(
    * the story, and the trade closes "by hand".
    */
   const flat = Math.abs(snap.positionAmt) < 1e-9;
-  const held = (filledQty || patch.size || trade.size) + adds.reduce((s, a) => s + a.qty, 0);
-  let gone = 0;
+  const held = (filledQty || patch.size || trade.size) + adds.reduce((s, a) => s + a.qty, 0) + agedAdds;
+  let gone = agedPartials;
   const exitFills: typeof closing = [];
   let closedElsewhere = false;
   const walk = (list: typeof closing, untilCovered = false) => {
@@ -597,18 +615,57 @@ export function reconcilePatch(
     patch.exitPrice = wavg(exitFills);
     patch.exitTime = new Date(Math.max(...exitFills.map((f) => f.time))).toISOString();
     if (!trade.exitReason || trade.exitReason === "other") {
+      // A tracked trade's fills name the order that executed, never the trigger that
+      // placed it, so the ids say nothing: its reason is read off the prices (trackedExitReason).
       const why = closedElsewhere
         ? "discretion"
-        : exitReasonFor(ref, { direction: trade.direction ?? (ref.positionSide === "SHORT" ? "short" : "long"), entryPrice: patch.entryPrice ?? trade.entryPrice, stopMoves: trade.stopMoves }, exitFills);
+        : ref.tracked
+          ? null
+          : exitReasonFor(ref, { direction: trade.direction ?? (ref.positionSide === "SHORT" ? "short" : "long"), entryPrice: patch.entryPrice ?? trade.entryPrice, stopMoves: trade.stopMoves }, exitFills);
       if (why) patch.exitReason = why;
     }
   }
-  if (fees != null && Math.abs(fees - (trade.fees ?? 0)) > 1e-9) patch.fees = fees;
+  // Fees only ever grow: a window that no longer shows the entry fill is not a refund.
+  if (fees != null && fees > (trade.fees ?? 0) + 1e-9) patch.fees = fees;
   return { patch: Object.keys(patch).length ? patch : null, partials, adds };
 }
 
 /** An add logged from the terminal carries the venue's fill id, as a partial does. */
 export const addNote = (tid: number) => `terminal · add ${tid}`;
+
+/** The ledger as reconcilePatch wants it, read back off the notes the ledger rows were written with. */
+export function ledgerOf(fills: { kind: string; size: number; note?: string | null }[] | undefined): Ledger {
+  const out: Ledger = { adds: [], partials: [] };
+  for (const f of fills ?? []) {
+    const m = /^terminal · (fill|add) (\d+)$/.exec(f.note ?? "");
+    if (!m) continue;
+    (m[1] === "add" ? out.adds : out.partials).push({ tid: Number(m[2]), qty: f.size });
+  }
+  return out;
+}
+
+/**
+ * A tracked position's fills, cut where the position first went flat.
+ *
+ * A tracked trade IS the position, and a position that went to zero and came
+ * back on the same side between two passes is two trades, not one with a
+ * take and an add. Walking the fills in time with a running size, the first
+ * fill that brings it to nothing is the last one this trade owns; what
+ * follows belongs to the next. Returns the fills kept and whether a cut was
+ * made — a cut position reads as flat whatever the venue holds now.
+ */
+export function cutAtFlat<F extends { time: number; tid: number; qty: number; side: string }>(fills: F[], openSide: string): { fills: F[]; cut: boolean } {
+  const sorted = [...fills].sort((a, b) => a.time - b.time || a.tid - b.tid);
+  let running = 0;
+  let wasOn = false;
+  for (let i = 0; i < sorted.length; i++) {
+    const f = sorted[i];
+    running += f.side === openSide ? f.qty : -f.qty;
+    if (running > 1e-9) wasOn = true;
+    else if (wasOn && running <= 1e-9) return { fills: sorted.slice(0, i + 1), cut: i < sorted.length - 1 || true };
+  }
+  return { fills: sorted, cut: false };
+}
 
 /* ------------------------------ the idea, watched ------------------------------ */
 

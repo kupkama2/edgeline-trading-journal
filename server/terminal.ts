@@ -19,6 +19,7 @@ import type { Express, NextFunction, Request, Response } from "express";
 import { z } from "zod";
 import { storageFor, terminalUsers, trackedAccountsEverywhere, tradingAccountsEverywhere, type DatabaseStorage } from "./storage";
 import { openUserStream, worthAReadBack, type StreamHandle } from "./binance-stream";
+import { relayConnected, setRelayEventHandler } from "./relay";
 import { oneAtATime } from "./venue-sync";
 import { trackEverywhere, trackUser } from "./tracker";
 import { fetch as undiciFetch } from "undici";
@@ -54,6 +55,8 @@ import {
   advancePlanWatch,
   bracketAt,
   bracketMoves,
+  cutAtFlat,
+  ledgerOf,
   trackedExitReason,
   type Brackets,
   formatTerminalRef,
@@ -156,6 +159,12 @@ export interface Armed {
 async function arm(s: DatabaseStorage, accountName: string): Promise<Armed> {
   const acct = (await s.listAccountSettings()).find((a) => a.name === accountName);
   if (!acct) throw httpError(404, `No account called ${accountName}.`);
+  if (acct.relayToken) {
+    if (!relayConnected(acct.userId, acct.name)) throw httpError(503, `${acct.name}'s relay is not connected. Start it on your machine.`);
+    if (!acct.binanceTrade) throw httpError(400, `${acct.name}'s relay holds a read-only key. Give the relay a trading key.`);
+    const creds: Creds = { key: "", secret: "", relay: { userId: acct.userId, account: acct.name } };
+    return { venue: { creds, env: (acct.binanceEnv === "testnet" ? "testnet" : "live") as BinanceEnv }, acct };
+  }
   if (!acct.binanceKey || !acct.binanceSecret) throw httpError(400, `${acct.name} holds no Binance key.`);
   if (!acct.binanceTrade) throw httpError(400, `${acct.name}'s key is read-only. Save a trading key on it in Settings.`);
   const secret = open(acct.binanceSecret);
@@ -396,7 +405,7 @@ export async function reconcileOne(s: DatabaseStorage, t: TradeWithTags, armed: 
       fired.push({ algoId: id, side: a.side, at: a.updateTime });
     }
   }
-  const rows = await fillsSince(v, ref.symbol, since);
+  let rows = await fillsSince(v, ref.symbol, since);
   const closeSide = ref.positionSide === "LONG" ? "SELL" : "BUY";
   const openSide = closeSide === "SELL" ? "BUY" : "SELL";
   const entryAt = new Date(t.entryTime).getTime();
@@ -407,9 +416,14 @@ export async function reconcileOne(s: DatabaseStorage, t: TradeWithTags, armed: 
    * with the ids learned from the fills instead of from the sending.
    */
   const onSide = (r: { positionSide: string }) => r.positionSide === ref.positionSide || r.positionSide === "BOTH";
+  let cutFlat = false;
   if (ref.tracked) {
-    for (const r of rows) {
-      if (!onSide(r) || r.time < entryAt - 5_000) continue;
+    // Only up to where the position first went flat: what follows is the next trade's.
+    const own = cutAtFlat(rows.filter((r) => onSide(r) && r.time >= entryAt - 5_000).map((r) => ({ ...r, tid: r.id })), openSide);
+    cutFlat = own.cut;
+    const keep = new Set(own.fills.map((r) => r.id));
+    rows = rows.filter((r) => !onSide(r) || r.time < entryAt - 5_000 || keep.has(r.id));
+    for (const r of own.fills) {
       mine.add(r.orderId);
       if (r.side === openSide && r.orderId !== ref.entryOrderId && !(ref.addOrderIds ?? []).includes(r.orderId)) {
         ref = { ...ref, addOrderIds: [...(ref.addOrderIds ?? []), r.orderId] };
@@ -445,11 +459,14 @@ export async function reconcileOne(s: DatabaseStorage, t: TradeWithTags, armed: 
       commissionUsd: USD_COMMISSION.has(r.commissionAsset),
       realizedPnl: r.realizedPnl,
     }));
-  const pos = (await positions(v)).find((p) => p.symbol === ref.symbol && p.positionSide === ref.positionSide);
+  // One-way mode reports the position as BOTH, signed; it is this side's when the sign agrees.
+  const pos = (await positions(v)).find(
+    (p) => p.symbol === ref.symbol && (p.positionSide === ref.positionSide || (p.positionSide === "BOTH" && p.amt > 0 === (ref.positionSide === "LONG"))),
+  );
   const snap: VenueSnapshot = {
     entry: entry ? { status: entry.status, avgPrice: entry.avgPrice, executedQty: entry.executedQty, updateTime: entry.updateTime } : null,
     fills,
-    positionAmt: pos?.amt ?? 0,
+    positionAmt: cutFlat ? 0 : Math.abs(pos?.amt ?? 0),
     openOrderIds: resting.map((o) => o.orderId),
   };
   // What rests on the book for this side now: for a tracked trade, that is the stop and the target.
@@ -478,7 +495,7 @@ export async function applySnapshot(
 ): Promise<TradeWithTags> {
   let ref = refIn;
   const v = opts.v;
-  const { patch: read, partials, adds } = reconcilePatch(t, ref, snap);
+  const { patch: read, partials, adds } = reconcilePatch(t, ref, snap, ledgerOf(t.fills));
   const patch = read ?? {};
   // A target that took its share while the rest stayed on, a take from here,
   // an add: rows in the ledger, once each, by the venue's fill id.
@@ -607,21 +624,26 @@ export type PassMode = "full" | "light";
 /** How long a full read holds while the stream is open. */
 const FULL_EVERY_MS = Number(process.env.TERMINAL_FULL_READ_MS ?? String(5 * 60_000));
 const lastFullRead = new Map<string, number>();
-const accountKey = (userId: number, account: string) => `${userId}:${account}`;
+/** The tracker and the terminal each keep their own record: one's full read is not the other's. */
+export type Reader = "terminal" | "tracker";
+const accountKey = (userId: number, account: string, who: Reader) => `${who}:${userId}:${account}`;
 
 /** Whether the timed pass may lean on the stream for this account right now. */
-export function restingOnStream(userId: number, a: { name: string; binanceKey?: string | null; binanceEnv?: string | null }): boolean {
-  if (!a.binanceKey) return false;
-  const env: BinanceEnv = a.binanceEnv === "testnet" ? "testnet" : "live";
-  const h = streams.get(streamId(userId, a.name, env, a.binanceKey));
-  if (!h?.connected) return false;
-  const at = lastFullRead.get(accountKey(userId, a.name));
+export function restingOnStream(userId: number, a: { name: string; binanceKey?: string | null; binanceEnv?: string | null; relayToken?: string | null }, who: Reader = "terminal"): boolean {
+  // A relay carries the account's user-data stream itself: connected means streaming.
+  const streaming = a.relayToken ? relayConnected(userId, a.name) : (() => {
+    if (!a.binanceKey) return false;
+    const env: BinanceEnv = a.binanceEnv === "testnet" ? "testnet" : "live";
+    return !!streams.get(streamId(userId, a.name, env, a.binanceKey))?.connected;
+  })();
+  if (!streaming) return false;
+  const at = lastFullRead.get(accountKey(userId, a.name, who));
   return at != null && Date.now() - at < FULL_EVERY_MS;
 }
 
 /** A full read of this account just happened: the stream carries it from here. */
-export function noteFullRead(userId: number, account: string): void {
-  lastFullRead.set(accountKey(userId, account), Date.now());
+export function noteFullRead(userId: number, account: string, who: Reader = "terminal"): void {
+  lastFullRead.set(accountKey(userId, account, who), Date.now());
 }
 
 async function reconcilePass(s: DatabaseStorage, userId: number, mode: PassMode): Promise<{ id: number; status: string; error?: string }[]> {
@@ -720,6 +742,8 @@ export async function ensureStreams(): Promise<void> {
   for (const a of await tradingAccountsEverywhere()) accounts.set(a.id, a);
   for (const a of await trackedAccountsEverywhere()) if (a.binanceKey) accounts.set(a.id, a);
   for (const a of Array.from(accounts.values())) {
+    // A relayed account's stream is opened by the relay, from where it is, and its events arrive through it.
+    if (a.relayToken) continue;
     if (!a.binanceKey || !a.binanceSecret) continue;
     const secret = open(a.binanceSecret);
     if (!secret) continue;
@@ -749,6 +773,10 @@ export async function ensureStreams(): Promise<void> {
 
 export function startTerminalWatch(intervalMs = 20_000): void {
   streamsOn = true;
+  // A user-data event forwarded by a relay is read back exactly like one from a stream opened here.
+  setRelayEventHandler((userId, _account, msg) => {
+    if (worthAReadBack(msg)) readBackSoon(userId);
+  });
   const tick = async () => {
     if (watching) return;
     watching = true;
@@ -757,7 +785,11 @@ export function startTerminalWatch(intervalMs = 20_000): void {
       await ensureStreams().catch((err) => console.error("[terminal] streams:", said(err)));
       await trackEverywhere("light").catch((err) => console.error("[tracker]", said(err)));
       if (TERMINAL_EMAILS.length === 0) return;
-      for (const userId of await terminalUsers()) {
+      const users = await terminalUsers().catch((err) => {
+        console.error("[terminal] watch: users:", said(err));
+        return [] as number[];
+      });
+      for (const userId of users) {
         const s = storageFor(userId);
         const out = await reconcileAll(s, userId, "light").catch((err) => {
           console.error("[terminal] watch:", said(err));
@@ -795,6 +827,15 @@ export function registerTerminalRoutes(app: Express, deps: { llm?: (prompt: stri
     next();
   });
 
+  /**
+   * A route that writes the record runs under the person's pass lock, so the
+   * read-back a stream event sets off cannot read the trade before the route
+   * writes it and then write its own copy over the top.
+   */
+  const underLock =
+    (fn: (req: Request, res: Response) => Promise<unknown>) =>
+    (req: Request, res: Response): Promise<unknown> =>
+      oneAtATime(`terminal:${req.userId}`, () => fn(req, res));
   const wrap =
     (fn: (req: Request, res: Response) => Promise<unknown>) =>
     (req: Request, res: Response, next: NextFunction) =>
@@ -835,12 +876,12 @@ export function registerTerminalRoutes(app: Express, deps: { llm?: (prompt: stri
 
   app.post(
     "/api/terminal/hedge-mode",
-    wrap(async (req, res) => {
+    wrap(underLock(async (req, res) => {
       const { account } = accountSchema.parse(req.body);
       const { venue } = await arm(store(req), account);
       await logged(store(req), "hedge-mode", account, null, {}, () => enableHedgeMode(venue));
       res.json({ ok: true, hedgeMode: await hedgeMode(venue) });
-    }),
+    })),
   );
 
   app.get(
@@ -925,7 +966,7 @@ export function registerTerminalRoutes(app: Express, deps: { llm?: (prompt: stri
    */
   app.post(
     "/api/terminal/send",
-    wrap(async (req, res) => {
+    wrap(underLock(async (req, res) => {
       const parsed = sendSchema.safeParse(req.body);
       if (!parsed.success) throw httpError(400, parsed.error.issues.map((i) => i.message).join("; "));
       const { account, plan } = parsed.data;
@@ -995,7 +1036,7 @@ export function registerTerminalRoutes(app: Express, deps: { llm?: (prompt: stri
       // The account's stream, if it is not open yet, so this trade's fill is heard at once.
       void ensureStreams().catch(() => {});
       res.status(201).json({ trade, placed: ref, refused: placed.refused, sized });
-    }),
+    })),
   );
 
   /** The strip over the chart: last, mark, the day's change and range, funding. Public data, from the account's own host. */
@@ -1047,7 +1088,7 @@ export function registerTerminalRoutes(app: Express, deps: { llm?: (prompt: stri
    */
   app.post(
     "/api/terminal/adopt",
-    wrap(async (req, res) => {
+    wrap(underLock(async (req, res) => {
       const { account, symbol, positionSide } = z
         .object({ account: z.string().min(1), symbol: z.string().min(1), positionSide: z.enum(["LONG", "SHORT"]) })
         .parse(req.body);
@@ -1118,13 +1159,13 @@ export function registerTerminalRoutes(app: Express, deps: { llm?: (prompt: stri
         ok: true,
       });
       res.status(201).json({ trade });
-    }),
+    })),
   );
 
   /** A new stop: the old bracket off, a new one on, and the move in the stop log. */
   app.post(
     "/api/terminal/trades/:id/stop",
-    wrap(async (req, res) => {
+    wrap(underLock(async (req, res) => {
       const { price } = priceSchema.parse(req.body);
       const s = store(req);
       const t = await s.getTrade(Number(req.params.id));
@@ -1166,13 +1207,13 @@ export function registerTerminalRoutes(app: Express, deps: { llm?: (prompt: stri
         }),
       } as any);
       res.json({ trade: after, order: next });
-    }),
+    })),
   );
 
   /** A new target: every resting target off, one close-position target on. */
   app.post(
     "/api/terminal/trades/:id/target",
-    wrap(async (req, res) => {
+    wrap(underLock(async (req, res) => {
       const { price } = priceSchema.parse(req.body);
       const s = store(req);
       const t = await s.getTrade(Number(req.params.id));
@@ -1209,7 +1250,7 @@ export function registerTerminalRoutes(app: Express, deps: { llm?: (prompt: stri
         }),
       } as any);
       res.json({ trade: after, order: next });
-    }),
+    })),
   );
 
   /**
@@ -1219,7 +1260,7 @@ export function registerTerminalRoutes(app: Express, deps: { llm?: (prompt: stri
    */
   app.post(
     "/api/terminal/trades/:id/take",
-    wrap(async (req, res) => {
+    wrap(underLock(async (req, res) => {
       const body = z.object({ qty: z.number().positive(), price: z.number().positive() }).parse(req.body);
       const s = store(req);
       const t = await s.getTrade(Number(req.params.id));
@@ -1245,7 +1286,7 @@ export function registerTerminalRoutes(app: Express, deps: { llm?: (prompt: stri
       };
       const after = await s.updateTrade(t.id, { terminal: formatTerminalRef(nextRef) } as any);
       res.json({ trade: after, order: placed });
-    }),
+    })),
   );
 
   /**
@@ -1256,7 +1297,7 @@ export function registerTerminalRoutes(app: Express, deps: { llm?: (prompt: stri
    */
   app.post(
     "/api/terminal/orders/cancel",
-    wrap(async (req, res) => {
+    wrap(underLock(async (req, res) => {
       const { account, symbol, orderId } = z.object({ account: z.string().min(1), symbol: z.string().min(1), orderId: z.number().int() }).parse(req.body);
       const s = store(req);
       const { venue } = await arm(s, account);
@@ -1285,13 +1326,13 @@ export function registerTerminalRoutes(app: Express, deps: { llm?: (prompt: stri
         touched.push(t.id);
       }
       res.json({ cancelled: orderId, trades: touched });
-    }),
+    })),
   );
 
   /** A resting limit that never filled: every order off, the trade cancelled. */
   app.post(
     "/api/terminal/trades/:id/cancel",
-    wrap(async (req, res) => {
+    wrap(underLock(async (req, res) => {
       const s = store(req);
       const t = await s.getTrade(Number(req.params.id));
       if (!t) throw httpError(404, "Trade not found");
@@ -1313,13 +1354,13 @@ export function registerTerminalRoutes(app: Express, deps: { llm?: (prompt: stri
       if (entry && entry.executedQty > 0) return res.json({ trade: await reconcileOne(store(req), t, { venue, acct }) });
       const after = await s.updateTrade(t.id, { status: "cancelled", cancelReason: "pulled" } as any);
       res.json({ trade: after });
-    }),
+    })),
   );
 
   /** Out at market: the position side flattened, the brackets taken off. */
   app.post(
     "/api/terminal/trades/:id/close",
-    wrap(async (req, res) => {
+    wrap(underLock(async (req, res) => {
       const s = store(req);
       const t = await s.getTrade(Number(req.params.id));
       if (!t) throw httpError(404, "Trade not found");
@@ -1348,13 +1389,13 @@ export function registerTerminalRoutes(app: Express, deps: { llm?: (prompt: stri
       };
       const stamped = (await s.updateTrade(t.id, { terminal: formatTerminalRef(nextRef) } as any)) ?? t;
       res.json({ trade: await reconcileOne(store(req), stamped, { venue, acct }) });
-    }),
+    })),
   );
 
   /** Some of it off at market: a take. The fill lands in the ledger as a partial. */
   app.post(
     "/api/terminal/trades/:id/reduce",
-    wrap(async (req, res) => {
+    wrap(underLock(async (req, res) => {
       const body = z.object({ qty: z.number().positive().optional(), fraction: z.number().gt(0).lte(1).optional() }).parse(req.body);
       const s = store(req);
       const t = await s.getTrade(Number(req.params.id));
@@ -1378,13 +1419,13 @@ export function registerTerminalRoutes(app: Express, deps: { llm?: (prompt: stri
       };
       const stamped = (await s.updateTrade(t.id, { terminal: formatTerminalRef(nextRef) } as any)) ?? t;
       res.json({ trade: await reconcileOne(s, stamped, { venue, acct }), order });
-    }),
+    })),
   );
 
   /** More on: at market, or resting at a price. The fill lands in the ledger as an add. */
   app.post(
     "/api/terminal/trades/:id/add",
-    wrap(async (req, res) => {
+    wrap(underLock(async (req, res) => {
       const body = z.object({ qty: z.number().positive(), price: z.number().positive().nullable().optional() }).parse(req.body);
       const s = store(req);
       const t = await s.getTrade(Number(req.params.id));
@@ -1408,13 +1449,13 @@ export function registerTerminalRoutes(app: Express, deps: { llm?: (prompt: stri
       };
       const stamped = (await s.updateTrade(t.id, { terminal: formatTerminalRef(nextRef) } as any)) ?? t;
       res.json({ trade: await reconcileOne(s, stamped, { venue, acct }), order });
-    }),
+    })),
   );
 
   /** A resting entry moved: the old limit off, a new one on at the price, the plan's entry with it. */
   app.post(
     "/api/terminal/trades/:id/entry",
-    wrap(async (req, res) => {
+    wrap(underLock(async (req, res) => {
       const { price } = priceSchema.parse(req.body);
       const s = store(req);
       const t = await s.getTrade(Number(req.params.id));
@@ -1451,13 +1492,13 @@ export function registerTerminalRoutes(app: Express, deps: { llm?: (prompt: stri
         }),
       } as any);
       res.json({ trade: after, order: next });
-    }),
+    })),
   );
 
   /** The management read on one finished trade, now — again, if it was read before. */
   app.post(
     "/api/terminal/trades/:id/review",
-    wrap(async (req, res) => {
+    wrap(underLock(async (req, res) => {
       const s = store(req);
       const t = await s.getTrade(Number(req.params.id));
       if (!t) throw httpError(404, "Trade not found");
@@ -1469,7 +1510,7 @@ export function registerTerminalRoutes(app: Express, deps: { llm?: (prompt: stri
       if (!reviewed.review) throw httpError(502, "The model did not answer. The trade is unchanged.");
       const after = await s.updateTrade(t.id, { ...watched.patch, terminal: formatTerminalRef(reviewed) } as any);
       res.json({ trade: after, review: reviewed.review });
-    }),
+    })),
   );
 
   /** Every live terminal trade, read back from its venue. The terminal calls this while open. */

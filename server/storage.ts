@@ -50,6 +50,7 @@ import { collapseToInstrument } from "@shared/binance";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import { and, eq, desc, inArray, isNull, sql as sqlx } from "drizzle-orm";
+import { randomBytes } from "node:crypto";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -265,6 +266,7 @@ ALTER TABLE account_settings ADD COLUMN IF NOT EXISTS binance_env TEXT NOT NULL 
 ALTER TABLE account_settings ADD COLUMN IF NOT EXISTS binance_trade BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE account_settings ADD COLUMN IF NOT EXISTS binance_ip_locked BOOLEAN;
 ALTER TABLE account_settings ADD COLUMN IF NOT EXISTS track BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE account_settings ADD COLUMN IF NOT EXISTS relay_token TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS terminal TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS paper BOOLEAN NOT NULL DEFAULT FALSE;
 -- Bars already read, kept across restarts (server/candles.ts). Keyed by
@@ -752,6 +754,24 @@ const DEFAULT_STYLES: { name: string; color: string }[] = [
 /** Every account with a key that may trade, across every user — each gets a user-data stream. */
 export async function tradingAccountsEverywhere(): Promise<AccountSettings[]> {
   return db.select().from(accountSettings).where(eq(accountSettings.binanceTrade, true));
+}
+
+/** A relay token: 32 random bytes, hex. Shown to the owner, given to the relay, never guessable. */
+export const newRelayToken = () => randomBytes(32).toString("hex");
+
+/** The account a relay token names, whoever it belongs to. */
+export async function accountByRelayToken(token: string): Promise<AccountSettings | undefined> {
+  if (!token) return undefined;
+  const [row] = await db.select().from(accountSettings).where(eq(accountSettings.relayToken, token));
+  return row;
+}
+
+/** What the relay learned about its key on arrival: which venue it is for, and whether it may trade. */
+export async function setRelayFacts(id: number, facts: { binanceEnv: "live" | "testnet"; binanceTrade: boolean; binanceKeyHint: string }): Promise<void> {
+  await db
+    .update(accountSettings)
+    .set({ binanceEnv: facts.binanceEnv, binanceTrade: facts.binanceTrade, binanceKey: facts.binanceKeyHint || null, binanceSecret: null, binanceIpLocked: null })
+    .where(eq(accountSettings.id, id));
 }
 
 /** Every account anybody asked the journal to watch (server/tracker.ts). */
@@ -1564,6 +1584,8 @@ export class DatabaseStorage implements IStorage {
           ...(s.kind ? { kind: s.kind } : {}),
           ...(s.track !== undefined ? { track: s.track } : {}),
           ...(s.wallet !== undefined ? { wallet: s.wallet } : {}),
+          // A relay: its token is minted once and kept until the relay is given up.
+          ...(s.relay === true ? { relayToken: existing.relayToken ?? newRelayToken() } : s.relay === false ? { relayToken: null, binanceKey: null, binanceSecret: null, binanceTrade: false, binanceIpLocked: null } : {}),
           // The route has already sealed the secret and checked the key's
           // permissions by the time it gets here; null on the key clears both.
           ...(s.binanceKey !== undefined
@@ -1592,6 +1614,7 @@ export class DatabaseStorage implements IStorage {
         kind: s.kind ?? "live",
         track: s.track ?? false,
         wallet: s.wallet ?? null,
+        relayToken: s.relay === true ? newRelayToken() : null,
         binanceKey: s.binanceKey ?? null,
         binanceSecret: s.binanceKey ? (s.binanceSecret ?? null) : null,
         binanceEnv: s.binanceKey ? (s.binanceEnv ?? "live") : "live",

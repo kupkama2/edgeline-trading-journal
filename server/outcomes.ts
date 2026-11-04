@@ -170,6 +170,8 @@ const defaultCensus = (): Census => (process.env.NODE_ENV === "test" ? "skip" : 
 let refreshing: Promise<void> | null = null;
 /** The catalogue as last assembled, held for a minute between reads of the table. */
 let listMemo: { at: number; rows: BinanceSymbol[] } | null = null;
+/** Bumped by every replace, so a memo built from a read that predates one is not kept. */
+let listGeneration = 0;
 const LIST_MEMO_MS = 60_000;
 
 /** Ask the bucket which listed perps still publish, and demote the rest. */
@@ -189,6 +191,7 @@ export async function ensureCatalogue(
 ): Promise<BinanceSymbol[]> {
   // The list is a thousand rows in the database; a chart should not read it per request.
   if (!force && listMemo && Date.now() - listMemo.at < LIST_MEMO_MS) return listMemo.rows;
+  const generation = listGeneration;
   const last = await catalogue.lastFetchedAt();
   const partial = (await catalogue.list()).every((r) => r.market !== "futures");
   const ttl = partial ? PARTIAL_TTL_MS : CATALOGUE_TTL_MS;
@@ -199,6 +202,7 @@ export async function ensureCatalogue(
         const rows = await fetchCatalogue();
         if (rows.length) await catalogue.replace(rows);
         listMemo = null;
+        listGeneration += 1;
         const listed = lastListed();
         if (rows.length && listed.length && census !== "skip") {
           const run = runCensus(listed);
@@ -255,7 +259,7 @@ export async function ensureCatalogue(
     }
   }
   const out = cat;
-  listMemo = { at: Date.now(), rows: out };
+  if (generation === listGeneration) listMemo = { at: Date.now(), rows: out };
   return out;
 }
 

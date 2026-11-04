@@ -919,6 +919,13 @@ export const accountSettings = pgTable("account_settings", {
    * a wallet address or any Binance key is enough.
    */
   track: boolean("track").notNull().default(false),
+  /**
+   * The relay's token, when this account's Binance calls go through a relay
+   * the trader runs on a machine of their own (server/relay.ts). The key
+   * then lives on that machine, never here: the server asks the relay, the
+   * relay asks Binance from an address nobody else is spending.
+   */
+  relayToken: text("relay_token"),
 });
 
 /**
@@ -998,6 +1005,8 @@ export const upsertAccountSettingsSchema = z.object({
   makerFee: z.number().min(0),
   takerFee: z.number().min(0),
   kind: accountKindEnum.optional(),
+  /** True mints a relay token for the account (keeping one it has); false removes it. Omitted leaves it alone. */
+  relay: z.boolean().optional(),
   /** Omitted leaves it alone; null clears it. */
   wallet: z
     .string()

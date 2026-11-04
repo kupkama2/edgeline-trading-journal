@@ -386,7 +386,15 @@ function useReplay(trade: TradeWithTags, candles: Candle[]) {
     const i = candles.findIndex((k) => k.t > entryMs);
     return Math.max(0, (i === -1 ? candles.length : i) - 1);
   }, [candles, entryMs]);
-  const barMs = candles.length > 1 ? candles[1].t - candles[0].t : 60_000;
+  // The bar's width from the tightest gap among the first bars, so a hole at the start does not stretch every bar.
+  const barMs = useMemo(() => {
+    let best = Infinity;
+    for (let i = 1; i < Math.min(candles.length, 50); i++) {
+      const d = candles[i].t - candles[i - 1].t;
+      if (d > 0 && d < best) best = d;
+    }
+    return Number.isFinite(best) ? best : 60_000;
+  }, [candles]);
   const untilMs = candles.length ? candles[Math.min(cursor, candles.length - 1)].t + barMs - 1 : 0;
   const atEnd = cursor >= candles.length - 1;
 
@@ -865,7 +873,13 @@ export function Candles({
     };
     const long = direction === "long";
     const shownBars = bars();
-    const drawnUntil = shownBars.length ? shownBars[shownBars.length - 1].t + (candles.length > 1 ? candles[1].t - candles[0].t : 60_000) - 1 : -Infinity;
+    let barWidth = Infinity;
+    for (let i = 1; i < Math.min(candles.length, 50); i++) {
+      const d = candles[i].t - candles[i - 1].t;
+      if (d > 0 && d < barWidth) barWidth = d;
+    }
+    if (!Number.isFinite(barWidth)) barWidth = 60_000;
+    const drawnUntil = shownBars.length ? shownBars[shownBars.length - 1].t + barWidth - 1 : -Infinity;
     const marks: SeriesMarker<Time>[] = [];
     if (events) {
       /* The replay: each thing that happened, on the bar it happened in, as
