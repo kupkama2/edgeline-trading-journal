@@ -269,6 +269,7 @@ ALTER TABLE account_settings ADD COLUMN IF NOT EXISTS track BOOLEAN NOT NULL DEF
 ALTER TABLE account_settings ADD COLUMN IF NOT EXISTS relay_token TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS terminal TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS paper BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS gate TEXT;
 -- Bars already read, kept across restarts (server/candles.ts). Keyed by
 -- venue, pair, timeframe and window; a window that ended in the past is
 -- the same bars forever, and 'until' says how long the row may be served.
@@ -828,8 +829,8 @@ export const accounts = {
    */
   async setPrefs(id: number, patch: UpdateUserPrefs): Promise<UserPrefs> {
     const current = await accounts.prefs(id);
-    const { guard, ...rest } = patch;
-    const next: UserPrefs = { ...current, ...rest, guard: { ...current.guard, ...(guard ?? {}) } };
+    const { guard, gate, ...rest } = patch;
+    const next: UserPrefs = { ...current, ...rest, guard: { ...current.guard, ...(guard ?? {}) }, gate: { ...current.gate, ...(gate ?? {}) } };
     if (patch.reviewMode === "enforce" && current.reviewMode !== "enforce") {
       next.reviewEnforcedSince = new Date().toISOString();
     }

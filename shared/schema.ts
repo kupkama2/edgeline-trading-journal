@@ -10,6 +10,7 @@ import {
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { DEFAULT_GUARDRAILS, guardRailsPatchSchema, guardRailsSchema, readGuardRails } from "./guardrails";
+import { DEFAULT_GATE, gateSettingsPatchSchema, gateSettingsSchema, readGate } from "./gate";
 
 /* =============================== users ============================== */
 
@@ -60,10 +61,12 @@ export const userPrefsSchema = z.object({
   reviewEnforcedSince: z.string().nullable(),
   /** The signed-in person's own loss and tilt limits (shared/guardrails.ts). */
   guard: guardRailsSchema,
+  /** The pre-trade gate: the questions, and where it stands in the way (shared/gate.ts). */
+  gate: gateSettingsSchema,
 });
 export type UserPrefs = z.infer<typeof userPrefsSchema>;
-export const DEFAULT_PREFS: UserPrefs = { reviewMode: "remind", reviewEnforcedSince: null, guard: DEFAULT_GUARDRAILS };
-export const updateUserPrefsSchema = z.object({ reviewMode: reviewModeEnum, guard: guardRailsPatchSchema }).partial().strict();
+export const DEFAULT_PREFS: UserPrefs = { reviewMode: "remind", reviewEnforcedSince: null, guard: DEFAULT_GUARDRAILS, gate: DEFAULT_GATE };
+export const updateUserPrefsSchema = z.object({ reviewMode: reviewModeEnum, guard: guardRailsPatchSchema, gate: gateSettingsPatchSchema }).partial().strict();
 export type UpdateUserPrefs = z.infer<typeof updateUserPrefsSchema>;
 
 /** Stored prefs, read leniently: a field that is missing or malformed takes its default. */
@@ -80,6 +83,7 @@ export function readPrefs(raw: string | null | undefined): UserPrefs {
     reviewMode: mode.success ? mode.data : DEFAULT_PREFS.reviewMode,
     reviewEnforcedSince: typeof o.reviewEnforcedSince === "string" ? o.reviewEnforcedSince : null,
     guard: readGuardRails(o.guard),
+    gate: readGate(o.gate),
   };
 }
 
@@ -237,6 +241,8 @@ export const trades = pgTable("trades", {
    * stand beside this one.
    */
   tradedPoorly: boolean("traded_poorly").notNull().default(false),
+  /** The pre-trade gate's answers, as JSON (shared/gate.ts). Null: never asked, or not yet answered. */
+  gate: text("gate"),
   /*
    * Recorded as a RESULT rather than as prices.
    *

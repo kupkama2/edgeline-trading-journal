@@ -4,6 +4,7 @@ import { createServer, type Server } from "node:http";
 import type { TradeWithTags } from "../shared/schema";
 import { readPrefs } from "../shared/schema";
 import { DEFAULT_GUARDRAILS, readGuardRails } from "../shared/guardrails";
+import { DEFAULT_GATE } from "../shared/gate";
 import { canSnooze, debtSentence, gateShut, reviewDebt, SNOOZE_MS } from "../shared/review-pressure";
 
 /**
@@ -112,7 +113,7 @@ describe("the gate", () => {
 
 describe("stored prefs", () => {
   it("default to reminding, and survive junk", () => {
-    const base = { reviewMode: "remind", reviewEnforcedSince: null, guard: DEFAULT_GUARDRAILS };
+    const base = { reviewMode: "remind", reviewEnforcedSince: null, guard: DEFAULT_GUARDRAILS, gate: DEFAULT_GATE };
     expect(readPrefs(null)).toEqual(base);
     expect(readPrefs("{not json")).toEqual(base);
     expect(readPrefs(JSON.stringify({ reviewMode: "nag", reviewEnforcedSince: 5 }))).toEqual(base);
@@ -160,7 +161,7 @@ describe.skipIf(!DB)("prefs over the wire", () => {
     fetch(`${base}/api/prefs`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 
   it("starts at the default", async () => {
-    expect(await (await fetch(`${base}/api/prefs`)).json()).toEqual({ reviewMode: "remind", reviewEnforcedSince: null, guard: DEFAULT_GUARDRAILS });
+    expect(await (await fetch(`${base}/api/prefs`)).json()).toEqual({ reviewMode: "remind", reviewEnforcedSince: null, guard: DEFAULT_GUARDRAILS, gate: DEFAULT_GATE });
   });
 
   it("takes the person's own guard rails a field at a time, and refuses a warning past the stop", async () => {

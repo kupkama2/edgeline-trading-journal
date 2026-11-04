@@ -86,6 +86,7 @@ import { computeMetrics } from "@shared/metrics";
 import { parseNoteRead } from "@shared/note-read";
 import { USD_COMMISSION } from "@shared/binance-account";
 import type { AccountSettings, TradeWithTags } from "@shared/schema";
+import { gateRecordSchema } from "@shared/gate";
 
 const TERMINAL_EMAILS = (process.env.TERMINAL_EMAILS ?? "")
   .split(",")
@@ -143,7 +144,7 @@ const planSchema = z.object({
   leverage: z.number().int().min(1).max(125),
 });
 
-const sendSchema = z.object({ account: z.string().min(1), plan: planSchema });
+const sendSchema = z.object({ account: z.string().min(1), plan: planSchema, gate: gateRecordSchema.optional() });
 const priceSchema = z.object({ price: z.number().positive() });
 const accountSchema = z.object({ account: z.string().min(1) });
 
@@ -1021,6 +1022,8 @@ export function registerTerminalRoutes(app: Express, deps: { llm?: (prompt: stri
         account: acct.name,
         riskAmount: sized.riskDollars,
         terminal: formatTerminalRef(ref),
+        // The gate's answers, when Send asked them.
+        gate: parsed.data.gate ? JSON.stringify(parsed.data.gate) : null,
         // A testnet fill is practice: kept for the terminal, left out of the journal.
         paper: venue.env === "testnet",
       } as any);

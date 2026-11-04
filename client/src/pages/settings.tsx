@@ -1,3 +1,4 @@
+import { GateSettingsCard } from "@/components/gate-card";
 import { parseLooseNumber } from "@shared/loose-number";
 import { useAccountBalances, useAddAccountBalance, useBinanceSync, useHyperliquidSync } from "@/lib/data";
 import { isWalletAddress, venueOfAccount } from "@shared/hyperliquid";
@@ -1296,6 +1297,7 @@ export default function Settings() {
       </Card>
 
       <GuardRailsCard />
+      <GateSettingsCard />
 
       <Card className="border-card-border bg-card p-4 sm:p-5">
         <h2 className="text-sm font-semibold tracking-tight">How the metrics work</h2>

@@ -1,4 +1,7 @@
 import { useAccountBalances } from "@/lib/data";
+import { usePrefs } from "@/lib/prefs";
+import { GateOverlay } from "@/components/gate";
+import { formatGate, type GateRecord } from "@shared/gate";
 import { joinNote, whyOf } from "@shared/notes";
 import type { PositionRow } from "@shared/positions-read";
 import { toInstant } from "@shared/import-parse";
@@ -136,6 +139,17 @@ export function NewTradeCard({
    * the page, which is how a trade usually starts anyway.
    */
   const [expanded, setExpanded] = useState(defaultExpanded);
+  /*
+   * The gate, hard: the form is under it until every answer is green. One
+   * pass per opening of the card — shut it and the next trade is asked
+   * again — and the answers go on the trade it saves.
+   */
+  const prefs = usePrefs();
+  const [gate, setGate] = useState<GateRecord | null>(null);
+  const gateUp = expanded && prefs.gate.entryCard && gate == null;
+  useEffect(() => {
+    if (!expanded) setGate(null);
+  }, [expanded]);
   const hasDraftRef = useRef(false);
   /** What the last screenshot read wrote, so the next read can take it back. */
   const lastRead = useRef<{ fields: Record<string, string>; closed: boolean; pending: boolean } | null>(null);
@@ -817,6 +831,7 @@ export function NewTradeCard({
     try {
     created = await createTrade.mutateAsync({
       trade: {
+        gate: gate ? formatGate(gate) : null,
         styleId,
         symbol: data.symbol.toUpperCase(),
         direction: data.direction,
@@ -1015,10 +1030,11 @@ export function NewTradeCard({
     <Card
       ref={cardRef}
       onClick={expanded ? undefined : () => setExpanded(true)}
-      className={`min-w-0 border-card-border bg-card ${
+      className={`relative min-w-0 border-card-border bg-card ${
         compact && !expanded ? "p-3" : "p-4 sm:p-5"
       } ${expanded ? "" : "cursor-pointer transition-colors hover:border-primary/40"}`}
     >
+      {gateUp && <GateOverlay questions={prefs.gate.questions} where="entry-card" onDone={setGate} testId="entry-gate" />}
       <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1.5">
         <button
           type="button"
