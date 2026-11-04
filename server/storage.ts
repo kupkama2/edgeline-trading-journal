@@ -1585,7 +1585,7 @@ export class DatabaseStorage implements IStorage {
           ...(s.track !== undefined ? { track: s.track } : {}),
           ...(s.wallet !== undefined ? { wallet: s.wallet } : {}),
           // A relay: its token is minted once and kept until the relay is given up.
-          ...(s.relay === true ? { relayToken: existing.relayToken ?? newRelayToken() } : s.relay === false ? { relayToken: null } : {}),
+          ...(s.relay === true ? { relayToken: existing.relayToken ?? newRelayToken() } : s.relay === false ? { relayToken: null, binanceKey: null, binanceSecret: null, binanceTrade: false, binanceIpLocked: null } : {}),
           // The route has already sealed the secret and checked the key's
           // permissions by the time it gets here; null on the key clears both.
           ...(s.binanceKey !== undefined

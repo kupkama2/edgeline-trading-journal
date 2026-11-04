@@ -22,7 +22,7 @@
  */
 import type { AccountSettings, TradeWithTags } from "@shared/schema";
 import { tradesFromFills, type HlFill, type HlOpenOrder, type HlTrade } from "@shared/hyperliquid";
-import { formatTerminalRef, parseTerminalRef, type Brackets, type TerminalRef, type VenueSnapshot } from "@shared/terminal";
+import { cutAtFlat, formatTerminalRef, parseTerminalRef, type Brackets, type TerminalRef, type VenueSnapshot } from "@shared/terminal";
 import { USD_COMMISSION, type BinanceUserTrade } from "@shared/binance-account";
 import { storageFor, trackedAccountsEverywhere, type DatabaseStorage } from "./storage";
 import { open } from "./secrets";
@@ -76,7 +76,7 @@ export async function trackEverywhere(mode: PassMode = "full"): Promise<void> {
     const s = storageFor(userId);
     await oneAtATime(`terminal:${userId}`, async () => {
       for (const a of accounts) {
-        if (mode === "light" && !a.wallet && restingOnStream(userId, a)) continue;
+        if (mode === "light" && !a.wallet && restingOnStream(userId, a, "tracker")) continue;
         const r = await trackAccount(s, a);
         const key = `${userId}:${a.name}`;
         if (r.error) {
@@ -260,6 +260,26 @@ function sideFills(rows: BinanceUserTrade[], symbol: string, side: "LONG" | "SHO
   return Math.abs(pos - heldNow) <= Math.max(ZERO, heldNow * 1e-6) ? out : null;
 }
 
+/**
+ * The entry as the opening fills say it: every leg of the entry ORDER — a
+ * market order sweeping two levels fills twice under one id — summed and
+ * averaged, and the opening orders beyond it as adds. Without the fills,
+ * the position itself.
+ */
+function entryOf(
+  open: HlTrade | null,
+  orderOf: (tid: number) => number | null,
+  fallback: { size: number; price: number; time: number },
+): { size: number; entryPrice: number; entryTime: number; entryOrderId: number | null; addOrderIds: number[] } {
+  if (!open || open.opens.length === 0) return { size: fallback.size, entryPrice: fallback.price, entryTime: fallback.time, entryOrderId: null, addOrderIds: [] };
+  const entryOrderId = orderOf(open.opens[0].tid);
+  const legs = entryOrderId != null ? open.opens.filter((l) => orderOf(l.tid) === entryOrderId) : [open.opens[0]];
+  const size = legs.reduce((s, l) => s + l.sz, 0);
+  const entryPrice = legs.reduce((s, l) => s + l.px * l.sz, 0) / size;
+  const addOrderIds = Array.from(new Set(open.opens.map((l) => orderOf(l.tid)).filter((x): x is number => x != null && x !== entryOrderId)));
+  return { size, entryPrice, entryTime: open.entryTime, entryOrderId, addOrderIds };
+}
+
 /** The open position from a side's fills, when the window reaches its opening. */
 function openFrom(fills: HlFill[] | null, venue: string): HlTrade | null {
   if (!fills || fills.length === 0) return null;
@@ -306,11 +326,7 @@ async function trackBinance(s: DatabaseStorage, acct: AccountSettings): Promise<
       symbol: p.symbol,
       journalSymbol: rules?.baseAsset ?? p.symbol.replace(/USDT$|USDC$|BUSD$|FDUSD$/, ""),
       positionSide: side,
-      size: fromFills ? fromFills.opens[0].sz : Math.abs(p.amt),
-      entryPrice: fromFills ? fromFills.opens[0].px : p.entryPrice,
-      entryTime: fromFills ? fromFills.entryTime : now,
-      entryOrderId: fromFills ? fromFills.opens[0].tid && (rows.find((r) => r.id === fromFills.opens[0].tid)?.orderId ?? null) : null,
-      addOrderIds: fromFills ? Array.from(new Set(fromFills.opens.slice(1).map((l) => rows.find((r) => r.id === l.tid)?.orderId).filter((x): x is number => x != null))) : [],
+      ...entryOf(fromFills, (tid) => rows.find((r) => r.id === tid)?.orderId ?? null, { size: Math.abs(p.amt), price: p.entryPrice, time: now }),
       leverage: p.leverage,
       externalId: fromFills ? fromFills.externalId : null,
       brackets,
@@ -327,7 +343,7 @@ async function trackBinance(s: DatabaseStorage, acct: AccountSettings): Promise<
     await reconcileOne(s, t, { venue: v, acct });
     out.read += 1;
   }
-  noteFullRead(acct.userId, acct.name);
+  noteFullRead(acct.userId, acct.name, "tracker");
   return out;
 }
 
@@ -371,11 +387,7 @@ async function trackHyperliquid(s: DatabaseStorage, acct: AccountSettings): Prom
       symbol: p.coin,
       journalSymbol: p.coin.toUpperCase(),
       positionSide: side,
-      size: fromFills ? fromFills.opens[0].sz : Math.abs(p.szi),
-      entryPrice: fromFills ? fromFills.opens[0].px : p.entryPx,
-      entryTime: fromFills ? fromFills.entryTime : now,
-      entryOrderId: fromFills ? (coinFills.find((f) => f.tid === fromFills.opens[0].tid)?.oid ?? null) : null,
-      addOrderIds: fromFills ? Array.from(new Set(fromFills.opens.slice(1).map((l) => coinFills.find((f) => f.tid === l.tid)?.oid).filter((x): x is number => x != null && x !== 0))) : [],
+      ...entryOf(fromFills, (tid) => coinFills.find((f) => f.tid === tid)?.oid || null, { size: Math.abs(p.szi), price: p.entryPx, time: now }),
       leverage: p.leverage,
       externalId: fromFills ? fromFills.externalId : null,
       brackets,
@@ -392,7 +404,9 @@ async function trackHyperliquid(s: DatabaseStorage, acct: AccountSettings): Prom
     const p = held.find((x) => x.coin === ref.symbol && (x.szi > 0) === long) ?? null;
     const entryAt = new Date(t.entryTime).getTime();
     const openSide = long ? "B" : "A";
-    const coinFills = fills.filter((f) => f.coin === ref.symbol && f.time >= entryAt - 5_000);
+    // This trade's fills: from the entry, up to where the position first went flat.
+    const own = cutAtFlat(fills.filter((f) => f.coin === ref.symbol && f.time >= entryAt - 5_000).map((f) => ({ ...f, qty: f.sz })), openSide);
+    const coinFills = own.fills;
     // Opening fills beyond the entry are adds; the ids are learned from the fills.
     const addIds = new Set(ref.addOrderIds ?? []);
     for (const f of coinFills) if (f.side === openSide && f.oid !== ref.entryOrderId && f.oid !== 0) addIds.add(f.oid);
@@ -419,7 +433,7 @@ async function trackHyperliquid(s: DatabaseStorage, acct: AccountSettings): Prom
         realizedPnl: f.closedPnl,
         foreign: false,
       })),
-      positionAmt: p ? Math.abs(p.szi) : 0,
+      positionAmt: own.cut ? 0 : p ? Math.abs(p.szi) : 0,
       openOrderIds: orders.filter((o) => o.coin === ref.symbol).map((o) => o.oid),
     };
     const brackets = bracketsOnHl(orders, ref.symbol, long);

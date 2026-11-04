@@ -271,8 +271,22 @@ export async function orderById(v: Venue, symbol: string, orderId: number): Prom
  */
 export async function fillsSince(v: Venue, symbol: string, sinceMs: number): Promise<BinanceUserTrade[]> {
   const floor = Date.now() - (7 * 24 * 60 * 60 * 1000 - 60 * 60 * 1000);
-  const j = await call(v, "GET", "/fapi/v1/userTrades", { symbol, startTime: Math.max(sinceMs, floor), limit: 1000 });
-  return parseUserTrades(j);
+  // A page is a thousand fills; a busy symbol has more in a week, and the newest are the closes.
+  const out: BinanceUserTrade[] = [];
+  const seen = new Set<number>();
+  let startTime = Math.max(sinceMs, floor);
+  for (let page = 0; page < 20; page++) {
+    const rows = parseUserTrades(await call(v, "GET", "/fapi/v1/userTrades", { symbol, startTime, limit: 1000 }));
+    for (const r of rows) if (!seen.has(r.id)) {
+      seen.add(r.id);
+      out.push(r);
+    }
+    if (rows.length < 1000) break;
+    const last = rows[rows.length - 1].time;
+    if (!(last > startTime)) break;
+    startTime = last;
+  }
+  return out;
 }
 
 export async function usdBalance(v: Venue): Promise<{ asset: string; balance: number; available: number }[]> {

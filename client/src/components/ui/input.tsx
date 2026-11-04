@@ -18,9 +18,18 @@ function pasteAsNumber(e: React.ClipboardEvent<HTMLInputElement>): boolean {
   if (!cleaned || cleaned === raw.trim()) return false
   e.preventDefault()
   const el = e.currentTarget
+  // Into the selection, as a paste goes, where the field lets us know where that is; a number field does not.
+  let next = cleaned
+  try {
+    const start = el.selectionStart
+    const end = el.selectionEnd
+    if (start != null && end != null) next = el.value.slice(0, start) + cleaned + el.value.slice(end)
+  } catch {
+    /* a number input throws on selectionStart: the whole value, then */
+  }
   const set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set
-  if (set) set.call(el, cleaned)
-  else el.value = cleaned
+  if (set) set.call(el, next)
+  else el.value = next
   el.dispatchEvent(new Event("input", { bubbles: true }))
   return true
 }

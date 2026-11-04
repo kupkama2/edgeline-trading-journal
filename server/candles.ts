@@ -116,10 +116,12 @@ export async function readCandlesAt(
       }
     }
     const read = pair.venue === "hyperliquid" ? await readHlCandles(pair.symbol, interval, startMs, endMs, maxBars) : await readCandles(pair, interval, startMs, endMs, maxBars, allowLateStart);
-    const ttl = liveEnd ? Math.min(bar, LIVE_TTL_MS) : CLOSED_TTL_MS;
+    // A past window is kept for good only when the read reached its end: the archive
+    // stops a day short, and tomorrow's file is the whole reason to ask again.
+    const complete = read.coveredTo >= endMs - bar;
+    const ttl = liveEnd || !complete ? Math.min(bar, LIVE_TTL_MS) : CLOSED_TTL_MS;
     remember(key, read, ttl);
-    // Only a window that will not change is worth a row; a live one is a minute's worth.
-    if (!liveEnd && read.candles.length) void candleStore.put(key, Date.now() + ttl, JSON.stringify(read)).catch(() => {});
+    if (!liveEnd && complete && read.candles.length) void candleStore.put(key, Date.now() + ttl, JSON.stringify(read)).catch(() => {});
     return read;
   })();
   inFlight.set(key, run);

@@ -12,7 +12,7 @@
 import { inArray, or, and, gt, eq } from "drizzle-orm";
 import { trades } from "@shared/schema";
 import { venueOfAccount } from "@shared/hyperliquid";
-import { db, storageFor } from "./storage";
+import { candleStore, db, storageFor } from "./storage";
 import { ensureCatalogue } from "./outcomes";
 import { hyperliquidAssets } from "./hyperliquid";
 import { pairForTradeAt, readCandlesAt } from "./candles";
@@ -57,10 +57,16 @@ let running = false;
 /** Every minute, after a few seconds' grace at boot. `CHART_WARM_MS=0` turns it off. */
 export function startChartWarm(everyMs = Number(process.env.CHART_WARM_MS ?? "60000")): void {
   if (!(everyMs > 0)) return;
+  let lastPrune = 0;
   const tick = async () => {
     if (running) return;
     running = true;
     try {
+      // Rows past their time, gone — a few times a day is plenty.
+      if (Date.now() - lastPrune > 6 * 60 * 60_000) {
+        lastPrune = Date.now();
+        await candleStore.prune().catch(() => 0);
+      }
       const r = await warmCharts();
       if (r.failed) console.error(`[charts] warmed ${r.warmed}, ${r.failed} could not be read`);
     } catch (err: any) {

@@ -41,7 +41,7 @@ import {
   hyperliquidStatus,
   probeHyperliquid,
 } from "./hyperliquid";
-import { fetchCandlesAt, pairForTradeAt, readCandlesAt } from "./candles";
+import { fetchCandlesAt, forgetCandles, pairForTradeAt, readCandlesAt } from "./candles";
 import { chartWindow, RECENT_AFTERMATH_MS } from "./chart-window";
 import { syncHyperliquid } from "./hl-sync";
 import { oneAtATime } from "./venue-sync";
@@ -973,7 +973,8 @@ export async function registerRoutes(
     if (!userId) return res.status(401).json({ message: "No account on request" });
     const only = typeof req.body?.account === "string" ? req.body.account : undefined;
     try {
-      res.json(await oneAtATime(`sync:${userId}`, () => syncBinance(userId, only)));
+      // Under the tracker's lock too: both write trades by external id, and two writers would write one position twice.
+      res.json(await oneAtATime(`terminal:${userId}`, () => oneAtATime(`sync:${userId}`, () => syncBinance(userId, only))));
     } catch (err: any) {
       res.status(502).json({ message: loggableError(err) });
     }
@@ -984,7 +985,7 @@ export async function registerRoutes(
     if (!userId) return res.status(401).json({ message: "No account on request" });
     const only = typeof req.body?.account === "string" ? req.body.account : undefined;
     try {
-      res.json(await oneAtATime(`sync:${userId}`, () => syncHyperliquid(userId, only)));
+      res.json(await oneAtATime(`terminal:${userId}`, () => oneAtATime(`sync:${userId}`, () => syncHyperliquid(userId, only))));
     } catch (err: any) {
       res.status(502).json({ message: loggableError(err) });
     }
@@ -1519,6 +1520,7 @@ export async function registerRoutes(
     // that they might not any more is the whole reason someone is here.
     if (force) {
       forgetRefusals();
+      forgetCandles();
       lastReadable.clear();
     }
     const cat = await ensureCatalogue(force).catch(() => []);

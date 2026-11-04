@@ -198,6 +198,9 @@ async function viaRelay(
   relay: { userId: number; account: string },
 ): Promise<unknown> {
   const host = new URL(base).hostname;
+  // A ban seen through the relay is the relay's address's, not this server's: kept apart from the host's own.
+  const banKey = `relay:${relay.userId}:${relay.account}@${host}`;
+  assertNotBanned(banKey);
   const { status, body } = await relayCall(relay.userId, relay.account, method, base, path, params);
   let parsed: any = null;
   try {
@@ -208,8 +211,8 @@ async function viaRelay(
   if (status < 200 || status >= 300) {
     const said = parsed?.msg ? ` — ${String(parsed.msg)}` : "";
     const code = typeof parsed?.code === "number" ? parsed.code : null;
-    noteRateLimit(host, status, said, null);
-    throw new BinanceError(`${host} → HTTP ${status} on ${path}${code != null ? ` (${code})` : ""}${said}.${adviceFor(code, path)}`, status, code);
+    noteRateLimit(banKey, status, said, null);
+    throw new BinanceError(`${host} (via the relay) → HTTP ${status} on ${path}${code != null ? ` (${code})` : ""}${said}.${adviceFor(code, path)}`, status, code);
   }
   if (parsed == null && body) throw new Error(`${host} → unreadable reply on ${path} (via the relay)`);
   return parsed;

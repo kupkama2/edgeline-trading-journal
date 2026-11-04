@@ -1,3 +1,4 @@
+import { parseLooseNumber } from "@shared/loose-number";
 import { useAccountBalances, useAddAccountBalance, useBinanceSync, useHyperliquidSync } from "@/lib/data";
 import { isWalletAddress, venueOfAccount } from "@shared/hyperliquid";
 import { fmtAmount } from "@shared/metrics";
@@ -223,14 +224,16 @@ function AccountFeesRow({
   );
   const [maker, setMaker] = useState(existing != null ? String(existing.makerFee) : "");
   const [taker, setTaker] = useState(existing != null ? String(existing.takerFee) : "");
+  // Read as typed in any locale: "0,02" is 0.02, not nothing.
+  const feeOf = (text: string) => (text.trim() === "" ? null : parseLooseNumber(text));
   const dirty =
     (existing?.feeMode ?? "percent") !== mode ||
-    String(existing?.makerFee ?? "") !== (maker.trim() === "" ? "" : String(Number(maker))) ||
-    String(existing?.takerFee ?? "") !== (taker.trim() === "" ? "" : String(Number(taker)));
+    String(existing?.makerFee ?? "") !== (feeOf(maker) == null ? "" : String(feeOf(maker))) ||
+    String(existing?.takerFee ?? "") !== (feeOf(taker) == null ? "" : String(feeOf(taker)));
 
   async function persist() {
-    const m = Number(maker) || 0;
-    const t = Number(taker) || 0;
+    const m = feeOf(maker) ?? 0;
+    const t = feeOf(taker) ?? 0;
     if (!(await attempt("Fees not saved", () => save.mutateAsync({ name, feeMode: mode, makerFee: m, takerFee: t })))) return;
     toast({ title: "Fees saved", description: `${name} — schedule updated.` });
   }

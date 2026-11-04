@@ -47,7 +47,8 @@ export async function browserCandles(
   fetchImpl: Fetch = (u, i) => fetch(u, i),
   now = Date.now(),
 ): Promise<Candle[]> {
-  const key = market;
+  // Keyed by the pair as well: a book that does not list one coin still answers for the rest.
+  const key = `${market}:${symbol}`;
   if (refusedAt[key] != null && now - refusedAt[key] < BACKOFF_MS) return [];
   const hosts = market === "futures" ? FUTURES_HOSTS : SPOT_HOSTS;
   const path = market === "futures" ? "/fapi/v1/klines" : "/api/v3/klines";

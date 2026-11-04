@@ -350,6 +350,36 @@ describe.skipIf(!DB)("the journal following an account on its venue", () => {
     expect(xrp.initialStop).toBe(0.48);
   });
 
+  it("sums a multi-leg entry under one order, and starts a new trade when a position reopens between passes", async () => {
+    // ETH on Hyperliquid: a market entry swept two levels — two fills, one order. One trade of 0.5, no add.
+    hlFills.push(
+      { coin: "ETH", px: "3000", sz: "0.3", side: "B", time: now - 8 * MIN, startPosition: "0", dir: "Open Long", closedPnl: "0", fee: "0.3", tid: 8001, oid: 900 },
+      { coin: "ETH", px: "3002", sz: "0.2", side: "B", time: now - 8 * MIN + 10, startPosition: "0.3", dir: "Open Long", closedPnl: "0", fee: "0.2", tid: 8002, oid: 900 },
+    );
+    hlPositions = [{ position: { coin: "ETH", szi: "0.5", entryPx: "3000.8", liquidationPx: "2500", unrealizedPnl: "0", leverage: { type: "cross", value: 5 } } }];
+    await run();
+    let [eth] = await tradesOf("ETH", HL);
+    expect(eth).toMatchObject({ size: 0.5, status: "open", externalId: "hl:ETH:8001" });
+    expect(eth.entryPrice).toBeCloseTo(3000.8, 1);
+    expect(ref(eth).addOrderIds).toEqual([]);
+    expect(eth.fills).toEqual([]);
+
+    // Closed in full, then bought again, both before the next pass: the first trade closes, a second begins.
+    hlFills.push(
+      { coin: "ETH", px: "3010", sz: "0.5", side: "A", time: now - 6 * MIN, startPosition: "0.5", dir: "Close Long", closedPnl: "4.6", fee: "0.5", tid: 8003, oid: 901 },
+      { coin: "ETH", px: "3005", sz: "0.4", side: "B", time: now - 5 * MIN, startPosition: "0", dir: "Open Long", closedPnl: "0", fee: "0.4", tid: 8004, oid: 902 },
+    );
+    hlPositions = [{ position: { coin: "ETH", szi: "0.4", entryPx: "3005", liquidationPx: "2500", unrealizedPnl: "0", leverage: { type: "cross", value: 5 } } }];
+    await run();
+    const first = (await tradesOf("ETH", HL)).find((t: any) => t.externalId === "hl:ETH:8001");
+    expect(first.status).toBe("closed");
+    expect(first.exitPrice).toBe(3010);
+    expect(first.fills).toEqual([]);
+    await run();
+    const second = (await tradesOf("ETH", HL)).find((t: any) => t.externalId === "hl:ETH:8004");
+    expect(second).toMatchObject({ status: "open", size: 0.4, entryPrice: 3005 });
+  });
+
   it("stops following an account when asked, and leaves what it wrote", async () => {
     await send("PUT", "/api/account-settings", { name: BN, feeMode: "percent", makerFee: 0, takerFee: 0, track: false });
     const out = await run();
