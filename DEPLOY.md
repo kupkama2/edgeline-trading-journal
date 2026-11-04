@@ -154,6 +154,20 @@ token and shows the exact command. The row turns green when the relay is
 connected; tracking, the sync and the terminal then work through it.
 `BINANCE_ENV=testnet` for a testnet key. Node 22 or newer; no packages.
 
+The relay reads the *account*, not a device: trades placed from a phone,
+a laptop or another terminal are all seen, as long as the relay is running
+somewhere. For "somewhere" that is always on and free, an Oracle Cloud
+Always Free VM (any region Binance serves; Frankfurt works) with the
+service installer:
+
+```
+curl -fsSL https://<your-journal>/relay/install.sh | sudo   EDGELINE_URL=https://<your-journal> EDGELINE_RELAY_TOKEN=<token>   BINANCE_KEY=<key> BINANCE_SECRET=<secret> bash
+```
+
+It installs Node 22 if needed, puts the key in `/etc/edgeline-relay.env`
+(root-only), and runs the relay as a systemd service that starts at boot
+and restarts itself. `journalctl -u edgeline-relay -f` watches it.
+
 ## Verifying a deploy
 
 - `GET /` returns 200 without a cookie — this is what `healthCheckPath` pings,

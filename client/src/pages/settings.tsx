@@ -602,7 +602,16 @@ BINANCE_KEY=<your api key> BINANCE_SECRET=<your secret> \
 node edgeline-relay.mjs`}
                   </pre>
                   <p className="text-muted-foreground">
-                    Add <span className="font-mono">BINANCE_ENV=testnet</span> for a testnet key. The row turns green when the relay is connected; tracking and the terminal then work through it.
+                    Or, on a Linux server that stays on — a free Oracle Cloud VM does — as a service that starts at boot and restarts itself:
+                  </p>
+                  <pre className="overflow-x-auto whitespace-pre-wrap break-all rounded bg-secondary/60 p-2 font-mono text-[10px] leading-relaxed" data-testid={`text-relay-install-${name}`}>
+{`curl -fsSL ${window.location.origin}/relay/install.sh | sudo \
+EDGELINE_URL=${window.location.origin} \
+EDGELINE_RELAY_TOKEN=${existing.relayToken} \
+BINANCE_KEY=<your api key> BINANCE_SECRET=<your secret> bash`}
+                  </pre>
+                  <p className="text-muted-foreground">
+                    Add <span className="font-mono">BINANCE_ENV=testnet</span> for a testnet key. The relay reads the account, not the device: trades placed from any phone, laptop or terminal are seen, as long as the relay is running somewhere. The row turns green when it is connected; tracking and the terminal then work through it.
                   </p>
                 </div>
               )}
