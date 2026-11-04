@@ -51,6 +51,7 @@ import { debriefTrades, normalizeDebrief } from "@shared/debrief";
 import { syncBinance, verifyKey, verifyTradingKey } from "./binance-account";
 import { registerTerminalRoutes } from "./terminal";
 import { trackUser } from "./tracker";
+import { subscribe } from "./events";
 import { formatGate, gateRecordSchema, redAnswers } from "@shared/gate";
 import { attachRelay, relayStatus } from "./relay";
 import { managementBrief, parseTerminalRef } from "@shared/terminal";
@@ -590,6 +591,12 @@ export async function registerRoutes(
   /* ------------------------------- trades ------------------------------- */
   app.get("/api/trades", async (req, res) => {
     res.json(await store(req).listTrades());
+  });
+
+  /** The page told when the record changes (server/events.ts). */
+  app.get("/api/events", (req, res) => {
+    if (!req.userId) return res.status(401).json({ message: "No account on request" });
+    subscribe(req.userId, res);
   });
 
   app.get("/api/trades/:id", async (req, res) => {
