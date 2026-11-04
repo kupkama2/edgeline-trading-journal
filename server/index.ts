@@ -70,6 +70,9 @@ app.use((req, res, next) => {
   // The terminal reads its live trades back on its own; see server/terminal.ts.
   const { startTerminalWatch } = await import("./terminal");
   startTerminalWatch();
+  // The charts of what is on, and of what just closed, read before they are asked for.
+  const { startChartWarm } = await import("./chart-warm");
+  startChartWarm();
 
   app.use((err: any, req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;

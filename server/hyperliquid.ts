@@ -441,7 +441,11 @@ export async function probeHyperliquid(): Promise<Record<string, unknown>> {
 }
 
 /** The cached universe, refreshed when missing or a day old. Never throws. */
+/** The universe as last read, held for a minute between reads of the table. */
+let universeMemo: { at: number; rows: HyperliquidPerp[] } | null = null;
+
 export async function ensureHyperliquid(force = false): Promise<HyperliquidPerp[]> {
+  if (!force && universeMemo && Date.now() - universeMemo.at < 60_000) return universeMemo.rows;
   const last = await universe.lastFetchedAt();
   const stale = force || !last || Date.now() - new Date(last).getTime() > TTL_MS;
   const triedRecently =
@@ -451,6 +455,7 @@ export async function ensureHyperliquid(force = false): Promise<HyperliquidPerp[
       try {
         const perps = await fetchHyperliquidPerps();
         if (perps.length) await universe.replace(perps);
+        universeMemo = null;
       } catch {
         // The cache, or nothing. The status endpoint carries the reason.
       }
@@ -459,5 +464,7 @@ export async function ensureHyperliquid(force = false): Promise<HyperliquidPerp[
     const have = last != null && (await universe.list()).length > 0;
     if (force || !have) await refresh;
   }
-  return universe.list();
+  const rows = await universe.list();
+  universeMemo = { at: Date.now(), rows };
+  return rows;
 }

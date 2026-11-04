@@ -285,6 +285,12 @@ export function TradeChart({
             from the file archive
           </span>
         )}
+        {/* The server could not read the book; this browser, on its own connection, could. */}
+        {data.source === "browser" && (
+          <span className="text-muted-foreground" data-testid="chart-from-browser">
+            read by your browser
+          </span>
+        )}
         {/* The archive publishes a day at a time, so its last day is usually
             missing. Spot fills that gap when the coin has a spot pair — a
             labelled approximation within a fraction of a percent, and only

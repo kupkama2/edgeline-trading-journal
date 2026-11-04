@@ -168,6 +168,9 @@ export type Census = "background" | "await" | "skip";
 const defaultCensus = (): Census => (process.env.NODE_ENV === "test" ? "skip" : "background");
 /** The catalogue refresh in flight, if any, so two callers do not start two. */
 let refreshing: Promise<void> | null = null;
+/** The catalogue as last assembled, held for a minute between reads of the table. */
+let listMemo: { at: number; rows: BinanceSymbol[] } | null = null;
+const LIST_MEMO_MS = 60_000;
 
 /** Ask the bucket which listed perps still publish, and demote the rest. */
 async function runCensus(symbols: string[]): Promise<void> {
@@ -184,6 +187,8 @@ export async function ensureCatalogue(
   force = false,
   census: Census = defaultCensus(),
 ): Promise<BinanceSymbol[]> {
+  // The list is a thousand rows in the database; a chart should not read it per request.
+  if (!force && listMemo && Date.now() - listMemo.at < LIST_MEMO_MS) return listMemo.rows;
   const last = await catalogue.lastFetchedAt();
   const partial = (await catalogue.list()).every((r) => r.market !== "futures");
   const ttl = partial ? PARTIAL_TTL_MS : CATALOGUE_TTL_MS;
@@ -193,6 +198,7 @@ export async function ensureCatalogue(
       try {
         const rows = await fetchCatalogue();
         if (rows.length) await catalogue.replace(rows);
+        listMemo = null;
         const listed = lastListed();
         if (rows.length && listed.length && census !== "skip") {
           const run = runCensus(listed);
@@ -248,7 +254,9 @@ export async function ensureCatalogue(
       // they already were. It is not worth failing a price lookup over.
     }
   }
-  return cat;
+  const out = cat;
+  listMemo = { at: Date.now(), rows: out };
+  return out;
 }
 
 /**
