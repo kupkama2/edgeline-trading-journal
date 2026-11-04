@@ -51,7 +51,7 @@ import { debriefTrades, normalizeDebrief } from "@shared/debrief";
 import { syncBinance, verifyKey, verifyTradingKey } from "./binance-account";
 import { registerTerminalRoutes } from "./terminal";
 import { trackUser } from "./tracker";
-import { formatGate, gateRecordSchema } from "@shared/gate";
+import { formatGate, gateRecordSchema, redAnswers } from "@shared/gate";
 import { attachRelay, relayStatus } from "./relay";
 import { managementBrief, parseTerminalRef } from "@shared/terminal";
 import { guardRailsProblem } from "@shared/guardrails";
@@ -1786,7 +1786,10 @@ export async function registerRoutes(
     if (!parsed.success) return res.status(400).json({ message: "Not a gate record", issues: parsed.error.issues });
     const t = await store(req).getTrade(Number(req.params.id));
     if (!t) return res.status(404).json({ message: "Trade not found" });
-    const after = await store(req).updateTrade(t.id, { gate: formatGate(parsed.data) } as any);
+    // Strict: one red answer, or a skip, and the trade is marked traded poorly — the gate said no and it went in anyway.
+    const prefs = await accounts.prefs(req.userId!);
+    const red = redAnswers(prefs.gate.questions, parsed.data).length > 0;
+    const after = await store(req).updateTrade(t.id, { gate: formatGate(parsed.data), ...(red ? { tradedPoorly: true } : {}) } as any);
     res.json(after ?? t);
   });
 

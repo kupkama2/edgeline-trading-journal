@@ -1,4 +1,5 @@
 import "dotenv/config";
+import compression from "compression";
 import express, { Response, NextFunction } from 'express';
 import type { Request } from 'express';
 import { registerRoutes } from "./routes";
@@ -8,6 +9,14 @@ import { serveStatic } from "./static";
 import { createServer } from "node:http";
 
 const app = express();
+
+/*
+ * Everything leaves compressed. The main script is 1.2 MB of text and gzips
+ * to a quarter of that; a journal's trades, the same. Without this, every
+ * visit on a slow line paid for all of it in full, and the free host's
+ * narrow pipe made it worse. Threshold low enough that API answers count.
+ */
+app.use(compression({ threshold: 1024 }));
 const httpServer = createServer(app);
 
 declare module "http" {
