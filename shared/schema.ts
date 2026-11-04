@@ -932,6 +932,14 @@ export const accountSettings = pgTable("account_settings", {
    * relay asks Binance from an address nobody else is spending.
    */
   relayToken: text("relay_token"),
+  /**
+   * How far the tracker has read this account's fills (ISO). The next pass
+   * picks up from here, so a round trip that opened and closed while nothing
+   * was watching — a relay asleep, the server down — is still written when
+   * the watch comes back. Null until the first pass: tracking starts from
+   * the moment it is turned on, never from history.
+   */
+  trackedThrough: text("tracked_through"),
 });
 
 /**

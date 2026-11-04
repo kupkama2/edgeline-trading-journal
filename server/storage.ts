@@ -267,6 +267,7 @@ ALTER TABLE account_settings ADD COLUMN IF NOT EXISTS binance_trade BOOLEAN NOT 
 ALTER TABLE account_settings ADD COLUMN IF NOT EXISTS binance_ip_locked BOOLEAN;
 ALTER TABLE account_settings ADD COLUMN IF NOT EXISTS track BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE account_settings ADD COLUMN IF NOT EXISTS relay_token TEXT;
+ALTER TABLE account_settings ADD COLUMN IF NOT EXISTS tracked_through TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS terminal TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS paper BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS gate TEXT;
@@ -773,6 +774,11 @@ export async function setRelayFacts(id: number, facts: { binanceEnv: "live" | "t
     .update(accountSettings)
     .set({ binanceEnv: facts.binanceEnv, binanceTrade: facts.binanceTrade, binanceKey: facts.binanceKeyHint || null, binanceSecret: null, binanceIpLocked: null })
     .where(eq(accountSettings.id, id));
+}
+
+/** How far the tracker has read an account's fills; the next pass picks up here. */
+export async function setTrackedThrough(id: number, iso: string): Promise<void> {
+  await db.update(accountSettings).set({ trackedThrough: iso }).where(eq(accountSettings.id, id));
 }
 
 /** Every account anybody asked the journal to watch (server/tracker.ts). */

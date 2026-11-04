@@ -876,6 +876,8 @@ export interface TrackSummary {
   opened: number[];
   /** Tracked trades read back. */
   read: number;
+  /** Round trips that opened and closed while nothing was watching, written whole. */
+  caughtUp?: number[];
   error?: string;
 }
 

@@ -54,6 +54,8 @@ let bnPositions: any[] = [
 const bnFills: any[] = [
   { symbol: "ETHUSDT", id: 9001, orderId: 5000, side: "SELL", positionSide: "SHORT", price: "3000", qty: "2", realizedPnl: "0", commission: "1.2", commissionAsset: "USDT", time: now - 20 * MIN, buyer: false, maker: false },
 ];
+/** Realised P&L rows, by which the tracker learns a symbol closed something. */
+const bnIncome: { symbol: string; incomeType: string; income: string; time: number }[] = [];
 const bnOrders: any[] = [{ orderId: 5000, clientOrderId: "web_1", symbol: "ETHUSDT", side: "SELL", positionSide: "SHORT", type: "MARKET", status: "FILLED", price: "0", stopPrice: "0", origQty: "2", executedQty: "2", avgPrice: "3000", closePosition: false, reduceOnly: false, time: now - 20 * MIN, updateTime: now - 20 * MIN }];
 let bnAlgos: any[] = [
   { algoId: 6001, clientAlgoId: "web_sl", symbol: "ETHUSDT", side: "BUY", positionSide: "SHORT", orderType: "STOP_MARKET", algoType: "CONDITIONAL", algoStatus: "NEW", quantity: "0", triggerPrice: "3100", closePosition: true, createTime: now - 19 * MIN, updateTime: now - 19 * MIN, triggerTime: 0, actualOrderId: "" },
@@ -108,7 +110,7 @@ function startVenue(): Promise<string> {
           symbol, baseAsset, quoteAsset: "USDT", status: "TRADING", contractType: "PERPETUAL", pricePrecision: 2, quantityPrecision: 3,
           filters: [{ filterType: "PRICE_FILTER", tickSize: "0.01" }, { filterType: "LOT_SIZE", stepSize: "0.001", minQty: "0.001" }, { filterType: "MIN_NOTIONAL", notional: "5" }],
         });
-        return json({ symbols: [sym("ETHUSDT", "ETH"), sym("XRPUSDT", "XRP"), sym("BTCUSDT", "BTC")] });
+        return json({ symbols: [sym("ETHUSDT", "ETH"), sym("XRPUSDT", "XRP"), sym("BTCUSDT", "BTC"), sym("SOLUSDT", "SOL")] });
       }
       if (u.pathname === "/api/v3/exchangeInfo") return json({ symbols: [] });
       if (u.pathname === "/fapi/v1/klines") return json([]);
@@ -128,6 +130,8 @@ function startVenue(): Promise<string> {
           return json({ enableReading: true, enableFutures: true, enableWithdrawals: false, enableInternalTransfer: false, ipRestrict: true });
         case "GET /fapi/v2/positionRisk":
           return json(bnPositions);
+        case "GET /fapi/v1/income":
+          return json(bnIncome.filter((r) => r.time >= Number(params.startTime ?? 0) && r.time <= Number(params.endTime ?? Infinity)));
         case "GET /fapi/v1/userTrades":
           return json(bnFills.filter((f) => f.symbol === params.symbol && f.time >= Number(params.startTime ?? 0)));
         case "GET /fapi/v1/openOrders":
@@ -378,6 +382,47 @@ describe.skipIf(!DB)("the journal following an account on its venue", () => {
     await run();
     const second = (await tradesOf("ETH", HL)).find((t: any) => t.externalId === "hl:ETH:8004");
     expect(second).toMatchObject({ status: "open", size: 0.4, entryPrice: 3005 });
+  });
+
+  it("writes a round trip that opened and closed while nothing was watching, once, from where the last pass left off", async () => {
+    // Both accounts have been read at least once: the next pass knows where it left off.
+    const settings = await get("/api/account-settings");
+    expect(settings.find((a: any) => a.name === BN).trackedThrough).toBeTruthy();
+    expect(settings.find((a: any) => a.name === HL).trackedThrough).toBeTruthy();
+
+    // Binance: SOL went long and flat again between passes, in hedge mode, with a take on the way. No position now.
+    const t0 = Date.now() - 90_000;
+    bnFills.push(
+      { symbol: "SOLUSDT", id: 9101, orderId: 5101, side: "BUY", positionSide: "LONG", price: "150", qty: "4", realizedPnl: "0", commission: "0.2", commissionAsset: "USDT", time: t0, buyer: true, maker: false },
+      { symbol: "SOLUSDT", id: 9102, orderId: 5102, side: "SELL", positionSide: "LONG", price: "155", qty: "2", realizedPnl: "10", commission: "0.1", commissionAsset: "USDT", time: t0 + 20_000, buyer: false, maker: false },
+      { symbol: "SOLUSDT", id: 9103, orderId: 5103, side: "SELL", positionSide: "LONG", price: "152", qty: "2", realizedPnl: "4", commission: "0.1", commissionAsset: "USDT", time: t0 + 40_000, buyer: false, maker: false },
+    );
+    bnIncome.push({ symbol: "SOLUSDT", incomeType: "REALIZED_PNL", income: "14", time: t0 + 40_000 });
+    // Hyperliquid: DOGE in and out between passes.
+    hlFills.push(
+      { coin: "DOGE", px: "0.2", sz: "1000", side: "B", time: t0, startPosition: "0", dir: "Open Long", closedPnl: "0", fee: "0.1", tid: 9201, oid: 1201 },
+      { coin: "DOGE", px: "0.21", sz: "1000", side: "A", time: t0 + 30_000, startPosition: "1000", dir: "Close Long", closedPnl: "10", fee: "0.1", tid: 9202, oid: 1202 },
+    );
+    await send("PUT", "/api/account-settings", { name: BN, feeMode: "percent", makerFee: 0, takerFee: 0, track: true });
+    const out = await run();
+    const bn = out.accounts.find((a) => a.account === BN);
+    const hl = out.accounts.find((a) => a.account === HL);
+    expect(bn.caughtUp).toHaveLength(1);
+    expect(hl.caughtUp).toHaveLength(1);
+
+    const [sol] = await tradesOf("SOL", BN);
+    expect(sol).toMatchObject({ direction: "long", size: 4, entryPrice: 150, status: "closed", exitPrice: 152, externalId: "binance:SOLUSDT:9101" });
+    expect(ref(sol).tracked).toBe(true);
+    expect(sol.fills).toMatchObject([{ kind: "partial", price: 155, size: 2 }]);
+    const [doge] = await tradesOf("DOGE", HL);
+    expect(doge).toMatchObject({ direction: "long", size: 1000, status: "closed", exitPrice: 0.21, externalId: "hl:DOGE:9201" });
+
+    // The same fills again: nothing written twice.
+    const again = await run();
+    expect(again.accounts.find((a) => a.account === BN).caughtUp).toEqual([]);
+    expect(again.accounts.find((a) => a.account === HL).caughtUp).toEqual([]);
+    expect(await tradesOf("SOL", BN)).toHaveLength(1);
+    expect(await tradesOf("DOGE", HL)).toHaveLength(1);
   });
 
   it("stops following an account when asked, and leaves what it wrote", async () => {

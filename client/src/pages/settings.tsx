@@ -268,7 +268,7 @@ function AccountFeesRow({
     if (mine.error) return toast({ title: `${name} could not be read`, description: mine.error, variant: "destructive" });
     toast({
       title: "Tracking pass done",
-      description: `${mine.opened.length} ${mine.opened.length === 1 ? "position" : "positions"} newly written, ${mine.read} ${mine.read === 1 ? "open trade" : "open trades"} read back.`,
+      description: `${mine.opened.length} ${mine.opened.length === 1 ? "position" : "positions"} newly written, ${mine.read} ${mine.read === 1 ? "open trade" : "open trades"} read back${mine.caughtUp?.length ? `, ${mine.caughtUp.length} closed while nothing was watching, written whole` : ""}.`,
     });
   }
 

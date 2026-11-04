@@ -22,15 +22,15 @@
  */
 import type { AccountSettings, TradeWithTags } from "@shared/schema";
 import { tradesFromFills, type HlFill, type HlOpenOrder, type HlTrade } from "@shared/hyperliquid";
-import { cutAtFlat, formatTerminalRef, parseTerminalRef, type Brackets, type TerminalRef, type VenueSnapshot } from "@shared/terminal";
+import { addNote, cutAtFlat, formatTerminalRef, parseTerminalRef, partialNote, type Brackets, type TerminalRef, type VenueSnapshot } from "@shared/terminal";
 import { USD_COMMISSION, type BinanceUserTrade } from "@shared/binance-account";
-import { storageFor, trackedAccountsEverywhere, type DatabaseStorage } from "./storage";
+import { setTrackedThrough, storageFor, trackedAccountsEverywhere, type DatabaseStorage } from "./storage";
 import { open } from "./secrets";
-import { credsFor, type BinanceEnv, type Creds } from "./binance-account";
+import { credsFor, fetchClosedSymbols, futuresBase, type BinanceEnv, type Creds } from "./binance-account";
 import { relayConnected } from "./relay";
 import { fillsSince, positions, rulesFor, type Venue } from "./binance-trade";
 import { fetchAllMids, fetchClearinghouseState, fetchFrontendOpenOrders, fetchUserFillsSince } from "./hyperliquid";
-import { oneAtATime } from "./venue-sync";
+import { asInsert, oneAtATime } from "./venue-sync";
 import { applySnapshot, newTag, noteFullRead, reconcileOne, refOf, restingOnStream, type PassMode } from "./terminal";
 
 /** How far back the fills are read to find a position's opening. Binance serves seven days of userTrades. */
@@ -42,8 +42,13 @@ export interface TrackSummary {
   venue: "binance" | "hyperliquid";
   opened: number[];
   read: number;
+  /** Round trips that opened and closed while nothing was watching, written whole on this pass. */
+  caughtUp: number[];
   error?: string;
 }
+
+/** How far back a pass looks for fills before its own start, so a round trip that straddles it is read whole. */
+const CATCHUP_SLACK_MS = 6 * 60 * 60_000;
 
 const said = (err: any) => String(err?.message ?? err).slice(0, 300);
 
@@ -93,9 +98,9 @@ export async function trackEverywhere(mode: PassMode = "full"): Promise<void> {
 
 /** One account, one pass: new positions adopted, tracked trades read back. */
 export async function trackAccount(s: DatabaseStorage, acct: AccountSettings): Promise<TrackSummary> {
-  if (acct.wallet) return trackHyperliquid(s, acct).catch((err) => ({ account: acct.name, venue: "hyperliquid" as const, opened: [], read: 0, error: said(err) }));
-  if (acct.relayToken || (acct.binanceKey && acct.binanceSecret)) return trackBinance(s, acct).catch((err) => ({ account: acct.name, venue: "binance" as const, opened: [], read: 0, error: said(err) }));
-  return { account: acct.name, venue: "binance", opened: [], read: 0, error: "No key, relay or wallet on the account." };
+  if (acct.wallet) return trackHyperliquid(s, acct).catch((err) => ({ account: acct.name, venue: "hyperliquid" as const, opened: [], read: 0, caughtUp: [], error: said(err) }));
+  if (acct.relayToken || (acct.binanceKey && acct.binanceSecret)) return trackBinance(s, acct).catch((err) => ({ account: acct.name, venue: "binance" as const, opened: [], read: 0, caughtUp: [], error: said(err) }));
+  return { account: acct.name, venue: "binance", opened: [], read: 0, caughtUp: [], error: "No key, relay or wallet on the account." };
 }
 
 /** This account's tracked trades still on. */
@@ -280,6 +285,64 @@ function entryOf(
   return { size, entryPrice, entryTime: open.entryTime, entryOrderId, addOrderIds };
 }
 
+/**
+ * A round trip that opened and closed while nothing was watching, written
+ * whole: the entry, the takes and adds as the fills say them, the exit. No
+ * moves — nothing saw the stop move — and the reason is "other", as a
+ * synced trade's is. Found by external id, so a pass that reads the same
+ * fills twice writes it once.
+ */
+async function catchUp(
+  s: DatabaseStorage,
+  acct: AccountSettings,
+  venue: "binance" | "hyperliquid",
+  env: "live" | "testnet",
+  round: HlTrade,
+  symbol: string,
+  journalSymbol: string,
+): Promise<number | null> {
+  if (round.status !== "closed" || !round.externalId) return null;
+  if (await s.tradeByExternalId(round.externalId)) return null;
+  const ref: TerminalRef = {
+    venue,
+    env,
+    account: acct.name,
+    symbol,
+    positionSide: round.direction === "short" ? "SHORT" : "LONG",
+    tag: newTag().replace(/^edg-/, "trk-"),
+    leverage: 1,
+    qty: round.size,
+    entryOrderId: null,
+    stopOrderId: null,
+    targetOrderIds: [],
+    closeOrderIds: [],
+    addOrderIds: [],
+    tracked: true,
+    idea: { entry: round.entryPrice, stop: null, targets: [], qty: round.size, riskDollars: null, at: new Date(round.entryTime).toISOString() },
+  };
+  // As the live read-back writes a trade: the takes before the last in the ledger, the exit the last leg out.
+  const last = round.closes[round.closes.length - 1];
+  const trade = await s.createTrade({
+    ...asInsert(round, acct.name, { initialStop: null, initialTarget: null }, journalSymbol),
+    ...(last ? { exitPrice: last.px, exitTime: new Date(last.time).toISOString() } : {}),
+    terminal: formatTerminalRef(ref),
+    paper: env === "testnet",
+  } as any);
+  // The legs beyond the first in and the last out, in the ledger.
+  for (const leg of round.opens.slice(1)) await s.addFill(trade.id, { kind: "add", price: leg.px, size: leg.sz, time: new Date(leg.time).toISOString(), note: addNote(leg.tid) });
+  for (const leg of round.closes.slice(0, -1)) await s.addFill(trade.id, { kind: "partial", price: leg.px, size: leg.sz, time: new Date(leg.time).toISOString(), note: partialNote(leg.tid) });
+  await s.logTerminal({
+    at: new Date().toISOString(),
+    account: acct.name,
+    action: "track-catchup",
+    tradeId: trade.id,
+    request: JSON.stringify({ venue, symbol, size: round.size, entryTime: round.entryTime, exitTime: round.exitTime }),
+    response: JSON.stringify({ tradeId: trade.id }),
+    ok: true,
+  });
+  return trade.id;
+}
+
 /** The open position from a side's fills, when the window reaches its opening. */
 function openFrom(fills: HlFill[] | null, venue: string): HlTrade | null {
   if (!fills || fills.length === 0) return null;
@@ -301,7 +364,7 @@ function bracketsOnBinance(
 }
 
 async function trackBinance(s: DatabaseStorage, acct: AccountSettings): Promise<TrackSummary> {
-  const out: TrackSummary = { account: acct.name, venue: "binance", opened: [], read: 0 };
+  const out: TrackSummary = { account: acct.name, venue: "binance", opened: [], read: 0, caughtUp: [] };
   if (acct.relayToken && !relayConnected(acct.userId, acct.name)) return { ...out, error: "The relay is not connected. Start it on your machine." };
   const rc = readCreds(acct);
   if (!rc) return { ...out, error: "The stored key could not be opened — the server's SESSION_SECRET has changed since it was saved (a new server, say). Enter the key again in Settings." };
@@ -339,11 +402,41 @@ async function trackBinance(s: DatabaseStorage, acct: AccountSettings): Promise<
     tracked.push({ t: made, ref: refOf(made) });
   }
 
+  /*
+   * What closed while nothing was watching. From where the last pass left
+   * off — never from before tracking was turned on — the symbols with
+   * realised P&L since then are read side by side, and a round trip that
+   * is not in the journal is written whole. A symbol with a tracked trade
+   * on is left to the read-back above, which owns its closes.
+   */
+  if (acct.trackedThrough) {
+    const since = new Date(acct.trackedThrough).getTime() - 2 * 60_000;
+    const symbols = await fetchClosedSymbols(rc.creds, since, now, futuresBase(v.env)).catch(() => [] as string[]);
+    for (const symbol of symbols) {
+      if (tracked.some((x) => x.ref.symbol === symbol)) continue;
+      const rows = await fillsSince(v, symbol, since - CATCHUP_SLACK_MS).catch(() => [] as BinanceUserTrade[]);
+      if (rows.length === 0) continue;
+      const rules = await rulesFor(v.env, symbol).catch(() => null);
+      const journalSymbol = rules?.baseAsset ?? symbol.replace(/USDT$|USDC$|BUSD$|FDUSD$/, "");
+      for (const side of ["LONG", "SHORT"] as const) {
+        const heldNow = Math.abs(held.find((p) => p.symbol === symbol && (p.positionSide === side || (p.positionSide === "BOTH" && (p.amt > 0) === (side === "LONG"))))?.amt ?? 0);
+        const fills = sideFills(rows, symbol, side, heldNow);
+        if (!fills) continue;
+        for (const round of tradesFromFills(fills, "binance").trades) {
+          if (round.exitTime == null || round.exitTime < since) continue;
+          const id = await catchUp(s, acct, "binance", v.env, round, symbol, journalSymbol);
+          if (id != null) out.caughtUp.push(id);
+        }
+      }
+    }
+  }
+
   for (const { t } of tracked) {
     await reconcileOne(s, t, { venue: v, acct });
     out.read += 1;
   }
   noteFullRead(acct.userId, acct.name, "tracker");
+  await setTrackedThrough(acct.id, new Date(now).toISOString());
   return out;
 }
 
@@ -362,7 +455,7 @@ function bracketsOnHl(orders: HlOpenOrder[], coin: string, long: boolean): Brack
 }
 
 async function trackHyperliquid(s: DatabaseStorage, acct: AccountSettings): Promise<TrackSummary> {
-  const out: TrackSummary = { account: acct.name, venue: "hyperliquid", opened: [], read: 0 };
+  const out: TrackSummary = { account: acct.name, venue: "hyperliquid", opened: [], read: 0, caughtUp: [] };
   const address = acct.wallet!;
   const now = Date.now();
   const [held, orders, fills, mids] = await Promise.all([
@@ -397,6 +490,19 @@ async function trackHyperliquid(s: DatabaseStorage, acct: AccountSettings): Prom
     const made = existing && !parseTerminalRef(existing.terminal) ? await adoptExisting(s, existing, opening) : existing ? existing : await openTracked(s, opening);
     out.opened.push(made.id);
     tracked.push({ t: made, ref: refOf(made) });
+  }
+
+  if (acct.trackedThrough) {
+    const since = new Date(acct.trackedThrough).getTime() - 2 * 60_000;
+    const coins = Array.from(new Set(fills.filter((f) => f.time >= since).map((f) => f.coin)));
+    for (const coin of coins) {
+      if (tracked.some((x) => x.ref.symbol === coin)) continue;
+      for (const round of tradesFromFills(fills.filter((f) => f.coin === coin), "hl").trades) {
+        if (round.exitTime == null || round.exitTime < since) continue;
+        const id = await catchUp(s, acct, "hyperliquid", "live", round, coin, coin.toUpperCase());
+        if (id != null) out.caughtUp.push(id);
+      }
+    }
   }
 
   for (const { t, ref } of tracked) {
@@ -440,5 +546,6 @@ async function trackHyperliquid(s: DatabaseStorage, acct: AccountSettings): Prom
     await applySnapshot(s, t, { ...ref, addOrderIds: Array.from(addIds) }, snap, { brackets, mark: mids[ref.symbol] ?? null });
     out.read += 1;
   }
+  await setTrackedThrough(acct.id, new Date(now).toISOString());
   return out;
 }
