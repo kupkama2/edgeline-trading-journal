@@ -1,3 +1,4 @@
+import { GateStatsCard } from "@/components/gate-card";
 import { useMemo, useState } from "react";
 import { weekKey } from "@shared/review";
 import { dayKey, dayKeyOfIso } from "@shared/daily";
@@ -436,6 +437,7 @@ export default function Dashboard({ embedded = false }: { embedded?: boolean } =
 
       {/* Both books, so the split is the card's to make. */}
       <TiltCostCard trades={dayTrades} />
+      <GateStatsCard trades={all} />
 
       {/* stat strip */}
       <Card className="border-card-border bg-card p-4" data-testid="card-stat-strip">

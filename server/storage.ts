@@ -267,8 +267,10 @@ ALTER TABLE account_settings ADD COLUMN IF NOT EXISTS binance_trade BOOLEAN NOT 
 ALTER TABLE account_settings ADD COLUMN IF NOT EXISTS binance_ip_locked BOOLEAN;
 ALTER TABLE account_settings ADD COLUMN IF NOT EXISTS track BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE account_settings ADD COLUMN IF NOT EXISTS relay_token TEXT;
+ALTER TABLE account_settings ADD COLUMN IF NOT EXISTS tracked_through TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS terminal TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS paper BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS gate TEXT;
 -- Bars already read, kept across restarts (server/candles.ts). Keyed by
 -- venue, pair, timeframe and window; a window that ended in the past is
 -- the same bars forever, and 'until' says how long the row may be served.
@@ -774,6 +776,11 @@ export async function setRelayFacts(id: number, facts: { binanceEnv: "live" | "t
     .where(eq(accountSettings.id, id));
 }
 
+/** How far the tracker has read an account's fills; the next pass picks up here. */
+export async function setTrackedThrough(id: number, iso: string): Promise<void> {
+  await db.update(accountSettings).set({ trackedThrough: iso }).where(eq(accountSettings.id, id));
+}
+
 /** Every account anybody asked the journal to watch (server/tracker.ts). */
 export async function trackedAccountsEverywhere(): Promise<AccountSettings[]> {
   return db.select().from(accountSettings).where(eq(accountSettings.track, true));
@@ -828,8 +835,8 @@ export const accounts = {
    */
   async setPrefs(id: number, patch: UpdateUserPrefs): Promise<UserPrefs> {
     const current = await accounts.prefs(id);
-    const { guard, ...rest } = patch;
-    const next: UserPrefs = { ...current, ...rest, guard: { ...current.guard, ...(guard ?? {}) } };
+    const { guard, gate, ...rest } = patch;
+    const next: UserPrefs = { ...current, ...rest, guard: { ...current.guard, ...(guard ?? {}) }, gate: { ...current.gate, ...(gate ?? {}) } };
     if (patch.reviewMode === "enforce" && current.reviewMode !== "enforce") {
       next.reviewEnforcedSince = new Date().toISOString();
     }

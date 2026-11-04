@@ -2,6 +2,7 @@
  * The terminal's reads and writes, as hooks. Every write goes through
  * /api/terminal, which does not exist for anyone not on its list.
  */
+import type { GateRecord } from "@shared/gate";
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "./queryClient";
@@ -127,7 +128,7 @@ export interface SendResult {
 
 export function useSendPlan() {
   return useMutation({
-    mutationFn: async (v: { account: string; plan: TerminalPlan }) =>
+    mutationFn: async (v: { account: string; plan: TerminalPlan; gate?: GateRecord }) =>
       (await apiRequest("POST", "/api/terminal/send", v)).json() as Promise<SendResult>,
     onSuccess: afterWrite,
   });

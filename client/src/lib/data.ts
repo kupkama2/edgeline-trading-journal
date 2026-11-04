@@ -317,6 +317,14 @@ export function useCreateTrade() {
   });
 }
 
+/** The gate's answers on a trade, after the fact — only the gate, whatever else the trade lacks. */
+export function useSetTradeGate() {
+  return useMutation({
+    mutationFn: async (v: { id: number; gate: unknown }) => (await apiRequest("POST", `/api/trades/${v.id}/gate`, { gate: v.gate })).json(),
+    onSuccess: invalidateTrades,
+  });
+}
+
 export function useUpdateTrade() {
   return useMutation({
     mutationFn: async (v: {
@@ -868,6 +876,8 @@ export interface TrackSummary {
   opened: number[];
   /** Tracked trades read back. */
   read: number;
+  /** Round trips that opened and closed while nothing was watching, written whole. */
+  caughtUp?: number[];
   error?: string;
 }
 

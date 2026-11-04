@@ -51,6 +51,7 @@ import { debriefTrades, normalizeDebrief } from "@shared/debrief";
 import { syncBinance, verifyKey, verifyTradingKey } from "./binance-account";
 import { registerTerminalRoutes } from "./terminal";
 import { trackUser } from "./tracker";
+import { formatGate, gateRecordSchema } from "@shared/gate";
 import { attachRelay, relayStatus } from "./relay";
 import { managementBrief, parseTerminalRef } from "@shared/terminal";
 import { guardRailsProblem } from "@shared/guardrails";
@@ -1773,6 +1774,20 @@ export async function registerRoutes(
       return res.status(400).json({ message: "That is the same account." });
     const moved = await store(req).mergeAccounts(from, into);
     res.json({ ok: true, moved });
+  });
+
+  /**
+   * The gate's answers on a trade, after the fact. Only the gate: a tracked
+   * position written from the venue may have no stop or target yet, and the
+   * trade's own validation would refuse a general update for that.
+   */
+  app.post("/api/trades/:id/gate", async (req, res) => {
+    const parsed = gateRecordSchema.safeParse(req.body?.gate);
+    if (!parsed.success) return res.status(400).json({ message: "Not a gate record", issues: parsed.error.issues });
+    const t = await store(req).getTrade(Number(req.params.id));
+    if (!t) return res.status(404).json({ message: "Trade not found" });
+    const after = await store(req).updateTrade(t.id, { gate: formatGate(parsed.data) } as any);
+    res.json(after ?? t);
   });
 
   app.get("/api/mistake-tags", async (req, res) => {

@@ -17,6 +17,8 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, Bell, BellOff, Crosshair, ExternalLink, Loader2, X } from "lucide-react";
 import { useLocation } from "wouter";
+import { usePrefs } from "@/lib/prefs";
+import { GateQuestions, gatePassFor, rememberGatePass } from "@/components/gate";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -427,7 +429,7 @@ function Desk({ account, env, hedge, free, quote }: { account: string; env: "liv
   async function doSend() {
     if (!plan) return;
     try {
-      const r = await send.mutateAsync({ account, plan });
+      const r = await send.mutateAsync({ account, plan, gate: gatePassFor(gateKey) ?? undefined });
       setConfirm(false);
       setTyped("");
       if (r.refused.length) {
@@ -464,8 +466,19 @@ function Desk({ account, env, hedge, free, quote }: { account: string; env: "liv
     const q = (free * (Number(leverage) || 1)) / e;
     return Math.floor(q / rule.stepSize) * rule.stepSize;
   };
+  /*
+   * The gate before Send: green for this symbol within ten minutes, or asked
+   * now. The answers ride along with the plan and land on the trade.
+   */
+  const prefs = usePrefs();
+  const [gateFor, setGateFor] = useState<"long" | "short" | null>(null);
+  const gateKey = `${account}:${symbol}`;
   const arm = (forSide: "long" | "short") => {
     setSide(forSide);
+    if (prefs.gate.terminal && !gatePassFor(gateKey)) {
+      setGateFor(forSide);
+      return;
+    }
     setConfirm(true);
   };
 
@@ -685,6 +698,24 @@ function Desk({ account, env, hedge, free, quote }: { account: string; env: "liv
           )}
         </div>
       </div>
+
+      <Dialog open={gateFor != null} onOpenChange={(o) => !o && setGateFor(null)}>
+        <DialogContent className="max-w-md" data-testid="dialog-terminal-gate">
+          <DialogHeader>
+            <DialogTitle className="sr-only">Pre-trade gate</DialogTitle>
+          </DialogHeader>
+          <GateQuestions
+            questions={prefs.gate.questions}
+            where="terminal"
+            onDone={(record) => {
+              rememberGatePass(gateKey, record);
+              setGateFor(null);
+              setConfirm(true);
+            }}
+            testId="terminal-gate"
+          />
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={confirm} onOpenChange={(o) => !o && setConfirm(false)}>
         <DialogContent className="max-w-sm" data-testid="dialog-terminal-confirm">

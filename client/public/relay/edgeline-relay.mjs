@@ -171,6 +171,18 @@ async function connect(facts) {
   }, 25_000);
 }
 
+/* ------------------------------ a port, if a host wants one ------------------------------ */
+
+// Hosts that run "web services" (Koyeb, Render, Railway…) insist on something listening. Nothing
+// is served; it answers "relay up" so the host keeps it alive. Set PORT and it listens.
+if (process.env.PORT) {
+  const { createServer } = await import("node:http");
+  createServer((_req, res) => {
+    res.setHeader("content-type", "text/plain");
+    res.end(`edgeline relay up; journal ${sendToJournal ? "linked" : "not linked"}\n`);
+  }).listen(Number(process.env.PORT), () => log(`health check on port ${process.env.PORT}`));
+}
+
 const facts = await describeKey();
 log(`key …${KEY.slice(-4)} on ${ENV}: ${facts.canTrade ? "may trade" : "read-only"}`);
 await connect(facts);

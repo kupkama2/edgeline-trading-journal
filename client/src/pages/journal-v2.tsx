@@ -1,3 +1,4 @@
+import { TrackedGateBanner } from "@/components/gate-card";
 import { useEffect, useMemo, useState } from "react";
 import { useCloseCardPaste } from "@/lib/close-paste";
 import { saysAnythingAboutClose, type CloseCard } from "@shared/close-card";
@@ -562,6 +563,9 @@ export default function JournalV2() {
       <ReviewDebtBanner pressure={review} />
 
       {guardLoud && <DailyGuardCard trades={dayTrades} tags={tags} styleId={activeStyleId} />}
+
+      {/* A position the tracker found, asked the gate after the fact. */}
+      <TrackedGateBanner trades={scoped} />
 
       <AttentionRow
         closed={closed}

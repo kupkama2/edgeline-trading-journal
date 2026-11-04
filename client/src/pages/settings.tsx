@@ -1,3 +1,4 @@
+import { GateSettingsCard } from "@/components/gate-card";
 import { parseLooseNumber } from "@shared/loose-number";
 import { useAccountBalances, useAddAccountBalance, useBinanceSync, useHyperliquidSync } from "@/lib/data";
 import { isWalletAddress, venueOfAccount } from "@shared/hyperliquid";
@@ -267,7 +268,7 @@ function AccountFeesRow({
     if (mine.error) return toast({ title: `${name} could not be read`, description: mine.error, variant: "destructive" });
     toast({
       title: "Tracking pass done",
-      description: `${mine.opened.length} ${mine.opened.length === 1 ? "position" : "positions"} newly written, ${mine.read} ${mine.read === 1 ? "open trade" : "open trades"} read back.`,
+      description: `${mine.opened.length} ${mine.opened.length === 1 ? "position" : "positions"} newly written, ${mine.read} ${mine.read === 1 ? "open trade" : "open trades"} read back${mine.caughtUp?.length ? `, ${mine.caughtUp.length} closed while nothing was watching, written whole` : ""}.`,
     });
   }
 
@@ -1296,6 +1297,7 @@ export default function Settings() {
       </Card>
 
       <GuardRailsCard />
+      <GateSettingsCard />
 
       <Card className="border-card-border bg-card p-4 sm:p-5">
         <h2 className="text-sm font-semibold tracking-tight">How the metrics work</h2>
