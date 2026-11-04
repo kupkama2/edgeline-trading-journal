@@ -42,6 +42,7 @@ import {
   probeHyperliquid,
 } from "./hyperliquid";
 import { fetchCandlesAt, pairForTradeAt, readCandlesAt } from "./candles";
+import { chartWindow, RECENT_AFTERMATH_MS } from "./chart-window";
 import { syncHyperliquid } from "./hl-sync";
 import { oneAtATime } from "./venue-sync";
 import { freshStartRefusal } from "@shared/chapters";
@@ -171,19 +172,7 @@ function costly(req: { userId?: number }, res: any): boolean {
   return true;
 }
 
-/** Timeframes the chart offers. One bar's width per timeframe is BAR_MS, in server/binance.ts. */
-const ALLOWED_INTERVALS = ["1m", "15m", "1h", "4h", "1d"] as const;
 
-/**
- * How far past the exit the chart runs, at the least.
- *
- * It used to be one and a half holds, which for a thirty-hour swing meant the
- * chart stopped two days after you left — and stayed stopped, while the
- * position you were asking about kept trading. A week is long enough that a
- * trade closed on Monday shows the rest of its week, and the window still
- * runs to now when now is nearer than that.
- */
-const RECENT_AFTERMATH_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
  * How far back a rescue mark may reach, and how many trades may ask for one.
@@ -1334,6 +1323,7 @@ export async function registerRoutes(
   app.get("/api/trades/:id/candles", async (req, res) => {
     const trade = await store(req).getTrade(Number(req.params.id));
     if (!trade) return res.status(404).json({ message: "Trade not found" });
+    let known: { pair: string; market: string; venue: string; interval: string; window: { from: number; to: number } } | null = null;
     try {
       const cat = await ensureCatalogue();
       /*
@@ -1395,72 +1385,11 @@ export async function registerRoutes(
           cat.every((s) => s.market !== "futures"),
       };
 
-      const entry = new Date(trade.entryTime).getTime();
-      const exit = trade.exitTime ? new Date(trade.exitTime).getTime() : Date.now();
-      const held = Math.max(exit - entry, 60 * 60 * 1000);
-      // Half the hold before, and the same again after — enough aftermath to
-      // show a level being reached without you.
-      const from = entry - held * 0.5;
-      /*
-       * The window's near end — one and a half holds past the exit — is what
-       * chooses the bar size, so a two-hour scalp keeps its one-minute bars.
-       * The far end runs to now, at least a week past the exit, within what
-       * those bars can show; that is the part the trader sees change from
-       * one day to the next.
-       */
-      const nearTo = Math.min(Date.now(), exit + held * 1.5);
-      const to = Math.min(Date.now(), Math.max(nearTo, exit + RECENT_AFTERMATH_MS));
-      /*
-       * A requested timeframe wins over the automatic one, and the WINDOW
-       * moves to suit it rather than the bar count doing the moving.
-       *
-       * Both ends of that matter. One-minute bars on a three-week swing is a
-       * request for thirty thousand candles when what you wanted was a close
-       * look at the entry — so a fine timeframe zooms in, centred on the
-       * trade. Daily bars on a trade you held for six hours is the opposite
-       * mistake: the window is narrower than a single candle, Binance has
-       * nothing whose open time falls inside it, and the chart comes back
-       * empty. So a coarse timeframe zooms OUT, and you get the daily context
-       * with your entry marked on it, which is the honest reading of what
-       * "show me this on the daily" meant.
-       */
-      const asked = String(req.query.interval ?? "");
-      const interval = (ALLOWED_INTERVALS as readonly string[]).includes(asked)
-        ? (asked as Interval)
-        : intervalFor(nearTo - from);
-      const widest = BAR_MS[interval] * 700;
-      const narrowest = BAR_MS[interval] * 40;
-      const mid = (entry + exit) / 2;
-      let win = { from, to };
-      if (to - from > widest) {
-        /*
-         * Too many bars. When the trade itself fits, keep it whole and trim
-         * the aftermath to what the budget allows; when even the trade does
-         * not fit at this bar size, centre on it and show what can be shown.
-         */
-        win =
-          nearTo - from <= widest
-            ? { from, to: from + widest }
-            : { from: Math.max(from, mid - widest / 2), to: Math.min(to, mid + widest / 2) };
-      } else if (to - from < narrowest) {
-        const end = Math.min(Date.now(), Math.max(to, mid + narrowest / 2));
-        win = { from: end - narrowest, to: end };
-      }
-
-      /*
-       * `before` asks for history instead: the page of bars ending at that
-       * instant, which is what scrolling left off the edge of the chart needs.
-       *
-       * A trade journal opens on the trade, and that is right — but a chart you
-       * cannot scroll back on is a screenshot. Loading every bar Binance has up
-       * front to avoid the question would be megabytes for a view nobody may
-       * look at, so history arrives a page at a time as it is asked for.
-       */
-      const before = Number(req.query.before);
-      const paging = Number.isFinite(before) && before > 0;
-      if (paging) {
-        win = { from: before - BAR_MS[interval] * 600, to: before };
-      }
+      // The timeframe and the window, the same way the warmer computes them (server/chart-window.ts).
+      const askedBefore = Number(req.query.before);
+      const { interval, paging, ...win } = chartWindow(trade, String(req.query.interval ?? ""), Number.isFinite(askedBefore) && askedBefore > 0 ? askedBefore : undefined);
+      // What was asked for, and of which book: enough for the browser to ask the venue itself when this server cannot.
+      known = { pair: pair.symbol, market: pair.market, venue: pair.venue ?? "binance", interval, window: { from: win.from, to: win.to } };
 
       /*
        * Ask for the perp; settle for spot rather than for nothing.
@@ -1564,9 +1493,11 @@ export async function registerRoutes(
         archiveShort,
         tail,
         candles,
+        asked: known,
       });
     } catch (err: any) {
-      res.json({ pair: null, candles: [], error: String(err?.message ?? err), feed: feedStatus() });
+      // The pair and the window are still worth saying: the browser can ask the venue for them itself.
+      res.json({ pair: known?.pair ?? null, market: known?.market, venue: known?.venue, interval: known?.interval, asked: known, candles: [], error: String(err?.message ?? err), feed: feedStatus() });
     }
   });
 

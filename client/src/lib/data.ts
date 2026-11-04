@@ -144,35 +144,58 @@ export function useHyperliquidSymbols() {
   });
 }
 
+export interface CandlesAnswer {
+  pair: string | null;
+  market?: "futures" | "spot";
+  interval?: string;
+  /** How many pairs each Binance book contributed to the catalogue in use. */
+  books?: {
+    futures: number;
+    spot: number;
+    /** These perp bars came from the file archive, the live book having refused. */
+    fallback?: boolean;
+  };
+  candles: { t: number; o: number; h: number; l: number; c: number }[];
+  /** Which exchange the bars are from. Binance unless the account says otherwise. */
+  venue?: "binance" | "hyperliquid";
+  /** Live API, the day-files — which stop a day or so short of now — or this browser, asking the venue itself. */
+  source?: "api" | "archive" | "browser";
+  /** The last instant the archive's files reach, when they were the source. */
+  coveredTo?: number;
+  /** The archive stopped short of the window's end. */
+  archiveShort?: boolean;
+  /** Bars past the archive's reach, read from the spot book instead. */
+  tail?: { market: "spot"; from: number; bars: number } | null;
+  /** What the server set out to read, and of which book — enough for the browser to ask the venue itself. */
+  asked?: { pair: string; market: "futures" | "spot"; venue: "binance" | "hyperliquid"; interval: string; window: { from: number; to: number } } | null;
+  error?: string;
+  feed?: { lastError: string | null; lastTriedAt: string | null; lastOkAt: string | null } | null;
+}
+
+/**
+ * The server's answer, and the browser's own read of the venue when the
+ * server's carried no bars worth drawing — a refused book, a rate-banned
+ * shared IP, yesterday's archive. The browser is on the trader's own
+ * connection, which Binance refuses nothing, and its public book answers
+ * a browser directly.
+ */
+export async function candlesFor(path: string): Promise<CandlesAnswer> {
+  const r = (await (await apiRequest("GET", path)).json()) as CandlesAnswer;
+  const a = r.asked;
+  if (!a || a.venue !== "binance") return r;
+  const thin = r.candles.length === 0 || r.source === "archive" || r.market !== a.market;
+  if (!thin) return r;
+  const { browserCandles } = await import("./browser-candles");
+  const bars = await browserCandles(a.market, a.pair, a.interval, a.window.from, a.window.to);
+  if (bars.length === 0) return r;
+  return { ...r, pair: a.pair, market: a.market, interval: a.interval, candles: bars, source: "browser", archiveShort: false, tail: null, error: undefined, coveredTo: a.window.to };
+}
+
 export function useTradeCandles(tradeId: number | null, interval?: string) {
-  return useQuery<{
-    pair: string | null;
-    market?: "futures" | "spot";
-    interval?: string;
-    /** How many pairs each Binance book contributed to the catalogue in use. */
-    books?: {
-      futures: number;
-      spot: number;
-      /** These perp bars came from the file archive, the live book having refused. */
-      fallback?: boolean;
-    };
-    candles: { t: number; o: number; h: number; l: number; c: number }[];
-    /** Which exchange the bars are from. Binance unless the account says otherwise. */
-    venue?: "binance" | "hyperliquid";
-    /** Live API, or the day-files — which stop a day or so short of now. */
-    source?: "api" | "archive";
-    /** The last instant the archive's files reach, when they were the source. */
-    coveredTo?: number;
-    /** The archive stopped short of the window's end. */
-    archiveShort?: boolean;
-    /** Bars past the archive's reach, read from the spot book instead. */
-    tail?: { market: "spot"; from: number; bars: number } | null;
-    error?: string;
-    feed?: { lastError: string | null; lastTriedAt: string | null; lastOkAt: string | null } | null;
-  }>({
-    queryKey: [
-      interval ? `/api/trades/${tradeId}/candles?interval=${interval}` : `/api/trades/${tradeId}/candles`,
-    ],
+  const path = interval ? `/api/trades/${tradeId}/candles?interval=${interval}` : `/api/trades/${tradeId}/candles`;
+  return useQuery<CandlesAnswer>({
+    queryKey: [path],
+    queryFn: () => candlesFor(path),
     enabled: tradeId != null,
     staleTime: 5 * 60 * 1000,
     /*
@@ -185,6 +208,7 @@ export function useTradeCandles(tradeId: number | null, interval?: string) {
     placeholderData: (prev: unknown) => prev as any,
   });
 }
+
 
 /**
  * One page of older candles, fetched imperatively rather than through a query.
@@ -200,7 +224,8 @@ export function useTradeCandles(tradeId: number | null, interval?: string) {
  * pointer only crosses asks once, and a trade already held asks nothing.
  */
 export function prefetchTradeCandles(tradeId: number): void {
-  void queryClient.prefetchQuery({ queryKey: [`/api/trades/${tradeId}/candles`], staleTime: 5 * 60 * 1000 });
+  const path = `/api/trades/${tradeId}/candles`;
+  void queryClient.prefetchQuery({ queryKey: [path], queryFn: () => candlesFor(path), staleTime: 5 * 60 * 1000 });
 }
 
 export async function fetchCandlePage(
@@ -208,11 +233,8 @@ export async function fetchCandlePage(
   interval: string,
   before: number,
 ): Promise<{ candles: { t: number; o: number; h: number; l: number; c: number }[] }> {
-  const res = await apiRequest(
-    "GET",
-    `/api/trades/${tradeId}/candles?interval=${encodeURIComponent(interval)}&before=${Math.floor(before)}`,
-  );
-  return res.json();
+  const r = await candlesFor(`/api/trades/${tradeId}/candles?interval=${encodeURIComponent(interval)}&before=${Math.floor(before)}`);
+  return { candles: r.candles };
 }
 
 export function useStyles() {

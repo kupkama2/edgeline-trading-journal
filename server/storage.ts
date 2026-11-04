@@ -267,6 +267,15 @@ ALTER TABLE account_settings ADD COLUMN IF NOT EXISTS binance_ip_locked BOOLEAN;
 ALTER TABLE account_settings ADD COLUMN IF NOT EXISTS track BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS terminal TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS paper BOOLEAN NOT NULL DEFAULT FALSE;
+-- Bars already read, kept across restarts (server/candles.ts). Keyed by
+-- venue, pair, timeframe and window; a window that ended in the past is
+-- the same bars forever, and 'until' says how long the row may be served.
+CREATE TABLE IF NOT EXISTS candle_cache (
+  key TEXT PRIMARY KEY,
+  until BIGINT NOT NULL,
+  body TEXT NOT NULL,
+  written_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS terminal_log (
   id SERIAL PRIMARY KEY,
   user_id INTEGER NOT NULL,
@@ -892,6 +901,25 @@ export const accounts = {
  * from the feed should vanish here, and reconciling additions and removals by
  * hand is a bug surface for no benefit at this size.
  */
+/** Bars read before, kept across restarts. Every call is best effort: a cache that fails is a cache that misses. */
+export const candleStore = {
+  async get(key: string): Promise<{ until: number; body: string } | null> {
+    const rows = await sql<{ until: string; body: string }[]>`SELECT until, body FROM candle_cache WHERE key = ${key}`;
+    const row = rows[0];
+    return row ? { until: Number(row.until), body: row.body } : null;
+  },
+  async put(key: string, until: number, body: string): Promise<void> {
+    const writtenAt = new Date().toISOString();
+    await sql`INSERT INTO candle_cache (key, until, body, written_at) VALUES (${key}, ${until}, ${body}, ${writtenAt})
+      ON CONFLICT (key) DO UPDATE SET until = EXCLUDED.until, body = EXCLUDED.body, written_at = EXCLUDED.written_at`;
+  },
+  /** Rows past their time, gone. */
+  async prune(now = Date.now()): Promise<number> {
+    const rows = await sql`DELETE FROM candle_cache WHERE until < ${now} RETURNING key`;
+    return rows.length;
+  },
+};
+
 export const catalogue = {
   async list(): Promise<BinanceSymbolRow[]> {
     return db.select().from(binanceSymbols);

@@ -26,6 +26,7 @@ import { parsePricePair } from "@shared/price-pair";
 import { fetchCandles, readCandles, type CandleRead, type Interval } from "./binance";
 import { readHlCandles } from "./hyperliquid";
 import { BAR_MS } from "./binance";
+import { candleStore } from "./storage";
 
 /** The pair a trade is read against, on the venue its account names. */
 export function pairForTradeAt(
@@ -99,8 +100,26 @@ export async function readCandlesAt(
   const flying = inFlight.get(key);
   if (flying) return flying;
   const run = (async () => {
+    // A window read by an earlier process: served from the table, remembered here.
+    if (!liveEnd) {
+      const row = await candleStore.get(key).catch(() => null);
+      if (row && row.until > Date.now()) {
+        try {
+          const read = JSON.parse(row.body) as CandleRead;
+          if (Array.isArray(read.candles) && read.candles.length) {
+            candleCache.set(key, { read, until: row.until });
+            return read;
+          }
+        } catch {
+          /* an unreadable row is a miss */
+        }
+      }
+    }
     const read = pair.venue === "hyperliquid" ? await readHlCandles(pair.symbol, interval, startMs, endMs, maxBars) : await readCandles(pair, interval, startMs, endMs, maxBars, allowLateStart);
-    remember(key, read, liveEnd ? Math.min(bar, LIVE_TTL_MS) : CLOSED_TTL_MS);
+    const ttl = liveEnd ? Math.min(bar, LIVE_TTL_MS) : CLOSED_TTL_MS;
+    remember(key, read, ttl);
+    // Only a window that will not change is worth a row; a live one is a minute's worth.
+    if (!liveEnd && read.candles.length) void candleStore.put(key, Date.now() + ttl, JSON.stringify(read)).catch(() => {});
     return read;
   })();
   inFlight.set(key, run);
@@ -121,7 +140,7 @@ export async function readCandlesAt(
  * runs to now is kept until the bar closes. Two charts asking for the same
  * window at once share one read.
  */
-const CLOSED_TTL_MS = 12 * 60 * 60_000;
+const CLOSED_TTL_MS = 30 * 24 * 60 * 60_000;
 const LIVE_TTL_MS = 60_000;
 const CACHE_MAX = 500;
 const candleCache = new Map<string, { read: CandleRead; until: number }>();
