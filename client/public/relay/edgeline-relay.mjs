@@ -115,6 +115,7 @@ async function openStream() {
       return;
     }
     if (msg?.e === "listenKeyExpired") return ws.close();
+    describeEvent(msg);
     sendToJournal({ t: "event", msg });
   };
   ws.onclose = () => {
@@ -125,6 +126,24 @@ async function openStream() {
   };
   ws.onerror = () => {};
 }
+
+/** One line per thing the venue says happened, so the window shows the account moving. */
+function describeEvent(msg) {
+  const e = msg?.e;
+  if (e === "ORDER_TRADE_UPDATE" && msg.o) {
+    const o = msg.o;
+    const what = o.x === "TRADE" ? `${o.X === "FILLED" ? "filled" : "partly filled"} ${o.l ?? o.z} @ ${o.L ?? o.ap}` : String(o.X ?? o.x).toLowerCase();
+    log(`order ${o.s} ${o.S} ${o.ps ?? ""} ${o.o ?? ""}${o.sp && Number(o.sp) > 0 ? ` stop ${o.sp}` : ""}: ${what}`);
+  } else if (e === "ALGO_UPDATE" && msg.o) {
+    const o = msg.o;
+    log(`conditional ${o.s} ${o.S ?? ""} ${o.o ?? o.ot ?? ""}${o.tp ?? o.sp ? ` @ ${o.tp ?? o.sp}` : ""}: ${String(o.X ?? "").toLowerCase()}`);
+  } else if (e === "ACCOUNT_UPDATE" && msg.a?.P?.length) {
+    for (const pos of msg.a.P) log(`position ${pos.s} ${pos.ps ?? ""}: ${pos.pa} @ ${pos.ep}`);
+  }
+}
+
+let served = 0;
+setInterval(() => log(`alive · ${served} requests answered for the journal in the last 10 minutes`), 10 * 60_000).unref?.();
 
 /* ------------------------------ the journal ------------------------------ */
 
@@ -151,6 +170,8 @@ async function connect(facts) {
         // The venue's own hosts are asked as named; anything else — a stub the server was pointed at — becomes this relay's futures host.
         const base = /binance(future)?\.com$/.test(new URL(m.base).hostname) ? m.base : FUTURES;
         const r = m.path === "/fapi/v1/listenKey" ? await unsignedWithKey(m.method, base, m.path) : await signed(m.method, base, m.path, m.params ?? {});
+        served += 1;
+        if (r.status !== 200) log(`${m.method} ${m.path} → HTTP ${r.status} ${r.body.slice(0, 120)}`);
         ws.send(JSON.stringify({ t: "res", id: m.id, status: r.status, body: r.body }));
       } catch (e) {
         ws.send(JSON.stringify({ t: "res", id: m.id, status: 0, body: JSON.stringify({ code: -1, msg: String(e?.message ?? e) }) }));

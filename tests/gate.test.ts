@@ -109,5 +109,14 @@ describe.skipIf(!DB)("the gate on the record", () => {
     expect(u.status).toBe(200);
     const row = await send("GET", `/api/trades/${made.id}`).then((x) => x.json());
     expect(redAnswers(DEFAULT_GATE_QUESTIONS, parseGate(row.gate))).toEqual(["calm"]);
+    // Strict: one red answer and the trade is marked traded poorly; a skip is red on every question.
+    expect(row.tradedPoorly).toBe(true);
+    expect((await send("GET", `/api/trades/${bare.id}`).then((x) => x.json())).tradedPoorly).toBe(true);
+    // Green all the way through leaves the mark alone.
+    const clean = await send("POST", "/api/trades", {
+      trade: { symbol: "ETH", direction: "long", size: 1, sizeUnit: "base", entryPrice: 100, initialStop: 90, initialTarget: 120, entryTime: new Date().toISOString(), status: "open" },
+    }).then((x) => x.json());
+    await send("POST", `/api/trades/${clean.id}/gate`, { gate: { at: new Date().toISOString(), answers: { ...green }, where: "tracked" } });
+    expect((await send("GET", `/api/trades/${clean.id}`).then((x) => x.json())).tradedPoorly).toBe(false);
   });
 });
