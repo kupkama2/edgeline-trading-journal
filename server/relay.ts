@@ -22,6 +22,7 @@
 import type { Server as HttpServer, IncomingMessage } from "node:http";
 import { WebSocketServer, type WebSocket } from "ws";
 import { accountByRelayToken, setRelayFacts } from "./storage";
+import { notify } from "./events";
 
 const TIMEOUT_MS = 25_000;
 
@@ -141,6 +142,7 @@ export function attachRelay(httpServer: HttpServer): void {
           };
           relays.set(key, relay);
           console.log(`[relay] ${acct.name}: connected`);
+          notify(acct.userId, "settings");
           ws.on("message", (data) => {
             relay.lastSeenAt = Date.now();
             let m: any;
@@ -161,7 +163,9 @@ export function attachRelay(httpServer: HttpServer): void {
               relay.env = m.env === "testnet" ? "testnet" : "live";
               relay.canTrade = !!m.canTrade;
               relay.keyHint = typeof m.keyHint === "string" ? m.keyHint.slice(-8) : "";
-              void setRelayFacts(relay.accountId, { binanceEnv: relay.env, binanceTrade: relay.canTrade, binanceKeyHint: relay.keyHint }).catch(() => {});
+              void setRelayFacts(relay.accountId, { binanceEnv: relay.env, binanceTrade: relay.canTrade, binanceKeyHint: relay.keyHint })
+                .then(() => notify(relay.userId, "settings"))
+                .catch(() => {});
             } else if (m?.t === "ping") {
               ws.send(JSON.stringify({ t: "pong" }));
             }
@@ -170,6 +174,7 @@ export function attachRelay(httpServer: HttpServer): void {
             if (relays.get(key) === relay) {
               dropRelay(key, "closed");
               console.log(`[relay] ${acct.name}: disconnected`);
+              notify(acct.userId, "settings");
             }
           });
           ws.on("error", () => {

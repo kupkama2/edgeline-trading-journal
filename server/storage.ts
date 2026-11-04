@@ -51,6 +51,7 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import { and, eq, desc, inArray, isNull, sql as sqlx } from "drizzle-orm";
 import { randomBytes } from "node:crypto";
+import { notify } from "./events";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -1420,6 +1421,7 @@ export class DatabaseStorage implements IStorage {
       .values({ ...withTarget, userId: this.userId })
       .returning();
     if (tagIds.length) await this.setTags(row.id, tagIds);
+    notify(this.userId, "trades");
     return {
       ...row,
       mistakeTagIds: await this.tagIdsFor(row.id),
@@ -1474,6 +1476,7 @@ export class DatabaseStorage implements IStorage {
       if (stamped) Object.assign(row, stamped);
     }
     if (tagIds) await this.setTags(id, tagIds);
+    notify(this.userId, "trades");
     return {
       ...row,
       mistakeTagIds: await this.tagIdsFor(id),
@@ -1498,6 +1501,7 @@ export class DatabaseStorage implements IStorage {
       await tx.delete(tradeFills).where(eq(tradeFills.tradeId, id));
       await tx.delete(trades).where(and(eq(trades.id, id), this.owns(trades)));
     });
+    notify(this.userId, "trades");
   }
 
   /* -------------------------------- fills ------------------------------- */
@@ -1519,6 +1523,7 @@ export class DatabaseStorage implements IStorage {
       .insert(tradeFills)
       .values({ tradeId, kind: f.kind, price: f.price, size: f.size, time: f.time, note: f.note ?? null })
       .returning();
+    notify(this.userId, "trades");
     return row;
   }
 
@@ -1526,6 +1531,7 @@ export class DatabaseStorage implements IStorage {
     const [fill] = await db.select().from(tradeFills).where(eq(tradeFills.id, id));
     if (!fill || !(await this.ownsTrade(fill.tradeId))) return;
     await db.delete(tradeFills).where(eq(tradeFills.id, id));
+    notify(this.userId, "trades");
   }
 
   /* --------------------------- account settings -------------------------- */

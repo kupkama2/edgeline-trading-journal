@@ -1,3 +1,4 @@
+import { useLiveUpdates } from "@/lib/live";
 import { Suspense, lazy, useRef } from "react";
 import { Switch, Route, Router, useLocation } from "wouter";
 import { useHashLocation } from "wouter/use-hash-location";
@@ -57,6 +58,8 @@ function PageFallback() {
  * Arriving cold on /trade/:id simply shows the journal underneath.
  */
 function AppRouter() {
+  // Told when the record changes, so a position the tracker found or a stop it saw move appears without a refresh.
+  useLiveUpdates();
   const [location] = useLocation();
   const onTrade = location.startsWith("/trade/");
   const lastPage = useRef("/");
