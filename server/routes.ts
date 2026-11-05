@@ -52,6 +52,7 @@ import { syncBinance, verifyKey, verifyTradingKey } from "./binance-account";
 import { registerTerminalRoutes } from "./terminal";
 import { trackUser } from "./tracker";
 import { subscribe } from "./events";
+import { registerScreenerRoutes } from "./screener-routes";
 import { formatGate, gateRecordSchema, redAnswers } from "@shared/gate";
 import { attachRelay, relayStatus } from "./relay";
 import { managementBrief, parseTerminalRef } from "@shared/terminal";
@@ -592,6 +593,9 @@ export async function registerRoutes(
   app.get("/api/trades", async (req, res) => {
     res.json(await store(req).listTrades());
   });
+
+  // The relative-strength screener (server/screener-routes.ts).
+  registerScreenerRoutes(app);
 
   /** The page told when the record changes (server/events.ts). */
   app.get("/api/events", (req, res) => {

@@ -13,7 +13,7 @@
  */
 import type { Response } from "express";
 
-export type ChangeKind = "trades" | "settings";
+export type ChangeKind = "trades" | "settings" | "screener";
 
 const listeners = new Map<number, Set<Response>>();
 const pending = new Map<string, NodeJS.Timeout>();
@@ -69,6 +69,11 @@ export function notify(userId: number, kind: ChangeKind): void {
   }, COALESCE_MS);
   t.unref?.();
   pending.set(key, t);
+}
+
+/** The same word to every tab of every person: the screener's run landed. */
+export function notifyAll(kind: ChangeKind): void {
+  for (const userId of Array.from(listeners.keys())) notify(userId, kind);
 }
 
 /** How many tabs are listening, for tests and the status line. */

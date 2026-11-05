@@ -69,6 +69,22 @@ app.use((req, res, next) => {
   const { initSchema } = await import("./storage");
   await initSchema();
 
+  /*
+   * The screener's cron hook, ahead of the /api guard on purpose: a Render
+   * Cron Job or any pinger calls it with the token, no login. Without a
+   * token set the hook does not exist.
+   */
+  const cronToken = process.env.SCREENER_CRON_TOKEN;
+  if (cronToken) {
+    app.post("/api/screener/cron", async (req: Request, res: Response) => {
+      const given = String(req.headers.authorization ?? "").replace(/^Bearer\s+/i, "") || String(req.query.token ?? "");
+      if (given !== cronToken) return res.status(401).json({ message: "No" });
+      const { runScreener, screenerStatus } = await import("./screener");
+      runScreener({ force: true }).catch(() => {});
+      res.json({ started: true, status: screenerStatus() });
+    });
+  }
+
   // Must precede registerRoutes — the /api guard only protects routes
   // registered after it.
   setupAuth(app);
@@ -82,6 +98,9 @@ app.use((req, res, next) => {
   // The charts of what is on, and of what just closed, read before they are asked for.
   const { startChartWarm } = await import("./chart-warm");
   startChartWarm();
+  // The relative-strength screener's clock: 08:00 and 13:30 Prague, and a catch-up after a sleep.
+  const { startScreenerClock } = await import("./screener");
+  startScreenerClock();
 
   app.use((err: any, req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;

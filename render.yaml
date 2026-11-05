@@ -45,3 +45,7 @@ services:
         sync: false
       - key: PERPLEXITY_API_KEY
         sync: false
+      # The screener's cron hook (POST /api/screener/cron) exists only when
+      # this is set; a Render Cron Job or any pinger calls it with the token.
+      - key: SCREENER_CRON_TOKEN
+        sync: false
