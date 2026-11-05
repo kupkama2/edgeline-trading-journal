@@ -3,8 +3,13 @@ import express from "express";
 import { createServer, type Server } from "node:http";
 import {
   coinMetrics,
+  completeBars,
+  daysFromHours,
+  DEFAULT_SCREENER_SETTINGS,
+  deriveDaily,
   exitPlan,
   flagRows,
+  mergeBars,
   parseScreenerCandles,
   ratioSeries,
   rebasedLine,
@@ -110,14 +115,57 @@ describe("the screener's arithmetic", () => {
     expect(f("X9").flags["4h"].weakest).toBe(false);
   });
 
-  it("plans the exit: the lowest low of the last N candles, the distance, and the size for the risk", () => {
+  it("plans the exit: the lowest low of the last N candles, the distance, and the size for the risk — or nothing short of N", () => {
     const alt = hourly(100, (i) => 100 + i * 0.1, () => 1);
     const plan = exitPlan(alt, "4h", 110, { rs: 0.1, accel: "up", breakout: true, rvol: 2, breakoutLevel: 1.05 }, 1.1, { stopLookback: 10, riskDollars: 250 });
     // Last 10 blocks of 4 = 40 bars; the lowest low among them is bar 60's low.
     expect(plan.structureStop).toBeCloseTo((100 + 60 * 0.1) * 0.98, 10);
     expect(plan.stopDistance).toBeCloseTo((110 - plan.structureStop!) / 110, 10);
     expect(plan.size).toBeCloseTo(250 / (110 - plan.structureStop!), 10);
+    expect(plan.stopCandles).toBe(10);
     expect(plan.rsInvalidation).toBe(1.05);
+    // Thirty hourly bars cannot make ten 4h candles: no stop, rather than one from fewer.
+    expect(exitPlan(alt.slice(-30), "4h", 110, plan as any, 1.1, { stopLookback: 10, riskDollars: 250 }).structureStop).toBeNull();
+  });
+
+  it("measures on completed bars, scales a partial day's volume, and keeps the series between runs", () => {
+    const now = T0 + 10 * HOUR + 15 * 60_000;
+    const bars = hourly(12, () => 1);
+    // Bars at hours 0..9 have closed by 10:15; hour 10 is forming, hour 11 is in the future.
+    expect(completeBars(bars, HOUR, now).map((b) => b.t)).toEqual(bars.slice(0, 10).map((b) => b.t));
+
+    // A fresh read laid over the store: the same timestamp replaced, the window trimmed.
+    const stored = hourly(5, () => 1);
+    const fresh = [{ ...stored[4], c: 9 }, { t: T0 + 5 * HOUR, o: 1, h: 1, l: 1, c: 2, v: 1 }];
+    const merged = mergeBars(stored, fresh, T0 + 2 * HOUR);
+    expect(merged.map((b) => [b.t, b.c])).toEqual([[T0 + 2 * HOUR, 1], [T0 + 3 * HOUR, 1], [T0 + 4 * HOUR, 9], [T0 + 5 * HOUR, 2]]);
+
+    // Hours folded into days: the open of the first hour, the high and low across, the last close, the volume summed.
+    const hours = hourly(30, (i) => 10 + i, () => 2);
+    const days = daysFromHours(hours);
+    expect(days).toHaveLength(2);
+    expect(days[0]).toMatchObject({ t: T0, o: hours[0].o, c: hours[23].c, v: 48 });
+    expect(days[0].h).toBeCloseTo(hours[23].h, 10);
+    expect(days[1]).toMatchObject({ t: T0 + DAY, c: hours[29].c, v: 12 });
+
+    // The daily series from the stored days and the hours: the stored days before the hours' first full day, then the hours' days.
+    const storedDays = daily(40, (i) => 100 + i);
+    const hrs = hourly(60, (i) => 500 + i).map((b) => ({ ...b, t: T0 + 38 * DAY + 6 * HOUR + (b.t - T0) }));
+    const derived = deriveDaily(storedDays, hrs, -Infinity)!;
+    // The hours begin at 06:00 on day 38: day 38 is partial on the left, so the store supplies it; days 39 and 40 come from the hours.
+    expect(derived.map((d) => d.t)).toEqual([...storedDays.slice(0, 39).map((d) => d.t), T0 + 39 * DAY, T0 + 40 * DAY]);
+    expect(derived[40].c).toBe(hrs[59].c);
+    // A store that ends before the hours begin cannot be bridged; nor can no store at all.
+    expect(deriveDaily(storedDays.slice(0, 30), hrs, -Infinity)).toBeNull();
+    expect(deriveDaily([], hrs, -Infinity)).toBeNull();
+
+    // RVOL on a day seven hours old: the seven hours' volume against seven twenty-fourths of a day, not a whole one.
+    const btc = daily(40, () => 100);
+    const vols = daily(40, () => 1, () => 2400);
+    vols[39] = { ...vols[39], v: 700 };
+    const r = ratioSeries(vols, btc);
+    expect(tfMetrics(r, "1D", 7 / 24).rvol).toBeCloseTo(1, 10);
+    expect(tfMetrics(r, "1D", 1).rvol).toBeCloseTo(700 / 2400, 10);
   });
 
   it("rebases a line to 0% at the window's first bar, reads candles with volume, and settings leniently", () => {
@@ -156,7 +204,7 @@ function candles(coin: string, iv: "1h" | "1d", start: number, end: number) {
   for (let t = Math.ceil(start / step) * step, i = 0; t <= end; t += step, i++) {
     const idx = Math.floor(t / step);
     const c = closes[coin]?.(idx, iv) ?? 1;
-    out.push({ t, T: t + step - 1, s: coin, i: iv, o: String(c), h: String(c * 1.01), l: String(c * 0.99), c: String(c), v: String(coin === "SOL" && t > end - 4 * step ? 900 : 100), n: 1 });
+    out.push({ t, T: t + step - 1, s: coin, i: iv, o: String(c), h: String(c * 1.01), l: String(c * 0.99), c: String(c), v: String(coin === "SOL" && t > end - 5 * step ? 900 : 100), n: 1 });
   }
   return out;
 }
@@ -201,8 +249,9 @@ beforeAll(async () => {
   const { initSchema, accounts, screenerStore } = await import("../server/storage");
   const { registerRoutes } = await import("../server/routes");
   await initSchema();
-  // A clean slate: earlier runs of this file left snapshots behind.
-  await screenerStore.prune(new Date(Date.now() + 365 * DAY).toISOString());
+  // A clean slate: earlier runs of this file left snapshots and series behind, and the series would be read incrementally.
+  await screenerStore.clearAll();
+  await screenerStore.saveSettings(DEFAULT_SCREENER_SETTINGS);
   const stamp = `${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
   const account = await accounts.create({ googleSub: `sc-${stamp}`, email: `sc-${stamp}@x.test` });
   const ex = express();
@@ -237,22 +286,30 @@ describe.skipIf(!DB)("the screener's run", () => {
     expect(doge.error).toMatch(/HTTP 500/);
     expect(doge.tf["1D"].rs).toBeNull();
 
-    // SOL's 1D and 1W RS change, by hand from the same candles the fake served.
+    // SOL's 1D, 1W and 1M RS change, by hand from the same candles the fake served, as measured: completed hours, today from them.
     const sol = run.rows.find((r) => r.coin === "SOL")!;
-    const { storedSeries } = await import("../server/screener");
+    const { storedSeries, measuredSeries } = await import("../server/screener");
     const [s, b] = await Promise.all([storedSeries("SOL"), storedSeries("BTC")]);
-    const last = s["1d"].length - 1;
-    const byHand = (k: number) => (s["1d"][last].c / b["1d"][last].c) / (s["1d"][last - k].c / b["1d"][last - k].c) - 1;
+    const sm = measuredSeries(s, run.barsTo);
+    const bm = measuredSeries(b, run.barsTo);
+    const last = sm["1d"].length - 1;
+    const byHand = (k: number) => (sm["1d"][last].c / bm["1d"][last].c) / (sm["1d"][last - k].c / bm["1d"][last - k].c) - 1;
     expect(sol.tf["1D"].rs).toBeCloseTo(byHand(1), 12);
     expect(sol.tf["1W"].rs).toBeCloseTo(byHand(7), 12);
     expect(sol.tf["1M"].rs).toBeCloseTo(byHand(30), 12);
-    // Its last four hourly bars carried nine times the volume.
+    // The last hour, on completed bars: the hour before the one forming.
+    const hl = sm["1h"].length - 1;
+    expect(sm["1h"][hl].t + HOUR).toBeLessThanOrEqual(new Date(run.at).getTime());
+    expect(sol.tf["1h"].rs).toBeCloseTo((sm["1h"][hl].c / bm["1h"][hl].c) / (sm["1h"][hl - 1].c / bm["1h"][hl - 1].c) - 1, 12);
+    // Its last four completed hourly bars carried nine times the volume.
     expect(sol.tf["4h"].rvol).toBeCloseTo(9, 6);
     expect(sol.flags["4h"].volumeConfirmed).toBe(true);
     // Funding annualized from the hourly rate; no OI change before a second snapshot.
     expect(sol.fundingAnnual).toBeCloseTo(0.0000125 * 24 * 365, 12);
     expect(sol.oiChange).toBeNull();
-    expect(sol.bars["1d"]).toBeGreaterThan(390);
+    expect(sol.bars["1d"]).toBeGreaterThan(600);
+    // Every coin read in full the first time (DOGE failed before its daily read).
+    expect(run.fullReads).toBe(3);
 
     // The page reads the stored run.
     const page = await get("/api/screener");
@@ -273,6 +330,10 @@ describe.skipIf(!DB)("the screener's run", () => {
     expect(sol.oiChange).toBeCloseTo(0.3, 9);
     expect(run.errors).toBe(0);
     expect(run.rows.find((r) => r.coin === "DOGE")!.error).toBeNull();
+    // The second time: only DOGE, which had nothing stored, needed the full read; the rest took the hours since their last bar and derived the days.
+    expect(run.fullReads).toBe(1);
+    expect(sol.tf["1D"].rs).not.toBeNull();
+    expect(sol.bars["1d"]).toBeGreaterThan(600);
   });
 
   it("serves the chart's lines rebased to zero, and a coin with its exit plan", async () => {
@@ -282,16 +343,25 @@ describe.skipIf(!DB)("the screener's run", () => {
     expect(lines.lines.SOL.length).toBeGreaterThan(80);
     expect(lines.lines.SOL.length).toBeLessThanOrEqual(92);
 
-    const coin = await get("/api/screener/coin/SOL?tf=4h&risk=500");
+    const coin = await get("/api/screener/coin/SOL?tf=4h");
     expect(coin.row.coin).toBe("SOL");
     expect(coin.price.length).toBeGreaterThan(100);
     expect(coin.ratio.length).toBe(coin.price.length);
     expect(coin.plan.structureStop).toBeGreaterThan(0);
-    expect(coin.plan.size).toBeCloseTo(500 / (coin.row.mark - coin.plan.structureStop), 6);
+    expect(coin.plan.stopCandles).toBe(10);
+    // The arithmetic shown is the table's number.
+    expect(coin.audit.rs).toBeCloseTo(coin.row.tf["4h"].rs, 12);
+    expect(coin.audit.lookbackBars).toBe(4);
     expect(coin.snapshots.length).toBe(2);
+    const status = await get("/api/screener/status");
+    expect(status.running).toBe(false);
+    expect(status.nextAllowedAt).toBeTruthy();
 
     const saved = await (await fetch(`${base}/api/screener/settings`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ rvolMin: 2, stopLookback: 5 }) })).json();
     expect(saved).toMatchObject({ rvolMin: 2, stopLookback: 5, minVolume: 5_000_000 });
+    // A value out of range keeps what was there, not the default.
+    const kept = await (await fetch(`${base}/api/screener/settings`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ rvolMin: 0 }) })).json();
+    expect(kept.rvolMin).toBe(2);
     const news = await (await fetch(`${base}/api/screener/news/kPEPE`, { method: "POST" })).json();
     expect(news.links.map((l: any) => l.label)).toEqual(["CoinGecko", "X: $PEPE", "Unlocks (DefiLlama)"]);
   });
@@ -313,6 +383,11 @@ describe.skipIf(!DB)("the screener's run", () => {
     expect(calls.filter((c) => c.startsWith("metaAndAssetCtxs")).length).toBe(2);
     expect(calls.filter((c) => c === "candleSnapshot:SOL:1h").length).toBe(2);
     // Run one: the universe, BTC twice, SOL and ETH twice, DOGE once (its hourly read failed). Run two: all nine.
-    expect(infoCalls).toBe(8 + 9);
+    // The night the clocks go forward (2026-03-29): at 00:30 on the 30th, yesterday is still the 29th.
+    expect(runDue(prague("2026-03-29T22:30:00Z"), "2026-03-29T11:35:00Z")).toBe(false);
+    expect(runDue(prague("2026-03-29T22:30:00Z"), "2026-03-29T06:05:00Z")).toBe(true);
+    // Run one: the universe, BTC twice, SOL and ETH twice, DOGE once (its hourly read failed).
+    // Run two: the universe, BTC, SOL and ETH once each (the hours since the last bar), DOGE twice.
+    expect(infoCalls).toBe(8 + 6);
   });
 });

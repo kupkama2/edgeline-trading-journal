@@ -191,8 +191,14 @@ const stdev = (xs: number[]) => {
   return Math.sqrt(xs.reduce((s, x) => s + (x - m) ** 2, 0) / (xs.length - 1));
 };
 
-/** One timeframe's numbers on a ratio series. */
-export function tfMetrics(series: { t: number; r: number; v: number }[], tf: Timeframe): TfMetrics {
+/**
+ * One timeframe's numbers on a ratio series. `partial` is how much of the
+ * last bar has elapsed (1 for a complete bar): the daily series ends on
+ * today's bar built from the hours so far, and RVOL's recent block is
+ * scaled by the elapsed fraction so a day seven hours old is not read as
+ * a quiet day.
+ */
+export function tfMetrics(series: { t: number; r: number; v: number }[], tf: Timeframe, partial = 1): TfMetrics {
   const { bars: L, accelBlocks } = TF_SPEC[tf];
   const r = series.map((x) => x.r);
   const v = series.map((x) => x.v);
@@ -246,7 +252,9 @@ export function tfMetrics(series: { t: number; r: number; v: number }[], tf: Tim
       blocks.push(sum(from, to));
     }
     const m = blocks.length >= MIN_PRIOR_BLOCKS ? mean(blocks) : null;
-    rvol = m != null && m > 0 ? recent / m : null;
+    // The recent block against the share of a block that has elapsed.
+    const elapsed = (L - 1 + Math.min(1, Math.max(0.05, partial))) / L;
+    rvol = m != null && m > 0 ? recent / (m * elapsed) : null;
   }
 
   return { rs, accel, breakout, rvol, breakoutLevel };
@@ -256,12 +264,69 @@ export function tfMetrics(series: { t: number; r: number; v: number }[], tf: Tim
 export function coinMetrics(
   alt: { "1h": ScreenerCandle[]; "1d": ScreenerCandle[] },
   btc: { "1h": ScreenerCandle[]; "1d": ScreenerCandle[] },
+  /** How much of the last daily bar has elapsed (today's hours so far ÷ 24). */
+  dayPartial = 1,
 ): Record<Timeframe, TfMetrics> {
   const hourly = ratioSeries(alt["1h"], btc["1h"]);
   const daily = ratioSeries(alt["1d"], btc["1d"]);
   const out = {} as Record<Timeframe, TfMetrics>;
-  for (const tf of TIMEFRAMES) out[tf] = tfMetrics(TF_SPEC[tf].base === "1h" ? hourly : daily, tf);
+  for (const tf of TIMEFRAMES) out[tf] = TF_SPEC[tf].base === "1h" ? tfMetrics(hourly, tf) : tfMetrics(daily, tf, dayPartial);
   return out;
+}
+
+/* ------------------------------- the series, kept between runs ------------------------------- */
+
+export const HOUR_MS = 3600_000;
+export const DAY_MS = 86400_000;
+
+/** Bars that have closed by `now`: the one still forming is left out, so every coin is measured at the same instant. */
+export function completeBars(candles: ScreenerCandle[], barMs: number, now: number): ScreenerCandle[] {
+  return candles.filter((c) => c.t + barMs <= now);
+}
+
+/** Newer bars laid over older ones: a bar with the same timestamp is replaced, the result sorted and trimmed to the window. */
+export function mergeBars(stored: ScreenerCandle[], fresh: ScreenerCandle[], keepFrom: number): ScreenerCandle[] {
+  const byT = new Map<number, ScreenerCandle>();
+  for (const c of stored) if (c.t >= keepFrom) byT.set(c.t, c);
+  for (const c of fresh) if (c.t >= keepFrom) byT.set(c.t, c);
+  return Array.from(byT.values()).sort((a, b) => a.t - b.t);
+}
+
+/** Hourly bars folded into UTC days, the last day as far as the hours go. */
+export function daysFromHours(hours: ScreenerCandle[]): ScreenerCandle[] {
+  const out: ScreenerCandle[] = [];
+  for (const b of hours) {
+    const day = Math.floor(b.t / DAY_MS) * DAY_MS;
+    const cur = out[out.length - 1];
+    if (cur && cur.t === day) {
+      cur.h = Math.max(cur.h, b.h);
+      cur.l = Math.min(cur.l, b.l);
+      cur.c = b.c;
+      cur.v += b.v;
+    } else out.push({ t: day, o: b.o, h: b.h, l: b.l, c: b.c, v: b.v });
+  }
+  return out;
+}
+
+/**
+ * The daily series without asking the venue for it again: the stored
+ * completed days, then every day the hourly bars cover in full — the
+ * last twenty-nine or so, today's partial one included. Null when there
+ * is no stored series or its days end before the hours begin, in which
+ * case the venue has to be asked.
+ */
+export function deriveDaily(storedDays: ScreenerCandle[], hours: ScreenerCandle[], keepFrom: number): ScreenerCandle[] | null {
+  if (hours.length === 0 || storedDays.length === 0) return null;
+  const fromHours = daysFromHours(hours);
+  // The hours usually begin mid-day: that first day is partial on the left and is not used.
+  const full = hours[0].t % DAY_MS === 0 ? fromHours : fromHours.slice(1);
+  const firstFullDay = full[0]?.t;
+  if (firstFullDay == null) return null;
+  const kept = storedDays.filter((d) => d.t < firstFullDay && d.t >= keepFrom);
+  const last = kept[kept.length - 1];
+  // A gap the hours cannot bridge: the store is too old.
+  if (!last || last.t + DAY_MS < firstFullDay) return null;
+  return [...kept, ...full];
 }
 
 const EMPTY_TF: TfMetrics = { rs: null, accel: null, breakout: null, rvol: null, breakoutLevel: null };
@@ -319,8 +384,10 @@ export const annualizeFunding = (hourly: number) => hourly * 24 * 365;
 /* ------------------------------- the exit planner ------------------------------- */
 
 export interface ExitPlan {
-  /** The lowest low of the last N candles on the timeframe. */
+  /** The lowest low of the last N candles on the timeframe; null when fewer than N exist. */
   structureStop: number | null;
+  /** How many candles the stop was read from. */
+  stopCandles: number;
   /** Distance from the mark to the stop, as a fraction of the mark. */
   stopDistance: number | null;
   /** The ratio level a breakout was measured against; a close back under it is the RS invalidation. */
@@ -347,12 +414,13 @@ export function exitPlan(
 ): ExitPlan {
   const L = TF_SPEC[tf].bars;
   const need = settings.stopLookback * L;
-  const slice = candles.slice(-need);
-  const structureStop = slice.length >= Math.min(need, L) && slice.length > 0 ? Math.min(...slice.map((c) => c.l)) : null;
+  const slice = candles.length >= need ? candles.slice(-need) : [];
+  const structureStop = slice.length > 0 ? Math.min(...slice.map((c) => c.l)) : null;
   const stopDistance = structureStop != null && mark != null && mark > 0 ? (mark - structureStop) / mark : null;
   const size = stopDistance != null && stopDistance > 0 && mark != null ? settings.riskDollars / (mark - structureStop!) : null;
   return {
     structureStop,
+    stopCandles: slice.length ? settings.stopLookback : 0,
     stopDistance,
     rsInvalidation: metrics.breakoutLevel,
     ratioNow,

@@ -9,7 +9,7 @@ import { useToast } from "@/hooks/use-toast";
 import { ScreenerTable, type Filter } from "@/components/screener/table";
 import { SpaghettiChart } from "@/components/screener/chart";
 import { CoinDrawer } from "@/components/screener/drawer";
-import { fmtPrague, useSaveScreenerSettings, useScreener, useScreenerLines, useScreenerRefresh } from "@/lib/screener";
+import { fmtPrague, useSaveScreenerSettings, useScreener, useScreenerLines, useScreenerRefresh, useScreenerStatus } from "@/lib/screener";
 import { TIMEFRAMES, type ScreenerRow, type Timeframe } from "@shared/screener";
 
 const TF_KEY = "edgeline.screener.tf";
@@ -61,6 +61,8 @@ export default function ScreenerPage() {
   }, [picked, pickedFor, rows, tf]);
   const order = useMemo(() => Array.from(charted), [charted]);
   const lines = useScreenerLines(tf, order);
+  // Only the coins that have a line, memoized: a new array here would re-feed the chart and reset its zoom on every render.
+  const drawn = useMemo(() => order.filter((c) => !!lines.data?.lines[c]), [order, lines.data]);
   const toggle = (coin: string) => {
     const next = new Set(charted);
     if (next.has(coin)) next.delete(coin);
@@ -69,15 +71,18 @@ export default function ScreenerPage() {
     setPickedFor(tf);
   };
 
-  // The refresh button: off while a run is on, and for five minutes after one.
+  // While a run is on, the small status answer is polled for the progress line; the table arrives with the "screener" event.
+  const live = useScreenerStatus(!!page.data?.status.running);
+  const status = live.data ?? page.data?.status;
+  // The refresh button: off while a run is on, and for five minutes after one. The clock ticks only while there is something to count down.
   const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(t);
-  }, []);
-  const status = page.data?.status;
   const nextAt = status?.nextAllowedAt ? new Date(status.nextAllowedAt).getTime() : 0;
   const waitMs = Math.max(0, nextAt - now);
+  useEffect(() => {
+    if (!nextAt || nextAt <= Date.now()) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [nextAt]);
   const canRefresh = !!page.data && !status?.running && waitMs === 0 && !refresh.isPending;
   const onRefresh = async () => {
     try {
@@ -109,7 +114,7 @@ export default function ScreenerPage() {
           <p className="text-[11px] text-muted-foreground" data-testid="screener-asof">
             {run ? (
               <>
-                Data as of <span className="font-mono text-foreground">{fmtPrague(run.at)}</span> Prague · {run.universe} coins · read in {(run.tookMs / 1000).toFixed(0)}s
+                Data as of <span className="font-mono text-foreground">{fmtPrague(run.at)}</span> Prague · bars to {new Date(run.barsTo).toISOString().slice(11, 16)}Z · {run.universe} coins · read in {(run.tookMs / 1000).toFixed(0)}s
                 {run.errors ? ` · ${run.errors} could not be read` : ""}
               </>
             ) : page.isLoading ? (
@@ -211,7 +216,7 @@ export default function ScreenerPage() {
           </button>
         </div>
         <div className="mt-2">
-          <SpaghettiChart lines={lines.data?.lines ?? {}} order={order.filter((c) => lines.data?.lines[c])} loading={lines.isLoading} />
+          <SpaghettiChart lines={lines.data?.lines ?? {}} order={drawn} loading={lines.isLoading} />
         </div>
       </Card>
 

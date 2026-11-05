@@ -987,11 +987,11 @@ export const screenerStore = {
       VALUES (${r.at}, ${r.tookMs}, ${r.body}, ${r.errors}, ${r.universe}, ${r.settings}) RETURNING id`;
     return rows[0].id;
   },
+  /** The whole snapshot in one statement: a few hundred rows is one round trip, not a few hundred. */
   async saveSnapshot(at: string, rows: { coin: string; funding: number | null; openInterest: number | null; volume: number | null; mark: number | null }[]): Promise<void> {
-    for (const r of rows) {
-      await sql`INSERT INTO screener_snapshots (at, coin, funding, open_interest, volume, mark)
-        VALUES (${at}, ${r.coin}, ${r.funding}, ${r.openInterest}, ${r.volume}, ${r.mark})
-        ON CONFLICT (at, coin) DO NOTHING`;
+    for (let i = 0; i < rows.length; i += 500) {
+      const chunk = rows.slice(i, i + 500).map((r) => ({ at, coin: r.coin, funding: r.funding, open_interest: r.openInterest, volume: r.volume, mark: r.mark }));
+      await sql`INSERT INTO screener_snapshots ${sql(chunk)} ON CONFLICT (at, coin) DO NOTHING`;
     }
   },
   /** The snapshot before `before` for every coin: what "OI change" is measured against. */
@@ -1005,10 +1005,14 @@ export const screenerStore = {
       SELECT at, funding, open_interest, volume, mark FROM screener_snapshots WHERE coin = ${coin} AND at >= ${since} ORDER BY at`;
     return rows.map((r) => ({ at: r.at, funding: r.funding, openInterest: r.open_interest, volume: r.volume, mark: r.mark }));
   },
-  async saveSeries(coin: string, interval: "1h" | "1d", body: string): Promise<void> {
-    const writtenAt = new Date().toISOString();
-    await sql`INSERT INTO screener_series (coin, interval, body, written_at) VALUES (${coin}, ${interval}, ${body}, ${writtenAt})
-      ON CONFLICT (coin, interval) DO UPDATE SET body = EXCLUDED.body, written_at = EXCLUDED.written_at`;
+  /** Both of a coin's series in one statement. */
+  async saveSeries(coin: string, hourly: unknown[], daily: unknown[]): Promise<void> {
+    const written_at = new Date().toISOString();
+    const rows = [
+      { coin, interval: "1h", body: JSON.stringify(hourly), written_at },
+      { coin, interval: "1d", body: JSON.stringify(daily), written_at },
+    ];
+    await sql`INSERT INTO screener_series ${sql(rows)} ON CONFLICT (coin, interval) DO UPDATE SET body = EXCLUDED.body, written_at = EXCLUDED.written_at`;
   },
   async series(coin: string, interval: "1h" | "1d"): Promise<string | null> {
     const rows = await sql<{ body: string }[]>`SELECT body FROM screener_series WHERE coin = ${coin} AND interval = ${interval}`;
@@ -1018,6 +1022,12 @@ export const screenerStore = {
     if (coins.length === 0) return new Map();
     const rows = await sql<{ coin: string; body: string }[]>`SELECT coin, body FROM screener_series WHERE interval = ${interval} AND coin IN ${sql(coins)}`;
     return new Map(rows.map((r) => [r.coin, r.body]));
+  },
+  /** Everything but the settings, gone: a clean slate for a test. */
+  async clearAll(): Promise<void> {
+    await sql`DELETE FROM screener_snapshots`;
+    await sql`DELETE FROM screener_runs`;
+    await sql`DELETE FROM screener_series`;
   },
   /** Runs and snapshots older than the window, gone. Series are one row per coin and replace themselves. */
   async prune(before: string): Promise<void> {
