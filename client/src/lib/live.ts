@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { queryClient } from "./queryClient";
 import { invalidateTrades } from "./data";
+import { invalidateScreener } from "./screener";
 
 /**
  * The page kept current without a refresh.
@@ -23,6 +24,7 @@ export function useLiveUpdates(): void {
     const settings = () => void queryClient.invalidateQueries({ queryKey: ["/api/account-settings"] });
     es.addEventListener("trades", trades);
     es.addEventListener("settings", settings);
+    es.addEventListener("screener", invalidateScreener);
     return () => es.close();
   }, []);
 }

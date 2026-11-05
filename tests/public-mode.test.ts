@@ -134,6 +134,7 @@ describe("nothing prints money behind the formatters' back", async () => {
       "a contract's point value: $20/pt is the exchange's spec, not your size",
     ],
     ["client/src/pages/trade-view.tsx", "the same point value, on the trade's own header"],
+    ["client/src/lib/screener.ts", "the venue's 24h volume and a planned position's notional: market figures, not the person's money"],
   ]);
 
   function walk(dir: string, out: string[] = []): string[] {

@@ -9,7 +9,7 @@ import {
   LineChart,
   NotebookPen,
   Palette,
-  Settings2, BookOpen, Crosshair } from "lucide-react";
+  Settings2, BookOpen, Crosshair, Radar } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import type { SessionResponse } from "@/components/login-gate";
 import { XpChip, XpToaster } from "@/components/xp";
@@ -130,6 +130,7 @@ const NAV = [
   { href: "/calendar", label: "Calendar", icon: CalendarDays },
   { href: "/review", label: "Review", icon: CalendarRange },
   { href: "/stats", label: "Stats", icon: BarChart3 },
+  { href: "/screener", label: "Screener", icon: Radar },
   { href: "/settings", label: "Settings", icon: Settings2 },
 ];
 

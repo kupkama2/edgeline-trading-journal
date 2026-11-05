@@ -27,7 +27,8 @@ const baseTrade = {
 };
 
 describe.skipIf(!DB)("the tilt verdict leaves the demon list", () => {
-  it("copies every tick onto the trade, removes the tag, and stays gone after seeding", async () => {
+  // Each case runs the whole schema twice against a live Postgres; the time that takes is not what is under test.
+  it("copies every tick onto the trade, removes the tag, and stays gone after seeding", { timeout: 60_000 }, async () => {
     const { initSchema, accounts, db, storageFor } = await import("../server/storage");
     const { mistakeTags, tradeMistakes, trades } = await import("../shared/schema");
     await initSchema();
@@ -79,7 +80,7 @@ describe.skipIf(!DB)("a scalp that already carries prices", () => {
    * The rule still runs where it can see whose doing the flag was: the PATCH
    * route, via promoteScalp (shared/schema.ts).
    */
-  it("is left exactly as stored, because the boot sweep has been retired", async () => {
+  it("is left exactly as stored, because the boot sweep has been retired", { timeout: 60_000 }, async () => {
     const { initSchema, accounts, db, storageFor } = await import("../server/storage");
     const { trades } = await import("../shared/schema");
     await initSchema();

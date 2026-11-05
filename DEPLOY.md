@@ -185,3 +185,28 @@ and restarts itself. `journalctl -u edgeline-relay -f` watches it.
   not part of the deploy path.
 - `rationaleTags` and `playbook` are JSON-in-TEXT, inherited from the SQLite
   schema. They could be `jsonb`.
+
+
+## The screener's schedule
+
+The relative-strength screener (the Screener tab) reads Hyperliquid at
+08:00 and 13:30 Europe/Prague. The server keeps that clock itself, and runs
+a missed slot as soon as it is up again — so on a free Render service, which
+sleeps when idle, the morning run happens at the first visit of the day
+rather than at 08:00 sharp. The page shows the last stored run at once and
+refreshes on its own when the new one lands.
+
+To have the runs happen on time while the service sleeps, give it a token
+and have something call the hook on the schedule:
+
+1. Set `SCREENER_CRON_TOKEN` in the Render dashboard to a long random string.
+2. Call `POST https://<your-render-host>/api/screener/cron` with the header
+   `Authorization: Bearer <token>` at 08:00 and 13:30 Prague. A Render Cron
+   Job (`curl -X POST -H "Authorization: Bearer $TOKEN" <url>`) or a free
+   pinger such as cron-job.org both work. The request wakes the service and
+   starts the run; it answers at once and the run finishes in the background.
+
+Nothing is placed anywhere by the screener; it only reads. Each run spends
+at most 700 of Hyperliquid's 1200 weight per minute and takes a few minutes
+for a hundred coins. Manual refresh on the page is limited to once every
+five minutes.

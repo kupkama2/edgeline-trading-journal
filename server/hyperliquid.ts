@@ -86,6 +86,20 @@ const host = () => new URL(BASE).hostname;
  * POST to /info with a `type`, and this is the only place the request is
  * written.
  */
+export async function hlInfo(body: Record<string, unknown>, timeoutMs = 12_000): Promise<unknown> {
+  return info(body, timeoutMs);
+}
+
+/** A refusal with its status, so a caller can tell a rate limit (429) from the rest. */
+export class HlHttpError extends Error {
+  constructor(
+    public status: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
 async function info(body: Record<string, unknown>, timeoutMs = 12_000): Promise<unknown> {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), timeoutMs);
@@ -97,7 +111,7 @@ async function info(body: Record<string, unknown>, timeoutMs = 12_000): Promise<
       signal: ctl.signal,
       dispatcher: egressFor(BASE),
     } as any);
-    if (!res.ok) throw new Error(`${host()} → HTTP ${res.status} on /info (${String(body.type)})`);
+    if (!res.ok) throw new HlHttpError(res.status, `${host()} → HTTP ${res.status} on /info (${String(body.type)})`);
     return await res.json();
   } finally {
     clearTimeout(timer);

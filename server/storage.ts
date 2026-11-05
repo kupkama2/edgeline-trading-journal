@@ -292,6 +292,38 @@ CREATE TABLE IF NOT EXISTS terminal_log (
   response TEXT,
   ok BOOLEAN NOT NULL
 );
+-- The relative-strength screener (server/screener.ts): each run's computed
+-- table, the perp snapshot it was built on (the only OI history there is),
+-- the latest series per coin for the charts, and the one settings row.
+CREATE TABLE IF NOT EXISTS screener_runs (
+  id SERIAL PRIMARY KEY,
+  at TEXT NOT NULL,
+  took_ms INTEGER NOT NULL,
+  body TEXT NOT NULL,
+  errors INTEGER NOT NULL DEFAULT 0,
+  universe INTEGER NOT NULL DEFAULT 0,
+  settings TEXT
+);
+CREATE TABLE IF NOT EXISTS screener_snapshots (
+  at TEXT NOT NULL,
+  coin TEXT NOT NULL,
+  funding DOUBLE PRECISION,
+  open_interest DOUBLE PRECISION,
+  volume DOUBLE PRECISION,
+  mark DOUBLE PRECISION,
+  PRIMARY KEY (at, coin)
+);
+CREATE TABLE IF NOT EXISTS screener_series (
+  coin TEXT NOT NULL,
+  interval TEXT NOT NULL,
+  body TEXT NOT NULL,
+  written_at TEXT NOT NULL,
+  PRIMARY KEY (coin, interval)
+);
+CREATE TABLE IF NOT EXISTS screener_settings (
+  id INTEGER PRIMARY KEY,
+  body TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS account_balances (
   id SERIAL PRIMARY KEY,
   user_id INTEGER NOT NULL,
@@ -930,6 +962,70 @@ export const accounts = {
  * hand is a bug surface for no benefit at this size.
  */
 /** Bars read before, kept across restarts. Every call is best effort: a cache that fails is a cache that misses. */
+/** The screener's rows (server/screener.ts). Global, not per account: the market is the same for everyone. */
+export const screenerStore = {
+  async settings(): Promise<unknown> {
+    const rows = await sql<{ body: string }[]>`SELECT body FROM screener_settings WHERE id = 1`;
+    try {
+      return rows[0] ? JSON.parse(rows[0].body) : null;
+    } catch {
+      return null;
+    }
+  },
+  async saveSettings(body: unknown): Promise<void> {
+    const text = JSON.stringify(body);
+    await sql`INSERT INTO screener_settings (id, body) VALUES (1, ${text}) ON CONFLICT (id) DO UPDATE SET body = EXCLUDED.body`;
+  },
+  async latestRun(): Promise<{ id: number; at: string; tookMs: number; body: string; errors: number; universe: number; settings: string | null } | null> {
+    const rows = await sql<{ id: number; at: string; took_ms: number; body: string; errors: number; universe: number; settings: string | null }[]>`
+      SELECT id, at, took_ms, body, errors, universe, settings FROM screener_runs ORDER BY id DESC LIMIT 1`;
+    const r = rows[0];
+    return r ? { id: r.id, at: r.at, tookMs: r.took_ms, body: r.body, errors: r.errors, universe: r.universe, settings: r.settings } : null;
+  },
+  async saveRun(r: { at: string; tookMs: number; body: string; errors: number; universe: number; settings: string }): Promise<number> {
+    const rows = await sql<{ id: number }[]>`INSERT INTO screener_runs (at, took_ms, body, errors, universe, settings)
+      VALUES (${r.at}, ${r.tookMs}, ${r.body}, ${r.errors}, ${r.universe}, ${r.settings}) RETURNING id`;
+    return rows[0].id;
+  },
+  async saveSnapshot(at: string, rows: { coin: string; funding: number | null; openInterest: number | null; volume: number | null; mark: number | null }[]): Promise<void> {
+    for (const r of rows) {
+      await sql`INSERT INTO screener_snapshots (at, coin, funding, open_interest, volume, mark)
+        VALUES (${at}, ${r.coin}, ${r.funding}, ${r.openInterest}, ${r.volume}, ${r.mark})
+        ON CONFLICT (at, coin) DO NOTHING`;
+    }
+  },
+  /** The snapshot before `before` for every coin: what "OI change" is measured against. */
+  async previousSnapshot(before: string): Promise<Map<string, { at: string; funding: number | null; openInterest: number | null }>> {
+    const rows = await sql<{ at: string; coin: string; funding: number | null; open_interest: number | null }[]>`
+      SELECT DISTINCT ON (coin) at, coin, funding, open_interest FROM screener_snapshots WHERE at < ${before} ORDER BY coin, at DESC`;
+    return new Map(rows.map((r) => [r.coin, { at: r.at, funding: r.funding, openInterest: r.open_interest }]));
+  },
+  async snapshotsFor(coin: string, since: string): Promise<{ at: string; funding: number | null; openInterest: number | null; volume: number | null; mark: number | null }[]> {
+    const rows = await sql<{ at: string; funding: number | null; open_interest: number | null; volume: number | null; mark: number | null }[]>`
+      SELECT at, funding, open_interest, volume, mark FROM screener_snapshots WHERE coin = ${coin} AND at >= ${since} ORDER BY at`;
+    return rows.map((r) => ({ at: r.at, funding: r.funding, openInterest: r.open_interest, volume: r.volume, mark: r.mark }));
+  },
+  async saveSeries(coin: string, interval: "1h" | "1d", body: string): Promise<void> {
+    const writtenAt = new Date().toISOString();
+    await sql`INSERT INTO screener_series (coin, interval, body, written_at) VALUES (${coin}, ${interval}, ${body}, ${writtenAt})
+      ON CONFLICT (coin, interval) DO UPDATE SET body = EXCLUDED.body, written_at = EXCLUDED.written_at`;
+  },
+  async series(coin: string, interval: "1h" | "1d"): Promise<string | null> {
+    const rows = await sql<{ body: string }[]>`SELECT body FROM screener_series WHERE coin = ${coin} AND interval = ${interval}`;
+    return rows[0]?.body ?? null;
+  },
+  async seriesFor(coins: string[], interval: "1h" | "1d"): Promise<Map<string, string>> {
+    if (coins.length === 0) return new Map();
+    const rows = await sql<{ coin: string; body: string }[]>`SELECT coin, body FROM screener_series WHERE interval = ${interval} AND coin IN ${sql(coins)}`;
+    return new Map(rows.map((r) => [r.coin, r.body]));
+  },
+  /** Runs and snapshots older than the window, gone. Series are one row per coin and replace themselves. */
+  async prune(before: string): Promise<void> {
+    await sql`DELETE FROM screener_snapshots WHERE at < ${before}`;
+    await sql`DELETE FROM screener_runs WHERE at < ${before}`;
+  },
+};
+
 export const candleStore = {
   async get(key: string): Promise<{ until: number; body: string } | null> {
     const rows = await sql<{ until: string; body: string }[]>`SELECT until, body FROM candle_cache WHERE key = ${key}`;

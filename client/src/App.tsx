@@ -34,6 +34,7 @@ const Settings = lazy(() => import("@/pages/settings"));
 const Stats = lazy(() => import("@/pages/stats"));
 const Review = lazy(() => import("@/pages/review"));
 const Terminal = lazy(() => import("@/pages/terminal"));
+const Screener = lazy(() => import("@/pages/screener"));
 
 /** A page arriving over the network is a beat, not a blank screen. */
 function PageFallback() {
@@ -83,6 +84,7 @@ function AppRouter() {
         {/* Only exists for the emails the server lists; everyone else gets
             the page's own "not enabled" line, and no API behind it. */}
         <Route path="/terminal" component={Terminal} />
+        <Route path="/screener" component={Screener} />
         {/* The Sunday pass. Both addresses: the bare one opens the week you
             are in, the dated one a week you were sent to. */}
         <Route path="/review" component={Review} />
