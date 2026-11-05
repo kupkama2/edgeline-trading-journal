@@ -46,3 +46,14 @@ describe("fills, paged", () => {
     expect(asked[1]).toBe(T0 + 999 * 1000);
   });
 });
+
+describe("one record per order across the plain and algo lists", () => {
+  it("drops a conditional order the plain list repeats under another id, and keeps real duplicates apart", async () => {
+    const { dedupeOrders, parseAlgoOrder, parseOrder } = await import("../server/binance-trade");
+    const algo = parseAlgoOrder({ algoId: 61, symbol: "ASTERUSDT", side: "SELL", positionSide: "LONG", orderType: "TAKE_PROFIT_MARKET", algoStatus: "NEW", quantity: "0", triggerPrice: "0.8184", closePosition: true, createTime: 1 })!;
+    const same = parseOrder({ orderId: 71, symbol: "ASTERUSDT", side: "SELL", positionSide: "LONG", type: "TAKE_PROFIT_MARKET", status: "NEW", price: "0", stopPrice: "0.8184", origQty: "0", executedQty: "0", closePosition: true, time: 1 })!;
+    const limit = parseOrder({ orderId: 72, symbol: "ASTERUSDT", side: "SELL", positionSide: "LONG", type: "LIMIT", status: "NEW", price: "0.8184", stopPrice: "0", origQty: "4000", executedQty: "0", closePosition: false, time: 1 })!;
+    const out = dedupeOrders([same, limit], [algo]);
+    expect(out.map((o) => o.orderId)).toEqual([72, 61]);
+  });
+});

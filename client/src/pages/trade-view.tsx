@@ -94,6 +94,7 @@ import { ResolveTradeDialog } from "@/components/resolve-trade";
 import { maskIfQuote } from "@shared/redact";
 import { PlanHitPrompt } from "@/components/plan-hit";
 import { ManagementCard } from "@/components/management-card";
+import { TradeGateCard } from "@/components/gate-card";
 
 /** A figure the page will let you correct without opening the editor. */
 export interface Editable {
@@ -1532,6 +1533,10 @@ export function TradeBody({
       {/* A trade sent from the terminal: the idea, every move on it, and
           whether leaving it alone would have paid more. */}
       <ManagementCard trade={trade} />
+
+      {/* The pre-trade gate: asked here too for a tracked position still
+          without one, and shown as answered once it has it. */}
+      <TradeGateCard trade={trade} />
 
       {/* ------------------------------ the plan ---------------------------- */}
       {/*

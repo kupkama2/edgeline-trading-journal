@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { gateLeft, type GateQuestion, type GateRecord } from "@shared/gate";
+import { gateLeft, gateUnanswered, type GateQuestion, type GateRecord } from "@shared/gate";
 
 /**
  * The pre-trade gate, as a card: the questions, Yes/No under each, the
@@ -18,6 +18,7 @@ export function GateQuestions({
   title = "Pre-trade gate",
   blurb = "Six questions before every entry. Any red answer, no trade.",
   testId = "gate",
+  afterTheFact = false,
 }: {
   questions: GateQuestion[];
   where: GateRecord["where"];
@@ -28,15 +29,25 @@ export function GateQuestions({
   title?: string;
   blurb?: string;
   testId?: string;
+  /**
+   * Asked after the fact: the trade is already on, so a red answer is an
+   * answer, not a wall. Every question answered shows a button that puts
+   * the answers on the record as they stand; only an all-green set goes
+   * through on its own.
+   */
+  afterTheFact?: boolean;
 }) {
   const [answers, setAnswers] = useState<Record<string, "yes" | "no">>({});
-  const left = gateLeft(questions, answers);
-  const anyRed = questions.some((q) => answers[q.id] != null && answers[q.id] !== q.good);
+  const left = afterTheFact ? gateUnanswered(questions, answers) : gateLeft(questions, answers);
+  const reds = questions.filter((q) => answers[q.id] != null && answers[q.id] !== q.good).length;
+  const anyRed = reds > 0;
+  const record = (a: Record<string, "yes" | "no">) => onDone({ at: new Date().toISOString(), answers: a, where });
   const answer = (q: GateQuestion, a: "yes" | "no") => {
     const next = { ...answers, [q.id]: a };
     setAnswers(next);
-    if (gateLeft(questions, next) === 0) onDone({ at: new Date().toISOString(), answers: next, where });
+    if (gateLeft(questions, next) === 0) record(next);
   };
+  const ready = afterTheFact && left === 0 && anyRed;
   return (
     <div data-testid={testId}>
       <h3 className="text-lg font-bold tracking-tight">{title}</h3>
@@ -67,14 +78,22 @@ export function GateQuestions({
           );
         })}
       </div>
-      <div className="mt-2 flex items-center gap-2 text-[11px]">
-        <span className={`rounded-md border px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider ${left === 0 ? "border-emerald-500/60 text-emerald-400" : "border-border text-muted-foreground"}`} data-testid={`${testId}-state`}>
-          {left === 0 ? "open" : "shut"}
+      <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px]">
+        <span
+          className={`rounded-md border px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider ${left === 0 && !anyRed ? "border-emerald-500/60 text-emerald-400" : ready ? "border-red-500/60 text-red-400" : "border-border text-muted-foreground"}`}
+          data-testid={`${testId}-state`}
+        >
+          {left === 0 && !anyRed ? "open" : ready ? `${reds} red` : "shut"}
         </span>
         <span className="text-muted-foreground" data-testid={`${testId}-left`}>
-          {left === 0 ? "Every answer green." : `${left} left.`}
+          {left === 0 && !anyRed ? "Every answer green." : ready ? "Every question answered." : afterTheFact ? `${left} to answer.` : `${left} left.`}
         </span>
         <span className="ml-auto flex items-center gap-1">
+          {ready && (
+            <Button size="sm" variant="destructive" className="h-7 px-2.5 text-[11px]" onClick={() => record(answers)} data-testid={`${testId}-record`}>
+              Put {reds} red on the record
+            </Button>
+          )}
           {onSkip && (
             <Button size="sm" variant="ghost" className="h-7 px-2 text-[11px] text-muted-foreground" onClick={() => onSkip({ at: new Date().toISOString(), answers, skipped: true, where })} data-testid={`${testId}-skip`}>
               Skip (counts as red)
