@@ -109,6 +109,11 @@ export function gatePassed(questions: GateQuestion[], g: GateRecord | null): boo
   return questions.every((q) => g.answers[q.id] === q.good);
 }
 
+/** How many have no answer yet — the count on a gate asked after the fact, where red is an answer too. */
+export function gateUnanswered(questions: GateQuestion[], answers: Record<string, "yes" | "no">): number {
+  return questions.filter((q) => answers[q.id] == null).length;
+}
+
 /** How many are still to answer, or answered red — the "6 left" of the card. */
 export function gateLeft(questions: GateQuestion[], answers: Record<string, "yes" | "no">): number {
   return questions.filter((q) => answers[q.id] !== q.good).length;

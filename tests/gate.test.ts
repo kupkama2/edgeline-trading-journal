@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createServer, type Server } from "node:http";
-import { DEFAULT_GATE_QUESTIONS, formatGate, gateLeft, gatePassed, gateReport, parseGate, readGate, redAnswers } from "../shared/gate";
+import { DEFAULT_GATE_QUESTIONS, formatGate, gateLeft, gatePassed, gateReport, gateUnanswered, parseGate, readGate, redAnswers } from "../shared/gate";
 
 /** The pre-trade gate: its rules, and the answers on the record. */
 const Q = DEFAULT_GATE_QUESTIONS;
@@ -13,6 +13,9 @@ describe("the gate's rules", () => {
     expect(redAnswers(Q, { at: "x", answers: { ...green, stop: "yes", calm: "no" }, where: "entry-card" })).toEqual(["calm", "stop"]);
     expect(gateLeft(Q, {})).toBe(6);
     expect(gateLeft(Q, { calm: "yes", planned: "no" })).toBe(5);
+    // Asked after the fact, a red answer is an answer: only the unanswered are left.
+    expect(gateUnanswered(Q, { calm: "yes", planned: "no" })).toBe(4);
+    expect(gateUnanswered(Q, { ...green, stop: "yes" })).toBe(0);
     // Skipped is red on all of them, and never a pass.
     const skipped = { at: "x", answers: {}, skipped: true, where: "tracked" as const };
     expect(gatePassed(Q, skipped)).toBe(false);

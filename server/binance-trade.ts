@@ -239,7 +239,43 @@ export async function openOrders(v: Venue, symbol?: string): Promise<VenueOrder[
     // A host without the algo endpoints answers 404; the plain list is still right.
     if (!(err instanceof BinanceError && err.status === 404)) throw err;
   }
-  return [...plain, ...algo];
+  return dedupeOrders(plain, algo);
+}
+
+/**
+ * The same conditional order can turn up in both lists — the plain one
+ * under its order id, the algo one under its algo id — and would read as
+ * two stops or two targets. One record per order, the algo's kept, since
+ * that is the id the venue cancels it by.
+ */
+export function dedupeOrders(plain: VenueOrder[], algo: VenueOrder[]): VenueOrder[] {
+  const print = (o: VenueOrder) => [o.symbol, o.side, o.positionSide, o.type, o.stopPrice ?? "", o.price ?? "", o.origQty, o.closePosition ? "cp" : ""].join("|");
+  const seen = new Set(algo.map(print));
+  const ids = new Set(algo.map((o) => o.orderId));
+  const kept = plain.filter((o) => !ids.has(o.orderId) && !(isAlgoType(o.type) && seen.has(print(o))));
+  return [...kept, ...algo];
+}
+
+/**
+ * Every order the venue still remembers on a symbol since a moment — filled,
+ * cancelled, resting — conditional ones included. The tracker reads the
+ * stop a position first had off this, when it meets the position after
+ * the stop was moved. Per the venue's SDK: GET /fapi/v1/allOrders and
+ * GET /fapi/v1/allAlgoOrders, both symbol, startTime, endTime, limit (≤1000).
+ */
+export async function orderHistory(v: Venue, symbol: string, since: number): Promise<VenueOrder[]> {
+  const params = { symbol, startTime: Math.max(0, Math.floor(since)), limit: 1000 };
+  const j = await call(v, "GET", "/fapi/v1/allOrders", params);
+  const plain = Array.isArray(j) ? (j.map(parseOrder).filter(Boolean) as VenueOrder[]) : [];
+  let algo: VenueOrder[] = [];
+  try {
+    const a = await call(v, "GET", "/fapi/v1/allAlgoOrders", params);
+    const list = Array.isArray(a) ? a : Array.isArray((a as any)?.orders) ? (a as any).orders : [];
+    algo = list.map(parseAlgoOrder).filter(Boolean) as VenueOrder[];
+  } catch (err) {
+    if (!(err instanceof BinanceError && err.status === 404)) throw err;
+  }
+  return dedupeOrders(plain, algo);
 }
 
 /** One conditional order by its algo id, or null once the venue has forgotten it. */

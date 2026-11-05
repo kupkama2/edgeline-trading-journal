@@ -307,6 +307,12 @@ export interface TerminalRef {
   moves?: TerminalMove[];
   /** The original stop and target, watched on the tape: which was touched first, and when. */
   planWatch?: PlanWatch;
+  /**
+   * The venue's order history has been read for the stop the position had
+   * first (server/tracker.ts); a tracked trade met after its stop was moved
+   * gets its idea from there, once.
+   */
+  historyChecked?: boolean;
   /** The read on the management, once the trade is over and the plan's answer is in. */
   review?: ManagementReview;
   /** When a review was last attempted and failed, so it is retried on a clock rather than every pass. */

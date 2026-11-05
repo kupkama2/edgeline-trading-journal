@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useLocation } from "wouter";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,6 +11,111 @@ import { computeMetrics } from "@shared/metrics";
 import { DEFAULT_GATE_QUESTIONS, gateReport, parseGate, redAnswers, type GateQuestion, type GateRecord, type GateSettings } from "@shared/gate";
 import { parseTerminalRef } from "@shared/terminal";
 import type { TradeWithTags } from "@shared/schema";
+import { num } from "@/components/trade-shared";
+import { agoLabel } from "@/lib/trade-draft";
+
+/** The trade the gate is about, in one line: side, size, entry, stop, account, when. */
+export function GateTradeLine({ trade, onOpen }: { trade: TradeWithTags; onOpen?: () => void }) {
+  const long = trade.direction === "long";
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1" data-testid={`gate-trade-${trade.id}`}>
+      <span className={`rounded px-1.5 py-0.5 font-mono text-[11px] font-bold uppercase ${long ? "bg-emerald-500/15 text-emerald-400" : "bg-red-500/15 text-red-400"}`}>{trade.direction}</span>
+      <span className="text-base font-bold tracking-tight">{trade.symbol}</span>
+      <span className="font-mono text-xs text-foreground/90">
+        {num(trade.size)} @ {num(trade.entryPrice)}
+      </span>
+      <span className="font-mono text-xs text-muted-foreground">
+        stop {trade.initialStop != null ? <span className="text-red-400">{num(trade.initialStop)}</span> : <span className="text-amber-500">none</span>}
+        {trade.initialTarget != null && (
+          <>
+            {" "}· target <span className="text-emerald-400">{num(trade.initialTarget)}</span>
+          </>
+        )}
+      </span>
+      <span className="text-[11px] text-muted-foreground">
+        {trade.account} · {agoLabel(trade.entryTime)}
+      </span>
+      {onOpen && (
+        <Button size="sm" variant="outline" className="ml-auto h-7 px-2.5 text-[11px]" onClick={onOpen} data-testid={`gate-open-${trade.id}`}>
+          Open trade
+        </Button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The gate as it was answered, on the trade: each question with its answer,
+ * green or red, and when and where it was asked.
+ */
+export function GateRecordCard({ trade }: { trade: TradeWithTags }) {
+  const prefs = usePrefs();
+  const g = parseGate(trade.gate);
+  if (!g) return null;
+  const reds = redAnswers(prefs.gate.questions, g);
+  const where = { "entry-card": "on the entry card", terminal: "in the terminal", tracked: "after the fact, on the journal" }[g.where];
+  return (
+    <Card className={`border-card-border bg-card p-4 ${reds.length ? "border-red-500/40" : "border-emerald-500/40"}`} data-testid="card-gate-record">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h2 className="text-sm font-semibold tracking-tight">The gate</h2>
+        <span className={`font-mono text-[10px] uppercase tracking-wider ${reds.length ? "text-red-400" : "text-emerald-400"}`} data-testid="text-gate-verdict">
+          {g.skipped ? "skipped · counts as red" : reds.length ? `${reds.length} red` : "green"}
+        </span>
+      </div>
+      <p className="mt-0.5 text-[11px] text-muted-foreground">
+        Asked {where}, {new Date(g.at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}.
+      </p>
+      {!g.skipped && (
+        <ul className="mt-2 divide-y divide-border/50 text-[12px]">
+          {prefs.gate.questions.map((q) => {
+            const a = g.answers[q.id];
+            const red = a != null && a !== q.good;
+            return (
+              <li key={q.id} className="flex items-baseline justify-between gap-3 py-1" data-testid={`gate-record-${q.id}`}>
+                <span className="text-foreground/90">{q.text}</span>
+                <span className={`font-mono text-[11px] font-semibold uppercase ${a == null ? "text-muted-foreground" : red ? "text-red-400" : "text-emerald-400"}`}>{a ?? "—"}</span>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </Card>
+  );
+}
+
+/**
+ * On the trade page: a tracked position still without its gate asks there
+ * too, where the trade is in full view; once answered, the record shows.
+ */
+export function TradeGateCard({ trade }: { trade: TradeWithTags }) {
+  const prefs = usePrefs();
+  const update = useSetTradeGate();
+  const { toast } = useToast();
+  if (trade.gate) return <GateRecordCard trade={trade} />;
+  const ref = parseTerminalRef(trade.terminal);
+  if (!prefs.gate.tracked || !ref?.tracked || (trade.status !== "open" && trade.status !== "pending")) return null;
+  const write = async (record: GateRecord) => {
+    try {
+      await update.mutateAsync({ id: trade.id, gate: record });
+    } catch (err: any) {
+      toast({ title: "Not saved", description: String(err?.message ?? err).slice(0, 200), variant: "destructive" });
+    }
+  };
+  return (
+    <Card className="border-amber-500/50 bg-card p-4" data-testid="card-trade-gate">
+      <GateQuestions
+        questions={prefs.gate.questions}
+        where="tracked"
+        afterTheFact
+        onDone={write}
+        onSkip={write}
+        title="Was this trade through the gate?"
+        blurb="The position is already on. Answer honestly; a red answer goes on the record, not on the trade's way."
+        testId="trade-gate-q"
+      />
+    </Card>
+  );
+}
 
 /* ------------------------------ a tracked position, asked after the fact ------------------------------ */
 
@@ -26,6 +132,7 @@ export function TrackedGateBanner({ trades }: { trades: TradeWithTags[] }) {
   const prefs = usePrefs();
   const update = useSetTradeGate();
   const { toast } = useToast();
+  const [, navigate] = useLocation();
   const open = useMemo(() => {
     if (!prefs.gate.tracked) return [];
     const since = Date.now() - RECENT_MS;
@@ -77,12 +184,17 @@ export function TrackedGateBanner({ trades }: { trades: TradeWithTags[] }) {
   };
   return (
     <Card className="border-amber-500/50 bg-card p-4" data-testid="tracked-gate">
-      <p className="mb-2 text-[11px] text-amber-500">
-        New {first.direction} in {first.symbol} on {first.account}, seen on the venue{open.length > 1 ? ` · ${open.length - 1} more waiting` : ""}.
+      <p className="mb-1.5 text-[11px] text-amber-500">
+        New position seen on the venue{open.length > 1 ? ` · ${open.length - 1} more waiting behind it` : ""}.
       </p>
+      <div className="mb-3 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2">
+        <GateTradeLine trade={first} onOpen={() => navigate(`/trade/${first.id}`)} />
+      </div>
       <GateQuestions
+        key={first.id}
         questions={prefs.gate.questions}
         where="tracked"
+        afterTheFact
         onDone={write}
         onSkip={write}
         title="Was this trade through the gate?"

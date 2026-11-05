@@ -138,6 +138,10 @@ function startVenue(): Promise<string> {
           return json(bnOrders.filter((o) => o.status === "NEW" && (!params.symbol || o.symbol === params.symbol)));
         case "GET /fapi/v1/openAlgoOrders":
           return json(bnAlgos.filter((a) => a.algoStatus === "NEW" && (!params.symbol || a.symbol === params.symbol)));
+        case "GET /fapi/v1/allOrders":
+          return json(bnOrders.filter((o) => o.symbol === params.symbol && o.time >= Number(params.startTime ?? 0)));
+        case "GET /fapi/v1/allAlgoOrders":
+          return json(bnAlgos.filter((a) => a.symbol === params.symbol && a.createTime >= Number(params.startTime ?? 0)));
         case "GET /fapi/v1/order": {
           const o = bnOrders.find((x) => x.orderId === Number(params.orderId));
           return o ? json(o) : json({ code: -2013, msg: "Order does not exist." }, 400);
@@ -352,6 +356,67 @@ describe.skipIf(!DB)("the journal following an account on its venue", () => {
     x = ref(xrp);
     expect(x.moves).toMatchObject([{ kind: "stop", from: 0.48, to: 0.49 }]);
     expect(xrp.initialStop).toBe(0.48);
+  });
+
+  it("reads the stop a position had first off the order history, when it meets the position after the stop was moved", async () => {
+    // LINK went long 30 minutes ago with a stop at 140 and a target at 170; the stop was pulled up to 150
+    // ten minutes later, and the target replaced at 175. Only then does the tracker meet it.
+    bnPositions.push({ symbol: "LINKUSDT", positionSide: "LONG", positionAmt: "10", entryPrice: "155", markPrice: "158", unRealizedProfit: "30", leverage: "5", liquidationPrice: "100" });
+    bnFills.push({ symbol: "LINKUSDT", id: 9301, orderId: 5300, side: "BUY", positionSide: "LONG", price: "155", qty: "10", realizedPnl: "0", commission: "0.8", commissionAsset: "USDT", time: now - 30 * MIN, buyer: true, maker: false });
+    bnOrders.push({ orderId: 5300, clientOrderId: "web_link", symbol: "LINKUSDT", side: "BUY", positionSide: "LONG", type: "MARKET", status: "FILLED", price: "0", stopPrice: "0", origQty: "10", executedQty: "10", avgPrice: "155", closePosition: false, reduceOnly: false, time: now - 30 * MIN, updateTime: now - 30 * MIN });
+    const sol = (algoId: number, orderType: string, triggerPrice: string, algoStatus: string, at: number) => ({ algoId, clientAlgoId: `web_${algoId}`, symbol: "LINKUSDT", side: "SELL", positionSide: "LONG", orderType, algoType: "CONDITIONAL", algoStatus, quantity: "0", triggerPrice, closePosition: true, createTime: at, updateTime: at, triggerTime: 0, actualOrderId: "" });
+    bnAlgos.push(
+      sol(6301, "STOP_MARKET", "140", "CANCELED", now - 30 * MIN + 5000),
+      sol(6302, "TAKE_PROFIT_MARKET", "170", "CANCELED", now - 30 * MIN + 5000),
+      sol(6303, "STOP_MARKET", "150", "NEW", now - 20 * MIN),
+      sol(6304, "TAKE_PROFIT_MARKET", "175", "NEW", now - 19 * MIN),
+    );
+    // The same resting stop listed by the plain endpoint too, under an order id: still one stop.
+    bnOrders.push({ orderId: 7303, clientOrderId: "web_6303", symbol: "LINKUSDT", side: "SELL", positionSide: "LONG", type: "STOP_MARKET", status: "NEW", price: "0", stopPrice: "150", origQty: "0", executedQty: "0", avgPrice: "0", closePosition: true, reduceOnly: false, time: now - 20 * MIN, updateTime: now - 20 * MIN });
+    await run();
+    const [t] = await tradesOf("LINK", BN);
+    expect(t).toMatchObject({ direction: "long", size: 10, entryPrice: 155, initialStop: 140, initialTarget: 170, status: "open" });
+    expect(t.riskAmount).toBeCloseTo(150);
+    const x = ref(t);
+    expect(x.idea).toMatchObject({ stop: 140, targets: [170] });
+    expect(x.seen).toMatchObject({ stop: 150, targets: [175] });
+    expect(x.stopOrderId).toBe(6303);
+    expect(x.targetOrderIds).toEqual([6304]);
+    expect(x.moves).toMatchObject([
+      { kind: "stop", from: 140, to: 150, at: new Date(now - 20 * MIN).toISOString() },
+      { kind: "target", from: 170, to: 175, at: new Date(now - 19 * MIN).toISOString() },
+    ]);
+    // The next pass sees nothing new.
+    await run();
+    expect(ref((await tradesOf("LINK", BN))[0]).moves).toHaveLength(2);
+    // XRP's record already says its stop moved 0.48 → 0.49: the history read leaves it alone.
+    const [xrp] = await tradesOf("XRP", BN);
+    expect(ref(xrp).historyChecked).toBe(true);
+    expect(ref(xrp).idea).toMatchObject({ stop: 0.48 });
+    expect(ref(xrp).moves).toHaveLength(1);
+  });
+
+  it("repairs, once, a trade tracked before the history was read", async () => {
+    // AVAX as a trade tracked by the earlier code: met after its stop was moved, idea = the stop seen, no moves.
+    bnPositions.push({ symbol: "AVAXUSDT", positionSide: "LONG", positionAmt: "20", entryPrice: "40", markPrice: "41", unRealizedProfit: "20", leverage: "5", liquidationPrice: "20" });
+    bnFills.push({ symbol: "AVAXUSDT", id: 9401, orderId: 5400, side: "BUY", positionSide: "LONG", price: "40", qty: "20", realizedPnl: "0", commission: "0.8", commissionAsset: "USDT", time: now - 40 * MIN, buyer: true, maker: false });
+    const avax = (algoId: number, orderType: string, triggerPrice: string, algoStatus: string, at: number) => ({ algoId, clientAlgoId: `web_${algoId}`, symbol: "AVAXUSDT", side: "SELL", positionSide: "LONG", orderType, algoType: "CONDITIONAL", algoStatus, quantity: "0", triggerPrice, closePosition: true, createTime: at, updateTime: at, triggerTime: 0, actualOrderId: "" });
+    bnAlgos.push(avax(6401, "STOP_MARKET", "36", "CANCELED", now - 40 * MIN + 3000), avax(6402, "STOP_MARKET", "39", "NEW", now - 25 * MIN));
+    const old = await store.createTrade({
+      symbol: "AVAX", direction: "long", size: 20, sizeUnit: "base", pointValue: 1, entryPrice: 40, initialStop: 39, initialTarget: null, riskAmount: 20,
+      entryTime: new Date(now - 40 * MIN).toISOString(), status: "open", account: BN, externalId: "binance:AVAXUSDT:9401",
+      terminal: JSON.stringify({ venue: "binance", env: "live", account: BN, symbol: "AVAXUSDT", positionSide: "LONG", tag: "trk-old", leverage: 5, qty: 20, entryOrderId: 5400, stopOrderId: 6402, targetOrderIds: [], closeOrderIds: [], addOrderIds: [], tracked: true, unprotected: false, idea: { entry: 40, stop: 39, targets: [], qty: 20, riskDollars: 20, at: new Date(now - 40 * MIN).toISOString() }, seen: { stop: 39, targets: [] } }),
+    } as any);
+    await run();
+    const t = (await tradesOf("AVAX", BN)).find((x: any) => x.id === old.id);
+    expect(t).toMatchObject({ initialStop: 36, riskAmount: 80 });
+    const x = ref(t);
+    expect(x.historyChecked).toBe(true);
+    expect(x.idea).toMatchObject({ stop: 36 });
+    expect(x.seen).toMatchObject({ stop: 39 });
+    expect(x.moves).toMatchObject([{ kind: "stop", from: 36, to: 39, at: new Date(now - 25 * MIN).toISOString() }]);
+    await run();
+    expect(ref((await tradesOf("AVAX", BN)).find((y: any) => y.id === old.id)).moves).toHaveLength(1);
   });
 
   it("sums a multi-leg entry under one order, and starts a new trade when a position reopens between passes", async () => {

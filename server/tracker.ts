@@ -22,7 +22,7 @@
  */
 import type { AccountSettings, TradeWithTags } from "@shared/schema";
 import { tradesFromFills, type HlFill, type HlOpenOrder, type HlTrade } from "@shared/hyperliquid";
-import { addNote, cutAtFlat, formatTerminalRef, parseTerminalRef, partialNote, type Brackets, type TerminalRef, type VenueSnapshot } from "@shared/terminal";
+import { addNote, cutAtFlat, formatTerminalRef, parseTerminalRef, partialNote, type Brackets, type TerminalMove, type TerminalRef, type VenueSnapshot } from "@shared/terminal";
 import { USD_COMMISSION, type BinanceUserTrade } from "@shared/binance-account";
 import { setTrackedThrough, storageFor, trackedAccountsEverywhere, type DatabaseStorage } from "./storage";
 import { open } from "./secrets";
@@ -128,12 +128,88 @@ interface Opening {
   leverage: number;
   externalId: string | null;
   brackets: Brackets;
+  /**
+   * The stop and target the position had first, read off the venue's order
+   * history when the tracker meets a position after they were moved: the
+   * idea is the first stop, and the change to the one resting now goes on
+   * the record as a move dated by the venue.
+   */
+  first?: FirstBrackets | null;
   paper: boolean;
+}
+
+export interface FirstBrackets {
+  stop: number | null;
+  stopAt: number | null;
+  targets: number[];
+  targetsAt: number | null;
+  /** When the stop resting now was placed — the date of the move, if it is a move. */
+  stopNowAt: number | null;
+  targetNowAt: number | null;
+}
+
+/**
+ * The first stop and target a position had, from every close-side
+ * conditional order on the symbol since just before the entry: the
+ * earliest stop placed, and the targets placed in the same breath as the
+ * earliest target. The order resting now carries the time it was placed,
+ * which dates the move. A history that has no earlier order than the
+ * resting ones says nothing new.
+ */
+export function firstBrackets(
+  history: { orderId: number; side: string; positionSide: string; type: string; stopPrice: number | null; price: number | null; time: number; status: string }[],
+  side: "LONG" | "SHORT",
+  entryTime: number,
+  now: Brackets,
+): FirstBrackets | null {
+  const closeSide = side === "LONG" ? "SELL" : "BUY";
+  const since = entryTime - 5 * 60_000;
+  const mine = history
+    .filter((o) => (o.positionSide === side || o.positionSide === "BOTH") && o.side === closeSide && o.time >= since && !/REJECTED|EXPIRED/.test(o.status))
+    .sort((a, b) => a.time - b.time);
+  const stops = mine.filter((o) => /STOP/.test(o.type) && !/TAKE_PROFIT/.test(o.type) && o.stopPrice != null);
+  const targets = mine.filter((o) => (/TAKE_PROFIT/.test(o.type) && o.stopPrice != null) || (o.type === "LIMIT" && o.price != null));
+  // The earliest order being the one resting now: nothing to learn — the idea is what rests.
+  const firstStop = stops[0] && stops[0].orderId !== now.stopId ? stops[0] : null;
+  const firstTarget = targets[0] && !now.targetIds.includes(targets[0].orderId) ? targets[0] : null;
+  const batch = firstTarget ? targets.filter((o) => Math.abs(o.time - firstTarget.time) <= 10_000) : [];
+  const prices = batch.map((o) => (o.stopPrice ?? o.price)!).sort((a, b) => (side === "LONG" ? a - b : b - a));
+  const stopNow = now.stopId != null ? stops.find((o) => o.orderId === now.stopId) ?? null : null;
+  const targetNow = now.targetIds.length ? targets.find((o) => o.orderId === now.targetIds[0]) ?? null : null;
+  if (!firstStop && !firstTarget) return null;
+  return {
+    stop: firstStop?.stopPrice ?? null,
+    stopAt: firstStop?.time ?? null,
+    targets: prices,
+    targetsAt: firstTarget?.time ?? null,
+    stopNowAt: stopNow?.time ?? null,
+    targetNowAt: targetNow?.time ?? null,
+  };
+}
+
+/**
+ * The idea as the first brackets say it, and the moves from there to what
+ * rests now — what a trade met after its stop was moved carries.
+ */
+function ideaFromFirst(o: Opening): { stop: number | null; targets: number[]; moves: TerminalMove[] } {
+  const f = o.first;
+  const near = (a: number | null, b: number | null) => (a == null && b == null) || (a != null && b != null && Math.abs(a - b) <= Math.abs(b) * 1e-9);
+  if (!f) return { stop: o.brackets.stopPrice, targets: o.brackets.targetPrices, moves: [] };
+  const stop = f.stop ?? o.brackets.stopPrice;
+  const targets = f.targets.length ? f.targets : o.brackets.targetPrices;
+  const moves: TerminalMove[] = [];
+  if (f.stop != null && !near(stop, o.brackets.stopPrice)) moves.push({ at: new Date(f.stopNowAt ?? Date.now()).toISOString(), kind: "stop", from: stop, to: o.brackets.stopPrice, mark: null, r: null });
+  const t0 = targets[0] ?? null;
+  const t1 = o.brackets.targetPrices[0] ?? null;
+  if (f.targets.length && !near(t0, t1)) moves.push({ at: new Date(f.targetNowAt ?? Date.now()).toISOString(), kind: "target", from: t0, to: t1, mark: null, r: null });
+  moves.sort((a, b) => a.at.localeCompare(b.at));
+  return { stop, targets, moves };
 }
 
 /** A trade written for a position the journal did not have, as the tracker first sees it. */
 async function openTracked(s: DatabaseStorage, o: Opening): Promise<TradeWithTags> {
   const at = new Date(o.entryTime).toISOString();
+  const first = ideaFromFirst(o);
   const ref: TerminalRef = {
     venue: o.venue,
     env: o.env,
@@ -152,13 +228,15 @@ async function openTracked(s: DatabaseStorage, o: Opening): Promise<TradeWithTag
     unprotected: o.brackets.stopId == null,
     idea: {
       entry: o.entryPrice,
-      stop: o.brackets.stopPrice,
-      targets: o.brackets.targetPrices,
+      stop: first.stop,
+      targets: first.targets,
       qty: o.size,
-      riskDollars: o.brackets.stopPrice != null ? Math.abs(o.entryPrice - o.brackets.stopPrice) * o.size : null,
+      riskDollars: first.stop != null ? Math.abs(o.entryPrice - first.stop) * o.size : null,
       at,
     },
     seen: { stop: o.brackets.stopPrice, targets: o.brackets.targetPrices },
+    ...(first.moves.length ? { moves: first.moves } : {}),
+    ...(o.first ? { historyChecked: true } : {}),
   };
   const trade = await s.createTrade({
     symbol: o.journalSymbol,
@@ -167,9 +245,9 @@ async function openTracked(s: DatabaseStorage, o: Opening): Promise<TradeWithTag
     sizeUnit: "base",
     pointValue: 1,
     entryPrice: o.entryPrice,
-    initialStop: o.brackets.stopPrice,
-    initialTarget: o.brackets.targetPrices[0] ?? null,
-    extraTargets: o.brackets.targetPrices.length > 1 ? JSON.stringify(o.brackets.targetPrices.slice(1)) : null,
+    initialStop: first.stop,
+    initialTarget: first.targets[0] ?? null,
+    extraTargets: first.targets.length > 1 ? JSON.stringify(first.targets.slice(1)) : null,
     entryTime: at,
     status: "open",
     account: o.account,
@@ -192,6 +270,7 @@ async function openTracked(s: DatabaseStorage, o: Opening): Promise<TradeWithTag
 
 /** A sync-written or hand-logged trade for the same position, taken under watch instead of written twice. */
 async function adoptExisting(s: DatabaseStorage, t: TradeWithTags, o: Opening): Promise<TradeWithTags> {
+  const first = ideaFromFirst(o);
   const ref: TerminalRef = {
     venue: o.venue,
     env: o.env,
@@ -208,22 +287,71 @@ async function adoptExisting(s: DatabaseStorage, t: TradeWithTags, o: Opening): 
     addOrderIds: o.addOrderIds,
     tracked: true,
     unprotected: o.brackets.stopId == null,
-    idea: { entry: t.entryPrice, stop: t.initialStop ?? o.brackets.stopPrice, targets: t.initialTarget != null ? [t.initialTarget] : o.brackets.targetPrices, qty: t.size, riskDollars: t.riskAmount ?? null, at: t.entryTime },
+    idea: { entry: t.entryPrice, stop: t.initialStop ?? first.stop, targets: t.initialTarget != null ? [t.initialTarget] : first.targets, qty: t.size, riskDollars: t.riskAmount ?? null, at: t.entryTime },
     seen: { stop: o.brackets.stopPrice, targets: o.brackets.targetPrices },
+    ...(t.initialStop == null && first.moves.length ? { moves: first.moves } : {}),
+    ...(o.first ? { historyChecked: true } : {}),
   };
-  // The brackets resting now stand in for a stop and a target the trade never had.
+  // The brackets the position first had stand in for a stop and a target the trade never had.
   const levels: Record<string, unknown> = {};
-  if (t.initialStop == null && o.brackets.stopPrice != null) {
-    levels.initialStop = o.brackets.stopPrice;
-    if (t.riskAmount == null) levels.riskAmount = Math.abs(t.entryPrice - o.brackets.stopPrice) * t.size;
+  if (t.initialStop == null && first.stop != null) {
+    levels.initialStop = first.stop;
+    if (t.riskAmount == null) levels.riskAmount = Math.abs(t.entryPrice - first.stop) * t.size;
   }
-  if (t.initialTarget == null && o.brackets.targetPrices.length) levels.initialTarget = o.brackets.targetPrices[0];
+  if (t.initialTarget == null && first.targets.length) levels.initialTarget = first.targets[0];
   const after = await s.updateTrade(t.id, { ...levels, terminal: formatTerminalRef(ref), status: "open", exitPrice: null, exitTime: null } as any);
   await s.logTerminal({ at: new Date().toISOString(), account: o.account, action: "track-adopt", tradeId: t.id, request: JSON.stringify({ venue: o.venue, symbol: o.symbol }), response: null, ok: true });
   return after ?? t;
 }
 
 /* -------------------------------- Binance -------------------------------- */
+
+/**
+ * A trade tracked before the order history was read: the stop it had
+ * first is looked up once. When the history names an earlier stop than the
+ * idea has and nothing on the record says the stop ever moved, the idea
+ * takes the first stop and the change to the one seen now goes on the
+ * record as a move. A trade whose moves already tell the story is left as
+ * it is. Either way the flag goes on, so this is one read per trade.
+ */
+async function repairFirst(s: DatabaseStorage, v: Venue, have: { t: TradeWithTags; ref: TerminalRef }, side: "LONG" | "SHORT"): Promise<void> {
+  const { orderHistory } = await import("./binance-trade");
+  const { t, ref } = have;
+  const entryTime = new Date(t.entryTime).getTime();
+  const seen: Brackets = { stopId: ref.stopOrderId, stopPrice: ref.seen?.stop ?? t.initialStop ?? null, targetIds: ref.targetOrderIds, targetPrices: ref.seen?.targets ?? [] };
+  let first: FirstBrackets | null;
+  try {
+    first = firstBrackets(await orderHistory(v, ref.symbol, entryTime - 5 * 60_000), side, entryTime, seen);
+  } catch {
+    return; // asked again next pass
+  }
+  const near = (a: number | null, b: number | null) => (a == null && b == null) || (a != null && b != null && Math.abs(a - b) <= Math.abs(b) * 1e-9);
+  const moves = ref.moves ?? [];
+  const next: TerminalRef = { ...ref, historyChecked: true };
+  const patch: Record<string, unknown> = {};
+  const idea = ref.idea ? { ...ref.idea } : null;
+  if (idea && first?.stop != null && !near(first.stop, idea.stop) && !moves.some((m) => m.kind === "stop")) {
+    const move: TerminalMove = { at: new Date(first.stopNowAt ?? Date.now()).toISOString(), kind: "stop", from: first.stop, to: seen.stopPrice, mark: null, r: null };
+    next.moves = [...moves, move].sort((a, b) => a.at.localeCompare(b.at));
+    idea.stop = first.stop;
+    idea.riskDollars = Math.abs(t.entryPrice - first.stop) * t.size;
+    patch.initialStop = first.stop;
+    patch.riskAmount = idea.riskDollars;
+  }
+  if (idea && first && first.targets.length && !near(first.targets[0], idea.targets[0] ?? null) && !(next.moves ?? moves).some((m) => m.kind === "target")) {
+    const move: TerminalMove = { at: new Date(first.targetNowAt ?? Date.now()).toISOString(), kind: "target", from: first.targets[0], to: seen.targetPrices[0] ?? null, mark: null, r: null };
+    next.moves = [...(next.moves ?? moves), move].sort((a, b) => a.at.localeCompare(b.at));
+    idea.targets = first.targets;
+    patch.initialTarget = first.targets[0];
+    patch.extraTargets = first.targets.length > 1 ? JSON.stringify(first.targets.slice(1)) : null;
+  }
+  if (idea) next.idea = idea;
+  const after = await s.updateTrade(t.id, { ...patch, terminal: formatTerminalRef(next) } as any);
+  if (after) {
+    have.t = after;
+    have.ref = next;
+  }
+}
 
 const readCreds = (a: AccountSettings): { creds: Creds; env: BinanceEnv } | null => {
   const creds = credsFor(a, open);
@@ -369,19 +497,31 @@ async function trackBinance(s: DatabaseStorage, acct: AccountSettings): Promise<
   const rc = readCreds(acct);
   if (!rc) return { ...out, error: "The stored key could not be opened — the server's SESSION_SECRET has changed since it was saved (a new server, say). Enter the key again in Settings." };
   const v: Venue = { creds: rc.creds, env: rc.env };
-  const { openOrders } = await import("./binance-trade");
+  const { openOrders, orderHistory } = await import("./binance-trade");
   const held = (await positions(v)).filter((p) => p.positionSide === "LONG" || p.positionSide === "SHORT" || p.positionSide === "BOTH");
   const tracked = await trackedOpen(s, acct.name);
   const now = Date.now();
 
   for (const p of held) {
     const side: "LONG" | "SHORT" = p.positionSide === "BOTH" ? (p.amt > 0 ? "LONG" : "SHORT") : p.positionSide;
-    if (tracked.some((x) => x.ref.symbol === p.symbol && x.ref.positionSide === side)) continue;
+    const have = tracked.find((x) => x.ref.symbol === p.symbol && x.ref.positionSide === side);
+    if (have) {
+      if (!have.ref.historyChecked && (have.ref.stopOrderId != null || have.ref.targetOrderIds.length)) await repairFirst(s, v, have, side);
+      continue;
+    }
     const rows = await fillsSince(v, p.symbol, now - WINDOW_MS);
     const fromFills = openFrom(sideFills(rows, p.symbol, side, Math.abs(p.amt)), "binance");
     const resting = await openOrders(v, p.symbol);
     const brackets = bracketsOnBinance(resting, side);
     const rules = await rulesFor(v.env, p.symbol).catch(() => null);
+    const entry = entryOf(fromFills, (tid) => rows.find((r) => r.id === tid)?.orderId ?? null, { size: Math.abs(p.amt), price: p.entryPrice, time: now });
+    // The stop it had first, if the one resting is not it: the venue's order history since the entry.
+    const first =
+      brackets.stopId != null || brackets.targetIds.length
+        ? await orderHistory(v, p.symbol, entry.entryTime - 5 * 60_000)
+            .then((h) => firstBrackets(h, side, entry.entryTime, brackets))
+            .catch(() => null)
+        : null;
     const opening: Opening = {
       venue: "binance",
       env: v.env,
@@ -389,10 +529,11 @@ async function trackBinance(s: DatabaseStorage, acct: AccountSettings): Promise<
       symbol: p.symbol,
       journalSymbol: rules?.baseAsset ?? p.symbol.replace(/USDT$|USDC$|BUSD$|FDUSD$/, ""),
       positionSide: side,
-      ...entryOf(fromFills, (tid) => rows.find((r) => r.id === tid)?.orderId ?? null, { size: Math.abs(p.amt), price: p.entryPrice, time: now }),
+      ...entry,
       leverage: p.leverage,
       externalId: fromFills ? fromFills.externalId : null,
       brackets,
+      first,
       paper: v.env === "testnet",
     };
     // The same position already written by the sync or by hand: taken under watch, not written twice.
