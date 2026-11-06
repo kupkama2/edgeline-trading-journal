@@ -15,6 +15,8 @@ export default defineConfig({
     // running files in parallel would let two of them interleave inside the
     // same database and blame each other for the result.
     fileParallelism: false,
+    // The fakes stand in for the venue: no need to pace requests to them like the real one.
+    env: { HL_WEIGHT_PER_MIN: "1000000", HL_RETRY_WAITS: "10,10", HL_BACKOFF_MS: "50" },
   },
   // server/ imports through the same aliases the app uses, so the isolation
   // tests can only load it if vitest resolves them too.

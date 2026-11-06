@@ -183,3 +183,15 @@ describe.skipIf(!DB)("the universe, cached and served", () => {
     expect(r.hyperliquid.listed).toBe(4);
   });
 });
+
+describe("the shared request budget", () => {
+  it("weighs each question the way the venue does", async () => {
+    const { weightOf } = await import("../server/hyperliquid");
+    expect(weightOf({ type: "clearinghouseState", user: "0x" })).toBe(2);
+    expect(weightOf({ type: "allMids" })).toBe(2);
+    expect(weightOf({ type: "userVaultEquities", user: "0x" })).toBe(20);
+    expect(weightOf({ type: "userRole", user: "0x" })).toBe(60);
+    // 30 days of hours: 720 bars, 20 + 12.
+    expect(weightOf({ type: "candleSnapshot", req: { coin: "BTC", interval: "1h", startTime: 0, endTime: 720 * 3600e3 } })).toBe(32);
+  });
+});

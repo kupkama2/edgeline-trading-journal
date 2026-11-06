@@ -86,9 +86,84 @@ const host = () => new URL(BASE).hostname;
  * POST to /info with a `type`, and this is the only place the request is
  * written.
  */
-export async function hlInfo(body: Record<string, unknown>, timeoutMs = 12_000): Promise<unknown> {
-  return info(body, timeoutMs);
+export async function hlInfo(body: Record<string, unknown>, timeoutMs = 12_000, opts: { lane?: Lane } = {}): Promise<unknown> {
+  return info(body, timeoutMs, opts.lane ?? "now");
 }
+
+/* ------------------------------- the budget ------------------------------- */
+
+/**
+ * One weight budget for every request this process sends the venue.
+ *
+ * Hyperliquid allows an aggregated weight of 1200 a minute per IP: 2 for a
+ * wallet's state, the mids or a book, 20 for most other reads, a candle
+ * read 20 plus one per 60 bars. The screener, the liquidation map, the
+ * tracker and the portfolio used to pace themselves each on its own, and
+ * together they went over — a screener run with the liquidation map behind
+ * it left the portfolio reading HTTP 429 for every wallet.
+ *
+ * Two lanes. "background" (the screener, the liquidation map, snapshots)
+ * may fill only part of the minute, so a page someone is looking at always
+ * finds room; "now" may use all of it. After a 429 the background lane
+ * stands back for a while, and a "now" request waits a beat and tries
+ * again twice before it gives up.
+ */
+export type Lane = "now" | "background";
+const LIMIT = Number(process.env.HL_WEIGHT_PER_MIN ?? "1100");
+const BACKGROUND_SHARE = 0.7;
+const BACKOFF_MS = Number(process.env.HL_BACKOFF_MS ?? "30000");
+const RETRY_WAITS = (process.env.HL_RETRY_WAITS ?? "2000,6000").split(",").map(Number);
+const LIGHT = new Set(["clearinghouseState", "spotClearinghouseState", "allMids", "l2Book", "orderStatus", "exchangeStatus"]);
+const INTERVAL_MS: Record<string, number> = { "1m": 60e3, "5m": 300e3, "15m": 900e3, "1h": 3600e3, "4h": 14400e3, "1d": 86400e3 };
+
+export function weightOf(body: Record<string, unknown>): number {
+  const type = String(body.type);
+  if (LIGHT.has(type)) return 2;
+  if (type === "userRole") return 60;
+  if (type === "candleSnapshot") {
+    const req = (body.req ?? {}) as { interval?: string; startTime?: number; endTime?: number };
+    const step = INTERVAL_MS[String(req.interval)] ?? 3600e3;
+    const bars = Math.min(5000, Math.max(1, ((req.endTime ?? Date.now()) - (req.startTime ?? 0)) / step));
+    return 20 + Math.ceil(bars / 60);
+  }
+  return 20;
+}
+
+const spent: { at: number; w: number }[] = [];
+let standBackUntil = 0;
+const nap = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+async function take(w: number, lane: Lane): Promise<void> {
+  const cap = lane === "background" ? Math.floor(LIMIT * BACKGROUND_SHARE) : LIMIT;
+  for (;;) {
+    const now = Date.now();
+    if (lane === "background" && now < standBackUntil) {
+      await nap(standBackUntil - now);
+      continue;
+    }
+    while (spent.length && now - spent[0].at >= 60_000) spent.shift();
+    const used = spent.reduce((sum, x) => sum + x.w, 0);
+    if (used + w <= cap || spent.length === 0) {
+      spent.push({ at: now, w });
+      return;
+    }
+    // Wait for enough of the minute to roll off to fit this one.
+    let freed = used + w - cap;
+    let until = spent[0].at;
+    for (const x of spent) {
+      until = x.at;
+      freed -= x.w;
+      if (freed <= 0) break;
+    }
+    await nap(Math.max(50, until + 60_000 - now + 10));
+  }
+}
+
+/** The minute so far, for a status line. */
+export const hlBudget = () => {
+  const now = Date.now();
+  return { used: spent.filter((x) => now - x.at < 60_000).reduce((s, x) => s + x.w, 0), limit: LIMIT, standingBack: now < standBackUntil };
+};
 
 /** A refusal with its status, so a caller can tell a rate limit (429) from the rest. */
 export class HlHttpError extends Error {
@@ -100,7 +175,23 @@ export class HlHttpError extends Error {
   }
 }
 
-async function info(body: Record<string, unknown>, timeoutMs = 12_000): Promise<unknown> {
+async function info(body: Record<string, unknown>, timeoutMs = 12_000, lane: Lane = "now"): Promise<unknown> {
+  const w = weightOf(body);
+  for (let attempt = 0; ; attempt++) {
+    await take(w, lane);
+    try {
+      return await infoOnce(body, timeoutMs);
+    } catch (err) {
+      if (!(err instanceof HlHttpError && err.status === 429)) throw err;
+      standBackUntil = Math.max(standBackUntil, Date.now() + BACKOFF_MS);
+      // The background callers have their own retry; someone waiting on a page gets two more tries.
+      if (lane === "background" || attempt >= RETRY_WAITS.length) throw err;
+      await nap(RETRY_WAITS[attempt]);
+    }
+  }
+}
+
+async function infoOnce(body: Record<string, unknown>, timeoutMs: number): Promise<unknown> {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), timeoutMs);
   try {

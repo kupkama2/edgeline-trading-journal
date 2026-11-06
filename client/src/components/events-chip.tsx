@@ -111,19 +111,24 @@ export function EventsChip() {
       <PopoverTrigger asChild>
         <button
           type="button"
-          className={`hidden items-center gap-1.5 whitespace-nowrap rounded-md border px-2 py-0.5 font-mono text-[10px] lg:flex ${soon ? "border-amber-500/60 bg-amber-500/10 text-amber-500" : today.length ? "border-sky-500/40 text-sky-400" : "border-border text-muted-foreground"}`}
-          title="Macro releases and large earnings this week"
+          className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border px-1.5 py-0.5 font-mono text-[10px] xl:px-2 ${soon ? "border-amber-500/60 bg-amber-500/10 text-amber-500" : today.length ? "border-sky-500/40 text-sky-400" : "border-border text-muted-foreground"}`}
+          title={next ? `Next: ${next.title} at ${hm(next.at)}, in ${left(new Date(next.at).getTime() - now)}` : today.length ? "Today's events are done" : "No events today. Click for the week."}
+          aria-label="Macro releases and large earnings this week"
           data-testid="events-chip"
         >
           <CalendarClock className="h-3 w-3" />
+          {/* Narrow screens: the icon alone, with the time left when an event is within the hour. */}
           {next ? (
-            <span>
+            <span className={soon ? "" : "hidden xl:inline"}>
+              <span className="xl:hidden">{left(new Date(next.at).getTime() - now)}</span>
+              <span className="hidden xl:inline">
               {next.tag === "USD" ? next.title.replace(/ (m\/m|y\/y|q\/q)$/, "") : next.tag} {hm(next.at)} · {left(new Date(next.at).getTime() - now)}
+              </span>
             </span>
           ) : today.length ? (
-            <span>today done</span>
+            <span className="hidden xl:inline">today done</span>
           ) : (
-            <span>no events today</span>
+            <span className="hidden xl:inline">no events today</span>
           )}
         </button>
       </PopoverTrigger>

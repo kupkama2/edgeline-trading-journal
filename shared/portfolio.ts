@@ -94,7 +94,8 @@ export interface PortfolioRead {
   accounts: { address: string; label: string | null; accountValue: number | null; withdrawable: number | null }[];
   totals: PortfolioTotals;
   /** What could not be read, per address or chain, in words. */
-  errors: { address: string; where: string; message: string }[];
+  /** A source that could not be read; `stale` when an earlier answer stands in for it. */
+  errors: { address: string; where: string; message: string; stale?: boolean }[];
 }
 
 export interface PortfolioTotals {

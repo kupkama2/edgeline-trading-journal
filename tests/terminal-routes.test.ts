@@ -476,6 +476,10 @@ describe.skipIf(!DB)("the terminal against a stub venue", () => {
     expect(ref.targetOrderIds).toHaveLength(1);
     const log = await get("/api/terminal/log");
     expect(log.some((l: any) => l.action === "arm-brackets" && l.ok)).toBe(true);
+    // Both brackets rest on the book: the next pass does not ask after either one by id.
+    calls.length = 0;
+    await send("POST", "/api/terminal/reconcile", {});
+    expect(calls.filter((c) => c.method === "GET" && c.path === "/fapi/v1/algoOrder")).toHaveLength(0);
   });
 
   it("moves the stop by replacing the resting order, and writes the move to the stop log", async () => {

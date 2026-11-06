@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Bell, BellOff } from "lucide-react";
+import { Bell, BellOff, Clock } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { nextNyOpen, nyParts, WARN_MS } from "@shared/ny-open";
 
@@ -106,15 +106,26 @@ export function NyOpenChip() {
   const soon = left > 0 && left <= WARN_MS;
   return (
     <div
-      className={`hidden items-center gap-1.5 whitespace-nowrap rounded-md border px-2 py-0.5 font-mono text-[10px] xl:flex ${soon ? "border-amber-500/60 bg-amber-500/10 text-amber-500" : inSession ? "border-emerald-500/40 text-emerald-400" : "border-border text-muted-foreground"}`}
-      title={inSession ? "New York session is on (09:30–16:00 New York)" : `Next New York open: ${new Date(openAt).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })} your time`}
+      className={`flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md border px-1.5 py-0.5 font-mono text-[10px] sm:gap-1.5 sm:px-2 ${soon ? "border-amber-500/60 bg-amber-500/10 text-amber-500" : inSession ? "border-emerald-500/40 text-emerald-400" : "border-border text-muted-foreground"}`}
+      title={inSession ? `New York session is on (09:30–16:00 New York) · ${p.hh}:${p.mm} there now` : `New York opens in ${fmtLeft(left)}: ${new Date(openAt).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })} your time · ${p.hh}:${p.mm} there now`}
       data-testid="ny-open"
     >
-      <span>
+      {/* Narrow screens keep only the countdown: the clock and the words come back as there is room. */}
+      <Clock className="h-3 w-3 xl:hidden" />
+      <span className="hidden xl:inline">
         NY {p.hh}:{p.mm}
       </span>
       <span className="text-foreground/80" data-testid="ny-open-left">
-        {inSession ? "open" : `opens in ${fmtLeft(left)}`}
+        {inSession ? (
+          <>
+            <span className="xl:hidden">NY </span>open
+          </>
+        ) : (
+          <>
+            <span className="hidden xl:inline">opens in </span>
+            {fmtLeft(left)}
+          </>
+        )}
       </span>
       <button type="button" onClick={toggle} className="ml-0.5 rounded p-0.5 hover:text-foreground" title={sound ? "Chime 5 minutes before the open: on. Click to turn off." : "Chime 5 minutes before the open: off. Click to turn on."} aria-pressed={sound} data-testid="ny-open-sound">
         {sound ? <Bell className="h-3 w-3" /> : <BellOff className="h-3 w-3" />}

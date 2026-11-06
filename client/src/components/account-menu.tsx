@@ -17,12 +17,14 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { LogOut, User as UserIcon } from "lucide-react";
+import { Check, LogOut, User as UserIcon } from "lucide-react";
+import { useLayout } from "@/lib/layout";
 import type { SessionResponse } from "@/components/login-gate";
 
 export function AccountMenu() {
   const session = useQuery<SessionResponse>({ queryKey: ["/api/session"] });
   const user = session.data?.user;
+  const { version, setVersion } = useLayout();
 
   const logout = useMutation({
     mutationFn: async () => (await apiRequest("POST", "/api/logout", {})).json(),
@@ -68,6 +70,14 @@ export function AccountMenu() {
           <p className="truncate text-[11px] text-muted-foreground">{user.email}</p>
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
+        {/* On a phone the header has no room for the layout switch; it lives here instead. */}
+        {(["v1", "v2"] as const).map((id) => (
+          <DropdownMenuItem key={id} className="sm:hidden" onClick={() => setVersion(id)} data-testid={`menu-layout-${id}`}>
+            <span className="text-xs">{id === "v1" ? "Layout V1: every figure" : "Layout V2: quiet"}</span>
+            {version === id && <Check className="ml-auto h-3 w-3" />}
+          </DropdownMenuItem>
+        ))}
+        <DropdownMenuSeparator className="sm:hidden" />
         <DropdownMenuItem
           onClick={() => logout.mutate()}
           disabled={logout.isPending || session.data?.provider === "local"}

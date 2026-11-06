@@ -164,7 +164,7 @@ export async function readLiqMap(
   for (const a of addresses) {
     await wait();
     try {
-      for (const p of parseClearinghouseState(await hlInfo({ type: "clearinghouseState", user: a }))) {
+      for (const p of parseClearinghouseState(await hlInfo({ type: "clearinghouseState", user: a }, 12_000, { lane: "background" }))) {
         if (!wanted.has(p.coin)) continue;
         if (!positions.has(p.coin)) positions.set(p.coin, []);
         positions.get(p.coin)!.push({ szi: p.szi, liquidationPx: p.liquidationPx });
