@@ -106,7 +106,7 @@ export function NyOpenChip() {
   const soon = left > 0 && left <= WARN_MS;
   return (
     <div
-      className={`hidden items-center gap-1.5 rounded-md border px-2 py-0.5 font-mono text-[10px] md:flex ${soon ? "border-amber-500/60 bg-amber-500/10 text-amber-500" : inSession ? "border-emerald-500/40 text-emerald-400" : "border-border text-muted-foreground"}`}
+      className={`hidden items-center gap-1.5 whitespace-nowrap rounded-md border px-2 py-0.5 font-mono text-[10px] xl:flex ${soon ? "border-amber-500/60 bg-amber-500/10 text-amber-500" : inSession ? "border-emerald-500/40 text-emerald-400" : "border-border text-muted-foreground"}`}
       title={inSession ? "New York session is on (09:30–16:00 New York)" : `Next New York open: ${new Date(openAt).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })} your time`}
       data-testid="ny-open"
     >

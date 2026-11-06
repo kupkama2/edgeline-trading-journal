@@ -555,12 +555,24 @@ export function runDue(now: number, lastRunIso: string | null): boolean {
   return false;
 }
 
+async function ownerPortfolioTick(): Promise<void> {
+  const { accounts, portfolioStore } = await import("./storage");
+  const owner = await accounts.owner();
+  if (!owner) return;
+  const last = await portfolioStore.lastSnapshotAt(owner.id);
+  if (last && Date.now() - new Date(last).getTime() < 60 * 60_000) return;
+  const { readPortfolio } = await import("./portfolio");
+  await readPortfolio(owner.id, { fresh: true });
+}
+
 /** The clock: a minute's tick, a run when one is due. `SCREENER_CLOCK_MS=0` is off (tests). */
 export function startScreenerClock(everyMs = Number(process.env.SCREENER_CLOCK_MS ?? "60000")): void {
   if (!(everyMs > 0)) return;
   const tick = async () => {
     // The hourly snapshot, whatever the run schedule says; its own failure is its own.
     if (!status.running) await takeSnapshot().catch((err) => console.error(`[screener] snapshot: ${String(err?.message ?? err)}`));
+    // The owner's portfolio value, an hour at most apart, so its chart fills in with the page closed.
+    await ownerPortfolioTick().catch((err) => console.error(`[portfolio] ${String(err?.message ?? err)}`));
     try {
       if (status.running) return;
       // A run that failed is not tried again every minute: the cooldown is the back-off.

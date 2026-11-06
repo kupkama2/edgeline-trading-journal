@@ -53,6 +53,7 @@ import { registerTerminalRoutes } from "./terminal";
 import { trackUser } from "./tracker";
 import { subscribe } from "./events";
 import { registerScreenerRoutes } from "./screener-routes";
+import { registerPortfolioRoutes } from "./portfolio";
 import { formatGate, gateRecordSchema, redAnswers } from "@shared/gate";
 import { attachRelay, relayStatus } from "./relay";
 import { managementBrief, parseTerminalRef } from "@shared/terminal";
@@ -596,6 +597,8 @@ export async function registerRoutes(
 
   // The relative-strength screener (server/screener-routes.ts).
   registerScreenerRoutes(app);
+  // The owner's portfolio: vaults, Hyperliquid accounts, wallets (server/portfolio.ts).
+  registerPortfolioRoutes(app);
 
   /** The page told when the record changes (server/events.ts). */
   app.get("/api/events", (req, res) => {

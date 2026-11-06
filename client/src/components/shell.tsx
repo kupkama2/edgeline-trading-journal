@@ -10,7 +10,7 @@ import {
   LineChart,
   NotebookPen,
   Palette,
-  Settings2, BookOpen, Radar } from "lucide-react";
+  Settings2, BookOpen, Radar, Wallet } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import type { SessionResponse } from "@/components/login-gate";
 import { XpChip, XpToaster } from "@/components/xp";
@@ -137,6 +137,7 @@ const NAV = [
 /** The owner's own tabs, before Settings. The terminal is reached by its address for now, not from the menu. */
 const ADMIN_NAV = [
   { href: "/screener", label: "Screener", icon: Radar },
+  { href: "/portfolio", label: "Portfolio", icon: Wallet },
 ];
 
 function ThemePicker() {

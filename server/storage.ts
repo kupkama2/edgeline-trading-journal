@@ -320,6 +320,31 @@ CREATE TABLE IF NOT EXISTS screener_series (
   written_at TEXT NOT NULL,
   PRIMARY KEY (coin, interval)
 );
+-- The owner's portfolio (server/portfolio.ts): the addresses followed, the
+-- costs entered for wallet tokens, and the value over time.
+CREATE TABLE IF NOT EXISTS portfolio_addresses (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  address TEXT NOT NULL,
+  label TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS portfolio_addresses_one ON portfolio_addresses (user_id, kind, lower(address));
+CREATE TABLE IF NOT EXISTS portfolio_costs (
+  user_id INTEGER NOT NULL,
+  key TEXT NOT NULL,
+  cost DOUBLE PRECISION NOT NULL,
+  PRIMARY KEY (user_id, key)
+);
+CREATE TABLE IF NOT EXISTS portfolio_snapshots (
+  user_id INTEGER NOT NULL,
+  at TEXT NOT NULL,
+  value DOUBLE PRECISION NOT NULL,
+  pnl DOUBLE PRECISION NOT NULL,
+  body TEXT,
+  PRIMARY KEY (user_id, at)
+);
 CREATE TABLE IF NOT EXISTS screener_settings (
   id INTEGER PRIMARY KEY,
   body TEXT NOT NULL
@@ -1053,6 +1078,44 @@ export const screenerStore = {
   async prune(before: string): Promise<void> {
     await sql`DELETE FROM screener_snapshots WHERE at < ${before}`;
     await sql`DELETE FROM screener_runs WHERE at < ${before}`;
+  },
+};
+
+/** The owner's portfolio rows (server/portfolio.ts), per account. */
+export const portfolioStore = {
+  async addresses(userId: number): Promise<{ id: number; kind: string; address: string; label: string | null }[]> {
+    return sql<{ id: number; kind: string; address: string; label: string | null }[]>`
+      SELECT id, kind, address, label FROM portfolio_addresses WHERE user_id = ${userId} ORDER BY id`;
+  },
+  async addAddress(userId: number, kind: string, address: string, label: string | null): Promise<{ id: number } | null> {
+    const at = new Date().toISOString();
+    const rows = await sql<{ id: number }[]>`INSERT INTO portfolio_addresses (user_id, kind, address, label, created_at)
+      VALUES (${userId}, ${kind}, ${address}, ${label}, ${at}) ON CONFLICT DO NOTHING RETURNING id`;
+    return rows[0] ?? null;
+  },
+  async updateLabel(userId: number, id: number, label: string | null): Promise<void> {
+    await sql`UPDATE portfolio_addresses SET label = ${label} WHERE user_id = ${userId} AND id = ${id}`;
+  },
+  async removeAddress(userId: number, id: number): Promise<void> {
+    await sql`DELETE FROM portfolio_addresses WHERE user_id = ${userId} AND id = ${id}`;
+  },
+  async costs(userId: number): Promise<Map<string, number>> {
+    const rows = await sql<{ key: string; cost: number }[]>`SELECT key, cost FROM portfolio_costs WHERE user_id = ${userId}`;
+    return new Map(rows.map((r) => [r.key, r.cost]));
+  },
+  async setCost(userId: number, key: string, cost: number | null): Promise<void> {
+    if (cost == null) await sql`DELETE FROM portfolio_costs WHERE user_id = ${userId} AND key = ${key}`;
+    else await sql`INSERT INTO portfolio_costs (user_id, key, cost) VALUES (${userId}, ${key}, ${cost}) ON CONFLICT (user_id, key) DO UPDATE SET cost = EXCLUDED.cost`;
+  },
+  async snapshot(userId: number, at: string, value: number, pnl: number, body: string | null): Promise<void> {
+    await sql`INSERT INTO portfolio_snapshots (user_id, at, value, pnl, body) VALUES (${userId}, ${at}, ${value}, ${pnl}, ${body}) ON CONFLICT DO NOTHING`;
+  },
+  async lastSnapshotAt(userId: number): Promise<string | null> {
+    const rows = await sql<{ at: string }[]>`SELECT at FROM portfolio_snapshots WHERE user_id = ${userId} ORDER BY at DESC LIMIT 1`;
+    return rows[0]?.at ?? null;
+  },
+  async history(userId: number, since: string): Promise<{ at: string; value: number; pnl: number }[]> {
+    return sql<{ at: string; value: number; pnl: number }[]>`SELECT at, value, pnl FROM portfolio_snapshots WHERE user_id = ${userId} AND at >= ${since} ORDER BY at`;
   },
 };
 
