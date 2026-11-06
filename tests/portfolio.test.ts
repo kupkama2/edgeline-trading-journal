@@ -103,6 +103,9 @@ let fake: Server;
 let app: Server;
 let base = "";
 let failBase = false;
+/** Hyperliquid refusing every wallet read with a rate limit, and how often it was asked. */
+let limitHl = false;
+let limitedAsks = 0;
 
 function startFake(): Promise<string> {
   return new Promise((resolve) => {
@@ -117,6 +120,10 @@ function startFake(): Promise<string> {
         const u = new URL(req.url ?? "/", "http://x");
         if (u.pathname === "/info") {
           const q = JSON.parse(body || "{}");
+          if (limitHl && q.type !== "allMids" && q.type !== "spotMetaAndAssetCtxs") {
+            limitedAsks++;
+            return json({ error: "rate limited" }, 429);
+          }
           switch (q.type) {
             case "clearinghouseState":
               return json({ marginSummary: { accountValue: "5000" }, withdrawable: "2000", assetPositions: [{ position: { coin: "BTC", szi: "0.1", entryPx: "97000", liquidationPx: "80000", unrealizedPnl: "300", leverage: { type: "cross", value: 5 } } }] });
@@ -219,6 +226,19 @@ describe.skipIf(!DB)("the portfolio", () => {
     expect(p.totals.value).toBeCloseTo(12500.5 + 5000 + 3200 + 7000 + 700, 6);
     expect(p.totals.pnl).toBeCloseTo(2500.5 + 300 + 650, 6);
     expect(p.history.length).toBe(1);
+  });
+
+  it("a rate limit is asked again, then answered with the earlier read and a note, and charts nothing", async () => {
+    limitHl = true;
+    limitedAsks = 0;
+    const p = await (await send("GET", "/api/portfolio?fresh=1")).json();
+    limitHl = false;
+    // Each of the four wallet questions was tried three times: once, then twice more after a wait.
+    expect(limitedAsks).toBe(12);
+    expect(p.errors.length).toBe(4);
+    for (const e of p.errors) expect(e).toMatchObject({ address: HL, stale: true, message: expect.stringMatching(/limiting requests.*showing the read from \d+ min ago/) });
+    expect(p.vaults).toMatchObject([{ name: "Growi HF", equity: 12500.5 }]);
+    expect(p.totals.value).toBeCloseTo(12500.5 + 5000 + 3200 + 7000 + 700, 6);
   });
 
   it("takes a cost for a wallet token and shows its P&L; one chain failing is a line, not the page", async () => {

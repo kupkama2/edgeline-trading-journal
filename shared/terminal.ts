@@ -324,6 +324,13 @@ export interface TerminalRef {
    * the moment the fill is seen.
    */
   armOnFill?: { stop: OrderParams; targets: OrderParams[] };
+  /**
+   * What each bracket that left the book turned out to be, asked of the
+   * venue once: the plain order it fired into, when it fired without naming
+   * one, or gone (cancelled, or a plain order the conditional-order lookup
+   * does not know). Keyed by the bracket's id.
+   */
+  bracketFate?: Record<string, { to?: number; firedAt?: number; side?: "BUY" | "SELL"; gone?: boolean }>;
   /** Brackets that were asked for and refused — the trade is on the book without them. */
   unprotected?: boolean;
   /** When the terminal last read this trade back from the venue. */

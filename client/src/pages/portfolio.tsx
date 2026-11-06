@@ -176,9 +176,9 @@ export default function PortfolioPage() {
             </div>
           </div>
           {d.errors.length > 0 && (
-            <ul className="mt-3 space-y-0.5 text-[11px] text-amber-500" data-testid="portfolio-errors">
+            <ul className="mt-3 space-y-0.5 text-[11px]" data-testid="portfolio-errors">
               {d.errors.map((e, i) => (
-                <li key={i} className="flex items-center gap-1">
+                <li key={i} className={`flex items-center gap-1 ${e.stale ? "text-muted-foreground" : "text-amber-500"}`}>
                   <AlertTriangle className="h-3 w-3" /> {short(e.address)} · {e.where}: {e.message}
                 </li>
               ))}

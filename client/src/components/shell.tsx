@@ -192,7 +192,7 @@ function LayoutSwitch() {
   ];
   return (
     <div
-      className="flex items-center rounded-md border border-border/70 p-0.5"
+      className="hidden items-center rounded-md border border-border/70 p-0.5 sm:flex"
       role="group"
       aria-label="Layout"
       data-testid="layout-switch"
@@ -276,20 +276,23 @@ export function Shell({ children }: { children: React.ReactNode }) {
   // The owner's tabs are drawn only for the owner; the server refuses everyone else regardless.
   const session = useQuery<SessionResponse>({ queryKey: ["/api/session"] });
   const nav = session.data?.admin ? [...NAV.slice(0, 4), ...ADMIN_NAV, ...NAV.slice(4)] : NAV;
+  // Seven names and the clocks do not fit in the header's width; five do on a wide screen.
+  const roomy = nav.length <= NAV.length;
 
   return (
     <div className="min-h-screen bg-background text-foreground">
       <header className="sticky top-0 z-40 border-b border-border/70 bg-background/85 backdrop-blur supports-[backdrop-filter]:bg-background/70">
-        <div className="mx-auto flex h-14 max-w-6xl items-center gap-3 px-4 sm:px-6">
+        {/* On a phone the tabs take a row of their own under the logo and the clocks. */}
+        <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-2 gap-y-1 px-3 py-2 sm:h-14 sm:flex-nowrap sm:gap-3 sm:px-6 sm:py-0">
           {/* wouter 3 renders its own <a>; wrapping another one nested two
               anchors and React warned on every page. Attributes go on the
               Link and it passes them through. */}
           <Link href="/" className="flex items-center gap-2 shrink-0" data-testid="link-home">
             <Logo className="h-6 w-6 text-primary" />
-            <span className="text-sm font-bold tracking-tight">Edgeline</span>
+            <span className="hidden text-sm font-bold tracking-tight lg:inline">Edgeline</span>
           </Link>
 
-          <nav className="ml-2 flex items-center gap-1 overflow-x-auto">
+          <nav className="order-last flex w-full min-w-0 items-center justify-between gap-0.5 overflow-x-auto sm:order-none sm:ml-1 sm:w-auto sm:justify-start sm:gap-1">
             {nav.map(({ href, label, icon: Icon }) => {
               // /daily still resolves to the same page, so it must still
               // light the tab that replaced it.
@@ -303,21 +306,24 @@ export function Shell({ children }: { children: React.ReactNode }) {
                   key={href}
                   href={href}
                   data-testid={`link-${label.toLowerCase()}`}
-                  className={`flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors whitespace-nowrap ${
+                  title={label}
+                  aria-label={label}
+                  className={`flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs xl:px-2.5 font-medium transition-colors whitespace-nowrap ${
                     active
                       ? "bg-secondary text-foreground"
                       : "text-muted-foreground hover:text-foreground"
                   }`}
                 >
                   <Icon className="h-3.5 w-3.5" />
-                  <span className="hidden sm:inline">{label}</span>
+                  {/* The open tab keeps its name from md; the others are icons with a tooltip, named only when few enough to fit. */}
+                  <span className={active ? "hidden md:inline" : roomy ? "hidden xl:inline" : "hidden"}>{label}</span>
                   {href === "/review" && <ReviewTabBadge />}
                 </Link>
               );
             })}
           </nav>
 
-          <div className="ml-auto flex items-center gap-2">
+          <div className="ml-auto flex shrink-0 items-center gap-1.5 sm:gap-2">
             <EventsChip />
             <NyOpenChip />
             <ChapterChip />

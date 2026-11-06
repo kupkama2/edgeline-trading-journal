@@ -11,7 +11,7 @@ import { fetch as undiciFetch } from "undici";
 import type { Express, Request, Response } from "express";
 import { z } from "zod";
 import { egressFor } from "./egress";
-import { hlInfo } from "./hyperliquid";
+import { hlInfo, HlHttpError } from "./hyperliquid";
 import { portfolioStore } from "./storage";
 import { adminOnly } from "./admin";
 import {
@@ -70,13 +70,39 @@ const evmUrl = (chain: (typeof EVM_CHAINS)[number], path: string) => (EVM_BASE ?
 
 type Part = { positions: Position[]; vaults: VaultHolding[]; accounts: PortfolioRead["accounts"]; errors: PortfolioRead["errors"] };
 
+/**
+ * The last answer the venue gave to each question, kept for a day. When a
+ * read is refused — a rate limit, a timeout — the page shows the earlier
+ * answer with a note saying how old it is, instead of a wallet at $0.
+ */
+const lastGood = new Map<string, { at: number; value: unknown }>();
+const KEEP_MS = 24 * 60 * 60_000;
+
+async function hlKept(body: Record<string, unknown>, where: string, a: PortfolioAddress, out: Part): Promise<unknown> {
+  const key = JSON.stringify(body);
+  try {
+    const value = await hlInfo(body);
+    lastGood.set(key, { at: Date.now(), value });
+    return value;
+  } catch (err: any) {
+    const kept = lastGood.get(key);
+    const why = err instanceof HlHttpError && err.status === 429 ? "Hyperliquid is limiting requests from the server" : String(err?.message ?? err);
+    if (kept && Date.now() - kept.at < KEEP_MS) {
+      const mins = Math.max(1, Math.round((Date.now() - kept.at) / 60_000));
+      out.errors.push({ address: a.address, where, message: `${why}; showing the read from ${mins} min ago`, stale: true });
+      return kept.value;
+    }
+    throw new Error(err instanceof HlHttpError && err.status === 429 ? `${why}. Try Refresh in a minute.` : why);
+  }
+}
+
 async function readHyperliquid(a: PortfolioAddress, costs: Map<string, number>, prices: () => Promise<Map<string, number>>): Promise<Part> {
   const out: Part = { positions: [], vaults: [], accounts: [], errors: [] };
   const user = a.address.toLowerCase();
   const [state, spot, equities] = await Promise.allSettled([
-    hlInfo({ type: "clearinghouseState", user }),
-    hlInfo({ type: "spotClearinghouseState", user }),
-    hlInfo({ type: "userVaultEquities", user }),
+    hlKept({ type: "clearinghouseState", user }, "Hyperliquid perps", a, out),
+    hlKept({ type: "spotClearinghouseState", user }, "Hyperliquid spot", a, out),
+    hlKept({ type: "userVaultEquities", user }, "Hyperliquid vaults", a, out),
   ]);
   if (state.status === "fulfilled") {
     const acct = parseAccountValue(state.value);
@@ -138,7 +164,7 @@ async function readHyperliquid(a: PortfolioAddress, costs: Map<string, number>, 
   if (equities.status === "fulfilled") {
     for (const v of parseVaultEquities(equities.value)) {
       try {
-        const d = parseVaultDetails(await hlInfo({ type: "vaultDetails", vaultAddress: v.vaultAddress, user }));
+        const d = parseVaultDetails(await hlKept({ type: "vaultDetails", vaultAddress: v.vaultAddress, user }, `vault ${v.vaultAddress.slice(0, 8)}…`, a, out));
         out.vaults.push({
           key: positionKey("hyperliquid", a.address, "vault", v.vaultAddress),
           vaultAddress: v.vaultAddress,
@@ -254,8 +280,9 @@ export async function readPortfolio(userId: number, opts: { fresh?: boolean } = 
     errors: parts.flatMap((p) => p.errors),
   };
   cache.set(userId, { at: Date.now(), read });
-  // The value over time: a row an hour at most, from whichever read comes first.
-  if (addresses.length) {
+  // The value over time: a row an hour at most, from whichever read comes first —
+  // and only from a whole read: a wallet that could not be read would chart as a drop to zero.
+  if (addresses.length && read.errors.every((e) => e.stale)) {
     const last = await portfolioStore.lastSnapshotAt(userId);
     if (!last || Date.now() - new Date(last).getTime() >= SNAPSHOT_EVERY_MS) {
       await portfolioStore.snapshot(userId, read.at, read.totals.value, read.totals.pnl, JSON.stringify(read.totals.byKind)).catch(() => {});

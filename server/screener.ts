@@ -166,12 +166,12 @@ const candleWeight = (bars: number) => 20 + Math.ceil(Math.max(1, bars) / 60);
 async function ask(budget: Budget, weight: number, body: Record<string, unknown>): Promise<unknown> {
   await budget.take(weight);
   try {
-    return await hlInfo(body, 20_000);
+    return await hlInfo(body, 20_000, { lane: "background" });
   } catch (err) {
     if (err instanceof HlHttpError && err.status === 429) {
       await sleep(RETRY_AFTER_429_MS);
       await budget.take(weight);
-      return await hlInfo(body, 20_000);
+      return await hlInfo(body, 20_000, { lane: "background" });
     }
     throw err;
   }
@@ -538,7 +538,7 @@ export async function takeSnapshot(nowFn: () => number = Date.now): Promise<{ at
   const last = await screenerStore.latestSnapshotAt();
   const now = nowFn();
   if (last && now - new Date(last).getTime() < 50 * 60_000) return null;
-  const ctxs = parseMetaAndAssetCtxs(await hlInfo({ type: "metaAndAssetCtxs" }, 20_000));
+  const ctxs = parseMetaAndAssetCtxs(await hlInfo({ type: "metaAndAssetCtxs" }, 20_000, { lane: "background" }));
   if (ctxs.length === 0) return null;
   const at = new Date(now).toISOString();
   await screenerStore.saveSnapshot(

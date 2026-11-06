@@ -396,16 +396,37 @@ export async function reconcileOne(s: DatabaseStorage, t: TradeWithTags, armed: 
   const alias = new Map<number, number>();
   const bracketIds = [ref.stopOrderId, ...ref.targetOrderIds].filter((x): x is number => x != null);
   const fired: { algoId: number; side: "BUY" | "SELL"; at: number }[] = [];
+  /*
+   * Only a bracket that has left the book is asked about: one still resting
+   * has not fired, and a plain order (a limit target) is not a conditional
+   * one at all, so the venue answers "Order does not exist" for it. A final
+   * answer is kept on the record and not asked for again; every pass used
+   * to ask for every bracket and the relay printed the refusals.
+   */
+  const onBook = new Set(resting.filter((o) => o.triggeredOrderId == null).map((o) => o.orderId));
+  const fate: NonNullable<TerminalRef["bracketFate"]> = { ...(ref.bracketFate ?? {}) };
   for (const id of bracketIds) {
-    const a = await algoOrderById(v, id).catch(() => null);
-    if (!a) continue;
-    if (a.triggeredOrderId != null) {
-      alias.set(a.triggeredOrderId, id);
-      mine.add(a.triggeredOrderId);
-    } else if (/TRIGGER|FINISHED|FILLED/.test(a.status)) {
-      fired.push({ algoId: id, side: a.side, at: a.updateTime });
+    if (onBook.has(id)) continue;
+    let known = fate[String(id)];
+    if (!known) {
+      const a = await algoOrderById(v, id).catch(() => undefined);
+      if (a === undefined) continue; // the venue did not answer: ask next pass
+      if (a === null) known = { gone: true };
+      else if (a.triggeredOrderId != null) known = { to: a.triggeredOrderId };
+      else if (/TRIGGER|FINISHED|FILLED/.test(a.status)) {
+        // Fired without naming its order yet; final only once it is finished.
+        if (/FINISHED|FILLED/.test(a.status)) known = { firedAt: a.updateTime, side: a.side };
+        else fired.push({ algoId: id, side: a.side, at: a.updateTime });
+      } else if (/CANCEL|EXPIRE|REJECT/.test(a.status)) known = { gone: true };
+      if (known) fate[String(id)] = known;
     }
+    if (!known) continue;
+    if (known.to != null) {
+      alias.set(known.to, id);
+      mine.add(known.to);
+    } else if (known.firedAt != null && known.side) fired.push({ algoId: id, side: known.side, at: known.firedAt });
   }
+  if (Object.keys(fate).length !== Object.keys(ref.bracketFate ?? {}).length) ref = { ...ref, bracketFate: fate };
   let rows = await fillsSince(v, ref.symbol, since);
   const closeSide = ref.positionSide === "LONG" ? "SELL" : "BUY";
   const openSide = closeSide === "SELL" ? "BUY" : "SELL";
