@@ -4,10 +4,10 @@ import { TIMEFRAMES, type ScreenerRow, type Timeframe } from "@shared/screener";
 import { ACCEL_ARROW, fmtPct, fmtUsd, fmtX, heat } from "@/lib/screener";
 import { useClickOrDouble } from "@/components/screener/chart";
 
-export type Filter = "all" | "candidates" | "fast" | "weakest";
+export type Filter = "all" | "candidates" | "fast" | "weakest" | "diverging";
 
 /** What a column header sorts by. */
-type SortKey = `rs:${Timeframe}` | "coin" | "rvol" | "funding" | "oi" | "volume";
+type SortKey = `rs:${Timeframe}` | "coin" | "rvol" | "funding" | "oi" | "volume" | "score" | "rsi";
 
 /**
  * The ranked table: one row per coin, RS change per timeframe as heat
@@ -56,13 +56,16 @@ export function ScreenerTable({
       if (filter === "candidates") return f.candidate;
       if (filter === "fast") return f.movingFast;
       if (filter === "weakest") return f.weakest;
+      if (filter === "diverging") return r.signals?.[tf]?.divergence != null;
       return true;
     });
     const value = (r: ScreenerRow): number | string | null => {
       if (sort.key === "coin") return r.coin;
       if (sort.key === "rvol") return r.tf[tf].rvol;
       if (sort.key === "funding") return r.fundingAnnual;
-      if (sort.key === "oi") return r.oiChange;
+      if (sort.key === "oi") return r.positioning?.oi1d ?? r.oiChange;
+      if (sort.key === "score") return r.signals?.[tf]?.score ?? null;
+      if (sort.key === "rsi") return r.price?.[tf]?.rsi ?? null;
       if (sort.key === "volume") return r.volume24h;
       return r.tf[sort.key.slice(3) as Timeframe].rs;
     };
@@ -132,8 +135,14 @@ export function ScreenerTable({
             <Head k="funding" className="text-right" title="Current funding, annualized">
               Fund.
             </Head>
-            <Head k="oi" className="text-right" title="Open interest against the previous run">
-              OI Δ
+            <Head k="score" className="text-right" title={`Readings that agree on ${tf}: RS vs BTC, its acceleration, RSI, trend, open interest against price, funding crowding. Each +1, 0 or −1.`}>
+              Signals
+            </Head>
+            <Head k="rsi" className="text-right" title={`RSI 14 on ${tf} candles`}>
+              RSI
+            </Head>
+            <Head k="oi" className="text-right" title="Open interest over the last 24 hours, and what it says against price">
+              OI 24h
             </Head>
             <Head k="volume" className="text-right hidden sm:table-cell" title="24h notional volume">
               Vol 24h
@@ -202,7 +211,14 @@ export function ScreenerTable({
                 })}
                 <td className={`whitespace-nowrap px-1.5 py-1 text-right font-mono ${m.rvol != null && m.rvol >= rvolMin ? "text-emerald-400" : ""}`}>{fmtX(m.rvol)}</td>
                 <td className={`whitespace-nowrap px-1.5 py-1 text-right font-mono ${r.fundingAnnual != null && r.fundingAnnual > 0.3 ? "text-amber-500" : ""}`}>{fmtPct(r.fundingAnnual, 0)}</td>
-                <td className="whitespace-nowrap px-1.5 py-1 text-right font-mono">{fmtPct(r.oiChange)}</td>
+                <td className="whitespace-nowrap px-1.5 py-1 text-right" title={signalTitle(r, tf)} data-testid={`screener-score-${r.coin}`}>
+                  <SignalDots s={r.signals?.[tf]} />
+                </td>
+                <td className={`whitespace-nowrap px-1.5 py-1 text-right font-mono ${rsiTone(r.price?.[tf]?.rsi)}`}>{r.price?.[tf]?.rsi != null ? r.price[tf].rsi!.toFixed(0) : "—"}</td>
+                <td className="whitespace-nowrap px-1.5 py-1 text-right font-mono" title={r.positioning?.read ? OI_READ[r.positioning.read] : undefined}>
+                  {fmtPct(r.positioning?.oi1d ?? r.oiChange)}
+                  {r.positioning?.read && <span className={`ml-1 text-[9px] ${OI_TONE[r.positioning.read]}`}>{OI_SHORT[r.positioning.read]}</span>}
+                </td>
                 <td className="hidden whitespace-nowrap px-1.5 py-1 text-right font-mono sm:table-cell">{fmtUsd(r.volume24h)}</td>
                 <td className="whitespace-nowrap px-1.5 py-1">
                   <span className="inline-flex flex-wrap gap-1">
@@ -211,6 +227,8 @@ export function ScreenerTable({
                     {f.volumeConfirmed && <Flag tone="muted">Vol</Flag>}
                     {r.leverageDriven && <Flag tone="amber">Lev</Flag>}
                     {f.weakest && <Flag tone="red">Weak</Flag>}
+                    {r.signals?.[tf]?.divergence === "bearish" && <Flag tone="red">Bear div</Flag>}
+                    {r.signals?.[tf]?.divergence === "bullish" && <Flag tone="emerald">Bull div</Flag>}
                   </span>
                 </td>
               </tr>
@@ -219,6 +237,50 @@ export function ScreenerTable({
         </tbody>
       </table>
     </div>
+  );
+}
+
+export const OI_READ = {
+  "new-longs": "Price up, open interest up: new longs opening",
+  "short-covering": "Price up, open interest down: shorts covering, not new demand",
+  "new-shorts": "Price down, open interest up: new shorts opening",
+  "longs-out": "Price down, open interest down: longs closing",
+} as const;
+const OI_SHORT = { "new-longs": "L+", "short-covering": "SC", "new-shorts": "S+", "longs-out": "L−" } as const;
+const OI_TONE = { "new-longs": "text-emerald-400", "short-covering": "text-sky-400", "new-shorts": "text-red-400", "longs-out": "text-amber-500" } as const;
+
+const rsiTone = (x: number | null | undefined) => (x == null ? "" : x >= 70 ? "text-amber-500" : x <= 30 ? "text-sky-400" : "");
+
+export const SIGNAL_NAMES = [
+  ["rs", "RS vs BTC"],
+  ["accel", "RS acceleration"],
+  ["rsi", "RSI"],
+  ["trend", "Trend (20/50 average)"],
+  ["oi", "Open interest vs price"],
+  ["funding", "Funding crowding"],
+] as const;
+
+function signalTitle(r: ScreenerRow, tf: Timeframe): string {
+  const s = r.signals?.[tf];
+  if (!s) return "";
+  const sign = (v: number) => (v > 0 ? "+" : v < 0 ? "−" : "·");
+  return SIGNAL_NAMES.map(([k, name]) => `${sign(s[k])} ${name}`).join("\n") + (s.divergence ? `\n${s.divergence === "bearish" ? "Bearish" : "Bullish"} divergence` : "");
+}
+
+/** Six dots, one per reading, and their sum. */
+export function SignalDots({ s }: { s?: ScreenerRow["signals"][Timeframe] }) {
+  if (!s) return <span className="text-muted-foreground">—</span>;
+  return (
+    <span className="inline-flex items-center gap-1">
+      <span className="inline-flex gap-px">
+        {SIGNAL_NAMES.map(([k]) => (
+          <span key={k} className={`inline-block h-1.5 w-1.5 rounded-full ${s[k] > 0 ? "bg-emerald-400" : s[k] < 0 ? "bg-red-400" : "bg-muted-foreground/30"}`} />
+        ))}
+      </span>
+      <span className={`w-6 text-right font-mono text-[11px] font-semibold ${s.score >= 3 ? "text-emerald-400" : s.score <= -3 ? "text-red-400" : "text-foreground/80"}`}>
+        {s.score > 0 ? `+${s.score}` : s.score}
+      </span>
+    </span>
   );
 }
 

@@ -324,6 +324,7 @@ CREATE TABLE IF NOT EXISTS screener_settings (
   id INTEGER PRIMARY KEY,
   body TEXT NOT NULL
 );
+ALTER TABLE screener_snapshots ADD COLUMN IF NOT EXISTS oracle DOUBLE PRECISION;
 CREATE TABLE IF NOT EXISTS account_balances (
   id SERIAL PRIMARY KEY,
   user_id INTEGER NOT NULL,
@@ -988,17 +989,28 @@ export const screenerStore = {
     return rows[0].id;
   },
   /** The whole snapshot in one statement: a few hundred rows is one round trip, not a few hundred. */
-  async saveSnapshot(at: string, rows: { coin: string; funding: number | null; openInterest: number | null; volume: number | null; mark: number | null }[]): Promise<void> {
+  async saveSnapshot(at: string, rows: { coin: string; funding: number | null; openInterest: number | null; volume: number | null; mark: number | null; oracle?: number | null }[]): Promise<void> {
     for (let i = 0; i < rows.length; i += 500) {
-      const chunk = rows.slice(i, i + 500).map((r) => ({ at, coin: r.coin, funding: r.funding, open_interest: r.openInterest, volume: r.volume, mark: r.mark }));
+      const chunk = rows.slice(i, i + 500).map((r) => ({ at, coin: r.coin, funding: r.funding, open_interest: r.openInterest, volume: r.volume, mark: r.mark, oracle: r.oracle ?? null }));
       await sql`INSERT INTO screener_snapshots ${sql(chunk)} ON CONFLICT (at, coin) DO NOTHING`;
     }
   },
   /** The snapshot before `before` for every coin: what "OI change" is measured against. */
-  async previousSnapshot(before: string): Promise<Map<string, { at: string; funding: number | null; openInterest: number | null }>> {
-    const rows = await sql<{ at: string; coin: string; funding: number | null; open_interest: number | null }[]>`
-      SELECT DISTINCT ON (coin) at, coin, funding, open_interest FROM screener_snapshots WHERE at < ${before} ORDER BY coin, at DESC`;
-    return new Map(rows.map((r) => [r.coin, { at: r.at, funding: r.funding, openInterest: r.open_interest }]));
+  async previousSnapshot(before: string): Promise<Map<string, { at: string; funding: number | null; openInterest: number | null; mark: number | null }>> {
+    const rows = await sql<{ at: string; coin: string; funding: number | null; open_interest: number | null; mark: number | null }[]>`
+      SELECT DISTINCT ON (coin) at, coin, funding, open_interest, mark FROM screener_snapshots WHERE at < ${before} ORDER BY coin, at DESC`;
+    return new Map(rows.map((r) => [r.coin, { at: r.at, funding: r.funding, openInterest: r.open_interest, mark: r.mark }]));
+  },
+  /** For every coin, the snapshot at or before `target` and no older than `tolerance` before it. */
+  async snapshotNear(target: string, tolerance: string): Promise<Map<string, { at: string; openInterest: number | null; mark: number | null }>> {
+    const rows = await sql<{ at: string; coin: string; open_interest: number | null; mark: number | null }[]>`
+      SELECT DISTINCT ON (coin) at, coin, open_interest, mark FROM screener_snapshots
+      WHERE at <= ${target} AND at >= ${tolerance} ORDER BY coin, at DESC`;
+    return new Map(rows.map((r) => [r.coin, { at: r.at, openInterest: r.open_interest, mark: r.mark }]));
+  },
+  async latestSnapshotAt(): Promise<string | null> {
+    const rows = await sql<{ at: string }[]>`SELECT at FROM screener_snapshots ORDER BY at DESC LIMIT 1`;
+    return rows[0]?.at ?? null;
   },
   /** Every perp in the most recent snapshot: the whole list the venue gave, filtered or not. */
   async latestSnapshot(): Promise<{ at: string; coins: { coin: string; volume: number | null; mark: number | null }[] } | null> {
@@ -1008,10 +1020,10 @@ export const screenerStore = {
     const rows = await sql<{ coin: string; volume: number | null; mark: number | null }[]>`SELECT coin, volume, mark FROM screener_snapshots WHERE at = ${at}`;
     return { at, coins: rows };
   },
-  async snapshotsFor(coin: string, since: string): Promise<{ at: string; funding: number | null; openInterest: number | null; volume: number | null; mark: number | null }[]> {
-    const rows = await sql<{ at: string; funding: number | null; open_interest: number | null; volume: number | null; mark: number | null }[]>`
-      SELECT at, funding, open_interest, volume, mark FROM screener_snapshots WHERE coin = ${coin} AND at >= ${since} ORDER BY at`;
-    return rows.map((r) => ({ at: r.at, funding: r.funding, openInterest: r.open_interest, volume: r.volume, mark: r.mark }));
+  async snapshotsFor(coin: string, since: string): Promise<{ at: string; funding: number | null; openInterest: number | null; volume: number | null; mark: number | null; oracle: number | null }[]> {
+    const rows = await sql<{ at: string; funding: number | null; open_interest: number | null; volume: number | null; mark: number | null; oracle: number | null }[]>`
+      SELECT at, funding, open_interest, volume, mark, oracle FROM screener_snapshots WHERE coin = ${coin} AND at >= ${since} ORDER BY at`;
+    return rows.map((r) => ({ at: r.at, funding: r.funding, openInterest: r.open_interest, volume: r.volume, mark: r.mark, oracle: r.oracle }));
   },
   /** Both of a coin's series in one statement. */
   async saveSeries(coin: string, hourly: unknown[], daily: unknown[]): Promise<void> {

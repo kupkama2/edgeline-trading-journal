@@ -10,7 +10,7 @@ import {
   LineChart,
   NotebookPen,
   Palette,
-  Settings2, BookOpen, Crosshair, Radar } from "lucide-react";
+  Settings2, BookOpen, Radar } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import type { SessionResponse } from "@/components/login-gate";
 import { XpChip, XpToaster } from "@/components/xp";
@@ -131,8 +131,12 @@ const NAV = [
   { href: "/calendar", label: "Calendar", icon: CalendarDays },
   { href: "/review", label: "Review", icon: CalendarRange },
   { href: "/stats", label: "Stats", icon: BarChart3 },
-  { href: "/screener", label: "Screener", icon: Radar },
   { href: "/settings", label: "Settings", icon: Settings2 },
+];
+
+/** The owner's own tabs, before Settings. The terminal is reached by its address for now, not from the menu. */
+const ADMIN_NAV = [
+  { href: "/screener", label: "Screener", icon: Radar },
 ];
 
 function ThemePicker() {
@@ -267,11 +271,9 @@ function ChapterChip() {
 
 export function Shell({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
-  // The terminal tab exists only for the people the server lists.
+  // The owner's tabs are drawn only for the owner; the server refuses everyone else regardless.
   const session = useQuery<SessionResponse>({ queryKey: ["/api/session"] });
-  const nav = session.data?.terminal
-    ? [...NAV.slice(0, 4), { href: "/terminal", label: "Terminal", icon: Crosshair }, ...NAV.slice(4)]
-    : NAV;
+  const nav = session.data?.admin ? [...NAV.slice(0, 4), ...ADMIN_NAV, ...NAV.slice(4)] : NAV;
 
   return (
     <div className="min-h-screen bg-background text-foreground">

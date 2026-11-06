@@ -2,6 +2,13 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import express from "express";
 import { createServer, type Server } from "node:http";
 import {
+  basketSeries,
+  breadthOf,
+  ema,
+  oiRead,
+  priceReadings,
+  rsi,
+  signalsOf,
   coinMetrics,
   completeBars,
   daysFromHours,
@@ -34,6 +41,60 @@ const hourly = (n: number, close: (i: number) => number, vol: (i: number) => num
   Array.from({ length: n }, (_, i) => ({ t: T0 + i * HOUR, o: close(i) * 0.99, h: close(i) * 1.02, l: close(i) * 0.98, c: close(i), v: vol(i) }));
 const daily = (n: number, close: (i: number) => number, vol: (i: number) => number = () => 1000): ScreenerCandle[] =>
   Array.from({ length: n }, (_, i) => ({ t: T0 + i * DAY, o: close(i) * 0.99, h: close(i) * 1.02, l: close(i) * 0.98, c: close(i), v: vol(i) }));
+
+describe("the other readings", () => {
+  it("RSI: 100 on a rise, 0 on a fall, 50 on an even chop, null short of fifteen closes", () => {
+    expect(rsi(Array.from({ length: 30 }, (_, i) => 100 + i))).toBe(100);
+    expect(rsi(Array.from({ length: 30 }, (_, i) => 100 - i))).toBeCloseTo(0, 10);
+    // An even chop sits near the middle; Wilder's smoothing leaves it a point or two either side, depending on which way the last bar went.
+    const chop = rsi(Array.from({ length: 31 }, (_, i) => (i % 2 ? 101 : 100)))!;
+    expect(chop).toBeGreaterThan(45);
+    expect(chop).toBeLessThan(55);
+    expect(rsi([1, 2, 3])).toBeNull();
+    // The exponential average starts from the plain mean of the first `period` values.
+    expect(ema([1, 2, 3], 3)).toBeCloseTo(2, 12);
+    expect(ema([1, 2, 3, 4], 3)).toBeCloseTo(4 * 0.5 + 2 * 0.5, 12);
+  });
+
+  it("reads open interest against price, and stays quiet under half a percent", () => {
+    expect(oiRead(0.03, 0.05)).toBe("new-longs");
+    expect(oiRead(0.03, -0.05)).toBe("short-covering");
+    expect(oiRead(-0.03, 0.05)).toBe("new-shorts");
+    expect(oiRead(-0.03, -0.05)).toBe("longs-out");
+    expect(oiRead(0.001, 0.2)).toBeNull();
+    expect(oiRead(null, 0.2)).toBeNull();
+  });
+
+  it("price readings: trend, a 20-period high, ATR; and a high RS does not confirm is a bearish divergence", () => {
+    // Daily closes rising for 60 days: above both averages, at a 20-day high.
+    const up = daily(60, (i) => 100 + i);
+    const p = priceReadings(up, "1D", 0.01, 0.02);
+    expect(p.ema).toBe(2);
+    expect(p.priceHigh20).toBe(true);
+    expect(p.offHigh).toBe(0);
+    expect(p.atrPct).toBeGreaterThan(0);
+    expect(p.rsEth).toBe(0.01);
+    // Price at a high while the ratio is not: bearish divergence.
+    const m = { rs: -0.01, accel: "down" as const, breakout: false, rvol: 1, breakoutLevel: 1 };
+    const sig = signalsOf(m, p, null, null, null);
+    expect(sig.divergence).toBe("bearish");
+    expect(sig).toMatchObject({ rs: -1, accel: -1, rsi: 1, trend: 1, oi: 0, funding: 0, score: 0 });
+    // Crowded longs and new longs: funding counts against, OI for.
+    const crowded = signalsOf({ ...m, breakout: true, rs: 0.05, accel: "up" }, p, { oi1h: null, oi4h: null, oi1d: 0.1, px1d: 0.05, read: "new-longs", premium: 0, fundingPct: 0.95 }, null, null);
+    expect(crowded).toMatchObject({ rs: 1, accel: 1, oi: 1, funding: -1, divergence: null });
+  });
+
+  it("builds the alt basket weighted by volume, and the breadth of the tape", () => {
+    const a = daily(5, (i) => 10 * (1 + i * 0.1));
+    const b = daily(5, () => 50);
+    const basket = basketSeries([{ candles: a, weight: 3 }, { candles: b, weight: 1 }]);
+    // Each coin as a share of its own first close, weighted 3:1.
+    expect(basket[4].c).toBeCloseTo((1.4 * 3 + 1 * 1) / 4, 12);
+    const rising = Array.from({ length: 25 }, (_, i) => ({ t: i, r: 1 + i * 0.01 }));
+    const falling = Array.from({ length: 25 }, (_, i) => ({ t: i, r: 1 - i * 0.01 }));
+    expect(breadthOf([rising, rising, falling, rising.slice(0, 10)])).toBeCloseTo(2 / 3, 12);
+  });
+});
 
 describe("the screener's arithmetic", () => {
   it("measures RS change over the lookback on the ratio of closes, matching a hand calculation", () => {
@@ -192,7 +253,7 @@ const calls: string[] = [];
 const closes = {
   BTC: (i: number, iv: string) => (iv === "1h" ? 60_000 + i * 5 : 40_000 + i * 50),
   SOL: (i: number, iv: string) => (iv === "1h" ? 150 + i * 0.05 : 80 + i * 0.3),
-  ETH: (i: number, iv: string) => (iv === "1h" ? 3000 - i * 0.2 : 2000 + i * 2),
+  ETH: (i: number, iv: string) => (iv === "1h" ? 3000 - (i % 1000) * 0.2 : 2000 + i * 2),
   DOGE: (i: number, iv: string) => (iv === "1h" ? 0.2 + i * 0.0001 : 0.1 + i * 0.0002),
   TINY: () => 1,
 } as Record<string, (i: number, iv: string) => number>;
@@ -226,7 +287,7 @@ function startVenue(): Promise<string> {
           const names = ["BTC", "SOL", "ETH", "DOGE", "TINY", "USDC", "OLD"];
           return json([
             { universe: names.map((name) => ({ name, szDecimals: 2, ...(name === "OLD" ? { isDelisted: true } : {}) })) },
-            names.map((name) => ({ funding: name === "ETH" ? "0.0005" : "0.0000125", openInterest: String(oi[name] ?? 1), dayNtlVlm: name === "TINY" ? "100000" : "20000000", markPx: String(closes[name]?.(Math.floor(Date.now() / HOUR), "1h") ?? 1) })),
+            names.map((name) => ({ funding: name === "ETH" ? "0.0005" : "0.0000125", openInterest: String(oi[name] ?? 1), dayNtlVlm: name === "TINY" ? "100000" : "20000000", markPx: String(closes[name]?.(Math.floor(Date.now() / HOUR), "1h") ?? 1), oraclePx: String((closes[name]?.(Math.floor(Date.now() / HOUR), "1h") ?? 1) / 1.001) })),
           ]);
         }
         if (q.type === "candleSnapshot") {
@@ -258,6 +319,8 @@ beforeAll(async () => {
   ex.use(express.json({ limit: "25mb" }));
   ex.use((req, _res, next) => {
     (req as any).userId = account.id;
+    // The owner, unless a test says otherwise: the screener is theirs alone.
+    (req as any).account = { id: account.id, email: account.email, isOwner: req.headers["x-not-owner"] !== "1" };
     next();
   });
   app = createServer(ex);
@@ -325,6 +388,11 @@ describe.skipIf(!DB)("the screener's run", () => {
     expect(refused.status).toBe(429);
     fail = new Set();
     oi = { ...oi, SOL: 1300 };
+    // An hourly snapshot from an hour and a day back, as the hourly job would have left.
+    const { screenerStore } = await import("../server/storage");
+    const solNow = closes.SOL(Math.floor(Date.now() / HOUR), "1h");
+    await screenerStore.saveSnapshot(new Date(Date.now() - HOUR - 60_000).toISOString(), [{ coin: "SOL", funding: 0, openInterest: 1200, volume: 2e7, mark: solNow, oracle: solNow }]);
+    await screenerStore.saveSnapshot(new Date(Date.now() - DAY - 60_000).toISOString(), [{ coin: "SOL", funding: 0, openInterest: 1000, volume: 2e7, mark: solNow * 0.9, oracle: solNow * 0.9 }]);
     const run = await runScreener({ force: true });
     const sol = run.rows.find((r) => r.coin === "SOL")!;
     expect(sol.oiChange).toBeCloseTo(0.3, 9);
@@ -334,6 +402,17 @@ describe.skipIf(!DB)("the screener's run", () => {
     expect(run.fullReads).toBe(1);
     expect(sol.tf["1D"].rs).not.toBeNull();
     expect(sol.bars["1d"]).toBeGreaterThan(600);
+    // Positioning off the snapshots: OI up 30% on the day with price up ~11%, up 8.3% on the hour.
+    expect(sol.positioning!.oi1d).toBeCloseTo(0.3, 9);
+    expect(sol.positioning!.oi1h).toBeCloseTo(1300 / 1200 - 1, 9);
+    expect(sol.positioning!.px1d).toBeCloseTo(1 / 0.9 - 1, 6);
+    expect(sol.positioning!.read).toBe("new-longs");
+    expect(sol.positioning!.premium).toBeCloseTo(0.001, 9);
+    expect(sol.signals["1D"].oi).toBe(1);
+    expect(sol.price["1D"].rsi).not.toBeNull();
+    expect(sol.price["4h"].rsEth).not.toBeNull();
+    expect(sol.price["4h"].rsBasket).not.toBeNull();
+    expect(run.breadth).not.toBeNull();
   });
 
   it("serves the chart's lines rebased to zero, and a coin with its exit plan", async () => {
@@ -352,7 +431,8 @@ describe.skipIf(!DB)("the screener's run", () => {
     // The arithmetic shown is the table's number.
     expect(coin.audit.rs).toBeCloseTo(coin.row.tf["4h"].rs, 12);
     expect(coin.audit.lookbackBars).toBe(4);
-    expect(coin.snapshots.length).toBe(2);
+    // The two runs' snapshots and the two planted an hour and a day back.
+    expect(coin.snapshots.length).toBe(4);
     // The search's lookup: in the table, under the volume line, not an alt, not listed.
     expect((await get("/api/screener/lookup/sol")).where).toBe("table");
     const tiny = await get("/api/screener/lookup/TINY");
@@ -375,6 +455,21 @@ describe.skipIf(!DB)("the screener's run", () => {
     expect(news.links.map((l: any) => l.label)).toEqual(["CoinGecko", "X: $PEPE", "Unlocks (DefiLlama)"]);
   });
 
+  it("does not exist for anyone but the owner", async () => {
+    const r = await fetch(`${base}/api/screener`, { headers: { "x-not-owner": "1" } });
+    expect(r.status).toBe(404);
+    const c = await fetch(`${base}/api/screener/coin/SOL`, { headers: { "x-not-owner": "1" } });
+    expect(c.status).toBe(404);
+  });
+
+  it("takes an hourly snapshot, once an hour", async () => {
+    const { takeSnapshot } = await import("../server/screener");
+    // The run just wrote one: nothing to do.
+    expect(await takeSnapshot()).toBeNull();
+    const later = await takeSnapshot(() => Date.now() + 51 * 60_000);
+    expect(later?.perps).toBe(7);
+  });
+
   it("knows when a run is due on the Prague clock", async () => {
     const { runDue } = await import("../server/screener");
     const prague = (iso: string) => new Date(iso).getTime();
@@ -389,7 +484,8 @@ describe.skipIf(!DB)("the screener's run", () => {
     expect(runDue(prague("2026-01-10T01:00:00Z"), "2026-01-09T07:05:00Z")).toBe(true);
     // Never ran: due.
     expect(runDue(prague("2026-01-10T01:00:00Z"), null)).toBe(true);
-    expect(calls.filter((c) => c.startsWith("metaAndAssetCtxs")).length).toBe(2);
+    // Two runs and one hourly snapshot.
+    expect(calls.filter((c) => c.startsWith("metaAndAssetCtxs")).length).toBe(3);
     expect(calls.filter((c) => c === "candleSnapshot:SOL:1h").length).toBe(2);
     // Run one: the universe, BTC twice, SOL and ETH twice, DOGE once (its hourly read failed). Run two: all nine.
     // The night the clocks go forward (2026-03-29): at 00:30 on the 30th, yesterday is still the 29th.
@@ -397,6 +493,6 @@ describe.skipIf(!DB)("the screener's run", () => {
     expect(runDue(prague("2026-03-29T22:30:00Z"), "2026-03-29T06:05:00Z")).toBe(true);
     // Run one: the universe, BTC twice, SOL and ETH twice, DOGE once (its hourly read failed).
     // Run two: the universe, BTC, SOL and ETH once each (the hours since the last bar), DOGE twice.
-    expect(infoCalls).toBe(8 + 6);
+    expect(infoCalls).toBe(8 + 6 + 1);
   });
 });

@@ -109,12 +109,13 @@ export default function ScreenerPage() {
   const matches = useMemo(() => (q ? rows.filter((r) => r.coin.toLowerCase().includes(q.toLowerCase())).length : -1), [rows, q]);
   const lookup = useScreenerLookup(q && matches === 0 && /^[A-Za-z0-9:_-]{1,24}$/.test(q) ? q : null);
   const counts = useMemo(() => {
-    const c = { candidates: 0, fast: 0, weakest: 0 };
+    const c = { candidates: 0, fast: 0, weakest: 0, diverging: 0 };
     for (const r of rows) {
       const f = r.flags[tf];
       if (f.candidate) c.candidates++;
       if (f.movingFast) c.fast++;
       if (f.weakest) c.weakest++;
+      if (r.signals?.[tf]?.divergence) c.diverging++;
     }
     return c;
   }, [rows, tf]);
@@ -128,6 +129,16 @@ export default function ScreenerPage() {
             {run ? (
               <>
                 Data as of <span className="font-mono text-foreground">{fmtPrague(run.at)}</span> Prague · bars to {new Date(run.barsTo).toISOString().slice(11, 16)}Z · {run.universe} coins · read in {(run.tookMs / 1000).toFixed(0)}s
+                {run.breadth != null && " "}
+                {run.breadth != null && (
+                  <span
+                    className={`ml-1 ${run.breadth >= 0.6 ? "text-emerald-400" : run.breadth <= 0.35 ? "text-red-400" : "text-foreground/80"}`}
+                    title="Breadth: the share of alts whose ratio to BTC is above its own 20-day average. High is a tape where alts lead; low is one where BTC does."
+                    data-testid="screener-breadth"
+                  >
+                    · breadth {(run.breadth * 100).toFixed(0)}%
+                  </span>
+                )}
                 {run.errors ? ` · ${run.errors} could not be read` : ""}
               </>
             ) : page.isLoading ? (
@@ -221,6 +232,7 @@ export default function ScreenerPage() {
                 ["candidates", `Candidates only (${counts.candidates})`],
                 ["fast", `Moving fast (${counts.fast})`],
                 ["weakest", `Show weakest (${counts.weakest})`],
+                ["diverging", `Diverging (${counts.diverging})`],
               ] as [Filter, string][]
             ).map(([id, label]) => (
               <button

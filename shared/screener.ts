@@ -102,10 +102,19 @@ export interface ScreenerRow {
   leverageDriven: boolean;
   tf: Record<Timeframe, TfMetrics>;
   flags: Record<Timeframe, TfFlags>;
+  /** Price readings per timeframe (RSI, trend, ATR, highs), and RS against ETH and the alt basket. */
+  price: Record<Timeframe, PriceReadings>;
+  /** The readings as +1/0/−1 and their sum, with any divergence, per timeframe. */
+  signals: Record<Timeframe, Signals>;
+  /** Open interest against price from the hourly snapshots, the premium, and funding's place in the universe. */
+  positioning: Positioning | null;
   /** Why the coin could not be measured, when it could not. */
   error: string | null;
   /** How many bars each series had: the evidence behind a "—". */
   bars: { "1h": number; "1d": number };
+  /** RSI's recent peak and trough per timeframe, for the divergence read; dropped once the signals are made. */
+  rsiPeak?: Record<Timeframe, number | null>;
+  rsiTrough?: Record<Timeframe, number | null>;
 }
 
 export interface ScreenerSettings {
@@ -333,6 +342,13 @@ const EMPTY_TF: TfMetrics = { rs: null, accel: null, breakout: null, rvol: null,
 export const emptyMetrics = (): Record<Timeframe, TfMetrics> =>
   Object.fromEntries(TIMEFRAMES.map((tf) => [tf, { ...EMPTY_TF }])) as Record<Timeframe, TfMetrics>;
 
+const NO_PRICE: PriceReadings = { rsi: null, ema: null, atrPct: null, offHigh: null, priceHigh20: null, priceLow20: null, rsEth: null, rsBasket: null };
+export const emptyPrice = (): Record<Timeframe, PriceReadings> =>
+  Object.fromEntries(TIMEFRAMES.map((tf) => [tf, { ...NO_PRICE }])) as Record<Timeframe, PriceReadings>;
+const NO_SIGNALS: Signals = { rs: 0, accel: 0, rsi: 0, trend: 0, oi: 0, funding: 0, score: 0, divergence: null };
+export const emptySignals = (): Record<Timeframe, Signals> =>
+  Object.fromEntries(TIMEFRAMES.map((tf) => [tf, { ...NO_SIGNALS }])) as Record<Timeframe, Signals>;
+
 const NO_FLAGS: TfFlags = { movingFast: false, candidate: false, weakest: false, volumeConfirmed: false };
 export const emptyFlags = (): Record<Timeframe, TfFlags> =>
   Object.fromEntries(TIMEFRAMES.map((tf) => [tf, { ...NO_FLAGS }])) as Record<Timeframe, TfFlags>;
@@ -361,6 +377,11 @@ export function flagRows(rows: ScreenerRow[], settings: Pick<ScreenerSettings, "
     const rsUp = (r.tf["1D"].rs ?? r.tf["4h"].rs ?? 0) > 0;
     const leverageDriven =
       rsUp && fundingTop != null && r.fundingAnnual != null && r.fundingAnnual >= fundingTop && fundings.length >= 10 && r.oiChange != null && r.oiChange >= settings.oiJumpMin;
+    // Funding's place in the universe, 0..1, onto the positioning; the signals read crowding off it.
+    const fundingPct = r.fundingAnnual != null && fundings.length >= 10 ? fundings.filter((f) => f <= r.fundingAnnual!).length / fundings.length : null;
+    const positioning = r.positioning ? { ...r.positioning, fundingPct } : null;
+    const signals = emptySignals();
+    for (const tf of TIMEFRAMES) signals[tf] = signalsOf(r.tf[tf], r.price?.[tf] ?? { ...NO_PRICE }, positioning, r.rsiPeak?.[tf] ?? null, r.rsiTrough?.[tf] ?? null);
     const flags = emptyFlags();
     for (const tf of TIMEFRAMES) {
       const m = r.tf[tf];
@@ -374,7 +395,8 @@ export function flagRows(rows: ScreenerRow[], settings: Pick<ScreenerSettings, "
         weakest: m.rs != null && bottom != null && m.rs <= bottom && m.rs < 0,
       };
     }
-    return { ...r, leverageDriven, flags };
+    const { rsiPeak: _p, rsiTrough: _t, ...rest } = r;
+    return { ...rest, leverageDriven, flags, positioning, signals };
   });
 }
 
@@ -454,3 +476,222 @@ export function rebasedLine(series: { t: number; r: number }[], windowMs: number
 
 /** Coins that are not alts: BTC itself, and the dollar-pegged ones. */
 export const NOT_AN_ALT = /^(BTC|USDC|USDT|USDE|USDH|USD1|USDD|USDS|USR|DAI|FDUSD|PYUSD|TUSD|BUSD|USDP|GUSD|XAUT)$/i;
+
+/* ------------------------------- the other readings ------------------------------- */
+
+/**
+ * Price readings on a timeframe's blocks, so the table can say whether
+ * price agrees with relative strength. Blocks are the closes sampled
+ * every L base bars back from the last bar, as the RS arithmetic does.
+ */
+export interface PriceReadings {
+  /** RSI 14 on the block closes. */
+  rsi: number | null;
+  /** Where price sits against its 20 and 50 block averages: 2 above both, 1 between, 0 below both. */
+  ema: 0 | 1 | 2 | null;
+  /** 14-block average true range as a share of price. */
+  atrPct: number | null;
+  /** How far price is under its 20-block high, as a share (0 = at the high). */
+  offHigh: number | null;
+  /** The last close is above every one of the previous 20 block closes. */
+  priceHigh20: boolean | null;
+  /** The last close is below every one of the previous 20 block closes. */
+  priceLow20: boolean | null;
+  /** RS change against ETH and against the volume-weighted alt basket, like `rs` against BTC. */
+  rsEth: number | null;
+  rsBasket: number | null;
+}
+
+/** The closes, highs and lows of the last N blocks of L bars, newest last. */
+export function blocksOf(candles: ScreenerCandle[], L: number, n: number): { c: number[]; h: number[]; l: number[] } {
+  const c: number[] = [];
+  const h: number[] = [];
+  const l: number[] = [];
+  for (let end = candles.length - 1, k = 0; end - L + 1 >= 0 && k < n; end -= L, k++) {
+    const b = candles.slice(end - L + 1, end + 1);
+    c.unshift(b[b.length - 1].c);
+    h.unshift(Math.max(...b.map((x) => x.h)));
+    l.unshift(Math.min(...b.map((x) => x.l)));
+  }
+  return { c, h, l };
+}
+
+/** Wilder's RSI over `period` on a series of closes; null short of period + 1 values. */
+export function rsi(closes: number[], period = 14): number | null {
+  if (closes.length < period + 1) return null;
+  let gain = 0;
+  let loss = 0;
+  for (let i = 1; i <= period; i++) {
+    const d = closes[i] - closes[i - 1];
+    if (d > 0) gain += d;
+    else loss -= d;
+  }
+  gain /= period;
+  loss /= period;
+  for (let i = period + 1; i < closes.length; i++) {
+    const d = closes[i] - closes[i - 1];
+    gain = (gain * (period - 1) + Math.max(0, d)) / period;
+    loss = (loss * (period - 1) + Math.max(0, -d)) / period;
+  }
+  if (loss === 0) return 100;
+  const rs = gain / loss;
+  return 100 - 100 / (1 + rs);
+}
+
+/** The exponential average of a series, the last value; null short of `period` values. */
+export function ema(values: number[], period: number): number | null {
+  if (values.length < period) return null;
+  const k = 2 / (period + 1);
+  let e = values.slice(0, period).reduce((s, x) => s + x, 0) / period;
+  for (let i = period; i < values.length; i++) e = values[i] * k + e * (1 - k);
+  return e;
+}
+
+export function priceReadings(
+  candles: ScreenerCandle[],
+  tf: Timeframe,
+  rsEth: number | null,
+  rsBasket: number | null,
+): PriceReadings {
+  const L = TF_SPEC[tf].bars;
+  const { c, h, l } = blocksOf(candles, L, 80);
+  const last = c.length - 1;
+  const out: PriceReadings = { rsi: null, ema: null, atrPct: null, offHigh: null, priceHigh20: null, priceLow20: null, rsEth, rsBasket };
+  if (last < 0) return out;
+  out.rsi = rsi(c, 14);
+  const e20 = ema(c, 20);
+  const e50 = ema(c, 50);
+  if (e20 != null && e50 != null) out.ema = c[last] > e20 && c[last] > e50 ? 2 : c[last] < e20 && c[last] < e50 ? 0 : 1;
+  if (c.length >= 15) {
+    let tr = 0;
+    for (let i = c.length - 14; i < c.length; i++) tr += Math.max(h[i] - l[i], Math.abs(h[i] - c[i - 1]), Math.abs(l[i] - c[i - 1]));
+    out.atrPct = c[last] > 0 ? tr / 14 / c[last] : null;
+  }
+  if (c.length >= 21) {
+    const prev = c.slice(last - 20, last);
+    const high = Math.max(...prev);
+    const low = Math.min(...prev);
+    out.priceHigh20 = c[last] > high;
+    out.priceLow20 = c[last] < low;
+    out.offHigh = high > 0 ? Math.max(0, (Math.max(high, c[last]) - c[last]) / Math.max(high, c[last])) : null;
+  }
+  return out;
+}
+
+/**
+ * Positioning from the hourly snapshots: how open interest moved against
+ * price, and what that says. Price up with OI up is new longs; price up
+ * with OI down is short covering; price down with OI up is new shorts;
+ * price down with OI down is longs leaving.
+ */
+export type OiRead = "new-longs" | "short-covering" | "new-shorts" | "longs-out" | null;
+
+export interface Positioning {
+  oi1h: number | null;
+  oi4h: number | null;
+  oi1d: number | null;
+  /** Price change over the day the OI change is measured on. */
+  px1d: number | null;
+  read: OiRead;
+  /** Mark over oracle, minus one: the perp's premium. */
+  premium: number | null;
+  /** Where this coin's funding sits in the universe, 0..1. */
+  fundingPct: number | null;
+}
+
+export function oiRead(px: number | null, oi: number | null, minMove = 0.005): OiRead {
+  if (px == null || oi == null) return null;
+  if (Math.abs(px) < minMove || Math.abs(oi) < minMove) return null;
+  if (px > 0) return oi > 0 ? "new-longs" : "short-covering";
+  return oi > 0 ? "new-shorts" : "longs-out";
+}
+
+/**
+ * The readings that agree or disagree, each as +1, 0 or −1, and what they
+ * add up to. Relative strength against BTC, its acceleration, price
+ * momentum, trend, the open-interest read and crowding by funding. The
+ * divergences are the cases worth a second look: price at a new high
+ * that relative strength or momentum does not confirm, and the mirror.
+ */
+export interface Signals {
+  rs: -1 | 0 | 1;
+  accel: -1 | 0 | 1;
+  rsi: -1 | 0 | 1;
+  trend: -1 | 0 | 1;
+  oi: -1 | 0 | 1;
+  funding: -1 | 0 | 1;
+  /** The sum of the above. */
+  score: number;
+  /** Price at a 20-block high while RS or RSI lags; or price at a low while they do not confirm. */
+  divergence: "bearish" | "bullish" | null;
+}
+
+export function signalsOf(m: TfMetrics, p: PriceReadings, pos: Positioning | null, rsiPrevPeak: number | null, rsiPrevTrough: number | null): Signals {
+  const sgn = (x: number | null, band = 0): -1 | 0 | 1 => (x == null ? 0 : x > band ? 1 : x < -band ? -1 : 0);
+  const rs = sgn(m.rs, 0.002);
+  const accel: -1 | 0 | 1 = m.accel === "up" ? 1 : m.accel === "down" ? -1 : 0;
+  const rsiS: -1 | 0 | 1 = p.rsi == null ? 0 : p.rsi > 55 ? 1 : p.rsi < 45 ? -1 : 0;
+  const trend: -1 | 0 | 1 = p.ema == null ? 0 : p.ema === 2 ? 1 : p.ema === 0 ? -1 : 0;
+  const oi: -1 | 0 | 1 = pos?.read === "new-longs" ? 1 : pos?.read === "new-shorts" || pos?.read === "longs-out" ? -1 : 0;
+  // Crowded longs (top decile funding) weigh against; crowded shorts (bottom decile) for.
+  const funding: -1 | 0 | 1 = pos?.fundingPct == null ? 0 : pos.fundingPct >= 0.9 ? -1 : pos.fundingPct <= 0.1 ? 1 : 0;
+  let divergence: Signals["divergence"] = null;
+  if (p.priceHigh20 && (m.breakout === false || (p.rsi != null && rsiPrevPeak != null && p.rsi < rsiPrevPeak))) divergence = "bearish";
+  if (p.priceLow20 && (m.rs != null && m.rs > 0 ? true : p.rsi != null && rsiPrevTrough != null && p.rsi > rsiPrevTrough)) divergence = "bullish";
+  return { rs, accel, rsi: rsiS, trend, oi, funding, score: rs + accel + rsiS + trend + oi + funding, divergence };
+}
+
+/** RSI's highest and lowest over blocks 2..20 back, to compare the one now against. */
+export function rsiExtremes(candles: ScreenerCandle[], tf: Timeframe): { peak: number | null; trough: number | null } {
+  const L = TF_SPEC[tf].bars;
+  const { c } = blocksOf(candles, L, 80);
+  let peak: number | null = null;
+  let trough: number | null = null;
+  for (let back = 2; back <= 20; back++) {
+    const r = rsi(c.slice(0, c.length - back), 14);
+    if (r == null) break;
+    peak = peak == null ? r : Math.max(peak, r);
+    trough = trough == null ? r : Math.min(trough, r);
+  }
+  return { peak, trough };
+}
+
+/**
+ * The alt basket: every alt's close as a share of its own first close,
+ * weighted by 24h volume, summed per timestamp. One series per base, the
+ * same shape as a coin's, so a coin's RS against the basket is the same
+ * arithmetic as against BTC.
+ */
+export function basketSeries(alts: { candles: ScreenerCandle[]; weight: number }[]): ScreenerCandle[] {
+  const sum = new Map<number, { v: number; w: number }>();
+  for (const a of alts) {
+    const first = a.candles.find((c) => c.c > 0)?.c;
+    if (!first || !(a.weight > 0)) continue;
+    for (const c of a.candles) {
+      const cur = sum.get(c.t) ?? { v: 0, w: 0 };
+      cur.v += (c.c / first) * a.weight;
+      cur.w += a.weight;
+      sum.set(c.t, cur);
+    }
+  }
+  // Only timestamps most of the basket has, so a thin early history does not swing the index.
+  const full = Math.max(...Array.from(sum.values()).map((x) => x.w), 0);
+  return Array.from(sum.entries())
+    .filter(([, x]) => x.w >= full * 0.6)
+    .map(([t, x]) => ({ t, o: x.v / x.w, h: x.v / x.w, l: x.v / x.w, c: x.v / x.w, v: 0 }))
+    .sort((a, b) => a.t - b.t);
+}
+
+/** The share of alts whose BTC ratio is above its own 20-day average: the breadth of the tape. */
+export function breadthOf(ratios: { t: number; r: number }[][]): number | null {
+  let above = 0;
+  let n = 0;
+  for (const r of ratios) {
+    if (r.length < 21) continue;
+    const last = r[r.length - 1].r;
+    const avg = r.slice(-21, -1).reduce((s, x) => s + x.r, 0) / 20;
+    n++;
+    if (last > avg) above++;
+  }
+  return n ? above / n : null;
+}
