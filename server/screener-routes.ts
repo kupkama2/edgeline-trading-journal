@@ -44,6 +44,25 @@ export function registerScreenerRoutes(app: Express): void {
     res.json({ run, settings, status: screenerStatus(run?.at), cooldownMs: COOLDOWN_MS });
   });
 
+  /** The AI's latest read of a run, and whether another may be asked for. */
+  app.get("/api/screener/ai", async (_req, res) => {
+    const { latestAiRead, aiStatus } = await import("./screener-ai");
+    res.json({ latest: await latestAiRead(), status: aiStatus() });
+  });
+
+  /** Ask for a read of the latest run now: at most every half hour, and answered at once — the page hears "screener" when it lands. */
+  app.post("/api/screener/ai", async (_req, res) => {
+    const { analyzeRun, aiStatus, AI_COOLDOWN_MS } = await import("./screener-ai");
+    const st = aiStatus();
+    if (!st.enabled) return res.status(400).json({ message: "No ANTHROPIC_API_KEY on the server." });
+    if (st.running) return res.status(429).json({ message: "A read is already on." });
+    if (st.nextAllowedAt && Date.now() < new Date(st.nextAllowedAt).getTime()) return res.status(429).json({ message: `Asked less than ${AI_COOLDOWN_MS / 60_000} minutes ago.`, retryAt: st.nextAllowedAt });
+    const run = await latestScreenerRun();
+    if (!run) return res.status(400).json({ message: "No run to read yet." });
+    void analyzeRun(run);
+    res.json({ started: true });
+  });
+
   /** Just the status, for the progress line while a run is on: no query, a few hundred bytes. */
   app.get("/api/screener/status", async (_req, res) => {
     const run = await latestScreenerRun();

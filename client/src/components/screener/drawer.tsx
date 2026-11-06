@@ -126,7 +126,125 @@ function readingText(k: (typeof SIGNAL_NAMES)[number][0], row: NonNullable<Scree
       return pos?.read ? pos.read.replace("-", " ") : pos?.oi1d != null ? `${fmtPct(pos.oi1d)} flat` : "no history yet";
     case "funding":
       return pos?.fundingPct != null ? `${fmtPct(row.fundingAnnual, 0)} · ${Math.round(pos.fundingPct * 100)}th pct` : fmtPct(row.fundingAnnual, 0);
+    case "cvd":
+      return row.flow?.cvd24h != null ? `${fmtPct(row.flow.cvd24h)} of volume` : "no Binance flow";
   }
+}
+
+/** A small line, for the CVD and the account ratio. */
+function MiniLine({ points, testId }: { points: number[]; testId?: string }) {
+  if (points.length < 2) return <span className="text-[11px] text-muted-foreground">—</span>;
+  const lo = Math.min(...points);
+  const hi = Math.max(...points);
+  const w = 220;
+  const h = 36;
+  const d = points.map((v, i) => `${i ? "L" : "M"}${((i / (points.length - 1)) * w).toFixed(1)},${(h - ((v - lo) / (hi - lo || 1)) * h).toFixed(1)}`).join(" ");
+  const up = points[points.length - 1] >= points[0];
+  return (
+    <svg width={w} height={h} className="block max-w-full" aria-hidden data-testid={testId}>
+      <path d={d} fill="none" stroke={up ? "#10b981" : "#ef4444"} strokeWidth={1.5} />
+    </svg>
+  );
+}
+
+type Liq = NonNullable<NonNullable<ScreenerCoin["row"]>["liq"]>;
+
+/** Where Hyperliquid's largest accounts would be liquidated: shorts above the mark, longs below, one bar per one-percent band. */
+function LiqBars({ liq }: { liq: Liq }) {
+  const bands = liq.bands.filter((b) => Math.abs(b.at) <= 0.15);
+  if (bands.length === 0) return <p className="text-[11px] text-muted-foreground">No liquidations within 15% among the accounts read.</p>;
+  const max = Math.max(...bands.map((b) => b.usd));
+  const fmt = (x: number) => (x >= 1e6 ? `$${(x / 1e6).toFixed(1)}M` : `$${Math.round(x / 1e3)}K`);
+  const above = bands.filter((b) => b.at > 0).sort((a, b) => b.at - a.at);
+  const below = bands.filter((b) => b.at < 0).sort((a, b) => b.at - a.at);
+  const Row = ({ b }: { b: (typeof bands)[number] }) => (
+    <div className="flex items-center gap-2 text-[10px]">
+      <span className="w-14 text-right font-mono text-muted-foreground">{b.price.toPrecision(5)}</span>
+      <span className="w-10 text-right font-mono text-muted-foreground">{fmtPct(b.at, 0)}</span>
+      <span className="h-2 rounded-sm" style={{ width: `${Math.max(2, (b.usd / max) * 140)}px`, background: b.at > 0 ? "rgba(239,68,68,0.7)" : "rgba(16,185,129,0.7)" }} />
+      <span className="font-mono">{fmt(b.usd)}</span>
+    </div>
+  );
+  return (
+    <div className="space-y-px" data-testid="screener-liq-bars">
+      {above.map((b) => (
+        <Row key={b.at} b={b} />
+      ))}
+      <div className="my-0.5 border-t border-dashed border-foreground/40 text-[10px] text-muted-foreground">mark {liq.mark.toPrecision(5)}</div>
+      {below.map((b) => (
+        <Row key={b.at} b={b} />
+      ))}
+    </div>
+  );
+}
+
+/** Binance's flow for the coin and the two venues side by side. */
+function FlowPanel({ row }: { row: NonNullable<ScreenerCoin["row"]> }) {
+  const f = row.flow;
+  const Item = ({ k, v, warn }: { k: string; v: string; warn?: boolean }) => (
+    <li className="flex justify-between gap-2">
+      <span className="text-muted-foreground">{k}</span>
+      <span className={`font-mono ${warn ? "text-amber-500" : ""}`}>{v}</span>
+    </li>
+  );
+  return (
+    <div className="mt-4 rounded-md border border-border/70 p-3" data-testid="screener-flow">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h3 className="text-sm font-semibold">Binance flow{f ? ` · ${f.symbol}` : ""}</h3>
+        <span className="text-[10px] text-muted-foreground">through your relay</span>
+      </div>
+      {f ? (
+        <>
+          <ul className="mt-2 grid grid-cols-1 gap-x-4 gap-y-1 text-xs sm:grid-cols-2">
+            <Item k="Taker delta 4h · 24h" v={`${fmtPct(f.cvd4h)} · ${fmtPct(f.cvd24h)}`} />
+            <Item k="Price 24h (Binance)" v={fmtPct(f.px24h)} />
+            <Item k="Accounts long/short · 24h" v={`${f.lsAccounts?.toFixed(2) ?? "—"} · ${fmtPct(f.lsAccounts24h)}`} />
+            <Item k="Top traders' positions L/S · 24h" v={`${f.lsTop?.toFixed(2) ?? "—"} · ${fmtPct(f.lsTop24h)}`} />
+            <Item k="Open interest 24h · Binance vs HL" v={`${fmtPct(f.oi24h)} · ${fmtPct(row.positioning?.oi1d)}`} />
+            <Item k="Funding /yr · HL vs Binance" v={`${fmtPct(f.fundingHl, 0)} · ${fmtPct(f.fundingBn, 0)}`} warn={f.fundingSpread != null && Math.abs(f.fundingSpread) >= 0.25} />
+            <Item k="HL mark vs Binance" v={fmtPct(f.basis, 2)} warn={f.basis != null && Math.abs(f.basis) >= 0.003} />
+          </ul>
+          <div className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div>
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">CVD, last week</p>
+              <MiniLine points={f.cvdSeries.map((x) => x.cvd)} testId="screener-cvd-line" />
+            </div>
+            <div>
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Accounts long/short, 2 days</p>
+              <MiniLine points={f.lsSeries.map((x) => x.ratio)} />
+            </div>
+          </div>
+        </>
+      ) : (
+        <p className="mt-1 text-[11px] text-muted-foreground">No Binance flow for this coin: it is not a Binance USDT perp, or the relay was not running at the last run.</p>
+      )}
+    </div>
+  );
+}
+
+function LiqPanel({ row }: { row: NonNullable<ScreenerCoin["row"]> }) {
+  const l = row.liq;
+  return (
+    <div className="mt-4 rounded-md border border-border/70 p-3" data-testid="screener-liq">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h3 className="text-sm font-semibold">Liquidations on Hyperliquid</h3>
+        <span className="text-[10px] text-muted-foreground">{l ? `${l.accounts} of the largest accounts hold it` : ""}</span>
+      </div>
+      {l ? (
+        <>
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            {l.nearestShort ? `Shorts liquidate heaviest at ${l.nearestShort.price.toPrecision(5)} (${fmtPct(l.nearestShort.at)}). ` : ""}
+            {l.nearestLong ? `Longs heaviest at ${l.nearestLong.price.toPrecision(5)} (${fmtPct(l.nearestLong.at)}).` : ""}
+          </p>
+          <div className="mt-2">
+            <LiqBars liq={l} />
+          </div>
+        </>
+      ) : (
+        <p className="mt-1 text-[11px] text-muted-foreground">None of the largest accounts holds a position with a liquidation price in range.</p>
+      )}
+    </div>
+  );
 }
 
 /**
@@ -302,6 +420,9 @@ export function CoinDrawer({
             {row.positioning?.read && <p className="mt-1 text-[11px] text-muted-foreground">{OI_READ[row.positioning.read]}.</p>}
           </div>
         )}
+
+        {row && <FlowPanel row={row} />}
+        {row && <LiqPanel row={row} />}
 
         {/* ------------------------------ the arithmetic ------------------------------ */}
         {d?.audit && (

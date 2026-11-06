@@ -213,3 +213,31 @@ every run after that reads only the hours since the last stored bar (about
 two and a half minutes at the 900-per-minute cap the run keeps under the
 venue's 1200. Manual refresh on the page is limited to once every five
 minutes; a failed run counts, which is the back-off.
+
+## Binance flow, the liquidation map and the AI read (Screener)
+
+- **Binance flow** (CVD from taker volume, long/short ratios, Binance open
+  interest, funding and mark beside Hyperliquid's) is read through your
+  relay, never from the server, since Binance has banned Render's shared IP
+  before. It needs the relay file from after this change, which can make
+  public market-data reads; an older copy is reported on the Screener as
+  "older copy — download the new relay". About four reads per coin at most
+  150 a minute, inside Binance's 1000 per five minutes.
+- **The liquidation map** reads Hyperliquid's public leaderboard and the
+  positions of its 300 largest accounts each run (set `LIQ_ACCOUNTS` to
+  change it).
+- **The AI read** runs after the 08:00 and 13:30 runs (and the cron hook),
+  or on "Read now" at most every 30 minutes, when `ANTHROPIC_API_KEY` is
+  set. `SCREENER_AI_MODEL` picks the model.
+
+## The event calendar
+
+US macro releases of high impact (NFP, CPI, PPI, FOMC, GDP, PCE…) come from
+Forex Factory's public weekly feed, and earnings of companies over $200B
+plus the crypto names (COIN, MSTR, HOOD…) from Nasdaq's calendar for the
+next five weekdays. Both are downloaded once a day by the server's clock;
+a source that fails keeps its last copy. The header shows the next event
+today; the page alerts the morning of a day with anything on (from 07:30
+your time) and an hour before each event — a toast, the chime if the bell
+is on, and a desktop notification once allowed. Alerts need a tab of the
+journal open.

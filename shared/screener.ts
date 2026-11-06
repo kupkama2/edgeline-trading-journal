@@ -108,6 +108,10 @@ export interface ScreenerRow {
   signals: Record<Timeframe, Signals>;
   /** Open interest against price from the hourly snapshots, the premium, and funding's place in the universe. */
   positioning: Positioning | null;
+  /** Binance's order flow and positioning for the same coin, read through the relay; null without one. */
+  flow?: FlowReadings | null;
+  /** Where Hyperliquid's largest accounts would be liquidated, in bands around the mark. */
+  liq?: LiqMap | null;
   /** Why the coin could not be measured, when it could not. */
   error: string | null;
   /** How many bars each series had: the evidence behind a "—". */
@@ -345,7 +349,7 @@ export const emptyMetrics = (): Record<Timeframe, TfMetrics> =>
 const NO_PRICE: PriceReadings = { rsi: null, ema: null, atrPct: null, offHigh: null, priceHigh20: null, priceLow20: null, rsEth: null, rsBasket: null };
 export const emptyPrice = (): Record<Timeframe, PriceReadings> =>
   Object.fromEntries(TIMEFRAMES.map((tf) => [tf, { ...NO_PRICE }])) as Record<Timeframe, PriceReadings>;
-const NO_SIGNALS: Signals = { rs: 0, accel: 0, rsi: 0, trend: 0, oi: 0, funding: 0, score: 0, divergence: null };
+const NO_SIGNALS: Signals = { rs: 0, accel: 0, rsi: 0, trend: 0, oi: 0, funding: 0, cvd: 0, score: 0, divergence: null };
 export const emptySignals = (): Record<Timeframe, Signals> =>
   Object.fromEntries(TIMEFRAMES.map((tf) => [tf, { ...NO_SIGNALS }])) as Record<Timeframe, Signals>;
 
@@ -381,7 +385,7 @@ export function flagRows(rows: ScreenerRow[], settings: Pick<ScreenerSettings, "
     const fundingPct = r.fundingAnnual != null && fundings.length >= 10 ? fundings.filter((f) => f <= r.fundingAnnual!).length / fundings.length : null;
     const positioning = r.positioning ? { ...r.positioning, fundingPct } : null;
     const signals = emptySignals();
-    for (const tf of TIMEFRAMES) signals[tf] = signalsOf(r.tf[tf], r.price?.[tf] ?? { ...NO_PRICE }, positioning, r.rsiPeak?.[tf] ?? null, r.rsiTrough?.[tf] ?? null);
+    for (const tf of TIMEFRAMES) signals[tf] = signalsOf(r.tf[tf], r.price?.[tf] ?? { ...NO_PRICE }, positioning, r.rsiPeak?.[tf] ?? null, r.rsiTrough?.[tf] ?? null, r.flow ?? null);
     const flags = emptyFlags();
     for (const tf of TIMEFRAMES) {
       const m = r.tf[tf];
@@ -478,6 +482,8 @@ export function rebasedLine(series: { t: number; r: number }[], windowMs: number
 export const NOT_AN_ALT = /^(BTC|USDC|USDT|USDE|USDH|USD1|USDD|USDS|USR|DAI|FDUSD|PYUSD|TUSD|BUSD|USDP|GUSD|XAUT)$/i;
 
 /* ------------------------------- the other readings ------------------------------- */
+
+import type { FlowReadings, LiqMap } from "./flow";
 
 /**
  * Price readings on a timeframe's blocks, so the table can say whether
@@ -620,13 +626,15 @@ export interface Signals {
   trend: -1 | 0 | 1;
   oi: -1 | 0 | 1;
   funding: -1 | 0 | 1;
+  /** Binance taker flow over 24 hours: net buying +1, net selling −1. */
+  cvd: -1 | 0 | 1;
   /** The sum of the above. */
   score: number;
   /** Price at a 20-block high while RS or RSI lags; or price at a low while they do not confirm. */
   divergence: "bearish" | "bullish" | null;
 }
 
-export function signalsOf(m: TfMetrics, p: PriceReadings, pos: Positioning | null, rsiPrevPeak: number | null, rsiPrevTrough: number | null): Signals {
+export function signalsOf(m: TfMetrics, p: PriceReadings, pos: Positioning | null, rsiPrevPeak: number | null, rsiPrevTrough: number | null, flow: FlowReadings | null = null): Signals {
   const sgn = (x: number | null, band = 0): -1 | 0 | 1 => (x == null ? 0 : x > band ? 1 : x < -band ? -1 : 0);
   const rs = sgn(m.rs, 0.002);
   const accel: -1 | 0 | 1 = m.accel === "up" ? 1 : m.accel === "down" ? -1 : 0;
@@ -638,7 +646,8 @@ export function signalsOf(m: TfMetrics, p: PriceReadings, pos: Positioning | nul
   let divergence: Signals["divergence"] = null;
   if (p.priceHigh20 && (m.breakout === false || (p.rsi != null && rsiPrevPeak != null && p.rsi < rsiPrevPeak))) divergence = "bearish";
   if (p.priceLow20 && (m.rs != null && m.rs > 0 ? true : p.rsi != null && rsiPrevTrough != null && p.rsi > rsiPrevTrough)) divergence = "bullish";
-  return { rs, accel, rsi: rsiS, trend, oi, funding, score: rs + accel + rsiS + trend + oi + funding, divergence };
+  const cvd: -1 | 0 | 1 = flow?.cvd24h == null ? 0 : flow.cvd24h > 0.02 ? 1 : flow.cvd24h < -0.02 ? -1 : 0;
+  return { rs, accel, rsi: rsiS, trend, oi, funding, cvd, score: rs + accel + rsiS + trend + oi + funding + cvd, divergence };
 }
 
 /** RSI's highest and lowest over blocks 2..20 back, to compare the one now against. */

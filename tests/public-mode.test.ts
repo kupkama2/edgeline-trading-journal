@@ -135,6 +135,8 @@ describe("nothing prints money behind the formatters' back", async () => {
     ],
     ["client/src/pages/trade-view.tsx", "the same point value, on the trade's own header"],
     ["client/src/lib/screener.ts", "the venue's 24h volume and a planned position's notional: market figures, not the person's money"],
+    ["shared/flow.ts", "the notional other traders would have liquidated, in an anomaly's sentence: the market's figure"],
+    ["client/src/components/screener/drawer.tsx", "the liquidation map's bands: other traders' notional on the venue, not the person's money"],
   ]);
 
   function walk(dir: string, out: string[] = []): string[] {

@@ -7,7 +7,7 @@ import { useClickOrDouble } from "@/components/screener/chart";
 export type Filter = "all" | "candidates" | "fast" | "weakest" | "diverging";
 
 /** What a column header sorts by. */
-type SortKey = `rs:${Timeframe}` | "coin" | "rvol" | "funding" | "oi" | "volume" | "score" | "rsi";
+type SortKey = `rs:${Timeframe}` | "coin" | "rvol" | "funding" | "oi" | "volume" | "score" | "rsi" | "cvd";
 
 /**
  * The ranked table: one row per coin, RS change per timeframe as heat
@@ -66,6 +66,7 @@ export function ScreenerTable({
       if (sort.key === "oi") return r.positioning?.oi1d ?? r.oiChange;
       if (sort.key === "score") return r.signals?.[tf]?.score ?? null;
       if (sort.key === "rsi") return r.price?.[tf]?.rsi ?? null;
+      if (sort.key === "cvd") return r.flow?.cvd24h ?? null;
       if (sort.key === "volume") return r.volume24h;
       return r.tf[sort.key.slice(3) as Timeframe].rs;
     };
@@ -141,6 +142,9 @@ export function ScreenerTable({
             <Head k="rsi" className="text-right" title={`RSI 14 on ${tf} candles`}>
               RSI
             </Head>
+            <Head k="cvd" className="text-right" title="Binance taker flow over 24 hours: net taker buying as a share of volume, read through your relay">
+              CVD
+            </Head>
             <Head k="oi" className="text-right" title="Open interest over the last 24 hours, and what it says against price">
               OI 24h
             </Head>
@@ -215,6 +219,12 @@ export function ScreenerTable({
                   <SignalDots s={r.signals?.[tf]} />
                 </td>
                 <td className={`whitespace-nowrap px-1.5 py-1 text-right font-mono ${rsiTone(r.price?.[tf]?.rsi)}`}>{r.price?.[tf]?.rsi != null ? r.price[tf].rsi!.toFixed(0) : "—"}</td>
+                <td
+                  className={`whitespace-nowrap px-1.5 py-1 text-right font-mono ${r.flow?.cvd24h == null ? "text-muted-foreground" : r.flow.cvd24h > 0.02 ? "text-emerald-400" : r.flow.cvd24h < -0.02 ? "text-red-400" : ""}`}
+                  title={r.flow ? `Binance ${r.flow.symbol}: taker delta ${fmtPct(r.flow.cvd24h)} of volume over 24h, price ${fmtPct(r.flow.px24h)}; accounts long/short ${r.flow.lsAccounts?.toFixed(2) ?? "—"}` : "No Binance flow for this coin"}
+                >
+                  {fmtPct(r.flow?.cvd24h)}
+                </td>
                 <td className="whitespace-nowrap px-1.5 py-1 text-right font-mono" title={r.positioning?.read ? OI_READ[r.positioning.read] : undefined}>
                   {fmtPct(r.positioning?.oi1d ?? r.oiChange)}
                   {r.positioning?.read && <span className={`ml-1 text-[9px] ${OI_TONE[r.positioning.read]}`}>{OI_SHORT[r.positioning.read]}</span>}
@@ -258,6 +268,7 @@ export const SIGNAL_NAMES = [
   ["trend", "Trend (20/50 average)"],
   ["oi", "Open interest vs price"],
   ["funding", "Funding crowding"],
+  ["cvd", "Binance taker flow (CVD 24h)"],
 ] as const;
 
 function signalTitle(r: ScreenerRow, tf: Timeframe): string {

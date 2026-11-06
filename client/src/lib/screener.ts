@@ -1,12 +1,28 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "./queryClient";
 import type { ExitPlan, ScreenerCandle, ScreenerRow, ScreenerSettings, Timeframe } from "@shared/screener";
+import type { Anomaly } from "@shared/flow";
 
 /** What the page reads: the latest run, the settings, and whether a refresh may be asked for. */
 export interface ScreenerPage {
-  run: { id: number; at: string; barsTo: number; tookMs: number; errors: number; universe: number; fullReads: number; breadth: number | null; settings: ScreenerSettings; rows: ScreenerRow[] } | null;
+  run: {
+    id: number;
+    at: string;
+    barsTo: number;
+    tookMs: number;
+    errors: number;
+    universe: number;
+    fullReads: number;
+    breadth: number | null;
+    btc?: { d1: number | null; w1: number | null };
+    flowStatus?: { source: "relay" | "none"; account: string | null; outdated: boolean; coins: number; failed: number; mismatched?: string[]; error: string | null } | null;
+    liqStatus?: { accounts: number; failed: number; error: string | null } | null;
+    anomalies?: Anomaly[];
+    settings: ScreenerSettings;
+    rows: ScreenerRow[];
+  } | null;
   settings: ScreenerSettings;
-  status: { running: boolean; startedAt: string | null; progress: { done: number; total: number } | null; lastError: string | null; nextAllowedAt: string | null };
+  status: { running: boolean; startedAt: string | null; progress: { done: number; total: number } | null; phase?: string | null; lastError: string | null; nextAllowedAt: string | null };
   cooldownMs: number;
 }
 
@@ -58,6 +74,8 @@ export function useScreenerLines(tf: Timeframe, coins: string[]) {
     queryFn: async () => (await apiRequest("GET", `/api/screener/series?tf=${tf}&coins=${encodeURIComponent(key)}`)).json(),
     enabled: coins.length > 0,
     staleTime: 60_000,
+    // A coin added to the set refetches, but the lines already drawn stay up meanwhile instead of the chart going blank.
+    placeholderData: (prev) => (prev?.tf === tf ? prev : undefined),
   });
 }
 
@@ -172,4 +190,32 @@ export function heat(rs: number | null): string | undefined {
   const a = Math.min(1, Math.abs(rs) / 0.1);
   const alpha = 0.08 + 0.42 * a;
   return rs >= 0 ? `rgba(16, 185, 129, ${alpha.toFixed(3)})` : `rgba(239, 68, 68, ${alpha.toFixed(3)})`;
+}
+
+/* ------------------------------- the AI read ------------------------------- */
+
+export interface AiTip {
+  coin: string;
+  stance: "long" | "short" | "watch" | "avoid";
+  horizon: string;
+  thesis: string;
+  agree: string[];
+  disagree: string[];
+  invalidation: string;
+  confidence: "low" | "medium" | "high";
+}
+export interface AiAnswer {
+  latest: { at: string; runId: number | null; model: string | null; read: { regime: string; tips: AiTip[]; anomalies: { coin: string; note: string }[] } | null; error: string | null } | null;
+  status: { running: boolean; nextAllowedAt: string | null; enabled: boolean; model: string };
+}
+
+export function useScreenerAi() {
+  return useQuery<AiAnswer>({ queryKey: ["/api/screener/ai"], refetchInterval: (q) => (q.state.data?.status.running ? 10_000 : false) });
+}
+
+export function useAskScreenerAi() {
+  return useMutation({
+    mutationFn: async () => (await apiRequest("POST", "/api/screener/ai")).json(),
+    onSettled: () => void queryClient.invalidateQueries({ queryKey: ["/api/screener/ai"] }),
+  });
 }

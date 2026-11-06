@@ -71,6 +71,26 @@ async function signed(method, base, path, params = {}) {
   }
 }
 
+/**
+ * A plain market-data read: no key, no signature, GET only, and only the
+ * futures data paths — so the server cannot ask this relay for anything
+ * but public numbers this way.
+ */
+async function publicGet(path, params = {}) {
+  if (!/^\/(fapi\/v1\/(klines|premiumIndex|fundingInfo|openInterest|ticker\/24hr|exchangeInfo)|futures\/data\/(takerlongshortRatio|globalLongShortAccountRatio|topLongShortPositionRatio|topLongShortAccountRatio|openInterestHist))$/.test(path)) {
+    return { status: 400, body: JSON.stringify({ code: -1, msg: `not a public path: ${path}` }) };
+  }
+  const q = encode(params);
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 20_000);
+  try {
+    const res = await fetch(`${FUTURES}${path}${q ? `?${q}` : ""}`, { headers: { accept: "application/json" }, signal: ctl.signal });
+    return { status: res.status, body: await res.text() };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function unsignedWithKey(method, base, path) {
   const res = await fetch(`${base}${path}`, { method, headers: { "X-MBX-APIKEY": KEY, accept: "application/json" } });
   return { status: res.status, body: await res.text() };
@@ -143,7 +163,12 @@ function describeEvent(msg) {
 }
 
 let served = 0;
-setInterval(() => log(`alive · ${served} requests answered for the journal in the last 10 minutes`), 10 * 60_000).unref?.();
+let publicServed = 0;
+setInterval(() => {
+  log(`alive · ${served} requests answered for the journal in the last 10 minutes${publicServed ? ` (${publicServed} of them market data for the screener)` : ""}`);
+  served = 0;
+  publicServed = 0;
+}, 10 * 60_000).unref?.();
 
 /* ------------------------------ the journal ------------------------------ */
 
@@ -156,7 +181,7 @@ async function connect(facts) {
   ws.onopen = () => {
     backoff = 1_000;
     log(`connected to ${URL_}`);
-    ws.send(JSON.stringify({ t: "hello", env: ENV, canTrade: facts.canTrade, keyHint: KEY.slice(-8) }));
+    ws.send(JSON.stringify({ t: "hello", env: ENV, canTrade: facts.canTrade, keyHint: KEY.slice(-8), features: ["public"] }));
   };
   ws.onmessage = async (ev) => {
     let m;
@@ -169,7 +194,8 @@ async function connect(facts) {
       try {
         // The venue's own hosts are asked as named; anything else — a stub the server was pointed at — becomes this relay's futures host.
         const base = /binance(future)?\.com$/.test(new URL(m.base).hostname) ? m.base : FUTURES;
-        const r = m.path === "/fapi/v1/listenKey" ? await unsignedWithKey(m.method, base, m.path) : await signed(m.method, base, m.path, m.params ?? {});
+        const r = m.public ? await publicGet(m.path, m.params ?? {}) : m.path === "/fapi/v1/listenKey" ? await unsignedWithKey(m.method, base, m.path) : await signed(m.method, base, m.path, m.params ?? {});
+        if (m.public) publicServed += 1;
         served += 1;
         if (r.status !== 200) log(`${m.method} ${m.path} → HTTP ${r.status} ${r.body.slice(0, 120)}`);
         ws.send(JSON.stringify({ t: "res", id: m.id, status: r.status, body: r.body }));
