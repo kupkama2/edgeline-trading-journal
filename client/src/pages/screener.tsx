@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Loader2, RefreshCw, Settings2 } from "lucide-react";
+import { Loader2, RefreshCw, Search, Settings2 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,7 +9,7 @@ import { useToast } from "@/hooks/use-toast";
 import { ScreenerTable, type Filter } from "@/components/screener/table";
 import { SpaghettiChart } from "@/components/screener/chart";
 import { CoinDrawer } from "@/components/screener/drawer";
-import { fmtPrague, useSaveScreenerSettings, useScreener, useScreenerLines, useScreenerRefresh, useScreenerStatus } from "@/lib/screener";
+import { fmtPrague, useSaveScreenerSettings, useScreener, useScreenerLines, useScreenerLookup, useScreenerRefresh, useScreenerStatus } from "@/lib/screener";
 import { TIMEFRAMES, type ScreenerRow, type Timeframe } from "@shared/screener";
 
 const TF_KEY = "edgeline.screener.tf";
@@ -50,6 +50,7 @@ export default function ScreenerPage() {
     }
   }, [tf]);
   const [filter, setFilter] = useState<Filter>("all");
+  const [search, setSearch] = useState("");
   const [open, setOpen] = useState<string | null>(null);
   // The chart's set: the default for the timeframe until a row is toggled by hand.
   const [picked, setPicked] = useState<Set<string> | null>(null);
@@ -95,6 +96,10 @@ export default function ScreenerPage() {
 
   const run = page.data?.run ?? null;
   const settings = page.data?.settings;
+  // A search that matches no row asks the server why: not listed, under the volume line, or read failed.
+  const q = search.trim();
+  const matches = useMemo(() => (q ? rows.filter((r) => r.coin.toLowerCase().includes(q.toLowerCase())).length : -1), [rows, q]);
+  const lookup = useScreenerLookup(q && matches === 0 && /^[A-Za-z0-9:_-]{1,24}$/.test(q) ? q : null);
   const counts = useMemo(() => {
     const c = { candidates: 0, fast: 0, weakest: 0 };
     for (const r of rows) {
@@ -178,6 +183,17 @@ export default function ScreenerPage() {
       <Card className="border-card-border bg-card p-3 sm:p-4">
         <div className="flex flex-wrap items-center gap-2">
           <Segmented value={tf} onChange={setTf} options={TIMEFRAMES.map((t) => ({ id: t, label: t }))} size="sm" ariaLabel="Timeframe" testId="screener-tf" />
+          <label className="relative">
+            <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Find a coin"
+              className="h-7 w-32 pl-7 text-xs"
+              aria-label="Find a coin"
+              data-testid="screener-search"
+            />
+          </label>
           <div className="flex flex-wrap gap-1.5">
             {(
               [
@@ -204,7 +220,12 @@ export default function ScreenerPage() {
           RS change is the alt-over-BTC ratio's move over the timeframe; the arrow says whether the last period beat the mean of the ones before. <b>Candidate</b> = top 10% and accelerating, RVOL ≥ {settings?.rvolMin ?? 1.5}, not leverage-driven. Click a row for the coin; the dot puts it on the chart.
         </p>
         <div className="mt-2">
-          <ScreenerTable rows={rows} tf={tf} filter={filter} rvolMin={settings?.rvolMin ?? 1.5} charted={charted} onToggleChart={toggle} onOpen={setOpen} />
+          <ScreenerTable rows={rows} tf={tf} filter={filter} search={search} rvolMin={settings?.rvolMin ?? 1.5} charted={charted} onToggleChart={toggle} onOpen={setOpen} />
+          {q && matches === 0 && (
+            <p className="px-2 pb-2 text-center text-xs" data-testid="screener-lookup">
+              {lookup.isLoading ? <span className="text-muted-foreground">Looking it up…</span> : lookup.data ? <span className={lookup.data.where === "not-listed" ? "text-amber-500" : "text-foreground/90"}>{lookup.data.reason}</span> : null}
+            </p>
+          )}
         </div>
       </Card>
 

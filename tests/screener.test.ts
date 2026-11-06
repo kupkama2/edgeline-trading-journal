@@ -353,6 +353,15 @@ describe.skipIf(!DB)("the screener's run", () => {
     expect(coin.audit.rs).toBeCloseTo(coin.row.tf["4h"].rs, 12);
     expect(coin.audit.lookbackBars).toBe(4);
     expect(coin.snapshots.length).toBe(2);
+    // The search's lookup: in the table, under the volume line, not an alt, not listed.
+    expect((await get("/api/screener/lookup/sol")).where).toBe("table");
+    const tiny = await get("/api/screener/lookup/TINY");
+    expect(tiny.where).toBe("under-volume");
+    expect(tiny.reason).toMatch(/\$100K, under the \$5\.0M line/);
+    expect((await get("/api/screener/lookup/USDC")).where).toBe("excluded");
+    const nope = await get("/api/screener/lookup/LIGHTER");
+    expect(nope.where).toBe("not-listed");
+    expect(nope.reason).toMatch(/LIT/);
     const status = await get("/api/screener/status");
     expect(status.running).toBe(false);
     expect(status.nextAllowedAt).toBeTruthy();

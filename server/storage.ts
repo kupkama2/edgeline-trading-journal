@@ -1000,6 +1000,14 @@ export const screenerStore = {
       SELECT DISTINCT ON (coin) at, coin, funding, open_interest FROM screener_snapshots WHERE at < ${before} ORDER BY coin, at DESC`;
     return new Map(rows.map((r) => [r.coin, { at: r.at, funding: r.funding, openInterest: r.open_interest }]));
   },
+  /** Every perp in the most recent snapshot: the whole list the venue gave, filtered or not. */
+  async latestSnapshot(): Promise<{ at: string; coins: { coin: string; volume: number | null; mark: number | null }[] } | null> {
+    const latest = await sql<{ at: string }[]>`SELECT at FROM screener_snapshots ORDER BY at DESC LIMIT 1`;
+    const at = latest[0]?.at;
+    if (!at) return null;
+    const rows = await sql<{ coin: string; volume: number | null; mark: number | null }[]>`SELECT coin, volume, mark FROM screener_snapshots WHERE at = ${at}`;
+    return { at, coins: rows };
+  },
   async snapshotsFor(coin: string, since: string): Promise<{ at: string; funding: number | null; openInterest: number | null; volume: number | null; mark: number | null }[]> {
     const rows = await sql<{ at: string; funding: number | null; open_interest: number | null; volume: number | null; mark: number | null }[]>`
       SELECT at, funding, open_interest, volume, mark FROM screener_snapshots WHERE coin = ${coin} AND at >= ${since} ORDER BY at`;

@@ -23,7 +23,13 @@ import {
   storedSeries,
 } from "./screener";
 import { screenerStore } from "./storage";
-import { blockCandles, CHART_WINDOW_MS, exitPlan, ratioSeries, rebasedLine, TF_SPEC, TIMEFRAMES, type Timeframe } from "@shared/screener";
+import { blockCandles, CHART_WINDOW_MS, exitPlan, NOT_AN_ALT, ratioSeries, rebasedLine, TF_SPEC, TIMEFRAMES, type Timeframe } from "@shared/screener";
+
+const fmtUsd = (x: number | null | undefined) => {
+  if (x == null || !Number.isFinite(x)) return "—";
+  const a = Math.abs(x);
+  return a >= 1e9 ? `$${(x / 1e9).toFixed(1)}B` : a >= 1e6 ? `$${(x / 1e6).toFixed(1)}M` : a >= 1e3 ? `$${(x / 1e3).toFixed(0)}K` : `$${x.toFixed(0)}`;
+};
 
 const tfParam = (v: unknown): Timeframe => (TIMEFRAMES.includes(v as Timeframe) ? (v as Timeframe) : "4h");
 const COIN = /^[A-Za-z0-9:_-]{1,24}$/;
@@ -79,6 +85,39 @@ export function registerScreenerRoutes(app: Express): void {
       lines[coin] = rebasedLine(ratioSeries(alt[base], btc[base]), CHART_WINDOW_MS[tf], now);
     }
     res.json({ tf, now, lines });
+  });
+
+  /** Why a coin is or is not in the table: typed into the search box and found nowhere. */
+  app.get("/api/screener/lookup/:coin", async (req, res) => {
+    const asked = String(req.params.coin).trim();
+    if (!COIN.test(asked)) return res.status(400).json({ message: "No such coin" });
+    const [run, settings, snap] = await Promise.all([latestScreenerRun(), screenerSettings(), screenerStore.latestSnapshot()]);
+    const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+    const row = run?.rows.find((r) => same(r.coin, asked)) ?? null;
+    if (row) return res.json({ asked, coin: row.coin, where: "table", reason: row.error ? `In the table, but its last read failed: ${row.error}` : "In the table." });
+    if (NOT_AN_ALT.test(asked)) return res.json({ asked, coin: asked.toUpperCase(), where: "excluded", reason: "BTC and the dollar-pegged coins are not alts; the screener measures the rest against BTC." });
+    const listed = snap?.coins.find((c) => same(c.coin, asked)) ?? null;
+    if (listed) {
+      const under = (listed.volume ?? 0) < settings.minVolume;
+      return res.json({
+        asked,
+        coin: listed.coin,
+        where: under ? "under-volume" : "not-read",
+        volume: listed.volume,
+        minVolume: settings.minVolume,
+        reason: under
+          ? `Listed on Hyperliquid, but its 24h volume at the last run was ${fmtUsd(listed.volume)}, under the ${fmtUsd(settings.minVolume)} line. Lower the line in the settings and refresh.`
+          : `Listed on Hyperliquid with ${fmtUsd(listed.volume)} of 24h volume, but not in the last run — it was listed after the run started, or was delisted. Refresh.`,
+      });
+    }
+    return res.json({
+      asked,
+      coin: null,
+      where: "not-listed",
+      reason: snap
+        ? `Not on Hyperliquid's perp list at the last run (${new Date(snap.at).toISOString().slice(0, 16).replace("T", " ")}Z). Tokens often trade under another name — Lighter is LIT.`
+        : "No run yet; refresh first.",
+    });
   });
 
   /** One coin for the drawer: price and ratio on the timeframe, volume, the exit plan, the arithmetic, and the funding/OI history. */

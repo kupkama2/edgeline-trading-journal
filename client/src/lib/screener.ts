@@ -101,6 +101,25 @@ export function sizeFor(risk: number, mark: number | null, stop: number | null):
   return { size, notional: size * mark };
 }
 
+export interface ScreenerLookup {
+  asked: string;
+  coin: string | null;
+  where: "table" | "excluded" | "under-volume" | "not-read" | "not-listed";
+  volume?: number | null;
+  minVolume?: number;
+  reason: string;
+}
+
+/** Why a coin typed into the search is or is not in the table; asked only when the search matches no row. */
+export function useScreenerLookup(coin: string | null) {
+  return useQuery<ScreenerLookup>({
+    queryKey: ["/api/screener/lookup", coin],
+    queryFn: async () => (await apiRequest("GET", `/api/screener/lookup/${encodeURIComponent(coin!)}`)).json(),
+    enabled: !!coin,
+    staleTime: 60_000,
+  });
+}
+
 export interface ScreenerNews {
   coin: string;
   links: { label: string; url: string }[];
