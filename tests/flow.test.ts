@@ -341,5 +341,12 @@ describe.skipIf(!DB)("a run with the flow, the map and the read", () => {
     expect(claudeAsked.thinking).toEqual({ type: "adaptive" });
     // Asked again at once: refused, the half-hour has not passed.
     expect((await fetch(`${base}/api/screener/ai`, { method: "POST" })).status).toBe(429);
+    // The track record: the call is on it, priced from the run's own snapshot, nothing scored yet.
+    const track = await (await fetch(`${base}/api/screener/ai/track`)).json();
+    const call = track.calls.find((c: any) => c.coin === "SOL");
+    expect(call).toMatchObject({ stance: "watch", readAt: got.latest.at });
+    expect(call.entry.px).toBeGreaterThan(0);
+    expect(call.moves["4h"]).toBeNull();
+    expect(track.summary.long["24h"].n).toBe(0);
   });
 });

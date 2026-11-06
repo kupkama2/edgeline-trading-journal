@@ -12,7 +12,8 @@
  */
 import Anthropic from "@anthropic-ai/sdk";
 import { notifyAll } from "./events";
-import { screenerAiStore } from "./storage";
+import { screenerAiStore, screenerStore } from "./storage";
+import { summarizeCalls, trackCalls, type CallStance, type PricePoint } from "@shared/ai-track";
 import type { ScreenerRun } from "./screener";
 import type { ScreenerRow, Timeframe } from "@shared/screener";
 
@@ -74,7 +75,7 @@ function coinDigest(r: ScreenerRow) {
 }
 
 /** The coins worth the read: candidates, the strongest and weakest by agreement, and every coin with a notable anomaly — at most thirty. */
-export function digestOf(run: ScreenerRun, events: { title: string; at: string; impact: string }[] = []) {
+export function digestOf(run: ScreenerRun, events: { title: string; at: string; impact: string }[] = [], trackRecord: unknown = null) {
   const rows = run.rows.filter((r) => !r.error);
   const byScore = [...rows].sort((a, b) => (b.signals?.["1D"]?.score ?? 0) - (a.signals?.["1D"]?.score ?? 0));
   const pick = new Map<string, ScreenerRow>();
@@ -95,6 +96,8 @@ export function digestOf(run: ScreenerRun, events: { title: string; at: string; 
     eventsNext36h: events.map((e) => ({ title: e.title, at: e.at, impact: e.impact })),
     anomalies: run.anomalies.slice(0, 40).map((a) => ({ coin: a.coin, severity: a.severity, kind: a.kind, text: a.text })),
     coins: Array.from(pick.values()).slice(0, 30).map(coinDigest),
+    // How its own calls of the last 30 days went: hits of n, and the mean move in the call's direction (avoid scored as a short).
+    ...(trackRecord ? { yourTrackRecord: trackRecord } : {}),
   };
 }
 
@@ -106,6 +109,8 @@ Your job: say where several independent readings point the same way, and where t
 - Use only the numbers given. Never mention news, events or prices you were not shown.
 - A good long has relative strength rising with taker buying, open interest growing with price (new longs), funding not crowded, and room before short liquidations above. A good short is the mirror. Flag traps: price up on net taker selling, OI up with top-decile funding, a crowd long while top traders are short.
 - Every tip names the readings that agree and the ones that disagree, and an invalidation in plain terms (a relative-strength break, a flow flip, a level from the liquidation bands).
+- Stances: "long" or "short" when the readings line up for that direction. "avoid" only when there is no edge either way: readings conflict, or both sides are crowded. If the evidence points down (fading relative strength, net taker selling, crowded longs), the call is "short", not "avoid". "watch" is a setup still forming: say what would trigger it.
+- Your calls are scored afterwards on the price move at 4 hours, 1 day, 3 days and a week ("avoid" scored as a short). yourTrackRecord, when given, is that score for the last 30 days: lean on the stances that have worked and be more careful with the ones that have not.
 - If a high-impact release (CPI, NFP, FOMC, PPI…) is due within the horizon of a tip, say so in that tip: volatility around it can run stops either way.
 - Be brief and concrete. No disclaimers.
 
@@ -171,7 +176,7 @@ export function analyzeRun(run: ScreenerRun): Promise<void> {
         max_tokens: 8000,
         thinking: { type: "adaptive" },
         system: SYSTEM,
-        messages: [{ role: "user", content: `Screener run:\n${JSON.stringify(digestOf(run, await upcomingEvents()))}` }],
+        messages: [{ role: "user", content: `Screener run:\n${JSON.stringify(digestOf(run, await upcomingEvents(), await trackRecordForPrompt()))}` }],
       } as any);
       const text = (res as any).content
         .filter((b: any) => b.type === "text")
@@ -183,10 +188,67 @@ export function analyzeRun(run: ScreenerRun): Promise<void> {
       await screenerAiStore.save({ at, runId: run.id, model: AI_MODEL, body: null, error: String(err?.message ?? err).slice(0, 300) }).catch(() => {});
     } finally {
       running = null;
+      trackCache = null;
       notifyAll("screener");
     }
   })();
   return running;
+}
+
+/**
+ * The track record: every call of the last `days` days priced from the
+ * hourly snapshots, and the summary per stance. Kept five minutes; a new
+ * read clears it.
+ */
+const TRACK_TTL_MS = 5 * 60_000;
+let trackCache: { at: number; days: number; value: Awaited<ReturnType<typeof computeTrack>> } | null = null;
+
+async function computeTrack(days: number, now = Date.now()) {
+  const since = new Date(now - days * 86400_000).toISOString();
+  const rows = await screenerAiStore.since(since);
+  const reads = rows
+    .map((r) => {
+      try {
+        const body = JSON.parse(r.body) as AiRead;
+        return { id: r.id, at: r.at, tips: (body.tips ?? []).map((t) => ({ coin: t.coin, stance: t.stance as CallStance, confidence: t.confidence, horizon: t.horizon })) };
+      } catch {
+        return null;
+      }
+    })
+    .filter((r): r is NonNullable<typeof r> => !!r && r.tips.length > 0);
+  const coins = Array.from(new Set(["BTC", ...reads.flatMap((r) => r.tips.map((t) => t.coin))]));
+  // An hour before the first read, so its start price is in hand.
+  const marks = reads.length ? await screenerStore.marksSince(new Date(new Date(reads[0].at).getTime() - 3 * 3600_000).toISOString(), coins) : [];
+  const series = new Map<string, PricePoint[]>();
+  for (const m of marks) {
+    if (!series.has(m.coin)) series.set(m.coin, []);
+    series.get(m.coin)!.push({ at: new Date(m.at).getTime(), mark: m.mark });
+  }
+  const calls = trackCalls(reads, series, now);
+  return { since, calls: calls.reverse(), summary: summarizeCalls(calls) };
+}
+
+export async function aiTrackRecord(days = 30) {
+  if (trackCache && trackCache.days === days && Date.now() - trackCache.at < TRACK_TTL_MS) return trackCache.value;
+  const value = await computeTrack(days);
+  trackCache = { at: Date.now(), days, value };
+  return value;
+}
+
+/** The summary in a few numbers for the prompt: hits of n and the mean directional move, per stance, at a day, three days and a week. */
+async function trackRecordForPrompt(): Promise<unknown> {
+  try {
+    const { summary } = await aiTrackRecord();
+    const pct = (x: number | null) => (x == null ? null : Math.round(x * 1000) / 10);
+    const out: Record<string, unknown> = {};
+    for (const [stance, cells] of Object.entries(summary)) {
+      if (!cells["24h"].n && !cells["3d"].n && !cells["1w"].n) continue;
+      out[stance] = { day: { hits: cells["24h"].hits, n: cells["24h"].n, avgPct: pct(cells["24h"].avg) }, threeDays: { hits: cells["3d"].hits, n: cells["3d"].n, avgPct: pct(cells["3d"].avg) }, week: { hits: cells["1w"].hits, n: cells["1w"].n, avgPct: pct(cells["1w"].avg) } };
+    }
+    return Object.keys(out).length ? out : null;
+  } catch {
+    return null;
+  }
 }
 
 export async function latestAiRead(): Promise<{ at: string; runId: number | null; model: string | null; read: AiRead | null; error: string | null } | null> {

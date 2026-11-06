@@ -1,3 +1,4 @@
+import type { CallStance, TrackCell, TrackKey, TrackedCall } from "@shared/ai-track";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "./queryClient";
 import type { ExitPlan, ScreenerCandle, ScreenerRow, ScreenerSettings, Timeframe } from "@shared/screener";
@@ -40,8 +41,8 @@ export function useScreenerStatus(running: boolean) {
 }
 
 export const invalidateScreener = () => {
-  // The prefix covers the page, the status, the lines and the coins.
-  void queryClient.invalidateQueries({ queryKey: ["/api/screener"] });
+  // Every screener query: the page, the status, the lines, the coins, the AI read and its track record.
+  void queryClient.invalidateQueries({ predicate: (q) => typeof q.queryKey[0] === "string" && q.queryKey[0].startsWith("/api/screener") });
 };
 
 export function useScreenerRefresh() {
@@ -226,6 +227,11 @@ export interface AiAnswer {
 
 export function useScreenerAi() {
   return useQuery<AiAnswer>({ queryKey: ["/api/screener/ai"], refetchInterval: (q) => (q.state.data?.status.running ? 10_000 : false) });
+}
+
+/** How the AI read's calls did, priced from the hourly snapshots. */
+export function useScreenerAiTrack() {
+  return useQuery<{ since: string; calls: TrackedCall[]; summary: Record<CallStance, Record<TrackKey, TrackCell>> }>({ queryKey: ["/api/screener/ai/track"], staleTime: 5 * 60_000 });
 }
 
 export function useAskScreenerAi() {

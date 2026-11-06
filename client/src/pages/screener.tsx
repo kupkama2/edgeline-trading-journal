@@ -253,8 +253,6 @@ export default function ScreenerPage() {
         </div>
       </div>
 
-      {run && <ScreenerInsights run={run} onOpen={setOpen} />}
-
       <Card className="border-card-border bg-card p-3 sm:p-4">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
           <h2 className="text-sm font-semibold">Relative strength vs BTC · {tf}</h2>
@@ -266,6 +264,8 @@ export default function ScreenerPage() {
           <SpaghettiChart lines={lines.data?.lines ?? {}} order={drawn} colors={loaded} resetKey={resetCount} loading={lines.isLoading} onHide={toggle} onSolo={solo} />
         </div>
       </Card>
+
+      {run && <ScreenerInsights run={run} onOpen={setOpen} />}
 
       <Card className="border-card-border bg-card p-3 sm:p-4">
         <div className="flex flex-wrap items-center gap-2">
