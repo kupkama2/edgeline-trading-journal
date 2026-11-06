@@ -1,14 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { ColorType, createChart, LineSeries, type UTCTimestamp } from "lightweight-charts";
-import { AlertTriangle, Loader2, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { AlertTriangle, Eye, EyeOff, Loader2, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import type { AddressKind, PortfolioRead, Position, VaultHolding } from "@shared/portfolio";
+import { DUST_USD, isDust, type AddressKind, type PortfolioRead, type Position, type VaultHolding } from "@shared/portfolio";
 import { fmtAmount, fmtMoney } from "@shared/metrics";
 
 type Page = PortfolioRead & { history: { at: string; value: number; pnl: number }[] };
@@ -71,6 +71,91 @@ function ValueChart({ history }: { history: Page["history"] }) {
   return <div ref={host} className="h-44 w-full" data-testid="portfolio-chart" />;
 }
 
+/** Why a row is out of the default view, if it is. */
+type Shade = "hidden" | "dust" | null;
+
+/** The eye at the end of a row: hide it, or bring a hidden one back. */
+function HideButton({ k, hidden, onHide }: { k: string; hidden: boolean; onHide: (key: string, hidden: boolean) => void }) {
+  return (
+    <button
+      type="button"
+      onClick={() => onHide(k, !hidden)}
+      className="rounded p-0.5 text-muted-foreground hover:text-foreground"
+      title={hidden ? "Show again, and count it in the totals" : "Hide, and leave it out of the totals"}
+      aria-label={hidden ? "Unhide" : "Hide"}
+      data-testid={`portfolio-hide-${k}`}
+    >
+      {hidden ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
+    </button>
+  );
+}
+
+const ShadeTag = ({ shade }: { shade: Shade }) =>
+  shade ? (
+    <span className="ml-1 rounded border border-border px-1 text-[9px] uppercase tracking-wider text-muted-foreground" title={shade === "dust" ? `Worth under ${DUST_USD} dollars, or no price` : "Hidden by you, left out of the totals"}>
+      {shade}
+    </span>
+  ) : null;
+
+/**
+ * A P&L figure that can be rewritten: a click on the pencil turns it into a
+ * field, Enter or leaving it saves, blank goes back to the source's figure.
+ */
+function PnlCell({ k, pnl, pct: pctOf, own, onSave, big = false }: { k: string; pnl: number | null; pct?: number | null; own: boolean; onSave: (key: string, pnl: number | null) => void; big?: boolean }) {
+  const [editing, setEditing] = useState(false);
+  const [v, setV] = useState("");
+  if (editing) {
+    const done = () => {
+      setEditing(false);
+      const raw = v.trim();
+      const n = raw === "" ? null : Number(raw.replace(/[$,\s]/g, "").replace(/^\+/, "").replace("\u2212", "-"));
+      if (n === null ? own : Number.isFinite(n) && n !== pnl) onSave(k, n);
+    };
+    return (
+      <Input
+        autoFocus
+        value={v}
+        onChange={(e) => setV(e.target.value)}
+        onBlur={done}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+          if (e.key === "Escape") setEditing(false);
+        }}
+        placeholder="P&L, blank = source"
+        inputMode="decimal"
+        className="ml-auto h-6 w-28 px-1.5 text-right font-mono text-[11px]"
+        data-testid={`portfolio-pnl-input-${k}`}
+      />
+    );
+  }
+  return (
+    <span className="group inline-flex items-center justify-end gap-1">
+      <span className={tone(pnl)}>
+        {usd(pnl, true)}
+        {pctOf !== undefined && pnl != null && <span className="ml-1 text-[10px]">{pct(pctOf)}</span>}
+      </span>
+      {own && (
+        <span className="text-[9px] text-sky-400" title="Your figure, over the source's. Edit it and leave it blank to go back.">
+          yours
+        </span>
+      )}
+      <button
+        type="button"
+        onClick={() => {
+          setV(own && pnl != null ? String(pnl) : "");
+          setEditing(true);
+        }}
+        className={`rounded p-0.5 text-muted-foreground hover:text-foreground ${big ? "" : "opacity-0 group-hover:opacity-100 focus:opacity-100"}`}
+        title="Rewrite this P&L"
+        aria-label="Rewrite P&L"
+        data-testid={`portfolio-pnl-edit-${k}`}
+      >
+        <Pencil className="h-3 w-3" />
+      </button>
+    </span>
+  );
+}
+
 /** A wallet token's cost, typed in; blank clears it. */
 function CostCell({ p, onSave }: { p: Position; onSave: (key: string, cost: number | null) => void }) {
   const [v, setV] = useState(p.cost != null && p.costFrom === "owner" ? String(p.cost) : "");
@@ -105,21 +190,67 @@ export default function PortfolioPage() {
   });
   const remove = useMutation({ mutationFn: async (id: number) => (await apiRequest("DELETE", `/api/portfolio/addresses/${id}`)).json(), onSuccess: invalidate });
   const saveCost = useMutation({ mutationFn: async (b: { key: string; cost: number | null }) => (await apiRequest("PUT", "/api/portfolio/cost", b)).json(), onSuccess: invalidate });
+  const hide = useMutation({ mutationFn: async (b: { key: string; hidden: boolean }) => (await apiRequest("PUT", "/api/portfolio/hidden", b)).json(), onSuccess: invalidate });
+  const onHide = (key: string, hidden: boolean) => hide.mutate({ key, hidden });
+  const savePnl = useMutation({ mutationFn: async (b: { key: string; pnl: number | null }) => (await apiRequest("PUT", "/api/portfolio/pnl", b)).json(), onSuccess: invalidate });
+  const onPnl = (key: string, pnl: number | null) => savePnl.mutate({ key, pnl });
+  // The P&L up top can be kept off the screen; remembered in this browser.
+  const [pnlOff, setPnlOff] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("edgeline.portfolio.pnlOff") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const togglePnl = () =>
+    setPnlOff((x) => {
+      try {
+        localStorage.setItem("edgeline.portfolio.pnlOff", x ? "0" : "1");
+      } catch {
+        /* fine */
+      }
+      return !x;
+    });
 
   const [kind, setKind] = useState<AddressKind>("hyperliquid");
   const [address, setAddress] = useState("");
   const [label, setLabel] = useState("");
-  const [showDust, setShowDust] = useState(false);
+  // Dust and what the owner hid stay off the page until asked for; remembered in this browser.
+  const [showHidden, setShowHidden] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("edgeline.portfolio.showHidden") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const toggleHidden = () =>
+    setShowHidden((x) => {
+      try {
+        localStorage.setItem("edgeline.portfolio.showHidden", x ? "0" : "1");
+      } catch {
+        /* fine */
+      }
+      return !x;
+    });
 
   const d = page.data;
+  const hiddenKeys = useMemo(() => new Set(d?.hidden ?? []), [d]);
+  const shadeOf = (key: string, p?: Position): Shade => (hiddenKeys.has(key) ? "hidden" : p && isDust(p) ? "dust" : null);
   const perps = d?.positions.filter((p) => p.source === "hl-perp") ?? [];
-  const spot = d?.positions.filter((p) => p.source === "hl-spot") ?? [];
-  const wallets = useMemo(() => {
-    const all = d?.positions.filter((p) => p.source === "evm" || p.source === "solana") ?? [];
-    // Unpriced or under a dollar: airdropped junk, mostly. Hidden unless asked for.
-    const shown = showDust ? all : all.filter((p) => p.value != null && p.value >= 1);
-    return { shown: shown.sort((a, b) => (b.value ?? -1) - (a.value ?? -1)), hidden: all.length - shown.length };
-  }, [d, showDust]);
+  const byValue = (a: Position, b: Position) => (b.value ?? -1) - (a.value ?? -1);
+  const sorted = (rows: Position[]) => {
+    const all = [...rows].sort(byValue);
+    return { shown: showHidden ? all : all.filter((p) => !shadeOf(p.key, p)), out: all.filter((p) => shadeOf(p.key, p)).length };
+  };
+  const spot = useMemo(() => sorted(d?.positions.filter((p) => p.source === "hl-spot") ?? []), [d, showHidden, hiddenKeys]);
+  const wallets = useMemo(() => sorted(d?.positions.filter((p) => p.source === "evm" || p.source === "solana") ?? []), [d, showHidden, hiddenKeys]);
+  const vaults = useMemo(() => (d?.vaults ?? []).filter((v) => showHidden || !hiddenKeys.has(v.key)), [d, showHidden, hiddenKeys]);
+  const counts = useMemo(() => {
+    const present = [...(d?.positions ?? []).map((p) => p.key), ...(d?.vaults ?? []).map((v) => v.key)];
+    const hidden = present.filter((k) => hiddenKeys.has(k)).length;
+    const dust = (d?.positions ?? []).filter((p) => !hiddenKeys.has(p.key) && isDust(p)).length;
+    return { hidden, dust };
+  }, [d, hiddenKeys]);
   const change24 = useMemo(() => {
     const h = d?.history ?? [];
     if (!d || h.length === 0) return null;
@@ -145,10 +276,18 @@ export default function PortfolioPage() {
           <h1 className="text-xl font-bold tracking-tight">Portfolio</h1>
           <p className="text-[11px] text-muted-foreground">{d ? `Read ${new Date(d.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · Hyperliquid vaults and accounts, EVM and Solana wallets · read-only` : page.isLoading ? "Reading…" : ""}</p>
         </div>
-        <Button size="sm" variant="outline" className="h-8" onClick={() => refresh.mutate()} disabled={refresh.isPending} data-testid="portfolio-refresh">
-          {refresh.isPending ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-1 h-3.5 w-3.5" />}
-          Refresh
-        </Button>
+        <div className="flex items-center gap-2">
+          {(counts.hidden > 0 || counts.dust > 0) && (
+            <Button size="sm" variant={showHidden ? "secondary" : "ghost"} className="h-8 text-xs" onClick={toggleHidden} aria-pressed={showHidden} data-testid="portfolio-show-hidden">
+              {showHidden ? <EyeOff className="mr-1 h-3.5 w-3.5" /> : <Eye className="mr-1 h-3.5 w-3.5" />}
+              {showHidden ? "Hide dust and hidden" : `Show ${[counts.dust ? `${counts.dust} dust` : "", counts.hidden ? `${counts.hidden} hidden` : ""].filter(Boolean).join(" · ")}`}
+            </Button>
+          )}
+          <Button size="sm" variant="outline" className="h-8" onClick={() => refresh.mutate()} disabled={refresh.isPending} data-testid="portfolio-refresh">
+            {refresh.isPending ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-1 h-3.5 w-3.5" />}
+            Refresh
+          </Button>
+        </div>
       </div>
 
       {/* ------------------------------ the totals ------------------------------ */}
@@ -161,9 +300,22 @@ export default function PortfolioPage() {
               <p className={`font-mono text-[11px] ${tone(change24)}`}>{change24 != null ? `${usd(change24, true)} 24h` : "24h change once a day of snapshots exists"}</p>
             </div>
             <div>
-              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">P&L the sources state</p>
-              <p className={`font-mono text-2xl font-bold ${tone(d.totals.pnl)}`} data-testid="portfolio-pnl">{usd(d.totals.pnl, true)}</p>
-              <p className="text-[11px] text-muted-foreground">on {usd(d.totals.valueWithCost)} with a known cost, plus open perps</p>
+              <p className="flex items-center gap-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+                P&L
+                <button type="button" onClick={togglePnl} className="rounded p-0.5 hover:text-foreground" title={pnlOff ? "Show the P&L" : "Hide the P&L from this card"} aria-pressed={pnlOff} data-testid="portfolio-pnl-toggle">
+                  {pnlOff ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3" />}
+                </button>
+              </p>
+              {pnlOff ? (
+                <p className="font-mono text-2xl font-bold text-muted-foreground" data-testid="portfolio-pnl">
+                  hidden
+                </p>
+              ) : (
+                <>
+                  <p className={`font-mono text-2xl font-bold ${tone(d.totals.pnl)}`} data-testid="portfolio-pnl">{usd(d.totals.pnl, true)}</p>
+                  <p className="text-[11px] text-muted-foreground">on {usd(d.totals.valueWithCost)} with a known cost or your own P&L, plus open perps. Click a row's P&L to rewrite it.</p>
+                </>
+              )}
             </div>
             <div>
               <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Vaults · HL accounts</p>
@@ -175,6 +327,11 @@ export default function PortfolioPage() {
               <ValueChart history={d.history} />
             </div>
           </div>
+          {counts.hidden > 0 && (
+            <p className="mt-2 text-[11px] text-muted-foreground" data-testid="portfolio-hidden-note">
+              {counts.hidden} hidden {counts.hidden === 1 ? "holding is" : "holdings are"} left out of these totals. Dust under ${DUST_USD} is counted.
+            </p>
+          )}
           {d.errors.length > 0 && (
             <ul className="mt-3 space-y-0.5 text-[11px]" data-testid="portfolio-errors">
               {d.errors.map((e, i) => (
@@ -188,7 +345,7 @@ export default function PortfolioPage() {
       )}
 
       {/* ------------------------------ vaults ------------------------------ */}
-      {d && d.vaults.length > 0 && (
+      {d && vaults.length > 0 && (
         <Card className="border-card-border bg-card p-4" data-testid="portfolio-vaults">
           <h2 className="text-sm font-semibold">Hyperliquid vaults</h2>
           <div className="mt-2 overflow-x-auto">
@@ -202,27 +359,31 @@ export default function PortfolioPage() {
                   <th className="py-1 text-right">Days in</th>
                   <th className="py-1 text-right">Vault APR</th>
                   <th className="py-1 text-right">Vault, 30d</th>
+                  <th className="w-6" />
                 </tr>
               </thead>
               <tbody>
-                {d.vaults.map((v: VaultHolding) => (
-                  <tr key={v.key} className="border-t border-border/40" data-testid={`portfolio-vault-${v.vaultAddress}`}>
+                {vaults.map((v: VaultHolding) => (
+                  <tr key={v.key} className={`border-t border-border/40 ${hiddenKeys.has(v.key) ? "opacity-50" : ""}`} data-testid={`portfolio-vault-${v.vaultAddress}`}>
                     <td className="py-1.5">
                       <a href={`https://app.hyperliquid.xyz/vaults/${v.vaultAddress}`} target="_blank" rel="noreferrer" className="font-semibold hover:text-sky-400">
                         {v.name}
                       </a>
                       <span className="ml-1 text-[10px] text-muted-foreground">{v.label ?? short(v.address)}{v.lockedUntil && v.lockedUntil > Date.now() ? ` · locked until ${new Date(v.lockedUntil).toLocaleDateString()}` : ""}</span>
+                      <ShadeTag shade={shadeOf(v.key)} />
                     </td>
                     <td className="py-1.5 text-right font-mono">{usd(v.equity)}</td>
-                    <td className={`py-1.5 text-right font-mono ${tone(v.pnl)}`}>
-                      {usd(v.pnl, true)}
-                      {v.pnl != null && v.equity - v.pnl > 0 && <span className="ml-1 text-[10px]">{pct(v.pnl / (v.equity - v.pnl))}</span>}
+                    <td className="py-1.5 text-right font-mono">
+                      <PnlCell k={v.key} pnl={v.pnl} pct={v.pnl != null && v.equity - v.pnl > 0 ? v.pnl / (v.equity - v.pnl) : null} own={v.pnlFrom === "owner"} onSave={onPnl} />
                     </td>
                     <td className={`py-1.5 text-right font-mono ${tone(v.allTimePnl)}`}>{usd(v.allTimePnl, true)}</td>
                     <td className="py-1.5 text-right font-mono">{v.daysFollowing ?? "—"}</td>
                     <td className={`py-1.5 text-right font-mono ${tone(v.apr)}`}>{pct(v.apr)}</td>
                     <td className="py-1.5 text-right">
                       <Sparkline points={v.history} />
+                    </td>
+                    <td className="py-1.5 pl-2 text-right">
+                      <HideButton k={v.key} hidden={hiddenKeys.has(v.key)} onHide={onHide} />
                     </td>
                   </tr>
                 ))}
@@ -233,7 +394,7 @@ export default function PortfolioPage() {
       )}
 
       {/* ------------------------------ Hyperliquid accounts ------------------------------ */}
-      {d && (perps.length > 0 || spot.length > 0) && (
+      {d && (perps.length > 0 || spot.shown.length > 0 || spot.out > 0) && (
         <Card className="border-card-border bg-card p-4" data-testid="portfolio-hl">
           <div className="flex flex-wrap items-baseline justify-between gap-2">
             <h2 className="text-sm font-semibold">Hyperliquid accounts</h2>
@@ -277,22 +438,19 @@ export default function PortfolioPage() {
               </table>
             </div>
           )}
-          {spot.length > 0 && <HoldingsTable rows={spot} title="Spot on Hyperliquid" onCost={(key, cost) => saveCost.mutate({ key, cost })} testId="portfolio-spot" />}
+          {spot.shown.length > 0 && <HoldingsTable rows={spot.shown} title="Spot on Hyperliquid" onCost={(key, cost) => saveCost.mutate({ key, cost })} onPnl={onPnl} onHide={onHide} shadeOf={shadeOf} testId="portfolio-spot" />}
+          {!showHidden && spot.out > 0 && <p className="mt-2 text-[11px] text-muted-foreground">{spot.out} spot {spot.out === 1 ? "balance" : "balances"} out of view: dust or hidden.</p>}
         </Card>
       )}
 
       {/* ------------------------------ wallets ------------------------------ */}
-      {d && (wallets.shown.length > 0 || wallets.hidden > 0) && (
+      {d && (wallets.shown.length > 0 || wallets.out > 0) && (
         <Card className="border-card-border bg-card p-4" data-testid="portfolio-wallets">
           <div className="flex flex-wrap items-baseline justify-between gap-2">
             <h2 className="text-sm font-semibold">Wallets</h2>
-            {wallets.hidden > 0 || showDust ? (
-              <button type="button" className="text-[11px] text-muted-foreground hover:text-foreground" onClick={() => setShowDust((x) => !x)} data-testid="portfolio-dust">
-                {showDust ? "Hide unpriced and under $1" : `${wallets.hidden} unpriced or under $1 hidden — show`}
-              </button>
-            ) : null}
+            {!showHidden && wallets.out > 0 && <span className="text-[11px] text-muted-foreground">{wallets.out} out of view: dust or hidden</span>}
           </div>
-          <HoldingsTable rows={wallets.shown} onCost={(key, cost) => saveCost.mutate({ key, cost })} testId="portfolio-wallet-table" showChain />
+          <HoldingsTable rows={wallets.shown} onCost={(key, cost) => saveCost.mutate({ key, cost })} onPnl={onPnl} onHide={onHide} shadeOf={shadeOf} testId="portfolio-wallet-table" showChain />
           <p className="mt-2 text-[11px] text-muted-foreground">A wallet token's cost is not on chain in a form a read can trust — a transfer in is not a purchase — so type what you paid and its P&L appears.</p>
         </Card>
       )}
@@ -340,7 +498,25 @@ export default function PortfolioPage() {
   );
 }
 
-function HoldingsTable({ rows, title, onCost, testId, showChain = false }: { rows: Position[]; title?: string; onCost: (key: string, cost: number | null) => void; testId: string; showChain?: boolean }) {
+function HoldingsTable({
+  rows,
+  title,
+  onCost,
+  onPnl,
+  onHide,
+  shadeOf,
+  testId,
+  showChain = false,
+}: {
+  rows: Position[];
+  title?: string;
+  onCost: (key: string, cost: number | null) => void;
+  onPnl: (key: string, pnl: number | null) => void;
+  onHide: (key: string, hidden: boolean) => void;
+  shadeOf: (key: string, p?: Position) => Shade;
+  testId: string;
+  showChain?: boolean;
+}) {
   if (rows.length === 0) return null;
   return (
     <div className="mt-3 overflow-x-auto" data-testid={testId}>
@@ -354,33 +530,35 @@ function HoldingsTable({ rows, title, onCost, testId, showChain = false }: { row
             <th className="py-1 text-right">Value</th>
             <th className="py-1 text-right">Cost</th>
             <th className="py-1 text-right">P&L</th>
+            <th className="w-6" />
           </tr>
         </thead>
         <tbody>
-          {rows.map((p) => (
-            <tr key={p.key} className="border-t border-border/40" data-testid={`portfolio-row-${p.asset}`}>
+          {rows.map((p) => {
+            const shade = shadeOf(p.key, p);
+            return (
+            <tr key={p.key} className={`border-t border-border/40 ${shade ? "opacity-50" : ""}`} data-testid={`portfolio-row-${p.asset}`}>
               <td className="py-1.5">
                 <span className="font-semibold">{p.asset}</span>
                 <span className="ml-1 text-[10px] text-muted-foreground">
                   {showChain ? `${p.chain} · ` : ""}
                   {p.label ?? short(p.address)}
                 </span>
+                <ShadeTag shade={shade} />
               </td>
               <td className="py-1.5 text-right font-mono">{qty(p.amount)}</td>
               <td className="py-1.5 text-right font-mono">{px(p.price)}</td>
               <td className="py-1.5 text-right font-mono">{usd(p.value)}</td>
               <td className="py-1.5 text-right">{p.asset === "USDC" && p.source === "hl-spot" ? "" : <CostCell p={p} onSave={onCost} />}</td>
-              <td className={`py-1.5 text-right font-mono ${tone(p.pnl)}`}>
-                {p.pnl != null ? (
-                  <>
-                    {usd(p.pnl, true)} <span className="text-[10px]">{pct(p.pnlPct)}</span>
-                  </>
-                ) : (
-                  "—"
-                )}
+              <td className="py-1.5 text-right font-mono">
+                <PnlCell k={p.key} pnl={p.pnl} pct={p.pnlPct} own={p.pnlFrom === "owner"} onSave={onPnl} />
+              </td>
+              <td className="py-1.5 pl-2 text-right">
+                <HideButton k={p.key} hidden={shade === "hidden"} onHide={onHide} />
               </td>
             </tr>
-          ))}
+            );
+          })}
         </tbody>
       </table>
     </div>

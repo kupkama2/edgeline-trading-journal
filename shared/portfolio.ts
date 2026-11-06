@@ -57,6 +57,8 @@ export interface Position {
   costFrom: "venue" | "owner" | null;
   pnl: number | null;
   pnlPct: number | null;
+  /** "owner" when the P&L is the figure the owner typed in, over whatever the source said. */
+  pnlFrom?: "owner";
   /** Perp only. */
   entryPx?: number | null;
   liquidationPx?: number | null;
@@ -75,6 +77,8 @@ export interface VaultHolding {
   equity: number;
   /** The holder's P&L in the vault since entry, and all-time across entries, as the venue states them. */
   pnl: number | null;
+  /** "owner" when the P&L is the figure the owner typed in, over the venue's. */
+  pnlFrom?: "owner";
   allTimePnl: number | null;
   daysFollowing: number | null;
   enteredAt: number | null;
@@ -94,6 +98,8 @@ export interface PortfolioRead {
   accounts: { address: string; label: string | null; accountValue: number | null; withdrawable: number | null }[];
   totals: PortfolioTotals;
   /** What could not be read, per address or chain, in words. */
+  /** Keys of the positions and vaults the owner hid; they are left out of the totals. */
+  hidden: string[];
   /** A source that could not be read; `stale` when an earlier answer stands in for it. */
   errors: { address: string; where: string; message: string; stale?: boolean }[];
 }
@@ -297,7 +303,7 @@ export function totalsOf(read: Pick<PortfolioRead, "positions" | "vaults" | "acc
     read.positions.filter((p) => p.source !== "hl-perp" && p.pnl != null).reduce((s, p) => s + p.pnl!, 0);
   const valueWithCost =
     read.vaults.filter((v) => v.pnl != null).reduce((s, v) => s + v.equity, 0) +
-    read.positions.filter((p) => p.source !== "hl-perp" && p.cost != null).reduce((s, p) => s + (p.value ?? 0), 0);
+    read.positions.filter((p) => p.source !== "hl-perp" && (p.cost != null || p.pnlFrom === "owner")).reduce((s, p) => s + (p.value ?? 0), 0);
   return { value: vaults + hlAccounts + hlSpot + wallets, pnl, valueWithCost, byKind: { vaults, hlAccounts, hlSpot, wallets } };
 }
 
@@ -306,5 +312,21 @@ export function validAddress(kind: AddressKind, address: string): boolean {
   if (kind === "solana") return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(address);
   return /^0x[0-9a-fA-F]{40}$/.test(address);
 }
+
+/**
+ * The owner's own P&L for a holding or a vault, over the source's. A
+ * holding's percentage is read against what it must have cost (value less
+ * P&L); a perp is never rewritten, its P&L is the venue's live figure.
+ */
+export function withOwnPnl<T extends { pnl: number | null; pnlFrom?: "owner" }>(row: T, pnl: number, value: number | null): T {
+  const cost = value != null ? value - pnl : null;
+  return { ...row, pnl, pnlFrom: "owner", ...("pnlPct" in row ? { pnlPct: cost != null && cost !== 0 ? pnl / Math.abs(cost) : null } : {}) };
+}
+
+/** Under this, a holding is dust: shown only on request, still counted in the totals. */
+export const DUST_USD = 5;
+
+/** A spot or wallet holding worth under DUST_USD, or with no price at all (airdropped junk, mostly). Perps and vaults are never dust. */
+export const isDust = (p: Pick<Position, "source" | "value">): boolean => p.source !== "hl-perp" && (p.value == null || Math.abs(p.value) < DUST_USD);
 
 export const positionKey = (kind: AddressKind, address: string, chain: string, asset: string) => `${kind}:${address.toLowerCase()}:${chain}:${asset}`;

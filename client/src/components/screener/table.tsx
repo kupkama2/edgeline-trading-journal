@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { AlertTriangle, ArrowDown, ArrowUp } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowUp, Pin } from "lucide-react";
 import { TIMEFRAMES, type ScreenerRow, type Timeframe } from "@shared/screener";
 import { ACCEL_ARROW, fmtPct, fmtUsd, fmtX, heat } from "@/lib/screener";
 import { useClickOrDouble } from "@/components/screener/chart";
@@ -192,6 +192,11 @@ export function ScreenerTable({
                   >
                     {r.coin}
                   </button>
+                  {r.pinned && (
+                    <span className="ml-0.5 inline-flex text-muted-foreground" title="Pinned from the search: read whatever its volume. Unpin in the settings." data-testid={`screener-pinned-${r.coin}`}>
+                      <Pin className="h-2.5 w-2.5" />
+                    </span>
+                  )}
                   {r.error && (
                     <span className="ml-1 inline-flex items-center gap-0.5 rounded border border-amber-500/50 px-1 text-[9px] font-medium uppercase text-amber-500" title={r.error} data-testid={`screener-error-${r.coin}`}>
                       <AlertTriangle className="h-2.5 w-2.5" /> err

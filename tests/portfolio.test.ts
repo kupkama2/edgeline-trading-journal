@@ -228,6 +228,45 @@ describe.skipIf(!DB)("the portfolio", () => {
     expect(p.history.length).toBe(1);
   });
 
+  it("hides a holding or a vault from the totals and shows it again; an open perp is not hidden", async () => {
+    const all = 12500.5 + 5000 + 3200 + 7000 + 700;
+    const hype = `hyperliquid:${HL}:spot:HYPE`;
+    const vault = `hyperliquid:${HL}:vault:${VAULT}`;
+    expect((await send("PUT", "/api/portfolio/hidden", { key: hype, hidden: true })).status).toBe(200);
+    expect((await send("PUT", "/api/portfolio/hidden", { key: vault, hidden: true })).status).toBe(200);
+    expect((await send("PUT", "/api/portfolio/hidden", { key: `hyperliquid:${HL}:perp:BTC`, hidden: true })).status).toBe(400);
+    let p = await (await send("GET", "/api/portfolio")).json();
+    expect(p.hidden.sort()).toEqual([hype, vault].sort());
+    // Still in the read, so the page can show them on request; out of the totals.
+    expect(p.positions.some((x: any) => x.key === hype)).toBe(true);
+    expect(p.totals.value).toBeCloseTo(all - 3150 - 12500.5, 6);
+    expect(p.totals.pnl).toBeCloseTo(300, 6);
+    await send("PUT", "/api/portfolio/hidden", { key: hype, hidden: false });
+    await send("PUT", "/api/portfolio/hidden", { key: vault, hidden: false });
+    p = await (await send("GET", "/api/portfolio")).json();
+    expect(p.hidden).toEqual([]);
+    expect(p.totals.value).toBeCloseTo(all, 6);
+  });
+
+  it("takes the owner's own P&L for a holding or a vault over the source's, into the totals; blank goes back; never a perp", async () => {
+    const hype = `hyperliquid:${HL}:spot:HYPE`;
+    const vault = `hyperliquid:${HL}:vault:${VAULT}`;
+    expect((await send("PUT", "/api/portfolio/pnl", { key: hype, pnl: 1150 })).status).toBe(200);
+    expect((await send("PUT", "/api/portfolio/pnl", { key: vault, pnl: -500 })).status).toBe(200);
+    expect((await send("PUT", "/api/portfolio/pnl", { key: `hyperliquid:${HL}:perp:BTC`, pnl: 1 })).status).toBe(400);
+    let p = await (await send("GET", "/api/portfolio")).json();
+    // HYPE is worth 3,150: a P&L of 1,150 means it cost 2,000, so +57.5%.
+    expect(p.positions.find((x: any) => x.key === hype)).toMatchObject({ pnl: 1150, pnlFrom: "owner", pnlPct: 0.575 });
+    expect(p.vaults[0]).toMatchObject({ pnl: -500, pnlFrom: "owner" });
+    expect(p.totals.pnl).toBeCloseTo(-500 + 300 + 1150, 6);
+    await send("PUT", "/api/portfolio/pnl", { key: hype, pnl: null });
+    await send("PUT", "/api/portfolio/pnl", { key: vault, pnl: null });
+    p = await (await send("GET", "/api/portfolio")).json();
+    expect(p.positions.find((x: any) => x.key === hype)).toMatchObject({ pnl: 650 });
+    expect(p.positions.find((x: any) => x.key === hype).pnlFrom).toBeUndefined();
+    expect(p.totals.pnl).toBeCloseTo(2500.5 + 300 + 650, 6);
+  });
+
   it("a rate limit is asked again, then answered with the earlier read and a note, and charts nothing", async () => {
     limitHl = true;
     limitedAsks = 0;
@@ -259,5 +298,15 @@ describe.skipIf(!DB)("the portfolio", () => {
     const r = await (await send("GET", "/api/portfolio")).json();
     expect(r.positions.some((x: any) => x.source === "solana")).toBe(false);
     failBase = false;
+  });
+});
+
+describe("dust", () => {
+  it("is a spot or wallet holding under $5 or without a price; never a perp", async () => {
+    const { isDust } = await import("../shared/portfolio");
+    expect(isDust({ source: "evm", value: 4.99 })).toBe(true);
+    expect(isDust({ source: "solana", value: null })).toBe(true);
+    expect(isDust({ source: "hl-spot", value: 5 })).toBe(false);
+    expect(isDust({ source: "hl-perp", value: 1 })).toBe(false);
   });
 });

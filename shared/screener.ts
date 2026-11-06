@@ -87,6 +87,8 @@ export interface TfFlags {
 
 export interface ScreenerRow {
   coin: string;
+  /** Added by hand from the search: read whatever its volume. */
+  pinned?: boolean;
   /** The venue's mark price at the run. */
   mark: number | null;
   /** 24h notional volume in USD. */
@@ -132,7 +134,13 @@ export interface ScreenerSettings {
   riskDollars: number;
   /** The OI jump that, with top-decile funding, reads as leverage-driven. */
   oiJumpMin: number;
+  /** Coins searched for and added by hand: read in every run whatever their volume. */
+  pinned: string[];
 }
+
+type NumericSetting = Exclude<keyof ScreenerSettings, "pinned">;
+export const PIN_LIMIT = 30;
+const PIN_NAME = /^[A-Za-z0-9:_-]{1,24}$/;
 
 export const DEFAULT_SCREENER_SETTINGS: ScreenerSettings = {
   minVolume: 5_000_000,
@@ -140,11 +148,12 @@ export const DEFAULT_SCREENER_SETTINGS: ScreenerSettings = {
   stopLookback: 10,
   riskDollars: 250,
   oiJumpMin: 0.15,
+  pinned: [],
 };
 
 export function readScreenerSettings(raw: unknown): ScreenerSettings {
   const o = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
-  const n = (k: keyof ScreenerSettings, min: number, max: number) => {
+  const n = (k: NumericSetting, min: number, max: number) => {
     const v = Number(o[k]);
     return Number.isFinite(v) && v >= min && v <= max ? v : DEFAULT_SCREENER_SETTINGS[k];
   };
@@ -154,6 +163,7 @@ export function readScreenerSettings(raw: unknown): ScreenerSettings {
     stopLookback: Math.round(n("stopLookback", 2, 200)),
     riskDollars: n("riskDollars", 1, 1e9),
     oiJumpMin: n("oiJumpMin", 0, 10),
+    pinned: Array.isArray(o.pinned) ? Array.from(new Set(o.pinned.filter((c): c is string => typeof c === "string" && PIN_NAME.test(c)))).slice(0, PIN_LIMIT) : [],
   };
 }
 
