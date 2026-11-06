@@ -2,6 +2,7 @@ import "dotenv/config";
 import compression from "compression";
 import express, { Response, NextFunction } from 'express';
 import type { Request } from 'express';
+import { timingSafeEqual } from 'node:crypto';
 import { registerRoutes } from "./routes";
 import { loggableError } from "./errors";
 import { setupAuth, setupAuthStub } from "./auth";
@@ -77,8 +78,10 @@ app.use((req, res, next) => {
   const cronToken = process.env.SCREENER_CRON_TOKEN;
   if (cronToken) {
     app.post("/api/screener/cron", async (req: Request, res: Response) => {
-      const given = String(req.headers.authorization ?? "").replace(/^Bearer\s+/i, "") || String(req.query.token ?? "");
-      if (given !== cronToken) return res.status(401).json({ message: "No" });
+      // The header only — a token in the query string ends up in access logs — and compared in constant time.
+      const given = Buffer.from(String(req.headers.authorization ?? "").replace(/^Bearer\s+/i, ""));
+      const want = Buffer.from(cronToken);
+      if (given.length !== want.length || !timingSafeEqual(given, want)) return res.status(401).json({ message: "No" });
       const { runScreener, screenerStatus } = await import("./screener");
       runScreener({ force: true }).catch(() => {});
       res.json({ started: true, status: screenerStatus() });

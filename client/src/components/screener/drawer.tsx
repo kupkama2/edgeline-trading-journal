@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { CandlestickSeries, ColorType, createChart, CrosshairMode, HistogramSeries, LineSeries, LineStyle, type IChartApi, type UTCTimestamp } from "lightweight-charts";
+import { CandlestickSeries, ColorType, createChart, CrosshairMode, HistogramSeries, LineSeries, LineStyle, type IChartApi, type IPriceLine, type ISeriesApi, type UTCTimestamp } from "lightweight-charts";
 import { ExternalLink, Loader2, Newspaper } from "lucide-react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Segmented } from "@/components/trade-shared";
 import { TIMEFRAMES, type Timeframe } from "@shared/screener";
-import { ACCEL_ARROW, fmtPct, fmtPx, fmtUsd, fmtX, useScreenerCoin, useScreenerNews, type ScreenerCoin, type ScreenerNews } from "@/lib/screener";
+import { ACCEL_ARROW, fmtPct, fmtPx, fmtUsd, fmtX, hostOf, sizeFor, useScreenerCoin, useScreenerNews, type ScreenerCoin, type ScreenerNews } from "@/lib/screener";
 
 function palette(host: HTMLElement) {
   const cs = getComputedStyle(host);
@@ -27,39 +27,68 @@ const baseOptions = (colors: ReturnType<typeof palette>) => ({
   crosshair: { mode: CrosshairMode.Normal },
 });
 
-/** The price, as candles, with the structure stop drawn on it. */
+/** The price, as candles, with the structure stop drawn on it. The chart is made once; data and the line are swapped in place. */
 function PriceChart({ data, stop }: { data: ScreenerCoin["price"]; stop: number | null }) {
   const hostRef = useRef<HTMLDivElement>(null);
+  const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
+  const lineRef = useRef<IPriceLine | null>(null);
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
     const chart = createChart(host, baseOptions(palette(host)));
     chartRef.current = chart;
-    const series = chart.addSeries(CandlestickSeries, { upColor: "#10b981", downColor: "#ef4444", borderUpColor: "#10b981", borderDownColor: "#ef4444", wickUpColor: "#10b981", wickDownColor: "#ef4444", priceLineVisible: false });
-    series.setData(data.map((c) => ({ time: Math.floor(c.t / 1000) as UTCTimestamp, open: c.o, high: c.h, low: c.l, close: c.c })));
-    if (stop != null) series.createPriceLine({ price: stop, color: "#ef4444", lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: "stop" });
-    chart.timeScale().fitContent();
+    seriesRef.current = chart.addSeries(CandlestickSeries, { upColor: "#10b981", downColor: "#ef4444", borderUpColor: "#10b981", borderDownColor: "#ef4444", wickUpColor: "#10b981", wickDownColor: "#ef4444", priceLineVisible: false });
     return () => {
       chart.remove();
       chartRef.current = null;
+      seriesRef.current = null;
+      lineRef.current = null;
     };
-  }, [data, stop]);
+  }, []);
+  useEffect(() => {
+    const series = seriesRef.current;
+    if (!series) return;
+    series.setData(data.map((c) => ({ time: Math.floor(c.t / 1000) as UTCTimestamp, open: c.o, high: c.h, low: c.l, close: c.c })));
+    chartRef.current?.timeScale().fitContent();
+  }, [data]);
+  useEffect(() => {
+    const series = seriesRef.current;
+    if (!series) return;
+    if (lineRef.current) series.removePriceLine(lineRef.current);
+    lineRef.current = stop != null ? series.createPriceLine({ price: stop, color: "#ef4444", lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: "stop" }) : null;
+  }, [stop, data]);
   return <div ref={hostRef} className="h-48 w-full sm:h-56" data-testid="screener-price-chart" />;
 }
 
-/** The RS ratio as a line, the RS invalidation on it, the alt's volume underneath. */
+/** The RS ratio as a line, the RS invalidation on it, the alt's volume underneath. Made once, fed on change. */
 function RatioChart({ data, invalidation }: { data: ScreenerCoin["ratio"]; invalidation: number | null }) {
   const hostRef = useRef<HTMLDivElement>(null);
+  const chartRef = useRef<IChartApi | null>(null);
+  const lineRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const volRef = useRef<ISeriesApi<"Histogram"> | null>(null);
+  const invRef = useRef<IPriceLine | null>(null);
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
     const chart = createChart(host, { ...baseOptions(palette(host)), rightPriceScale: { borderColor: palette(host).grid, scaleMargins: { top: 0.08, bottom: 0.28 } } });
-    const line = chart.addSeries(LineSeries, { color: "#38bdf8", lineWidth: 2, priceLineVisible: false, priceFormat: { type: "price", precision: 6, minMove: 0.000001 } });
-    line.setData(data.map((p) => ({ time: Math.floor(p.t / 1000) as UTCTimestamp, value: p.r })));
-    if (invalidation != null) line.createPriceLine({ price: invalidation, color: "#f59e0b", lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: "RS inv." });
-    const vol = chart.addSeries(HistogramSeries, { priceScaleId: "vol", color: "rgba(148, 163, 184, 0.45)", priceFormat: { type: "volume" }, lastValueVisible: false, priceLineVisible: false });
+    chartRef.current = chart;
+    lineRef.current = chart.addSeries(LineSeries, { color: "#38bdf8", lineWidth: 2, priceLineVisible: false, priceFormat: { type: "price", precision: 6, minMove: 0.000001 } });
+    volRef.current = chart.addSeries(HistogramSeries, { priceScaleId: "vol", color: "rgba(148, 163, 184, 0.45)", priceFormat: { type: "volume" }, lastValueVisible: false, priceLineVisible: false });
     chart.priceScale("vol").applyOptions({ scaleMargins: { top: 0.78, bottom: 0 } });
+    return () => {
+      chart.remove();
+      chartRef.current = null;
+      lineRef.current = null;
+      volRef.current = null;
+      invRef.current = null;
+    };
+  }, []);
+  useEffect(() => {
+    const line = lineRef.current;
+    const vol = volRef.current;
+    if (!line || !vol) return;
+    line.setData(data.map((p) => ({ time: Math.floor(p.t / 1000) as UTCTimestamp, value: p.r })));
     vol.setData(
       data.map((p, i) => ({
         time: Math.floor(p.t / 1000) as UTCTimestamp,
@@ -67,9 +96,14 @@ function RatioChart({ data, invalidation }: { data: ScreenerCoin["ratio"]; inval
         color: i > 0 && p.r >= data[i - 1].r ? "rgba(16, 185, 129, 0.45)" : "rgba(239, 68, 68, 0.45)",
       })),
     );
-    chart.timeScale().fitContent();
-    return () => chart.remove();
-  }, [data, invalidation]);
+    chartRef.current?.timeScale().fitContent();
+  }, [data]);
+  useEffect(() => {
+    const line = lineRef.current;
+    if (!line) return;
+    if (invRef.current) line.removePriceLine(invRef.current);
+    invRef.current = invalidation != null ? line.createPriceLine({ price: invalidation, color: "#f59e0b", lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: "RS inv." }) : null;
+  }, [invalidation, data]);
   return <div ref={hostRef} className="h-56 w-full sm:h-64" data-testid="screener-ratio-chart" />;
 }
 
@@ -92,8 +126,9 @@ export function CoinDrawer({
   onClose: () => void;
 }) {
   const [riskText, setRiskText] = useState(String(defaultRisk));
+  useEffect(() => setRiskText(String(defaultRisk)), [defaultRisk]);
   const risk = Number(riskText) > 0 ? Number(riskText) : defaultRisk;
-  const q = useScreenerCoin(coin, tf, risk);
+  const q = useScreenerCoin(coin, tf);
   const news = useScreenerNews();
   const [got, setGot] = useState<ScreenerNews | null>(null);
   useEffect(() => {
@@ -105,6 +140,7 @@ export function CoinDrawer({
   const row = d?.row ?? null;
   const m = row?.tf[tf];
   const plan = d?.plan;
+  const sized = plan ? sizeFor(risk, d?.mark ?? null, plan.structureStop) : { size: null, notional: null };
   return (
     <Sheet open={!!coin} onOpenChange={(o) => !o && onClose()}>
       <SheetContent side="right" className="w-full overflow-y-auto p-4 sm:max-w-xl" data-testid="screener-drawer">
@@ -139,7 +175,9 @@ export function CoinDrawer({
         {d && d.price.length === 0 && <p className="mt-6 text-xs text-muted-foreground">No stored candles for this coin yet. The next run reads them.</p>}
         {d && d.price.length > 0 && (
           <>
-            <p className="mt-3 text-[10px] uppercase tracking-wider text-muted-foreground">Price · {tf}</p>
+            <p className="mt-3 text-[10px] uppercase tracking-wider text-muted-foreground">
+              Price · {tf} · bars to {new Date(d.barsTo).toISOString().slice(11, 16)}Z
+            </p>
             <PriceChart data={d.price} stop={plan?.structureStop ?? null} />
             <p className="mt-3 text-[10px] uppercase tracking-wider text-muted-foreground">RS ratio vs BTC · {tf} · volume below</p>
             <RatioChart data={d.ratio} invalidation={plan?.rsInvalidation ?? null} />
@@ -162,7 +200,9 @@ export function CoinDrawer({
                 <dd className="font-mono text-red-400" data-testid="screener-stop">
                   {fmtPx(plan.structureStop)}
                 </dd>
-                <dd className="text-[10px] text-muted-foreground">lowest low of the last {d?.stopLookback ?? "N"} {tf} candles</dd>
+                <dd className="text-[10px] text-muted-foreground">
+                  {plan.structureStop != null ? `lowest low of the last ${plan.stopCandles} ${tf} candles` : `fewer than ${d?.stopLookback ?? "N"} ${tf} candles on record`}
+                </dd>
               </div>
               <div>
                 <dt className="text-[10px] uppercase tracking-wider text-muted-foreground">Stop distance</dt>
@@ -173,9 +213,9 @@ export function CoinDrawer({
               <div>
                 <dt className="text-[10px] uppercase tracking-wider text-muted-foreground">Size for ${risk}</dt>
                 <dd className="font-mono" data-testid="screener-size">
-                  {plan.size != null ? `${plan.size.toFixed(plan.size >= 100 ? 0 : plan.size >= 1 ? 2 : 4)} ${coin}` : "—"}
+                  {sized.size != null ? `${sized.size.toFixed(sized.size >= 100 ? 0 : sized.size >= 1 ? 2 : 4)} ${coin}` : "—"}
                 </dd>
-                <dd className="text-[10px] text-muted-foreground">{plan.notional != null ? `≈ ${fmtUsd(plan.notional)} notional` : "stop above the mark"}</dd>
+                <dd className="text-[10px] text-muted-foreground">{sized.notional != null ? `≈ ${fmtUsd(sized.notional)} notional` : plan.structureStop == null ? "not enough candles" : "stop above the mark"}</dd>
               </div>
               <div>
                 <dt className="text-[10px] uppercase tracking-wider text-muted-foreground">RS invalidation</dt>
@@ -251,7 +291,7 @@ export function CoinDrawer({
                 <p className="flex flex-wrap gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
                   {got.sources.map((s) => (
                     <a key={s.url} href={s.url} target="_blank" rel="noreferrer" className="underline decoration-dotted hover:text-foreground">
-                      {s.title || new URL(s.url).hostname}
+                      {s.title || hostOf(s.url)}
                     </a>
                   ))}
                 </p>

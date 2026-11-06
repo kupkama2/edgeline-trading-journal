@@ -206,7 +206,10 @@ and have something call the hook on the schedule:
    pinger such as cron-job.org both work. The request wakes the service and
    starts the run; it answers at once and the run finishes in the background.
 
-Nothing is placed anywhere by the screener; it only reads. Each run spends
-at most 700 of Hyperliquid's 1200 weight per minute and takes a few minutes
-for a hundred coins. Manual refresh on the page is limited to once every
-five minutes.
+Nothing is placed anywhere by the screener; it only reads. The first run
+reads two series per coin (near 60 of Hyperliquid's weight units each);
+every run after that reads only the hours since the last stored bar (about
+21 per coin) and derives the days from them, so a hundred coins take about
+two and a half minutes at the 900-per-minute cap the run keeps under the
+venue's 1200. Manual refresh on the page is limited to once every five
+minutes; a failed run counts, which is the back-off.

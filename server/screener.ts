@@ -6,18 +6,27 @@
  * Budget. Hyperliquid's REST limit is an aggregated weight of 1200 a minute
  * per IP; a candle request costs 20 plus one per 60 candles, every other
  * info request 20 (per the venue's docs, read through search since the
- * docs host is unreachable from the build sandbox). A coin is two requests
- * — about 30 days of hourly bars and 400 of daily — near 60 weight; the
- * run spends at most WEIGHT_PER_MIN of the 1200 so the tracker's own
- * reads on the same IP never queue behind it. A 429 waits a minute and
- * tries once more. One coin failing is one row with an error on it; the
- * run goes on.
+ * docs host is unreachable from the build sandbox). The run spends at most
+ * WEIGHT_PER_MIN of the 1200, leaving the tracker's own reads on the same
+ * IP their room. A 429 waits a minute and tries once more. One coin
+ * failing is one row with an error on it; the run goes on.
+ *
+ * Cost per coin. The first time, two requests: thirty days of hourly bars
+ * and 640 of daily (near 60 weight). After that, one small request: the
+ * hourly bars since the stored series' last one (21 weight), merged into
+ * the store; the daily series is the stored completed days plus the days
+ * the hours cover, so it is not asked for again until the store has a gap
+ * the hours cannot bridge. Bars still forming are left out of the
+ * arithmetic, so every coin is measured at the same instant — the last
+ * completed hour — whatever minute of the run it was fetched in; today's
+ * daily bar is built from those hours.
  *
  * Schedule. 08:00 and 13:30 Europe/Prague, kept by an in-process clock, and
  * a catch-up at boot when the last slot was missed (a free Render service
  * sleeps; it wakes for the first visit and runs then). A cron outside —
  * Render's, or any pinger — can call POST /api/screener/cron with the
- * token instead. Manual refresh keeps a five-minute cooldown.
+ * token instead. Manual refresh keeps a five-minute cooldown; a failed run
+ * counts for it too, which is the back-off.
  */
 import { hlInfo, HlHttpError } from "./hyperliquid";
 import { screenerStore } from "./storage";
@@ -25,9 +34,14 @@ import { notifyAll } from "./events";
 import {
   annualizeFunding,
   coinMetrics,
+  completeBars,
+  DAY_MS,
+  deriveDaily,
   emptyFlags,
   emptyMetrics,
   flagRows,
+  HOUR_MS,
+  mergeBars,
   NOT_AN_ALT,
   parseScreenerCandles,
   readScreenerSettings,
@@ -36,21 +50,26 @@ import {
   type ScreenerSettings,
 } from "@shared/screener";
 
-const HOUR = 3600_000;
-const DAY = 86400_000;
 const HOURLY_DAYS = 30;
-const DAILY_DAYS = 400;
+/** Enough daily bars for twenty 30-day blocks and the one being measured. */
+const DAILY_DAYS = 640;
 const KEEP_DAYS = 60;
 export const COOLDOWN_MS = 5 * 60_000;
-const WEIGHT_PER_MIN = Number(process.env.SCREENER_WEIGHT_PER_MIN ?? "700");
+const WEIGHT_PER_MIN = Number(process.env.SCREENER_WEIGHT_PER_MIN ?? "900");
 const RETRY_AFTER_429_MS = Number(process.env.SCREENER_RETRY_MS ?? "60000");
+
+export type Series = { "1h": ScreenerCandle[]; "1d": ScreenerCandle[] };
 
 export interface ScreenerRun {
   id: number;
   at: string;
+  /** The last completed hour the bars run to: the instant every coin was measured at. */
+  barsTo: number;
   tookMs: number;
   errors: number;
   universe: number;
+  /** How many coins needed the full two-request read rather than the small incremental one. */
+  fullReads: number;
   settings: ScreenerSettings;
   rows: ScreenerRow[];
 }
@@ -115,7 +134,7 @@ class Budget {
   }
 }
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-const candleWeight = (bars: number) => 20 + Math.ceil(bars / 60);
+const candleWeight = (bars: number) => 20 + Math.ceil(Math.max(1, bars) / 60);
 
 /** One info request under the budget, with one retry after a rate limit. */
 async function ask(budget: Budget, weight: number, body: Record<string, unknown>): Promise<unknown> {
@@ -132,15 +151,90 @@ async function ask(budget: Budget, weight: number, body: Record<string, unknown>
   }
 }
 
-/** Both series for a coin, the budget charged for what each should return. */
-async function fetchSeries(budget: Budget, coin: string, now: number): Promise<{ "1h": ScreenerCandle[]; "1d": ScreenerCandle[] }> {
-  const hourly = parseScreenerCandles(
-    await ask(budget, candleWeight(HOURLY_DAYS * 24), { type: "candleSnapshot", req: { coin, interval: "1h", startTime: now - HOURLY_DAYS * DAY, endTime: now } }),
-  );
-  const daily = parseScreenerCandles(
-    await ask(budget, candleWeight(DAILY_DAYS), { type: "candleSnapshot", req: { coin, interval: "1d", startTime: now - DAILY_DAYS * DAY, endTime: now } }),
-  );
-  return { "1h": hourly, "1d": daily };
+async function candles(budget: Budget, coin: string, interval: "1h" | "1d", startTime: number, endTime: number): Promise<ScreenerCandle[]> {
+  const bars = Math.ceil((endTime - startTime) / (interval === "1h" ? HOUR_MS : DAY_MS)) + 1;
+  return parseScreenerCandles(await ask(budget, candleWeight(bars), { type: "candleSnapshot", req: { coin, interval, startTime: Math.floor(startTime), endTime: Math.floor(endTime) } }));
+}
+
+/**
+ * Both series for a coin, as cheaply as the store allows: the hours since
+ * the stored series' last bar (that bar read again, since it was still
+ * forming), the days derived from the stored days and the hours, and the
+ * full two-request read only when there is nothing to build on.
+ */
+async function fetchSeries(budget: Budget, coin: string, now: number, stored: Series | null): Promise<{ series: Series; full: boolean }> {
+  const hourFrom = now - HOURLY_DAYS * DAY_MS;
+  const lastStored = stored?.["1h"][stored["1h"].length - 1]?.t ?? null;
+  let hourly: ScreenerCandle[];
+  let full = false;
+  if (stored && lastStored != null && lastStored >= hourFrom && stored["1h"].length >= 24) {
+    const fresh = await candles(budget, coin, "1h", lastStored, now);
+    hourly = mergeBars(stored["1h"], fresh, hourFrom);
+  } else {
+    hourly = await candles(budget, coin, "1h", hourFrom, now);
+    full = true;
+  }
+  const dayFrom = now - DAILY_DAYS * DAY_MS;
+  let daily = stored ? deriveDaily(stored["1d"], hourly, dayFrom) : null;
+  if (!daily) {
+    daily = await candles(budget, coin, "1d", dayFrom, now);
+    full = true;
+  }
+  return { series: { "1h": hourly, "1d": daily }, full };
+}
+
+/* ------------------------------- the cache ------------------------------- */
+
+/**
+ * The process that writes the series is the one that serves them: the
+ * latest run and every coin's series stay in memory, loaded from the
+ * database once after boot and replaced as a run writes them.
+ */
+let latest: ScreenerRun | null | undefined;
+const seriesCache = new Map<string, Series>();
+
+const parseSeries = (s: string | null): ScreenerCandle[] => {
+  try {
+    return s ? (JSON.parse(s) as ScreenerCandle[]) : [];
+  } catch {
+    return [];
+  }
+};
+
+/** A coin's stored series; empty arrays when the coin was never fetched. */
+export async function storedSeries(coin: string): Promise<Series> {
+  const hit = seriesCache.get(coin);
+  if (hit) return hit;
+  const [h, d] = await Promise.all([screenerStore.series(coin, "1h"), screenerStore.series(coin, "1d")]);
+  const s: Series = { "1h": parseSeries(h), "1d": parseSeries(d) };
+  if (s["1h"].length || s["1d"].length) seriesCache.set(coin, s);
+  return s;
+}
+
+/** The latest stored run, parsed; null before the first. */
+export async function latestScreenerRun(): Promise<ScreenerRun | null> {
+  if (latest !== undefined) return latest;
+  const r = await screenerStore.latestRun();
+  if (!r) return (latest = null);
+  let body: any = {};
+  try {
+    body = JSON.parse(r.body);
+  } catch {
+    body = {};
+  }
+  const rows: ScreenerRow[] = Array.isArray(body) ? body : Array.isArray(body.rows) ? body.rows : [];
+  latest = {
+    id: r.id,
+    at: r.at,
+    barsTo: Number(body.barsTo) || new Date(r.at).getTime(),
+    tookMs: r.tookMs,
+    errors: r.errors,
+    universe: r.universe,
+    fullReads: Number(body.fullReads) || 0,
+    settings: readScreenerSettings(r.settings ? JSON.parse(r.settings) : null),
+    rows,
+  };
+  return latest;
 }
 
 /* ------------------------------- the run ------------------------------- */
@@ -156,26 +250,33 @@ function cooldownFrom(storedAt?: string | null): number {
 }
 
 export const screenerStatus = (storedAt?: string | null): ScreenerStatus => {
-  const from = cooldownFrom(storedAt);
+  const from = cooldownFrom(storedAt ?? latest?.at);
   return { ...status, nextAllowedAt: from ? new Date(from + COOLDOWN_MS).toISOString() : null };
 };
+
+/** Whether a manual refresh may start now, and when it may if not. */
+export function refreshAllowed(storedAt?: string | null, now = Date.now()): { ok: boolean; retryAt: string | null } {
+  if (current) return { ok: false, retryAt: null };
+  const from = cooldownFrom(storedAt ?? latest?.at);
+  if (from && now - from < COOLDOWN_MS) return { ok: false, retryAt: new Date(from + COOLDOWN_MS).toISOString() };
+  return { ok: true, retryAt: null };
+}
 
 export async function screenerSettings(): Promise<ScreenerSettings> {
   return readScreenerSettings(await screenerStore.settings());
 }
 
+/** A patch over the settings; a value out of range keeps what was there. */
 export async function saveScreenerSettings(patch: unknown): Promise<ScreenerSettings> {
-  const next = readScreenerSettings({ ...(await screenerSettings()), ...((patch && typeof patch === "object" ? patch : {}) as object) });
+  const before = await screenerSettings();
+  const p = (patch && typeof patch === "object" ? patch : {}) as Record<string, unknown>;
+  const next = readScreenerSettings({ ...before, ...p });
+  for (const k of Object.keys(next) as (keyof ScreenerSettings)[]) {
+    // readScreenerSettings fell back to the default: an invalid value given, so the old one stays.
+    if (k in p && next[k] !== Number(p[k])) next[k] = before[k];
+  }
   await screenerStore.saveSettings(next);
   return next;
-}
-
-/** Whether a manual refresh may start now, and when it may if not. */
-export function refreshAllowed(storedAt?: string | null, now = Date.now()): { ok: boolean; retryAt: string | null } {
-  if (current) return { ok: false, retryAt: null };
-  const from = cooldownFrom(storedAt);
-  if (from && now - from < COOLDOWN_MS) return { ok: false, retryAt: new Date(from + COOLDOWN_MS).toISOString() };
-  return { ok: true, retryAt: null };
 }
 
 /**
@@ -197,32 +298,36 @@ export function runScreener(opts: { force?: boolean; now?: () => number } = {}):
 async function run(nowFn: () => number): Promise<ScreenerRun> {
   const t0 = nowFn();
   const now = t0;
+  // The instant every coin is measured at: the last completed hour.
+  const barsTo = Math.floor(now / HOUR_MS) * HOUR_MS;
   lastRunAt = t0;
   status.running = true;
   status.startedAt = new Date(t0).toISOString();
   status.progress = null;
   status.lastError = null;
   const at = new Date(t0).toISOString();
-  const settings = await screenerSettings();
-  const budget = new Budget(WEIGHT_PER_MIN);
   try {
+    const settings = await screenerSettings();
+    const budget = new Budget(WEIGHT_PER_MIN);
     const ctxs = parseMetaAndAssetCtxs(await ask(budget, 20, { type: "metaAndAssetCtxs" }));
     if (ctxs.length === 0) throw new Error("metaAndAssetCtxs answered with no universe");
-    const byCoin = new Map(ctxs.map((c) => [c.coin, c]));
     const alts = ctxs.filter((c) => !c.delisted && !NOT_AN_ALT.test(c.coin) && (c.dayNtlVlm ?? 0) >= settings.minVolume);
     status.progress = { done: 0, total: alts.length + 1 };
-
-    // The whole snapshot is kept — every perp, filtered or not — so OI history exists before a coin crosses the volume line.
-    await screenerStore.saveSnapshot(
-      at,
-      ctxs.map((c) => ({ coin: c.coin, funding: c.funding, openInterest: c.openInterest, volume: c.dayNtlVlm, mark: c.markPx })),
-    );
     const previous = await screenerStore.previousSnapshot(at);
 
-    const btc = await fetchSeries(budget, "BTC", now);
-    if (btc["1h"].length === 0 || btc["1d"].length === 0) throw new Error("BTC candles came back empty; nothing to measure against");
-    await screenerStore.saveSeries("BTC", "1h", JSON.stringify(btc["1h"]));
-    await screenerStore.saveSeries("BTC", "1d", JSON.stringify(btc["1d"]));
+    let fullReads = 0;
+    const read = async (coin: string): Promise<Series> => {
+      const { series, full } = await fetchSeries(budget, coin, now, await storedSeries(coin));
+      if (full) fullReads++;
+      seriesCache.set(coin, series);
+      await screenerStore.saveSeries(coin, series["1h"], series["1d"]);
+      return series;
+    };
+    const btcRaw = await read("BTC");
+    if (btcRaw["1h"].length === 0 || btcRaw["1d"].length === 0) throw new Error("BTC candles came back empty; nothing to measure against");
+    const btc = measuredSeries(btcRaw, now);
+    // The daily series' last bar is today's, built from the completed hours: how much of the day that is.
+    const dayPartial = Math.max(1 / 24, ((barsTo - Math.floor(barsTo / DAY_MS) * DAY_MS) / DAY_MS) || 1);
     status.progress.done = 1;
 
     const rows: ScreenerRow[] = [];
@@ -242,11 +347,9 @@ async function run(nowFn: () => number): Promise<ScreenerRun> {
         bars: { "1h": 0, "1d": 0 },
       };
       try {
-        const series = await fetchSeries(budget, c.coin, now);
-        base.bars = { "1h": series["1h"].length, "1d": series["1d"].length };
-        base.tf = coinMetrics(series, btc);
-        await screenerStore.saveSeries(c.coin, "1h", JSON.stringify(series["1h"]));
-        await screenerStore.saveSeries(c.coin, "1d", JSON.stringify(series["1d"]));
+        const alt = measuredSeries(await read(c.coin), now);
+        base.bars = { "1h": alt["1h"].length, "1d": alt["1d"].length };
+        base.tf = coinMetrics(alt, btc, dayPartial);
       } catch (err: any) {
         base.error = String(err?.message ?? err).slice(0, 200);
         console.error(`[screener] ${c.coin}: ${base.error}`);
@@ -257,11 +360,17 @@ async function run(nowFn: () => number): Promise<ScreenerRun> {
     const flagged = flagRows(rows, settings);
     const tookMs = nowFn() - t0;
     const errors = flagged.filter((r) => r.error).length;
-    const id = await screenerStore.saveRun({ at, tookMs, body: JSON.stringify(flagged), errors, universe: flagged.length, settings: JSON.stringify(settings) });
-    await screenerStore.prune(new Date(t0 - KEEP_DAYS * DAY).toISOString()).catch(() => {});
-    console.log(`[screener] ${flagged.length} coins in ${(tookMs / 1000).toFixed(1)}s, ${errors} could not be read, ${byCoin.size} perps listed`);
+    const id = await screenerStore.saveRun({ at, tookMs, body: JSON.stringify({ barsTo, fullReads, rows: flagged }), errors, universe: flagged.length, settings: JSON.stringify(settings) });
+    // The whole snapshot is kept — every perp, filtered or not — so OI history exists before a coin crosses the volume line. After the run, so a failed one leaves none.
+    await screenerStore.saveSnapshot(
+      at,
+      ctxs.map((c) => ({ coin: c.coin, funding: c.funding, openInterest: c.openInterest, volume: c.dayNtlVlm, mark: c.markPx })),
+    );
+    await screenerStore.prune(new Date(t0 - KEEP_DAYS * DAY_MS).toISOString()).catch(() => {});
+    console.log(`[screener] ${flagged.length} coins in ${(tookMs / 1000).toFixed(1)}s, ${fullReads} full reads, ${errors} could not be read, ${ctxs.length} perps listed`);
+    latest = { id, at, barsTo, tookMs, errors, universe: flagged.length, fullReads, settings, rows: flagged };
     notifyAll("screener");
-    return { id, at, tookMs, errors, universe: flagged.length, settings, rows: flagged };
+    return latest;
   } catch (err: any) {
     status.lastError = String(err?.message ?? err).slice(0, 300);
     console.error(`[screener] run failed: ${status.lastError}`);
@@ -272,33 +381,36 @@ async function run(nowFn: () => number): Promise<ScreenerRun> {
   }
 }
 
+/**
+ * A coin's series as measured: the completed hours only (the bar still
+ * forming is left out, so every coin is read at the same instant), and
+ * the days as the stored completed days plus the days those hours make —
+ * today's bar ending on the same hour for every coin. The routes use the
+ * same view with the run's `barsTo`, so the drawer's numbers are the
+ * table's.
+ */
+export function measuredSeries(s: Series, now: number): Series {
+  return { "1h": completeBars(s["1h"], HOUR_MS, now), "1d": dailyTo(s, now) };
+}
+
+function dailyTo(s: Series, now: number): ScreenerCandle[] {
+  const hours = completeBars(s["1h"], HOUR_MS, now);
+  const derived = deriveDaily(s["1d"], hours, -Infinity);
+  if (derived) return derived;
+  // No bridge from the store: the venue's days, the one still forming replaced by the hours' version.
+  const today = Math.floor(now / DAY_MS) * DAY_MS;
+  const done = s["1d"].filter((d) => d.t < today);
+  const todays = hours.filter((h) => h.t >= today);
+  if (todays.length === 0) return done;
+  const [t] = deriveDailyTail(todays);
+  return [...done, t];
+}
+const deriveDailyTail = (hours: ScreenerCandle[]): ScreenerCandle[] => {
+  const t = Math.floor(hours[0].t / DAY_MS) * DAY_MS;
+  return [{ t, o: hours[0].o, h: Math.max(...hours.map((x) => x.h)), l: Math.min(...hours.map((x) => x.l)), c: hours[hours.length - 1].c, v: hours.reduce((s, x) => s + x.v, 0) }];
+};
+
 const oiChange = (now: number | null, before: number | null) => (now != null && before != null && before > 0 ? now / before - 1 : null);
-
-/** The latest stored run, parsed; null before the first. */
-export async function latestScreenerRun(): Promise<ScreenerRun | null> {
-  const r = await screenerStore.latestRun();
-  if (!r) return null;
-  let rows: ScreenerRow[] = [];
-  try {
-    rows = JSON.parse(r.body);
-  } catch {
-    rows = [];
-  }
-  return { id: r.id, at: r.at, tookMs: r.tookMs, errors: r.errors, universe: r.universe, settings: readScreenerSettings(r.settings ? JSON.parse(r.settings) : null), rows };
-}
-
-/** A coin's stored series, parsed; empty when the coin was never fetched. */
-export async function storedSeries(coin: string): Promise<{ "1h": ScreenerCandle[]; "1d": ScreenerCandle[] }> {
-  const parse = (s: string | null): ScreenerCandle[] => {
-    try {
-      return s ? (JSON.parse(s) as ScreenerCandle[]) : [];
-    } catch {
-      return [];
-    }
-  };
-  const [h, d] = await Promise.all([screenerStore.series(coin, "1h"), screenerStore.series(coin, "1d")]);
-  return { "1h": parse(h), "1d": parse(d) };
-}
 
 /* ------------------------------- the clock ------------------------------- */
 
@@ -313,6 +425,12 @@ export function pragueClock(ms: number): { day: string; minutes: number } {
   return { day: `${get("year")}-${get("month")}-${get("day")}`, minutes: (Number(get("hour")) % 24) * 60 + Number(get("minute")) };
 }
 
+/** The calendar day before a YYYY-MM-DD, by the calendar rather than by 24 hours, so a clock change does not skip a day. */
+const dayBefore = (day: string): string => {
+  const [y, m, d] = day.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d) - DAY_MS).toISOString().slice(0, 10);
+};
+
 const slotMinutes = SCHEDULE.map((s) => Number(s.slice(0, 2)) * 60 + Number(s.slice(3, 5)));
 
 /**
@@ -324,13 +442,13 @@ export function runDue(now: number, lastRunIso: string | null): boolean {
   const last = lastRunIso ? pragueClock(new Date(lastRunIso).getTime()) : null;
   const passedToday = slotMinutes.filter((m) => m <= minutes);
   if (passedToday.length) {
-    const latest = Math.max(...passedToday);
-    if (!last || last.day < day || (last.day === day && last.minutes < latest)) return true;
+    const latestSlot = Math.max(...passedToday);
+    if (!last || last.day < day || (last.day === day && last.minutes < latestSlot)) return true;
     return false;
   }
   // Before the first slot of the day: the last slot of yesterday is the one to have run.
   const lastSlot = Math.max(...slotMinutes);
-  const yesterday = pragueClock(now - DAY).day;
+  const yesterday = dayBefore(day);
   if (!last) return true;
   if (last.day < yesterday) return true;
   if (last.day === yesterday && last.minutes < lastSlot) return true;
@@ -343,8 +461,10 @@ export function startScreenerClock(everyMs = Number(process.env.SCREENER_CLOCK_M
   const tick = async () => {
     try {
       if (status.running) return;
-      const latest = await screenerStore.latestRun();
-      if (runDue(Date.now(), latest?.at ?? null)) await runScreener({ force: true });
+      // A run that failed is not tried again every minute: the cooldown is the back-off.
+      if (lastRunAt && Date.now() - lastRunAt < COOLDOWN_MS) return;
+      const last = await latestScreenerRun();
+      if (runDue(Date.now(), last?.at ?? null)) await runScreener({ force: true });
     } catch (err: any) {
       console.error(`[screener] clock: ${String(err?.message ?? err)}`);
     }

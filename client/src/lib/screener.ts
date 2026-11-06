@@ -4,24 +4,28 @@ import type { ExitPlan, ScreenerCandle, ScreenerRow, ScreenerSettings, Timeframe
 
 /** What the page reads: the latest run, the settings, and whether a refresh may be asked for. */
 export interface ScreenerPage {
-  run: { id: number; at: string; tookMs: number; errors: number; universe: number; settings: ScreenerSettings; rows: ScreenerRow[] } | null;
+  run: { id: number; at: string; barsTo: number; tookMs: number; errors: number; universe: number; fullReads: number; settings: ScreenerSettings; rows: ScreenerRow[] } | null;
   settings: ScreenerSettings;
   status: { running: boolean; startedAt: string | null; progress: { done: number; total: number } | null; lastError: string | null; nextAllowedAt: string | null };
   cooldownMs: number;
 }
 
 export function useScreener() {
-  return useQuery<ScreenerPage>({
-    queryKey: ["/api/screener"],
-    // While a run is on, the progress line moves; otherwise the "screener" event refreshes it.
-    refetchInterval: (q) => (q.state.data?.status.running ? 5_000 : false),
+  return useQuery<ScreenerPage>({ queryKey: ["/api/screener"] });
+}
+
+/** The status alone while a run is on: a few hundred bytes every few seconds, not the whole table. The "screener" event brings the table when the run lands. */
+export function useScreenerStatus(running: boolean) {
+  return useQuery<ScreenerPage["status"]>({
+    queryKey: ["/api/screener/status"],
+    enabled: running,
+    refetchInterval: running ? 4_000 : false,
   });
 }
 
 export const invalidateScreener = () => {
+  // The prefix covers the page, the status, the lines and the coins.
   void queryClient.invalidateQueries({ queryKey: ["/api/screener"] });
-  void queryClient.invalidateQueries({ queryKey: ["/api/screener/series"] });
-  void queryClient.invalidateQueries({ queryKey: ["/api/screener/coin"] });
 };
 
 export function useScreenerRefresh() {
@@ -69,8 +73,10 @@ export interface ScreenerAudit {
 export interface ScreenerCoin {
   coin: string;
   tf: Timeframe;
+  barsTo: number;
   audit: ScreenerAudit | null;
   stopLookback: number;
+  mark: number | null;
   row: ScreenerRow | null;
   price: ScreenerCandle[];
   ratio: { t: number; r: number; v: number }[];
@@ -78,13 +84,21 @@ export interface ScreenerCoin {
   snapshots: { at: string; funding: number | null; openInterest: number | null; volume: number | null; mark: number | null }[];
 }
 
-export function useScreenerCoin(coin: string | null, tf: Timeframe, risk: number) {
+/** The coin on a timeframe. The risk is not part of this: the size for it is arithmetic the drawer does itself. */
+export function useScreenerCoin(coin: string | null, tf: Timeframe) {
   return useQuery<ScreenerCoin>({
-    queryKey: ["/api/screener/coin", coin, tf, risk],
-    queryFn: async () => (await apiRequest("GET", `/api/screener/coin/${encodeURIComponent(coin!)}?tf=${tf}&risk=${risk}`)).json(),
+    queryKey: ["/api/screener/coin", coin, tf],
+    queryFn: async () => (await apiRequest("GET", `/api/screener/coin/${encodeURIComponent(coin!)}?tf=${tf}`)).json(),
     enabled: !!coin,
     staleTime: 60_000,
   });
+}
+
+/** The size that puts exactly `risk` dollars on the structure stop, and its notional. */
+export function sizeFor(risk: number, mark: number | null, stop: number | null): { size: number | null; notional: number | null } {
+  if (mark == null || stop == null || !(mark > stop) || !(risk > 0)) return { size: null, notional: null };
+  const size = risk / (mark - stop);
+  return { size, notional: size * mark };
 }
 
 export interface ScreenerNews {
@@ -93,7 +107,17 @@ export interface ScreenerNews {
   summary: string[] | null;
   sources: { url: string; title: string | null }[];
   reason: string | null;
+  cached?: boolean;
 }
+
+/** A hostname for a link's label, without throwing on a malformed one. */
+export const hostOf = (url: string) => {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return url.slice(0, 40);
+  }
+};
 
 export function useScreenerNews() {
   return useMutation({
