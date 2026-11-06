@@ -1,4 +1,6 @@
 import { currentStop } from "./stops";
+import { positionLedger } from "./fills";
+import type { TradeFill } from "./schema";
 /**
  * Where an open trade stands against its plan, right now.
  *
@@ -117,6 +119,8 @@ export function standingOf(
     size: number;
     sizeUnit: string;
     pointValue: number;
+    /** Adds and partials since the entry: with them, the P&L is the ledger's, not the opening fill's. */
+    fills?: TradeFill[];
   },
   price: number,
 ): Standing {
@@ -134,8 +138,23 @@ export function standingOf(
   const perPoint = qty * (t.pointValue || 1);
   const move = sign * (price - t.entryPrice);
 
-  const currentR = risk > 0 ? move / risk : null;
-  const pnl = Number.isFinite(perPoint) && perPoint > 0 ? move * perPoint : null;
+  /*
+   * With adds and partials on the record, what the trade stands at is what
+   * the partials banked against the average entry of the time, plus the
+   * open quantity marked from the average entry now — the same ledger the
+   * closed trade settles by (shared/fills.ts). A trade that scaled in at a
+   * worse price and took some off below it is behind, however the opening
+   * fill alone sits against the mark. R stays against the original risk,
+   * entry to stop on the opening size, so scaling in does not re-base it.
+   */
+  const ledger = t.fills && t.fills.length ? positionLedger(t as any) : null;
+  const pnl =
+    ledger != null
+      ? ledger.realizedPnL + sign * (price - ledger.avgEntry) * ledger.openQty * (t.pointValue || 1)
+      : Number.isFinite(perPoint) && perPoint > 0
+        ? move * perPoint
+        : null;
+  const currentR = risk > 0 ? (ledger != null && perPoint > 0 ? pnl! / (risk * perPoint) : move / risk) : null;
   const toStopR = risk > 0 && stopNow != null ? (sign * (price - stopNow)) / risk : null;
   const toTargetR =
     risk > 0 && t.initialTarget != null ? (sign * (t.initialTarget - price)) / risk : null;

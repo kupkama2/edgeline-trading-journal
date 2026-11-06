@@ -34,6 +34,38 @@ describe("where a long stands", () => {
 
   it("calls the target crossed at the target", () => {
     expect(standingOf(long, 130)).toMatchObject({ crossedTarget: true, toTargetR: 0 });
+  });
+
+  it("stands by the ledger once there are adds and partials: banked against the average entry, the rest marked from it", () => {
+    // The BTC long as Binance had it: in at 75,954.8 for 0.131, added 0.328 at 76,020.9, took 0.328 off at 75,392.2.
+    const t = {
+      direction: "long",
+      entryPrice: 75954.8,
+      initialStop: 73019.9,
+      initialTarget: null,
+      size: 0.131,
+      sizeUnit: "base",
+      pointValue: 1,
+      fills: [
+        { id: 1, tradeId: 1, kind: "add", price: 76020.9, size: 0.291, time: "2026-11-05T18:48:00Z", note: null },
+        { id: 2, tradeId: 1, kind: "add", price: 76020.9, size: 0.037, time: "2026-11-05T18:48:01Z", note: null },
+        { id: 3, tradeId: 1, kind: "partial", price: 75392.2, size: 0.117, time: "2026-11-06T00:01:00Z", note: null },
+        { id: 4, tradeId: 1, kind: "partial", price: 75392.2, size: 0.125, time: "2026-11-06T00:01:01Z", note: null },
+        { id: 5, tradeId: 1, kind: "partial", price: 75392.2, size: 0.086, time: "2026-11-06T00:01:02Z", note: null },
+      ],
+    } as any;
+    const s = standingOf(t, 76285.1);
+    const avg = (0.131 * 75954.8 + 0.328 * 76020.9) / 0.459;
+    expect(avg).toBeCloseTo(76002.03, 1);
+    const banked = 0.328 * (75392.2 - avg);
+    const open = 0.131 * (76285.1 - avg);
+    expect(s.pnl).toBeCloseTo(banked + open, 6);
+    expect(s.pnl).toBeLessThan(0);
+    expect(s.pnl).toBeCloseTo(-162.95, 1);
+    // R against the original risk: entry to stop on the opening size.
+    expect(s.currentR).toBeCloseTo((banked + open) / (0.131 * (75954.8 - 73019.9)), 6);
+    // The opening fill alone, against the mark, would have said +43: that number is gone.
+    expect(standingOf({ ...t, fills: [] }, 76285.1).pnl).toBeCloseTo(0.131 * (76285.1 - 75954.8), 6);
     expect(standingOf(long, 129.99).crossedTarget).toBe(false);
   });
 });
