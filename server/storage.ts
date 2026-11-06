@@ -345,6 +345,19 @@ CREATE TABLE IF NOT EXISTS portfolio_snapshots (
   body TEXT,
   PRIMARY KEY (user_id, at)
 );
+-- The macro and earnings calendar (server/calendar.ts), downloaded once a day.
+CREATE TABLE IF NOT EXISTS calendar_events (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  title TEXT NOT NULL,
+  tag TEXT NOT NULL,
+  at TEXT NOT NULL,
+  impact TEXT NOT NULL,
+  session TEXT,
+  forecast TEXT,
+  previous TEXT,
+  fetched_at TEXT NOT NULL
+);
 -- The AI's read of a screener run (server/screener-ai.ts), twice a day.
 CREATE TABLE IF NOT EXISTS screener_ai (
   id SERIAL PRIMARY KEY,
@@ -1087,6 +1100,30 @@ export const screenerStore = {
   async prune(before: string): Promise<void> {
     await sql`DELETE FROM screener_snapshots WHERE at < ${before}`;
     await sql`DELETE FROM screener_runs WHERE at < ${before}`;
+  },
+};
+
+export const calendarStore = {
+  /** A source's events from `from` on replaced by what it just gave: a release moved or dropped is not kept. */
+  async replace(kind: string, from: string, events: { id: string; kind: string; title: string; tag: string; at: string; impact: string; session?: string; forecast?: string | null; previous?: string | null }[]): Promise<void> {
+    const fetched_at = new Date().toISOString();
+    await sql.begin(async (tx: any) => {
+      await tx`DELETE FROM calendar_events WHERE kind = ${kind} AND at >= ${from}`;
+      if (events.length) {
+        const rows = events.map((e) => ({ id: e.id, kind: e.kind, title: e.title, tag: e.tag, at: e.at, impact: e.impact, session: e.session ?? null, forecast: e.forecast ?? null, previous: e.previous ?? null, fetched_at }));
+        await tx`INSERT INTO calendar_events ${tx(rows)} ON CONFLICT (id) DO UPDATE SET at = EXCLUDED.at, impact = EXCLUDED.impact, forecast = EXCLUDED.forecast, previous = EXCLUDED.previous, fetched_at = EXCLUDED.fetched_at`;
+      }
+    });
+  },
+  async between(from: string, to: string): Promise<{ id: string; kind: string; title: string; tag: string; at: string; impact: string; session: string | null; forecast: string | null; previous: string | null }[]> {
+    return sql`SELECT id, kind, title, tag, at, impact, session, forecast, previous FROM calendar_events WHERE at >= ${from} AND at <= ${to} ORDER BY at` as any;
+  },
+  async lastFetchedAt(): Promise<string | null> {
+    const rows = await sql<{ fetched_at: string }[]>`SELECT max(fetched_at) AS fetched_at FROM calendar_events`;
+    return rows[0]?.fetched_at ?? null;
+  },
+  async prune(before: string): Promise<void> {
+    await sql`DELETE FROM calendar_events WHERE at < ${before}`;
   },
 };
 

@@ -62,9 +62,30 @@ export default function ScreenerPage() {
     return new Set(defaultSet(rows, tf));
   }, [picked, pickedFor, rows, tf]);
   const order = useMemo(() => Array.from(charted), [charted]);
-  const lines = useScreenerLines(tf, order);
-  // Only the coins that have a line, memoized: a new array here would re-feed the chart and reset its zoom on every render.
+  /*
+   * The lines loaded are the default set plus every coin put on the chart
+   * since, for this timeframe: hiding or isolating a line only changes what
+   * shows, so it neither refetches nor redraws. Only a coin never loaded
+   * asks the server, and the lines already up stay while it does.
+   */
+  const [extra, setExtra] = useState<{ tf: Timeframe; coins: string[] }>({ tf, coins: [] });
+  const loaded = useMemo(() => {
+    const base = defaultSet(rows, tf);
+    const more = extra.tf === tf ? extra.coins : [];
+    return Array.from(new Set([...base, ...more, ...order]));
+  }, [rows, tf, extra, order]);
+  useEffect(() => {
+    const missing = order.filter((c) => !loaded.includes(c));
+    if (missing.length) setExtra((x) => ({ tf, coins: Array.from(new Set([...(x.tf === tf ? x.coins : []), ...missing])) }));
+  }, [order, loaded, tf]);
+  const lines = useScreenerLines(tf, loaded);
+  // What shows, in a stable order; memoized so the chart only hears about real changes.
   const drawn = useMemo(() => order.filter((c) => !!lines.data?.lines[c]), [order, lines.data]);
+  const [resetCount, setResetCount] = useState(0);
+  const resetChart = () => {
+    setPicked(null);
+    setResetCount((n) => n + 1);
+  };
   const toggle = (coin: string) => {
     const next = new Set(charted);
     if (next.has(coin)) next.delete(coin);
@@ -205,12 +226,12 @@ export default function ScreenerPage() {
       <Card className="border-card-border bg-card p-3 sm:p-4">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
           <h2 className="text-sm font-semibold">Relative strength vs BTC · {tf}</h2>
-          <button type="button" className="text-[11px] text-muted-foreground hover:text-foreground" onClick={() => setPicked(null)} data-testid="screener-chart-reset">
-            Top 8 + bottom 3
-          </button>
+          <Button size="sm" variant="outline" className="h-7 px-2.5 text-[11px]" onClick={resetChart} title="Back to the top 8 and bottom 3, zoomed to fit" data-testid="screener-chart-reset">
+            <RefreshCw className="mr-1 h-3 w-3" /> Reset
+          </Button>
         </div>
         <div className="mt-2">
-          <SpaghettiChart lines={lines.data?.lines ?? {}} order={drawn} loading={lines.isLoading} onHide={toggle} onSolo={solo} />
+          <SpaghettiChart lines={lines.data?.lines ?? {}} order={drawn} colors={loaded} resetKey={resetCount} loading={lines.isLoading} onHide={toggle} onSolo={solo} />
         </div>
       </Card>
 

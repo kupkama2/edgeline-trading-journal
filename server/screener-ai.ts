@@ -74,7 +74,7 @@ function coinDigest(r: ScreenerRow) {
 }
 
 /** The coins worth the read: candidates, the strongest and weakest by agreement, and every coin with a notable anomaly — at most thirty. */
-export function digestOf(run: ScreenerRun) {
+export function digestOf(run: ScreenerRun, events: { title: string; at: string; impact: string }[] = []) {
   const rows = run.rows.filter((r) => !r.error);
   const byScore = [...rows].sort((a, b) => (b.signals?.["1D"]?.score ?? 0) - (a.signals?.["1D"]?.score ?? 0));
   const pick = new Map<string, ScreenerRow>();
@@ -92,6 +92,7 @@ export function digestOf(run: ScreenerRun) {
     breadth: r2(run.breadth, 2),
     btc: { d1: r2(run.btc?.d1), w1: r2(run.btc?.w1) },
     binanceFlow: run.flowStatus?.source === "relay" ? `read for ${run.flowStatus.coins} coins` : "not available this run",
+    eventsNext36h: events.map((e) => ({ title: e.title, at: e.at, impact: e.impact })),
     anomalies: run.anomalies.slice(0, 40).map((a) => ({ coin: a.coin, severity: a.severity, kind: a.kind, text: a.text })),
     coins: Array.from(pick.values()).slice(0, 30).map(coinDigest),
   };
@@ -99,12 +100,13 @@ export function digestOf(run: ScreenerRun) {
 
 const SYSTEM = `You are a crypto derivatives analyst reading a relative-strength screener for a discretionary trader on Hyperliquid perpetuals.
 
-You get, per coin: relative strength against BTC (rs, as a fraction: 0.05 = +5%) and its acceleration per timeframe, RSI, trend (2 = above its 20 and 50 averages, 0 = below both), an agreement score of seven readings, divergences, open interest on Hyperliquid and Binance, Hyperliquid's read of OI against price, funding on both venues (annualised fractions) and its percentile, Binance taker flow as CVD (net taker buying as a share of volume), Binance long/short ratios for all accounts and for top traders' positions, the basis between the venues, and where Hyperliquid's largest accounts would be liquidated (fraction from the mark and USD). Also the breadth of the alt tape, BTC's own move, and the anomalies the screener flagged.
+You get, per coin: relative strength against BTC (rs, as a fraction: 0.05 = +5%) and its acceleration per timeframe, RSI, trend (2 = above its 20 and 50 averages, 0 = below both), an agreement score of seven readings, divergences, open interest on Hyperliquid and Binance, Hyperliquid's read of OI against price, funding on both venues (annualised fractions) and its percentile, Binance taker flow as CVD (net taker buying as a share of volume), Binance long/short ratios for all accounts and for top traders' positions, the basis between the venues, and where Hyperliquid's largest accounts would be liquidated (fraction from the mark and USD). Also the breadth of the alt tape, BTC's own move, the anomalies the screener flagged, and the US macro releases and large earnings due in the next 36 hours (UTC times).
 
 Your job: say where several independent readings point the same way, and where they conflict. Rules:
 - Use only the numbers given. Never mention news, events or prices you were not shown.
 - A good long has relative strength rising with taker buying, open interest growing with price (new longs), funding not crowded, and room before short liquidations above. A good short is the mirror. Flag traps: price up on net taker selling, OI up with top-decile funding, a crowd long while top traders are short.
 - Every tip names the readings that agree and the ones that disagree, and an invalidation in plain terms (a relative-strength break, a flow flip, a level from the liquidation bands).
+- If a high-impact release (CPI, NFP, FOMC, PPI…) is due within the horizon of a tip, say so in that tip: volatility around it can run stops either way.
 - Be brief and concrete. No disclaimers.
 
 Answer with JSON only, in exactly this shape:
@@ -144,6 +146,16 @@ export function parseAiRead(text: string): AiRead | null {
 
 let client: Anthropic | undefined;
 
+/** The macro releases and earnings in the next day and a half, for the read to weigh. */
+async function upcomingEvents(): Promise<{ title: string; at: string; impact: string }[]> {
+  try {
+    const { calendarStore } = await import("./storage");
+    return (await calendarStore.between(new Date().toISOString(), new Date(Date.now() + 36 * 3600_000).toISOString())).map((e) => ({ title: e.title, at: e.at, impact: e.impact }));
+  } catch {
+    return [];
+  }
+}
+
 /** Read a run with Claude and store the answer (or why there is none). One at a time. */
 export function analyzeRun(run: ScreenerRun): Promise<void> {
   if (running) return running;
@@ -159,7 +171,7 @@ export function analyzeRun(run: ScreenerRun): Promise<void> {
         max_tokens: 8000,
         thinking: { type: "adaptive" },
         system: SYSTEM,
-        messages: [{ role: "user", content: `Screener run:\n${JSON.stringify(digestOf(run))}` }],
+        messages: [{ role: "user", content: `Screener run:\n${JSON.stringify(digestOf(run, await upcomingEvents()))}` }],
       } as any);
       const text = (res as any).content
         .filter((b: any) => b.type === "text")

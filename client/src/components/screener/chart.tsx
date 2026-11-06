@@ -52,12 +52,19 @@ export function useClickOrDouble() {
 export function SpaghettiChart({
   lines,
   order,
+  colors,
+  resetKey,
   loading,
   onHide,
   onSolo,
 }: {
   lines: Record<string, { t: number; pct: number }[]>;
+  /** The lines that show, in order. */
   order: string[];
+  /** Every coin loaded, in a stable order: a coin keeps its colour when others are hidden or isolated. */
+  colors?: string[];
+  /** Bumped by the Reset button: the chart zooms back out to fit. */
+  resetKey?: number;
   loading?: boolean;
   /** A click on a legend name takes that line off. */
   onHide?: (coin: string) => void;
@@ -70,7 +77,8 @@ export function SpaghettiChart({
   const seriesRef = useRef<Map<string, ISeriesApi<"Line">>>(new Map());
   const baseRef = useRef<ISeriesApi<"Line"> | null>(null);
   const [hover, setHover] = useState<string | null>(null);
-  const colorOf = (coin: string) => HUES[Math.max(0, order.indexOf(coin)) % HUES.length];
+  const palette_ = colors ?? order;
+  const colorOf = (coin: string) => HUES[Math.max(0, palette_.indexOf(coin)) % HUES.length];
 
   useEffect(() => {
     const host = hostRef.current;
@@ -101,7 +109,7 @@ export function SpaghettiChart({
     };
   }, []);
 
-  // The lines, replaced when the set or the data changes.
+  // The data: every loaded line gets a series, fed only when the data itself changes. Fit once per new data.
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart) return;
@@ -113,12 +121,11 @@ export function SpaghettiChart({
     }
     let from = Infinity;
     let to = -Infinity;
-    for (const coin of order) {
-      const pts = lines[coin];
+    for (const [coin, pts] of Object.entries(lines)) {
       if (!pts || pts.length === 0) continue;
       let s = seriesRef.current.get(coin);
       if (!s) {
-        s = chart.addSeries(LineSeries, { color: colorOf(coin), lineWidth: 2, priceLineVisible: false, lastValueVisible: true, title: coin, crosshairMarkerRadius: 3 });
+        s = chart.addSeries(LineSeries, { color: colorOf(coin), lineWidth: 2, priceLineVisible: false, lastValueVisible: true, title: coin, crosshairMarkerRadius: 3, visible: order.includes(coin) });
         seriesRef.current.set(coin, s);
       }
       s.setData(pts.map((p) => ({ time: Math.floor(p.t / 1000) as UTCTimestamp, value: p.pct * 100 })));
@@ -132,15 +139,27 @@ export function SpaghettiChart({
       ]);
     }
     chart.timeScale().fitContent();
-  }, [lines, order]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lines]);
 
-  // Hover: the one line forward, the rest faded.
+  // What shows: hiding or isolating a line only flips its visibility — no new data, no refit, the zoom stays.
+  useEffect(() => {
+    for (const [coin, s] of Array.from(seriesRef.current)) s.applyOptions({ visible: order.includes(coin) });
+  }, [order, lines]);
+
+  // Reset: zoom back out to fit everything shown.
+  useEffect(() => {
+    if (resetKey) chartRef.current?.timeScale().fitContent();
+  }, [resetKey]);
+
+  // Hover: the one line forward, the rest faded; colours by the stable order.
   useEffect(() => {
     for (const [coin, s] of Array.from(seriesRef.current)) {
       const c = colorOf(coin);
       s.applyOptions(hover == null ? { color: c, lineWidth: 2 } : hover === coin ? { color: c, lineWidth: 4 } : { color: withAlpha(c, 0.18), lineWidth: 1 });
     }
-  }, [hover, order]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hover, palette_, lines]);
 
   const last = (coin: string) => {
     const pts = lines[coin];

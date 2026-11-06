@@ -54,6 +54,7 @@ import { trackUser } from "./tracker";
 import { subscribe } from "./events";
 import { registerScreenerRoutes } from "./screener-routes";
 import { registerPortfolioRoutes } from "./portfolio";
+import { registerCalendarRoutes } from "./calendar";
 import { formatGate, gateRecordSchema, redAnswers } from "@shared/gate";
 import { attachRelay, relayStatus } from "./relay";
 import { managementBrief, parseTerminalRef } from "@shared/terminal";
@@ -599,6 +600,8 @@ export async function registerRoutes(
   registerScreenerRoutes(app);
   // The owner's portfolio: vaults, Hyperliquid accounts, wallets (server/portfolio.ts).
   registerPortfolioRoutes(app);
+  // The macro and earnings calendar (server/calendar.ts).
+  registerCalendarRoutes(app);
 
   /** The page told when the record changes (server/events.ts). */
   app.get("/api/events", (req, res) => {

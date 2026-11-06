@@ -607,6 +607,8 @@ export function startScreenerClock(everyMs = Number(process.env.SCREENER_CLOCK_M
   const tick = async () => {
     // The hourly snapshot, whatever the run schedule says; its own failure is its own.
     if (!status.running) await takeSnapshot().catch((err) => console.error(`[screener] snapshot: ${String(err?.message ?? err)}`));
+    // The macro and earnings calendar, downloaded once a day.
+    await import("./calendar").then((m) => m.calendarTick()).catch((err) => console.error(`[calendar] ${String(err?.message ?? err)}`));
     // The owner's portfolio value, an hour at most apart, so its chart fills in with the page closed.
     await ownerPortfolioTick().catch((err) => console.error(`[portfolio] ${String(err?.message ?? err)}`));
     try {

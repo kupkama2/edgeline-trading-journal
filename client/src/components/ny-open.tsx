@@ -11,7 +11,7 @@ import { nextNyOpen, nyParts, WARN_MS } from "@shared/ny-open";
  * Market holidays are not known here: on a holiday the countdown runs to
  * a bell that does not ring.
  */
-const SOUND_KEY = "edgeline.nyopen.sound";
+export const SOUND_KEY = "edgeline.nyopen.sound";
 const RUNG_KEY = "edgeline.nyopen.rung";
 
 const fmtLeft = (ms: number) => {
@@ -24,7 +24,7 @@ const fmtLeft = (ms: number) => {
 };
 
 /** A soft two-note chime, made here so there is nothing to download. */
-function chime(): void {
+export function chime(): void {
   try {
     const Ctx = (window as any).AudioContext || (window as any).webkitAudioContext;
     if (!Ctx) return;

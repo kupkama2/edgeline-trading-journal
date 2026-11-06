@@ -74,6 +74,8 @@ export function useScreenerLines(tf: Timeframe, coins: string[]) {
     queryFn: async () => (await apiRequest("GET", `/api/screener/series?tf=${tf}&coins=${encodeURIComponent(key)}`)).json(),
     enabled: coins.length > 0,
     staleTime: 60_000,
+    // A coin added to the set refetches, but the lines already drawn stay up meanwhile instead of the chart going blank.
+    placeholderData: (prev) => (prev?.tf === tf ? prev : undefined),
   });
 }
 

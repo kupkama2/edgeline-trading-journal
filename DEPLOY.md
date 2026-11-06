@@ -229,3 +229,15 @@ minutes; a failed run counts, which is the back-off.
 - **The AI read** runs after the 08:00 and 13:30 runs (and the cron hook),
   or on "Read now" at most every 30 minutes, when `ANTHROPIC_API_KEY` is
   set. `SCREENER_AI_MODEL` picks the model.
+
+## The event calendar
+
+US macro releases of high impact (NFP, CPI, PPI, FOMC, GDP, PCE…) come from
+Forex Factory's public weekly feed, and earnings of companies over $200B
+plus the crypto names (COIN, MSTR, HOOD…) from Nasdaq's calendar for the
+next five weekdays. Both are downloaded once a day by the server's clock;
+a source that fails keeps its last copy. The header shows the next event
+today; the page alerts the morning of a day with anything on (from 07:30
+your time) and an hour before each event — a toast, the chime if the bell
+is on, and a desktop notification once allowed. Alerts need a tab of the
+journal open.
