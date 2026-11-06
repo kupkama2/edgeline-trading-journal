@@ -23,6 +23,7 @@ import {
   storedSeries,
 } from "./screener";
 import { screenerStore } from "./storage";
+import { adminOnly } from "./admin";
 import { blockCandles, CHART_WINDOW_MS, exitPlan, NOT_AN_ALT, ratioSeries, rebasedLine, TF_SPEC, TIMEFRAMES, type Timeframe } from "@shared/screener";
 
 const fmtUsd = (x: number | null | undefined) => {
@@ -35,6 +36,8 @@ const tfParam = (v: unknown): Timeframe => (TIMEFRAMES.includes(v as Timeframe) 
 const COIN = /^[A-Za-z0-9:_-]{1,24}$/;
 
 export function registerScreenerRoutes(app: Express): void {
+  // The owner's tool: to anyone else none of this exists. The cron hook is registered earlier, with its own token.
+  app.use("/api/screener", adminOnly);
   /** The latest run, the settings and whether a refresh may be asked for. */
   app.get("/api/screener", async (_req, res) => {
     const [run, settings] = await Promise.all([latestScreenerRun(), screenerSettings()]);

@@ -10,6 +10,8 @@ export interface SessionResponse {
   provider: "google" | "local";
   /** Whether the terminal exists for this person. Absent means no. */
   terminal?: boolean;
+  /** The journal's owner: the terminal, the screener and the portfolio are theirs alone. */
+  admin?: boolean;
 }
 
 /** Google's mark, inlined — a CDN request just to draw a logo is a tracker. */

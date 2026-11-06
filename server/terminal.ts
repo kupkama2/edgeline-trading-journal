@@ -824,7 +824,8 @@ export function registerTerminalRoutes(app: Express, deps: { llm?: (prompt: stri
   if (deps.llm) llm = deps.llm;
   // To anyone not on the list, none of this exists.
   app.use("/api/terminal", (req: Request, res: Response, next: NextFunction) => {
-    if (!terminalAllowed(req.account?.email)) return res.status(404).json({ message: "Not found" });
+    // The owner only, and only when the server lists them too.
+    if (!req.account?.isOwner || !terminalAllowed(req.account?.email)) return res.status(404).json({ message: "Not found" });
     next();
   });
 

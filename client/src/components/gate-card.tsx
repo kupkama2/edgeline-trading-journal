@@ -54,17 +54,18 @@ export function GateRecordCard({ trade }: { trade: TradeWithTags }) {
   if (!g) return null;
   const reds = redAnswers(prefs.gate.questions, g);
   const where = { "entry-card": "on the entry card", terminal: "in the terminal", tracked: "after the fact, on the journal" }[g.where];
+  // Folded by default: the verdict is the line that matters; the answers are there on a click.
   return (
-    <Card className={`border-card-border bg-card p-4 ${reds.length ? "border-red-500/40" : "border-emerald-500/40"}`} data-testid="card-gate-record">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h2 className="text-sm font-semibold tracking-tight">The gate</h2>
-        <span className={`font-mono text-[10px] uppercase tracking-wider ${reds.length ? "text-red-400" : "text-emerald-400"}`} data-testid="text-gate-verdict">
-          {g.skipped ? "skipped · counts as red" : reds.length ? `${reds.length} red` : "green"}
-        </span>
-      </div>
-      <p className="mt-0.5 text-[11px] text-muted-foreground">
-        Asked {where}, {new Date(g.at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}.
-      </p>
+    <Card className={`border-card-border bg-card px-4 py-3 ${reds.length ? "border-red-500/40" : "border-emerald-500/40"}`} data-testid="card-gate-record">
+      <details>
+        <summary className="flex cursor-pointer select-none flex-wrap items-baseline justify-between gap-2 [&::-webkit-details-marker]:hidden">
+          <span className="text-sm font-semibold tracking-tight">
+            The gate <span className="ml-1 text-[11px] font-normal text-muted-foreground">asked {where}, {new Date(g.at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span>
+          </span>
+          <span className={`font-mono text-[10px] uppercase tracking-wider ${reds.length ? "text-red-400" : "text-emerald-400"}`} data-testid="text-gate-verdict">
+            {g.skipped ? "skipped · counts as red" : reds.length ? `${reds.length} red` : "green"}
+          </span>
+        </summary>
       {!g.skipped && (
         <ul className="mt-2 divide-y divide-border/50 text-[12px]">
           {prefs.gate.questions.map((q) => {
@@ -79,6 +80,7 @@ export function GateRecordCard({ trade }: { trade: TradeWithTags }) {
           })}
         </ul>
       )}
+      </details>
     </Card>
   );
 }

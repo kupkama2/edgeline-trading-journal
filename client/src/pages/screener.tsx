@@ -71,6 +71,14 @@ export default function ScreenerPage() {
     setPicked(next);
     setPickedFor(tf);
   };
+  // Keep only this coin; a second double click on the only coin left brings the default set back.
+  const solo = (coin: string) => {
+    if (charted.size === 1 && charted.has(coin)) setPicked(null);
+    else {
+      setPicked(new Set([coin]));
+      setPickedFor(tf);
+    }
+  };
 
   // While a run is on, the small status answer is polled for the progress line; the table arrives with the "screener" event.
   const live = useScreenerStatus(!!page.data?.status.running);
@@ -101,12 +109,13 @@ export default function ScreenerPage() {
   const matches = useMemo(() => (q ? rows.filter((r) => r.coin.toLowerCase().includes(q.toLowerCase())).length : -1), [rows, q]);
   const lookup = useScreenerLookup(q && matches === 0 && /^[A-Za-z0-9:_-]{1,24}$/.test(q) ? q : null);
   const counts = useMemo(() => {
-    const c = { candidates: 0, fast: 0, weakest: 0 };
+    const c = { candidates: 0, fast: 0, weakest: 0, diverging: 0 };
     for (const r of rows) {
       const f = r.flags[tf];
       if (f.candidate) c.candidates++;
       if (f.movingFast) c.fast++;
       if (f.weakest) c.weakest++;
+      if (r.signals?.[tf]?.divergence) c.diverging++;
     }
     return c;
   }, [rows, tf]);
@@ -120,6 +129,16 @@ export default function ScreenerPage() {
             {run ? (
               <>
                 Data as of <span className="font-mono text-foreground">{fmtPrague(run.at)}</span> Prague · bars to {new Date(run.barsTo).toISOString().slice(11, 16)}Z · {run.universe} coins · read in {(run.tookMs / 1000).toFixed(0)}s
+                {run.breadth != null && " "}
+                {run.breadth != null && (
+                  <span
+                    className={`ml-1 ${run.breadth >= 0.6 ? "text-emerald-400" : run.breadth <= 0.35 ? "text-red-400" : "text-foreground/80"}`}
+                    title="Breadth: the share of alts whose ratio to BTC is above its own 20-day average. High is a tape where alts lead; low is one where BTC does."
+                    data-testid="screener-breadth"
+                  >
+                    · breadth {(run.breadth * 100).toFixed(0)}%
+                  </span>
+                )}
                 {run.errors ? ` · ${run.errors} could not be read` : ""}
               </>
             ) : page.isLoading ? (
@@ -181,6 +200,18 @@ export default function ScreenerPage() {
       </div>
 
       <Card className="border-card-border bg-card p-3 sm:p-4">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <h2 className="text-sm font-semibold">Relative strength vs BTC · {tf}</h2>
+          <button type="button" className="text-[11px] text-muted-foreground hover:text-foreground" onClick={() => setPicked(null)} data-testid="screener-chart-reset">
+            Top 8 + bottom 3
+          </button>
+        </div>
+        <div className="mt-2">
+          <SpaghettiChart lines={lines.data?.lines ?? {}} order={drawn} loading={lines.isLoading} onHide={toggle} onSolo={solo} />
+        </div>
+      </Card>
+
+      <Card className="border-card-border bg-card p-3 sm:p-4">
         <div className="flex flex-wrap items-center gap-2">
           <Segmented value={tf} onChange={setTf} options={TIMEFRAMES.map((t) => ({ id: t, label: t }))} size="sm" ariaLabel="Timeframe" testId="screener-tf" />
           <label className="relative">
@@ -201,6 +232,7 @@ export default function ScreenerPage() {
                 ["candidates", `Candidates only (${counts.candidates})`],
                 ["fast", `Moving fast (${counts.fast})`],
                 ["weakest", `Show weakest (${counts.weakest})`],
+                ["diverging", `Diverging (${counts.diverging})`],
               ] as [Filter, string][]
             ).map(([id, label]) => (
               <button
@@ -217,27 +249,15 @@ export default function ScreenerPage() {
           </div>
         </div>
         <p className="mt-1.5 text-[11px] text-muted-foreground">
-          RS change is the alt-over-BTC ratio's move over the timeframe; the arrow says whether the last period beat the mean of the ones before. <b>Candidate</b> = top 10% and accelerating, RVOL ≥ {settings?.rvolMin ?? 1.5}, not leverage-driven. Click a row for the coin; the dot puts it on the chart.
+          RS change is the alt-over-BTC ratio's move over the timeframe; the arrow says whether the last period beat the mean of the ones before. <b>Candidate</b> = top 10% and accelerating, RVOL ≥ {settings?.rvolMin ?? 1.5}, not leverage-driven. Click a row for the coin. Its name puts it on the chart or takes it off; a double click keeps only it.
         </p>
         <div className="mt-2">
-          <ScreenerTable rows={rows} tf={tf} filter={filter} search={search} rvolMin={settings?.rvolMin ?? 1.5} charted={charted} onToggleChart={toggle} onOpen={setOpen} />
+          <ScreenerTable rows={rows} tf={tf} filter={filter} search={search} rvolMin={settings?.rvolMin ?? 1.5} charted={charted} onToggleChart={toggle} onSolo={solo} onOpen={setOpen} />
           {q && matches === 0 && (
             <p className="px-2 pb-2 text-center text-xs" data-testid="screener-lookup">
               {lookup.isLoading ? <span className="text-muted-foreground">Looking it up…</span> : lookup.data ? <span className={lookup.data.where === "not-listed" ? "text-amber-500" : "text-foreground/90"}>{lookup.data.reason}</span> : null}
             </p>
           )}
-        </div>
-      </Card>
-
-      <Card className="border-card-border bg-card p-3 sm:p-4">
-        <div className="flex flex-wrap items-baseline justify-between gap-2">
-          <h2 className="text-sm font-semibold">Relative strength vs BTC · {tf}</h2>
-          <button type="button" className="text-[11px] text-muted-foreground hover:text-foreground" onClick={() => setPicked(null)} data-testid="screener-chart-reset">
-            Top 8 + bottom 3
-          </button>
-        </div>
-        <div className="mt-2">
-          <SpaghettiChart lines={lines.data?.lines ?? {}} order={drawn} loading={lines.isLoading} />
         </div>
       </Card>
 

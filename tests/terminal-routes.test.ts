@@ -320,7 +320,8 @@ describe.skipIf(!DB)("the terminal against a stub venue", () => {
     server.use((req, _res, next) => {
       const id = Number(req.header("x-test-user") ?? me.userId);
       (req as any).userId = id;
-      (req as any).account = { id, email: req.header("x-test-email") ?? me.email };
+      // The owner is the one the tests act as; the stranger is not.
+      (req as any).account = { id, email: req.header("x-test-email") ?? me.email, isOwner: !req.header("x-test-email") };
       next();
     });
     app = createServer(server);

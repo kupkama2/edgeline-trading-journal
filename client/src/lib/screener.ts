@@ -4,7 +4,7 @@ import type { ExitPlan, ScreenerCandle, ScreenerRow, ScreenerSettings, Timeframe
 
 /** What the page reads: the latest run, the settings, and whether a refresh may be asked for. */
 export interface ScreenerPage {
-  run: { id: number; at: string; barsTo: number; tookMs: number; errors: number; universe: number; fullReads: number; settings: ScreenerSettings; rows: ScreenerRow[] } | null;
+  run: { id: number; at: string; barsTo: number; tookMs: number; errors: number; universe: number; fullReads: number; breadth: number | null; settings: ScreenerSettings; rows: ScreenerRow[] } | null;
   settings: ScreenerSettings;
   status: { running: boolean; startedAt: string | null; progress: { done: number; total: number } | null; lastError: string | null; nextAllowedAt: string | null };
   cooldownMs: number;

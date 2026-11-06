@@ -5,6 +5,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sh
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Segmented } from "@/components/trade-shared";
+import { OI_READ, SIGNAL_NAMES, SignalDots } from "@/components/screener/table";
 import { TIMEFRAMES, type Timeframe } from "@shared/screener";
 import { ACCEL_ARROW, fmtPct, fmtPx, fmtUsd, fmtX, hostOf, sizeFor, useScreenerCoin, useScreenerNews, type ScreenerCoin, type ScreenerNews } from "@/lib/screener";
 
@@ -105,6 +106,27 @@ function RatioChart({ data, invalidation }: { data: ScreenerCoin["ratio"]; inval
     invRef.current = invalidation != null ? line.createPriceLine({ price: invalidation, color: "#f59e0b", lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: "RS inv." }) : null;
   }, [invalidation, data]);
   return <div ref={hostRef} className="h-56 w-full sm:h-64" data-testid="screener-ratio-chart" />;
+}
+
+/** One reading in words, for the panel. */
+function readingText(k: (typeof SIGNAL_NAMES)[number][0], row: NonNullable<ScreenerCoin["row"]>, tf: Timeframe): string {
+  const m = row.tf[tf];
+  const p = row.price?.[tf];
+  const pos = row.positioning;
+  switch (k) {
+    case "rs":
+      return fmtPct(m.rs);
+    case "accel":
+      return m.accel ? `${ACCEL_ARROW[m.accel]} ${m.accel}` : "—";
+    case "rsi":
+      return p?.rsi != null ? p.rsi.toFixed(0) : "—";
+    case "trend":
+      return p?.ema == null ? "—" : p.ema === 2 ? "above both" : p.ema === 0 ? "below both" : "between";
+    case "oi":
+      return pos?.read ? pos.read.replace("-", " ") : pos?.oi1d != null ? `${fmtPct(pos.oi1d)} flat` : "no history yet";
+    case "funding":
+      return pos?.fundingPct != null ? `${fmtPct(row.fundingAnnual, 0)} · ${Math.round(pos.fundingPct * 100)}th pct` : fmtPct(row.fundingAnnual, 0);
+  }
 }
 
 /**
@@ -231,6 +253,53 @@ export function CoinDrawer({
                 </dd>
               </div>
             </dl>
+          </div>
+        )}
+
+        {/* ------------------------------ the readings ------------------------------ */}
+        {row && (
+          <div className="mt-4 rounded-md border border-border/70 p-3" data-testid="screener-readings">
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <h3 className="text-sm font-semibold">Do the readings agree? · {tf}</h3>
+              <SignalDots s={row.signals?.[tf]} />
+            </div>
+            <ul className="mt-2 grid grid-cols-1 gap-x-4 gap-y-1 text-xs sm:grid-cols-2">
+              {SIGNAL_NAMES.map(([k, name]) => {
+                const v = row.signals?.[tf]?.[k] ?? 0;
+                return (
+                  <li key={k} className="flex items-baseline justify-between gap-2">
+                    <span className="text-muted-foreground">{name}</span>
+                    <span className={`font-mono ${v > 0 ? "text-emerald-400" : v < 0 ? "text-red-400" : "text-muted-foreground"}`}>{readingText(k, row, tf)}</span>
+                  </li>
+                );
+              })}
+              <li className="flex items-baseline justify-between gap-2">
+                <span className="text-muted-foreground">RS vs ETH · vs alt basket</span>
+                <span className="font-mono">
+                  {fmtPct(row.price?.[tf]?.rsEth)} · {fmtPct(row.price?.[tf]?.rsBasket)}
+                </span>
+              </li>
+              <li className="flex items-baseline justify-between gap-2">
+                <span className="text-muted-foreground">ATR · off the 20-period high</span>
+                <span className="font-mono">
+                  {row.price?.[tf]?.atrPct != null ? `${(row.price[tf].atrPct! * 100).toFixed(2)}%` : "—"} · {row.price?.[tf]?.offHigh != null ? `${(row.price[tf].offHigh! * 100).toFixed(1)}%` : "—"}
+                </span>
+              </li>
+              <li className="flex items-baseline justify-between gap-2">
+                <span className="text-muted-foreground">OI 1h · 4h · 24h · premium</span>
+                <span className="font-mono">
+                  {fmtPct(row.positioning?.oi1h)} · {fmtPct(row.positioning?.oi4h)} · {fmtPct(row.positioning?.oi1d)} · {fmtPct(row.positioning?.premium, 2)}
+                </span>
+              </li>
+            </ul>
+            {row.signals?.[tf]?.divergence && (
+              <p className={`mt-2 text-xs ${row.signals[tf].divergence === "bearish" ? "text-red-400" : "text-emerald-400"}`} data-testid="screener-divergence">
+                {row.signals[tf].divergence === "bearish"
+                  ? "Bearish divergence: price at a 20-period high that relative strength or RSI does not confirm."
+                  : "Bullish divergence: price at a 20-period low while relative strength or RSI holds up."}
+              </p>
+            )}
+            {row.positioning?.read && <p className="mt-1 text-[11px] text-muted-foreground">{OI_READ[row.positioning.read]}.</p>}
           </div>
         )}
 

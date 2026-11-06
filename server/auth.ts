@@ -334,7 +334,7 @@ export function setupAuth(app: Express) {
 
   app.get("/api/session", async (req: Request, res: Response) => {
     const user = req.session?.userId ? await accounts.byId(req.session.userId) : undefined;
-    res.json({ user: user ? toSessionUser(user) : null, provider: "google", terminal: terminalAllowed(user?.email) });
+    res.json({ user: user ? toSessionUser(user) : null, provider: "google", terminal: Boolean(user?.isOwner) && terminalAllowed(user?.email), admin: Boolean(user?.isOwner) });
   });
 
   app.post("/api/logout", (req: Request, res: Response) => {
@@ -392,7 +392,7 @@ function setupLocalAccount(app: Express) {
 
   app.get("/api/session", async (_req: Request, res: Response) => {
     const user = await localUser();
-    res.json({ user: toSessionUser(user), provider: "local", terminal: terminalAllowed(user.email) });
+    res.json({ user: toSessionUser(user), provider: "local", terminal: user.isOwner && terminalAllowed(user.email), admin: user.isOwner });
   });
 
   app.post("/api/logout", (_req: Request, res: Response) => res.json({ ok: true }));

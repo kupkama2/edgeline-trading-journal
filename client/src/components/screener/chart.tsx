@@ -26,7 +26,45 @@ const withAlpha = (hex: string, a: number) => {
  * forward and dims the rest; the legend says which is which and where
  * each one ended.
  */
-export function SpaghettiChart({ lines, order, loading }: { lines: Record<string, { t: number; pct: number }[]>; order: string[]; loading?: boolean }) {
+/**
+ * One click or two on the same thing, told apart: the single action waits
+ * a beat and is dropped when a second click follows. The browser fires
+ * click twice before dblclick, so the first action must not run on its own.
+ */
+export function useClickOrDouble() {
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  return (one: () => void, two: () => void) => ({
+    onClick: () => {
+      if (timer.current) clearTimeout(timer.current);
+      timer.current = setTimeout(() => {
+        timer.current = null;
+        one();
+      }, 230);
+    },
+    onDoubleClick: () => {
+      if (timer.current) clearTimeout(timer.current);
+      timer.current = null;
+      two();
+    },
+  });
+}
+
+export function SpaghettiChart({
+  lines,
+  order,
+  loading,
+  onHide,
+  onSolo,
+}: {
+  lines: Record<string, { t: number; pct: number }[]>;
+  order: string[];
+  loading?: boolean;
+  /** A click on a legend name takes that line off. */
+  onHide?: (coin: string) => void;
+  /** A double click keeps only that line. */
+  onSolo?: (coin: string) => void;
+}) {
+  const clicks = useClickOrDouble();
   const hostRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<Map<string, ISeriesApi<"Line">>>(new Map());
@@ -123,6 +161,8 @@ export function SpaghettiChart({ lines, order, loading }: { lines: Record<string
             className={`inline-flex items-center gap-1 rounded px-0.5 transition-opacity ${hover && hover !== coin ? "opacity-40" : ""}`}
             onMouseEnter={() => setHover(coin)}
             onMouseLeave={() => setHover(null)}
+            title="Click to hide this line; double-click to keep only it"
+            {...clicks(() => onHide?.(coin), () => onSolo?.(coin))}
             data-testid={`screener-legend-${coin}`}
           >
             <span className="inline-block h-0.5 w-3" style={{ background: colorOf(coin) }} />
@@ -131,7 +171,7 @@ export function SpaghettiChart({ lines, order, loading }: { lines: Record<string
           </button>
         ))}
         {loading && <span className="text-muted-foreground">loading…</span>}
-        {!loading && order.length === 0 && <span className="text-muted-foreground">Nothing on the chart. Click a row's dot to add a coin.</span>}
+        {!loading && order.length === 0 && <span className="text-muted-foreground">Nothing on the chart. Click a coin's name in the table to add it.</span>}
       </div>
     </div>
   );

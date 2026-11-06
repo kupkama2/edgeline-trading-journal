@@ -33,7 +33,20 @@ import { screenerStore } from "./storage";
 import { notifyAll } from "./events";
 import {
   annualizeFunding,
+  basketSeries,
+  breadthOf,
   coinMetrics,
+  emptyPrice,
+  emptySignals,
+  oiRead,
+  priceReadings,
+  ratioSeries,
+  rsiExtremes,
+  tfMetrics,
+  TF_SPEC,
+  TIMEFRAMES,
+  type Positioning,
+  type Timeframe,
   completeBars,
   DAY_MS,
   deriveDaily,
@@ -70,6 +83,8 @@ export interface ScreenerRun {
   universe: number;
   /** How many coins needed the full two-request read rather than the small incremental one. */
   fullReads: number;
+  /** The share of alts whose BTC ratio is above its 20-day average: the breadth of the tape. */
+  breadth: number | null;
   settings: ScreenerSettings;
   rows: ScreenerRow[];
 }
@@ -92,6 +107,7 @@ export interface AssetCtx {
   openInterest: number | null;
   dayNtlVlm: number | null;
   markPx: number | null;
+  oraclePx: number | null;
   delisted: boolean;
 }
 
@@ -108,7 +124,7 @@ export function parseMetaAndAssetCtxs(json: unknown): AssetCtx[] {
   universe.forEach((u, i) => {
     const c = ctxs[i] ?? {};
     if (typeof u?.name !== "string") return;
-    out.push({ coin: u.name, funding: n(c.funding), openInterest: n(c.openInterest), dayNtlVlm: n(c.dayNtlVlm), markPx: n(c.markPx), delisted: u.isDelisted === true });
+    out.push({ coin: u.name, funding: n(c.funding), openInterest: n(c.openInterest), dayNtlVlm: n(c.dayNtlVlm), markPx: n(c.markPx), oraclePx: n(c.oraclePx), delisted: u.isDelisted === true });
   });
   return out;
 }
@@ -222,7 +238,12 @@ export async function latestScreenerRun(): Promise<ScreenerRun | null> {
   } catch {
     body = {};
   }
-  const rows: ScreenerRow[] = Array.isArray(body) ? body : Array.isArray(body.rows) ? body.rows : [];
+  const rows: ScreenerRow[] = (Array.isArray(body) ? body : Array.isArray(body.rows) ? body.rows : []).map((r: any) => ({
+    ...r,
+    price: r.price ?? emptyPrice(),
+    signals: r.signals ?? emptySignals(),
+    positioning: r.positioning ?? null,
+  }));
   latest = {
     id: r.id,
     at: r.at,
@@ -231,6 +252,7 @@ export async function latestScreenerRun(): Promise<ScreenerRun | null> {
     errors: r.errors,
     universe: r.universe,
     fullReads: Number(body.fullReads) || 0,
+    breadth: typeof body.breadth === "number" ? body.breadth : null,
     settings: readScreenerSettings(r.settings ? JSON.parse(r.settings) : null),
     rows,
   };
@@ -330,8 +352,51 @@ async function run(nowFn: () => number): Promise<ScreenerRun> {
     const dayPartial = Math.max(1 / 24, ((barsTo - Math.floor(barsTo / DAY_MS) * DAY_MS) / DAY_MS) || 1);
     status.progress.done = 1;
 
+    // Positioning: the hourly snapshots an hour, four hours and a day back (Stage B keeps one an hour).
+    const ago = (ms: number) => new Date(t0 - ms).toISOString();
+    const [snap1h, snap4h, snap1d] = await Promise.all([
+      screenerStore.snapshotNear(ago(HOUR_MS), ago(2.5 * HOUR_MS)),
+      screenerStore.snapshotNear(ago(4 * HOUR_MS), ago(6 * HOUR_MS)),
+      screenerStore.snapshotNear(ago(DAY_MS), ago(DAY_MS + 6 * HOUR_MS)),
+    ]);
+
+    // Every coin's series first, so the alt basket and ETH are in hand before anything is measured against them.
+    const measured = new Map<string, Series>();
+    const failed = new Map<string, string>();
+    for (const c of alts) {
+      try {
+        measured.set(c.coin, measuredSeries(await read(c.coin), now));
+      } catch (err: any) {
+        const msg = String(err?.message ?? err).slice(0, 200);
+        failed.set(c.coin, msg);
+        console.error(`[screener] ${c.coin}: ${msg}`);
+      }
+      status.progress.done++;
+    }
+    const weightOf = new Map(alts.map((c) => [c.coin, c.dayNtlVlm ?? 0]));
+    const basket: Series = { "1h": [], "1d": [] };
+    for (const base of ["1h", "1d"] as const) {
+      basket[base] = basketSeries(Array.from(measured, ([coin, s]) => ({ candles: s[base], weight: weightOf.get(coin) ?? 0 })));
+    }
+    const eth = measured.get("ETH") ?? null;
+    const breadth = breadthOf(Array.from(measured.values()).map((s) => ratioSeries(s["1d"], btc["1d"])));
+
     const rows: ScreenerRow[] = [];
     for (const c of alts) {
+      const pos = (snap: Map<string, { openInterest: number | null; mark: number | null }>) => {
+        const was = snap.get(c.coin);
+        return { oi: oiChange(c.openInterest, was?.openInterest ?? null), px: c.markPx != null && was?.mark ? c.markPx / was.mark - 1 : null };
+      };
+      const d1 = pos(snap1d);
+      const positioning: Positioning = {
+        oi1h: pos(snap1h).oi,
+        oi4h: pos(snap4h).oi,
+        oi1d: d1.oi,
+        px1d: d1.px,
+        read: oiRead(d1.px, d1.oi),
+        premium: c.markPx != null && c.oraclePx ? c.markPx / c.oraclePx - 1 : null,
+        fundingPct: null,
+      };
       const base: ScreenerRow = {
         coin: c.coin,
         mark: c.markPx,
@@ -343,32 +408,44 @@ async function run(nowFn: () => number): Promise<ScreenerRun> {
         leverageDriven: false,
         tf: emptyMetrics(),
         flags: emptyFlags(),
-        error: null,
+        price: emptyPrice(),
+        signals: emptySignals(),
+        positioning,
+        error: failed.get(c.coin) ?? null,
         bars: { "1h": 0, "1d": 0 },
       };
-      try {
-        const alt = measuredSeries(await read(c.coin), now);
+      const alt = measured.get(c.coin);
+      if (alt) {
         base.bars = { "1h": alt["1h"].length, "1d": alt["1d"].length };
         base.tf = coinMetrics(alt, btc, dayPartial);
-      } catch (err: any) {
-        base.error = String(err?.message ?? err).slice(0, 200);
-        console.error(`[screener] ${c.coin}: ${base.error}`);
+        const peaks = {} as Record<Timeframe, number | null>;
+        const troughs = {} as Record<Timeframe, number | null>;
+        for (const tf of TIMEFRAMES) {
+          const b = TF_SPEC[tf].base;
+          const vsEth = eth && c.coin !== "ETH" ? tfMetrics(ratioSeries(alt[b], eth[b]), tf).rs : null;
+          const vsBasket = basket[b].length ? tfMetrics(ratioSeries(alt[b], basket[b]), tf).rs : null;
+          base.price[tf] = priceReadings(alt[b], tf, vsEth, vsBasket);
+          const ex = rsiExtremes(alt[b], tf);
+          peaks[tf] = ex.peak;
+          troughs[tf] = ex.trough;
+        }
+        base.rsiPeak = peaks;
+        base.rsiTrough = troughs;
       }
       rows.push(base);
-      status.progress.done++;
     }
     const flagged = flagRows(rows, settings);
     const tookMs = nowFn() - t0;
     const errors = flagged.filter((r) => r.error).length;
-    const id = await screenerStore.saveRun({ at, tookMs, body: JSON.stringify({ barsTo, fullReads, rows: flagged }), errors, universe: flagged.length, settings: JSON.stringify(settings) });
+    const id = await screenerStore.saveRun({ at, tookMs, body: JSON.stringify({ barsTo, fullReads, breadth, rows: flagged }), errors, universe: flagged.length, settings: JSON.stringify(settings) });
     // The whole snapshot is kept — every perp, filtered or not — so OI history exists before a coin crosses the volume line. After the run, so a failed one leaves none.
     await screenerStore.saveSnapshot(
       at,
-      ctxs.map((c) => ({ coin: c.coin, funding: c.funding, openInterest: c.openInterest, volume: c.dayNtlVlm, mark: c.markPx })),
+      ctxs.map((c) => ({ coin: c.coin, funding: c.funding, openInterest: c.openInterest, volume: c.dayNtlVlm, mark: c.markPx, oracle: c.oraclePx })),
     );
     await screenerStore.prune(new Date(t0 - KEEP_DAYS * DAY_MS).toISOString()).catch(() => {});
     console.log(`[screener] ${flagged.length} coins in ${(tookMs / 1000).toFixed(1)}s, ${fullReads} full reads, ${errors} could not be read, ${ctxs.length} perps listed`);
-    latest = { id, at, barsTo, tookMs, errors, universe: flagged.length, fullReads, settings, rows: flagged };
+    latest = { id, at, barsTo, tookMs, errors, universe: flagged.length, fullReads, breadth, settings, rows: flagged };
     notifyAll("screener");
     return latest;
   } catch (err: any) {
@@ -411,6 +488,29 @@ const deriveDailyTail = (hours: ScreenerCandle[]): ScreenerCandle[] => {
 };
 
 const oiChange = (now: number | null, before: number | null) => (now != null && before != null && before > 0 ? now / before - 1 : null);
+
+/* ------------------------------- the hourly snapshot ------------------------------- */
+
+/**
+ * Open interest, funding, mark and oracle for every perp, once an hour:
+ * one request (20 of the venue's 1200 weight a minute). Hyperliquid keeps
+ * no OI history, so these rows are the history the positioning read is
+ * made from. Skipped when a snapshot under 50 minutes old exists, so a run
+ * and the hourly tick do not both write one.
+ */
+export async function takeSnapshot(nowFn: () => number = Date.now): Promise<{ at: string; perps: number } | null> {
+  const last = await screenerStore.latestSnapshotAt();
+  const now = nowFn();
+  if (last && now - new Date(last).getTime() < 50 * 60_000) return null;
+  const ctxs = parseMetaAndAssetCtxs(await hlInfo({ type: "metaAndAssetCtxs" }, 20_000));
+  if (ctxs.length === 0) return null;
+  const at = new Date(now).toISOString();
+  await screenerStore.saveSnapshot(
+    at,
+    ctxs.map((c) => ({ coin: c.coin, funding: c.funding, openInterest: c.openInterest, volume: c.dayNtlVlm, mark: c.markPx, oracle: c.oraclePx })),
+  );
+  return { at, perps: ctxs.length };
+}
 
 /* ------------------------------- the clock ------------------------------- */
 
@@ -455,10 +555,24 @@ export function runDue(now: number, lastRunIso: string | null): boolean {
   return false;
 }
 
+async function ownerPortfolioTick(): Promise<void> {
+  const { accounts, portfolioStore } = await import("./storage");
+  const owner = await accounts.owner();
+  if (!owner) return;
+  const last = await portfolioStore.lastSnapshotAt(owner.id);
+  if (last && Date.now() - new Date(last).getTime() < 60 * 60_000) return;
+  const { readPortfolio } = await import("./portfolio");
+  await readPortfolio(owner.id, { fresh: true });
+}
+
 /** The clock: a minute's tick, a run when one is due. `SCREENER_CLOCK_MS=0` is off (tests). */
 export function startScreenerClock(everyMs = Number(process.env.SCREENER_CLOCK_MS ?? "60000")): void {
   if (!(everyMs > 0)) return;
   const tick = async () => {
+    // The hourly snapshot, whatever the run schedule says; its own failure is its own.
+    if (!status.running) await takeSnapshot().catch((err) => console.error(`[screener] snapshot: ${String(err?.message ?? err)}`));
+    // The owner's portfolio value, an hour at most apart, so its chart fills in with the page closed.
+    await ownerPortfolioTick().catch((err) => console.error(`[portfolio] ${String(err?.message ?? err)}`));
     try {
       if (status.running) return;
       // A run that failed is not tried again every minute: the cooldown is the back-off.
