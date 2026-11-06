@@ -73,7 +73,7 @@ function klines(start: number, end: number) {
 }
 /** A stand-in for the model: answers the management review from the brief it is given. */
 let model: Server;
-let modelCalls: string[] = [];
+const modelCalls: string[] = [];
 let dual = true;
 let nextId = 100;
 let nextTid = 5000;
@@ -779,7 +779,15 @@ describe.skipIf(!DB)("the terminal against a stub venue", () => {
     expect(log.some((l: any) => l.tradeId === trade.id && l.action === "plan-hit" && /"kind":"target"/.test(l.request ?? ""))).toBe(true);
 
     // Closed by hand: the review runs on the next pass, against the plan's answer.
-    modelCalls = [];
+    //
+    // The stub model is not this trade's alone. The watch started above reads
+    // every person's terminal trades in the shared database, and trades left
+    // by earlier runs that are due a look meet the spike above and get their
+    // own review through this stub. So this trade's asks are counted from this
+    // account's log, where every ask writes one "review" row carrying its
+    // brief, and the stub only shows that each brief really reached the model.
+    const reviewsOf = async (id: number) =>
+      (await store.listTerminalLog(500)).filter((l: any) => l.tradeId === id && l.action === "review").reverse();
     const c = await send("POST", `/api/terminal/trades/${trade.id}/close`, {});
     expect(c.status).toBe(200);
     expect((await c.json()).trade.status).toBe("closed");
@@ -789,16 +797,23 @@ describe.skipIf(!DB)("the terminal against a stub venue", () => {
     expect(ref.moves.map((x: any) => x.kind)).toEqual(["stop", "reduce", "close"]);
     expect(ref.review).toMatchObject({ verdict: "hurt", basis: { planVerdict: "target_first", planR: 1 } });
     expect(ref.review.lesson).toBe("Let the plan run to its target.");
-    expect(modelCalls).toHaveLength(1);
-    expect(modelCalls[0]).toContain("Stop 79010 → 80010 (breakeven)");
-    expect(modelCalls[0]).toContain("Tape reached the original target 81010");
+    let asked = await reviewsOf(trade.id);
+    expect(asked).toHaveLength(1);
+    expect(asked[0].ok).toBe(true);
+    const brief: string = JSON.parse(asked[0].request).brief;
+    expect(brief).toContain("Stop 79010 → 80010 (breakeven)");
+    expect(brief).toContain("Tape reached the original target 81010");
+    expect(modelCalls.some((m) => m.includes(brief))).toBe(true);
     // Once: a second pass does not ask again.
     await send("POST", "/api/terminal/reconcile", {});
-    expect(modelCalls).toHaveLength(1);
+    expect(await reviewsOf(trade.id)).toHaveLength(1);
     // Asked by name, it reads again.
     const again = await send("POST", `/api/terminal/trades/${trade.id}/review`, {});
     expect(again.status).toBe(200);
-    expect(modelCalls).toHaveLength(2);
+    asked = await reviewsOf(trade.id);
+    expect(asked).toHaveLength(2);
+    expect(asked[1].ok).toBe(true);
+    expect(modelCalls.some((m) => m.includes(JSON.parse(asked[1].request).brief))).toBe(true);
     spikes.clear();
   });
 
