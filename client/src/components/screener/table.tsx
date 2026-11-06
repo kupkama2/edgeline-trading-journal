@@ -19,6 +19,7 @@ export function ScreenerTable({
   rows,
   tf,
   filter,
+  search = "",
   rvolMin,
   charted,
   onToggleChart,
@@ -27,6 +28,8 @@ export function ScreenerTable({
   rows: ScreenerRow[];
   tf: Timeframe;
   filter: Filter;
+  /** Part of a coin's name; empty is everything. */
+  search?: string;
   rvolMin: number;
   charted: Set<string>;
   onToggleChart: (coin: string) => void;
@@ -40,8 +43,10 @@ export function ScreenerTable({
     if (sort.key.startsWith("rs:")) setSort({ key: `rs:${tf}`, desc: true });
   }
 
+  const q = search.trim().toLowerCase();
   const shown = useMemo(() => {
     const kept = rows.filter((r) => {
+      if (q && !r.coin.toLowerCase().includes(q)) return false;
       const f = r.flags[tf];
       if (filter === "candidates") return f.candidate;
       if (filter === "fast") return f.movingFast;
@@ -74,7 +79,7 @@ export function ScreenerTable({
       return [...cands, ...rest];
     }
     return sorted;
-  }, [rows, tf, filter, sort]);
+  }, [rows, tf, filter, sort, q]);
 
   const Head = ({ k, children, className = "", title }: { k: SortKey; children: React.ReactNode; className?: string; title?: string }) => {
     const on = sort.key === k;
@@ -95,7 +100,11 @@ export function ScreenerTable({
   };
 
   if (shown.length === 0) {
-    return <p className="px-2 py-6 text-center text-xs text-muted-foreground" data-testid="screener-empty">Nothing here on this timeframe with this filter.</p>;
+    return (
+      <p className="px-2 py-6 text-center text-xs text-muted-foreground" data-testid="screener-empty">
+        {q ? `No coin matching "${search.trim()}" in the table.` : "Nothing here on this timeframe with this filter."}
+      </p>
+    );
   }
 
   return (
