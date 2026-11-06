@@ -66,7 +66,14 @@ export function registerScreenerRoutes(app: Express): void {
     if (st.running) return res.status(429).json({ message: "A read is already on." });
     if (st.nextAllowedAt && Date.now() < new Date(st.nextAllowedAt).getTime()) return res.status(429).json({ message: `Asked less than ${AI_COOLDOWN_MS / 60_000} minutes ago.`, retryAt: st.nextAllowedAt });
     const run = await latestScreenerRun();
-    if (!run) return res.status(400).json({ message: "No run to read yet." });
+    // A read of old data reads old data: past an hour and a quarter, the run is refreshed first and the read follows it.
+    if (!run || Date.now() - new Date(run.at).getTime() > 75 * 60_000) {
+      const { runScreener, refreshAllowed } = await import("./screener");
+      const allowed = refreshAllowed(run?.at);
+      if (!allowed.ok) return res.status(429).json({ message: "The data is over an hour old, and a refresh was tried in the last five minutes. Try again shortly.", retryAt: allowed.retryAt });
+      void runScreener({ ai: true }).catch(() => {});
+      return res.json({ started: true, refreshing: true });
+    }
     void analyzeRun(run);
     res.json({ started: true });
   });

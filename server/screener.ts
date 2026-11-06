@@ -21,15 +21,17 @@
  * completed hour — whatever minute of the run it was fetched in; today's
  * daily bar is built from those hours.
  *
- * Schedule. 08:00 and 13:30 Europe/Prague, kept by an in-process clock, and
- * a catch-up at boot when the last slot was missed (a free Render service
- * sleeps; it wakes for the first visit and runs then). A cron outside —
- * Render's, or any pinger — can call POST /api/screener/cron with the
- * token instead. Manual refresh keeps a five-minute cooldown; a failed run
+ * Schedule. A run at five past every hour, once the hour's bar is complete,
+ * kept by an in-process clock, and a catch-up at boot when the hour's run
+ * was missed (a free Render service sleeps; it wakes for the first visit
+ * and runs then). The AI read comes with the runs after 08:00 and 13:30
+ * Europe/Prague — a run of its own at 13:30, which is not on the hour. A
+ * cron outside — Render's, or any pinger — can call POST /api/screener/cron
+ * with the token to wake the service; it runs whatever is due. Manual refresh keeps a five-minute cooldown; a failed run
  * counts for it too, which is the back-off.
  */
 import { hlInfo, HlHttpError } from "./hyperliquid";
-import { screenerStore } from "./storage";
+import { screenerAiStore, screenerStore } from "./storage";
 import { notifyAll } from "./events";
 import { readBinanceFlow, readLiqMap, type FlowStatus, type LiqStatus } from "./flow";
 import { findAnomalies, type Anomaly } from "@shared/flow";
@@ -585,7 +587,10 @@ export async function takeSnapshot(nowFn: () => number = Date.now): Promise<{ at
 /* ------------------------------- the clock ------------------------------- */
 
 /** The run times, Europe/Prague, as "HH:MM". */
-export const SCHEDULE = ["08:00", "13:30"];
+/** The AI read's slots, Europe/Prague. The screener itself runs every hour. */
+export const AI_SCHEDULE = ["08:00", "13:30"];
+/** The hourly run, this long after the hour: the hour's bar is complete by then. */
+export const RUN_OFFSET_MS = 5 * 60_000;
 const TZ = "Europe/Prague";
 
 /** The Prague wall clock for an instant: the day as YYYY-MM-DD and the minutes since its midnight. */
@@ -601,13 +606,27 @@ const dayBefore = (day: string): string => {
   return new Date(Date.UTC(y, m - 1, d) - DAY_MS).toISOString().slice(0, 10);
 };
 
-const slotMinutes = SCHEDULE.map((s) => Number(s.slice(0, 2)) * 60 + Number(s.slice(3, 5)));
+const slotMinutes = AI_SCHEDULE.map((s) => Number(s.slice(0, 2)) * 60 + Number(s.slice(3, 5)));
+
+/** The start of the hourly slot `now` is in: five past the hour (Prague's offset is whole hours, so UTC's hour is its hour). */
+const hourSlot = (now: number) => Math.floor((now - RUN_OFFSET_MS) / HOUR_MS) * HOUR_MS + RUN_OFFSET_MS;
+
+/** Whether the hourly run is due: none since this hour's slot. Pure, so the clock can be tested. */
+export function runDue(now: number, lastRunIso: string | null): boolean {
+  if (!lastRunIso) return true;
+  const last = new Date(lastRunIso).getTime();
+  return !Number.isFinite(last) || last < hourSlot(now);
+}
+
+/** When the next hourly run starts. */
+export const nextRunAt = (now: number): number => hourSlot(now) + HOUR_MS;
 
 /**
- * Whether a run is due: a slot has passed today, or yesterday after the
- * last run, with no run since it. Pure, so the clock can be tested.
+ * Whether the AI read is due: one of its slots has passed today, or
+ * yesterday after the last read, with no read since. Pure, so the clock
+ * can be tested.
  */
-export function runDue(now: number, lastRunIso: string | null): boolean {
+export function aiReadDue(now: number, lastRunIso: string | null): boolean {
   const { day, minutes } = pragueClock(now);
   const last = lastRunIso ? pragueClock(new Date(lastRunIso).getTime()) : null;
   const passedToday = slotMinutes.filter((m) => m <= minutes);
@@ -635,6 +654,30 @@ async function ownerPortfolioTick(): Promise<void> {
   await readPortfolio(owner.id, { fresh: true });
 }
 
+/**
+ * Whether this moment's run should bring the AI read: the key is set and a
+ * slot has passed with no read, or attempt, since. The attempt counts so a
+ * read that is refused or fails is not retried by every tick.
+ */
+let aiTriedAt = 0;
+export async function aiDueNow(now = Date.now()): Promise<boolean> {
+  if (!process.env.ANTHROPIC_API_KEY) return false;
+  const last = await screenerAiStore.latest();
+  const lastAt = Math.max(last ? new Date(last.at).getTime() : 0, aiTriedAt);
+  return aiReadDue(now, lastAt ? new Date(lastAt).toISOString() : null);
+}
+
+/** Whatever is due now — the hourly run, the AI read's run — started; false when nothing is. */
+export async function scheduledRun(now = Date.now()): Promise<boolean> {
+  if (status.running) return false;
+  const last = await latestScreenerRun();
+  const ai = await aiDueNow(now);
+  if (!runDue(now, last?.at ?? null) && !ai) return false;
+  if (ai) aiTriedAt = now;
+  await runScreener({ force: true, ai });
+  return true;
+}
+
 /** The clock: a minute's tick, a run when one is due. `SCREENER_CLOCK_MS=0` is off (tests). */
 export function startScreenerClock(everyMs = Number(process.env.SCREENER_CLOCK_MS ?? "60000")): void {
   if (!(everyMs > 0)) return;
@@ -649,8 +692,7 @@ export function startScreenerClock(everyMs = Number(process.env.SCREENER_CLOCK_M
       if (status.running) return;
       // A run that failed is not tried again every minute: the cooldown is the back-off.
       if (lastRunAt && Date.now() - lastRunAt < COOLDOWN_MS) return;
-      const last = await latestScreenerRun();
-      if (runDue(Date.now(), last?.at ?? null)) await runScreener({ force: true, ai: true });
+      await scheduledRun();
     } catch (err: any) {
       console.error(`[screener] clock: ${String(err?.message ?? err)}`);
     }

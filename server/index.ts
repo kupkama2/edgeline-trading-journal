@@ -82,9 +82,9 @@ app.use((req, res, next) => {
       const given = Buffer.from(String(req.headers.authorization ?? "").replace(/^Bearer\s+/i, ""));
       const want = Buffer.from(cronToken);
       if (given.length !== want.length || !timingSafeEqual(given, want)) return res.status(401).json({ message: "No" });
-      const { runScreener, screenerStatus } = await import("./screener");
-      // A scheduled run from outside: it brings the AI read too.
-      runScreener({ force: true, ai: true }).catch(() => {});
+      const { scheduledRun, screenerStatus } = await import("./screener");
+      // A call from outside wakes the service and runs whatever is due: the hourly run, with the AI read at its slots.
+      scheduledRun().catch(() => {});
       res.json({ started: true, status: screenerStatus() });
     });
   }
@@ -102,7 +102,7 @@ app.use((req, res, next) => {
   // The charts of what is on, and of what just closed, read before they are asked for.
   const { startChartWarm } = await import("./chart-warm");
   startChartWarm();
-  // The relative-strength screener's clock: 08:00 and 13:30 Prague, and a catch-up after a sleep.
+  // The relative-strength screener's clock: a run every hour, the AI read at 08:00 and 13:30 Prague, and a catch-up after a sleep.
   const { startScreenerClock } = await import("./screener");
   startScreenerClock();
 

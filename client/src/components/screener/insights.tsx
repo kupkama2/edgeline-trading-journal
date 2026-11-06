@@ -210,8 +210,12 @@ export function ScreenerInsights({ run, onOpen }: { run: NonNullable<ScreenerPag
 
   const onAsk = async () => {
     try {
-      await ask.mutateAsync();
-      toast({ title: "Reading the run", description: "The read appears here when it lands, in a minute or two." });
+      const r = (await ask.mutateAsync()) as { refreshing?: boolean };
+      toast(
+        r?.refreshing
+          ? { title: "Refreshing the data first", description: "The last run is over an hour old. The read follows the new run, in a few minutes." }
+          : { title: "Reading the run", description: "The read appears here when it lands, in a minute or two." },
+      );
     } catch (err: any) {
       toast({ title: "Not now", description: String(err?.message ?? err).replace(/^\d+:\s*/, "").replace(/^\{"message":"|".*$/g, "").slice(0, 160), variant: "destructive" });
     }

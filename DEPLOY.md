@@ -189,22 +189,27 @@ and restarts itself. `journalctl -u edgeline-relay -f` watches it.
 
 ## The screener's schedule
 
-The relative-strength screener (the Screener tab) reads Hyperliquid at
-08:00 and 13:30 Europe/Prague. The server keeps that clock itself, and runs
-a missed slot as soon as it is up again — so on a free Render service, which
-sleeps when idle, the morning run happens at the first visit of the day
-rather than at 08:00 sharp. The page shows the last stored run at once and
-refreshes on its own when the new one lands.
+The relative-strength screener (the Screener tab) reads Hyperliquid at five
+past every hour, once the hour's bar is complete, and the AI read comes with
+the runs after 08:00 and 13:30 Europe/Prague. The server keeps that clock
+itself, and runs a missed hour as soon as it is up again — so on a free
+Render service, which sleeps after about 15 minutes without a visit, the
+data is only as fresh as the last visit. The page shows the last stored run
+at once, says when it is over an hour old, and refreshes on its own when the
+new one lands.
 
-To have the runs happen on time while the service sleeps, give it a token
-and have something call the hook on the schedule:
+To have the runs happen every hour while nobody is on the site, keep the
+service awake and let it run on its own clock:
 
 1. Set `SCREENER_CRON_TOKEN` in the Render dashboard to a long random string.
 2. Call `POST https://<your-render-host>/api/screener/cron` with the header
-   `Authorization: Bearer <token>` at 08:00 and 13:30 Prague. A Render Cron
-   Job (`curl -X POST -H "Authorization: Bearer $TOKEN" <url>`) or a free
-   pinger such as cron-job.org both work. The request wakes the service and
-   starts the run; it answers at once and the run finishes in the background.
+   `Authorization: Bearer <token>` every 10 minutes. A free pinger such as
+   cron-job.org works (or a Render Cron Job:
+   `curl -X POST -H "Authorization: Bearer $TOKEN" <url>`). Each call wakes
+   the service and runs whatever is due — the hourly run, the AI read at its
+   slots — and answers at once; a call with nothing due does nothing.
+   Every 10 minutes keeps a free service from sleeping; one always-on
+   service fits inside Render's 750 free hours a month.
 
 Nothing is placed anywhere by the screener; it only reads. The first run
 reads two series per coin (near 60 of Hyperliquid's weight units each);
@@ -226,8 +231,8 @@ minutes; a failed run counts, which is the back-off.
 - **The liquidation map** reads Hyperliquid's public leaderboard and the
   positions of its 300 largest accounts each run (set `LIQ_ACCOUNTS` to
   change it).
-- **The AI read** runs after the 08:00 and 13:30 runs (and the cron hook),
-  or on "Read now" at most every 30 minutes, when `ANTHROPIC_API_KEY` is
+- **The AI read** comes with the runs after 08:00 and 13:30 Prague,
+  or on "Read now" at most every 30 minutes (data over an hour old is refreshed first), when `ANTHROPIC_API_KEY` is
   set. `SCREENER_AI_MODEL` picks the model.
 
 ## The event calendar

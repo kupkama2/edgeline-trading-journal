@@ -471,8 +471,16 @@ describe.skipIf(!DB)("the screener's run", () => {
   });
 
   it("knows when a run is due on the Prague clock", async () => {
-    const { runDue } = await import("../server/screener");
+    const { runDue: hourlyDue, aiReadDue: runDue, nextRunAt } = await import("../server/screener");
     const prague = (iso: string) => new Date(iso).getTime();
+    // The hourly run: at five past, once per hour; the slot before five past is the previous hour's.
+    expect(hourlyDue(prague("2026-01-10T14:06:00Z"), "2026-01-10T13:05:30Z")).toBe(true);
+    expect(hourlyDue(prague("2026-01-10T14:06:00Z"), "2026-01-10T14:05:10Z")).toBe(false);
+    expect(hourlyDue(prague("2026-01-10T14:03:00Z"), "2026-01-10T13:05:30Z")).toBe(false);
+    expect(hourlyDue(prague("2026-01-10T14:03:00Z"), null)).toBe(true);
+    expect(new Date(nextRunAt(prague("2026-01-10T14:03:00Z"))).toISOString()).toBe("2026-01-10T14:05:00.000Z");
+    expect(new Date(nextRunAt(prague("2026-01-10T14:06:00Z"))).toISOString()).toBe("2026-01-10T15:05:00.000Z");
+    // The AI read's slots, 08:00 and 13:30 Prague:
     // 09:00 Prague in winter is 08:00Z. Nothing ran today: due.
     expect(runDue(prague("2026-01-10T08:00:00Z"), "2026-01-09T12:40:00Z")).toBe(true);
     // Ran at 08:05 Prague today, now 09:00: not due. At 13:30 Prague (12:30Z): due. Ran at 13:31: not.
