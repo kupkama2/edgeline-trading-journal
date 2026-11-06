@@ -30,6 +30,13 @@ function defaultSet(rows: ScreenerRow[], tf: Timeframe): string[] {
  * the last stored run; a refresh asks the venue again, five minutes apart
  * at most. Never places a trade.
  */
+/** Five past the next hour: when the server's hourly run starts. */
+const nextHourly = (now: number) => {
+  const H = 3600_000;
+  const off = 5 * 60_000;
+  return Math.floor((now - off) / H) * H + off + H;
+};
+
 export default function ScreenerPage() {
   const page = useScreener();
   const refresh = useScreenerRefresh();
@@ -165,7 +172,12 @@ export default function ScreenerPage() {
           <p className="text-[11px] text-muted-foreground" data-testid="screener-asof">
             {run ? (
               <>
-                Data as of <span className="font-mono text-foreground">{fmtPrague(run.at)}</span> Prague · bars to {new Date(run.barsTo).toISOString().slice(11, 16)}Z · {run.universe} coins · read in {(run.tookMs / 1000).toFixed(0)}s
+                Data as of <span className="font-mono text-foreground">{fmtPrague(run.at)}</span> Prague · bars to {new Date(run.barsTo).toISOString().slice(11, 16)}Z · {run.universe} coins · read in {(run.tookMs / 1000).toFixed(0)}s · runs hourly, next {new Date(nextHourly(Date.now())).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                {Date.now() - new Date(run.at).getTime() > 75 * 60_000 && !status?.running && (
+                  <span className="ml-1 text-amber-500" data-testid="screener-stale">
+                    · over an hour old: refresh, or it updates when the server next runs
+                  </span>
+                )}
                 {run.breadth != null && " "}
                 {run.breadth != null && (
                   <span
