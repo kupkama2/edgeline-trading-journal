@@ -1530,9 +1530,11 @@ export function TradeBody({
           answer is on screen. Gone once answered. */}
       <PlanHitPrompt trade={trade} />
 
-      {/* A trade sent from the terminal: the idea, every move on it, and
-          whether leaving it alone would have paid more. */}
-      <ManagementCard trade={trade} />
+      {/* A trade sent from the terminal or tracked on the venue: the idea,
+          every move on it, and whether leaving it alone would have paid
+          more. Once it is over: while it is on, the stop card above is the
+          live view, and the verdict has no answer yet. */}
+      {trade.status !== "open" && trade.status !== "pending" && <ManagementCard trade={trade} />}
 
       {/* The pre-trade gate: asked here too for a tracked position still
           without one, and shown as answered once it has it. */}

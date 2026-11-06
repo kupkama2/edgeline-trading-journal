@@ -201,17 +201,22 @@ export function StopMover({ trade }: { trade: TradeWithTags }) {
       {/* The history, because "when did this stop being able to hurt me" is a
           question the latest price alone cannot answer. */}
       {moves.length > 0 && (
-        <div className="mt-3 space-y-0.5 border-t border-border/50 pt-2" data-testid="list-stop-moves">
-          {moves.map((mv, i) => (
-            <div key={`${mv.at}-${i}`} className="flex flex-wrap items-baseline gap-x-2 text-[11px]">
-              <span className="font-mono text-foreground/80">{num(mv.price)}</span>
-              <span className="text-muted-foreground">
-                {new Date(mv.at).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
-              </span>
-              {mv.note && <span className="text-muted-foreground">· {mv.note}</span>}
-            </div>
-          ))}
-        </div>
+        <details className="mt-3 border-t border-border/50 pt-2" data-testid="list-stop-moves">
+          <summary className="cursor-pointer select-none text-[11px] text-muted-foreground hover:text-foreground">
+            {moves.length} {moves.length === 1 ? "move" : "moves"} on the stop
+          </summary>
+          <div className="mt-1 space-y-0.5">
+            {moves.map((mv, i) => (
+              <div key={`${mv.at}-${i}`} className="flex flex-wrap items-baseline gap-x-2 text-[11px]">
+                <span className="font-mono text-foreground/80">{num(mv.price)}</span>
+                <span className="text-muted-foreground">
+                  {new Date(mv.at).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                </span>
+                {mv.note && <span className="text-muted-foreground">· {mv.note}</span>}
+              </div>
+            ))}
+          </div>
+        </details>
       )}
     </Card>
   );

@@ -1,4 +1,5 @@
 import { useEffect, useState, createContext, useContext } from "react";
+import { NyOpenChip } from "@/components/ny-open";
 import { Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import {
@@ -313,6 +314,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
           </nav>
 
           <div className="ml-auto flex items-center gap-2">
+            <NyOpenChip />
             <ChapterChip />
             <PublicChip />
             <XpChip />

@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { AlertTriangle, ArrowDown, ArrowUp } from "lucide-react";
 import { TIMEFRAMES, type ScreenerRow, type Timeframe } from "@shared/screener";
 import { ACCEL_ARROW, fmtPct, fmtUsd, fmtX, heat } from "@/lib/screener";
+import { useClickOrDouble } from "@/components/screener/chart";
 
 export type Filter = "all" | "candidates" | "fast" | "weakest";
 
@@ -23,6 +24,7 @@ export function ScreenerTable({
   rvolMin,
   charted,
   onToggleChart,
+  onSolo,
   onOpen,
 }: {
   rows: ScreenerRow[];
@@ -33,8 +35,11 @@ export function ScreenerTable({
   rvolMin: number;
   charted: Set<string>;
   onToggleChart: (coin: string) => void;
+  /** A double click on a name keeps only that coin on the chart. */
+  onSolo: (coin: string) => void;
   onOpen: (coin: string) => void;
 }) {
+  const clicks = useClickOrDouble();
   const [sort, setSort] = useState<{ key: SortKey; desc: boolean }>({ key: `rs:${tf}`, desc: true });
   const [lastTf, setLastTf] = useState(tf);
   // The timeframe picker moves the default sort with it, unless a column was chosen by hand.
@@ -161,8 +166,19 @@ export function ScreenerTable({
                     data-testid={`screener-chart-${r.coin}`}
                   />
                 </td>
-                <td className={`sticky left-5 z-10 whitespace-nowrap px-1.5 py-1 font-semibold ${f.candidate ? "bg-[#0b1511]" : "bg-card"}`}>
-                  {r.coin}
+                <td
+                  className={`sticky left-5 z-10 whitespace-nowrap px-1.5 py-1 font-semibold ${f.candidate ? "bg-[#0b1511]" : "bg-card"}`}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <button
+                    type="button"
+                    className={`rounded px-0.5 hover:text-sky-400 ${on ? "text-sky-300" : ""}`}
+                    title={on ? "Click to take it off the chart; double-click to keep only it" : "Click to put it on the chart; double-click to keep only it"}
+                    {...clicks(() => onToggleChart(r.coin), () => onSolo(r.coin))}
+                    data-testid={`screener-name-${r.coin}`}
+                  >
+                    {r.coin}
+                  </button>
                   {r.error && (
                     <span className="ml-1 inline-flex items-center gap-0.5 rounded border border-amber-500/50 px-1 text-[9px] font-medium uppercase text-amber-500" title={r.error} data-testid={`screener-error-${r.coin}`}>
                       <AlertTriangle className="h-2.5 w-2.5" /> err
