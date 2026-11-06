@@ -52,6 +52,12 @@ export function registerScreenerRoutes(app: Express): void {
     res.json({ latest: await latestAiRead(), status: aiStatus() });
   });
 
+  /** How the read's calls did: each priced at 4 hours, a day, three days and now, and the summary per stance. */
+  app.get("/api/screener/ai/track", async (_req, res) => {
+    const { aiTrackRecord } = await import("./screener-ai");
+    res.json(await aiTrackRecord());
+  });
+
   /** Ask for a read of the latest run now: at most every half hour, and answered at once — the page hears "screener" when it lands. */
   app.post("/api/screener/ai", async (_req, res) => {
     const { analyzeRun, aiStatus, AI_COOLDOWN_MS } = await import("./screener-ai");

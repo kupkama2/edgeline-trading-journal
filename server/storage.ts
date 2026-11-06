@@ -1066,6 +1066,12 @@ export const screenerStore = {
       WHERE at <= ${target} AND at >= ${tolerance} ORDER BY coin, at DESC`;
     return new Map(rows.map((r) => [r.coin, { at: r.at, openInterest: r.open_interest, mark: r.mark }]));
   },
+  /** Every coin's mark in the snapshots since `since`, oldest first: what the AI read's calls are priced from. */
+  async marksSince(since: string, coins: string[]): Promise<{ at: string; coin: string; mark: number }[]> {
+    if (!coins.length) return [];
+    return sql<{ at: string; coin: string; mark: number }[]>`
+      SELECT at, coin, mark FROM screener_snapshots WHERE at >= ${since} AND coin IN ${sql(coins)} AND mark IS NOT NULL ORDER BY at`;
+  },
   async latestSnapshotAt(): Promise<string | null> {
     const rows = await sql<{ at: string }[]>`SELECT at FROM screener_snapshots ORDER BY at DESC LIMIT 1`;
     return rows[0]?.at ?? null;
@@ -1142,6 +1148,10 @@ export const screenerAiStore = {
   async save(r: { at: string; runId: number | null; model: string; body: string | null; error: string | null }): Promise<number> {
     const rows = await sql<{ id: number }[]>`INSERT INTO screener_ai (at, run_id, model, body, error) VALUES (${r.at}, ${r.runId}, ${r.model}, ${r.body}, ${r.error}) RETURNING id`;
     return rows[0].id;
+  },
+  /** The reads that came back with a body, since `since`, oldest first. */
+  async since(since: string): Promise<{ id: number; at: string; body: string }[]> {
+    return sql<{ id: number; at: string; body: string }[]>`SELECT id, at, body FROM screener_ai WHERE at >= ${since} AND body IS NOT NULL ORDER BY at`;
   },
   async latest(): Promise<{ id: number; at: string; runId: number | null; model: string | null; body: string | null; error: string | null } | null> {
     const rows = await sql<{ id: number; at: string; run_id: number | null; model: string | null; body: string | null; error: string | null }[]>`SELECT id, at, run_id, model, body, error FROM screener_ai ORDER BY id DESC LIMIT 1`;
