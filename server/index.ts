@@ -83,7 +83,8 @@ app.use((req, res, next) => {
       const want = Buffer.from(cronToken);
       if (given.length !== want.length || !timingSafeEqual(given, want)) return res.status(401).json({ message: "No" });
       const { runScreener, screenerStatus } = await import("./screener");
-      runScreener({ force: true }).catch(() => {});
+      // A scheduled run from outside: it brings the AI read too.
+      runScreener({ force: true, ai: true }).catch(() => {});
       res.json({ started: true, status: screenerStatus() });
     });
   }

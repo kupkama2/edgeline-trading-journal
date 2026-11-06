@@ -31,6 +31,8 @@
 import { hlInfo, HlHttpError } from "./hyperliquid";
 import { screenerStore } from "./storage";
 import { notifyAll } from "./events";
+import { readBinanceFlow, readLiqMap, type FlowStatus, type LiqStatus } from "./flow";
+import { findAnomalies, type Anomaly } from "@shared/flow";
 import {
   annualizeFunding,
   basketSeries,
@@ -85,6 +87,13 @@ export interface ScreenerRun {
   fullReads: number;
   /** The share of alts whose BTC ratio is above its 20-day average: the breadth of the tape. */
   breadth: number | null;
+  /** BTC itself over a day and a week, for the regime. */
+  btc: { d1: number | null; w1: number | null };
+  /** How the Binance flow pass and the liquidation map went. */
+  flowStatus: FlowStatus | null;
+  liqStatus: LiqStatus | null;
+  /** What stands out across the universe, worst first. */
+  anomalies: Anomaly[];
   settings: ScreenerSettings;
   rows: ScreenerRow[];
 }
@@ -92,8 +101,9 @@ export interface ScreenerRun {
 export interface ScreenerStatus {
   running: boolean;
   startedAt: string | null;
-  /** Coins done so far in the run that is on, for the progress line. */
+  /** Coins done so far in the run that is on, for the progress line, and which pass it is in. */
   progress: { done: number; total: number } | null;
+  phase: string | null;
   lastError: string | null;
   /** When a manual refresh may next be asked for. */
   nextAllowedAt: string | null;
@@ -253,6 +263,10 @@ export async function latestScreenerRun(): Promise<ScreenerRun | null> {
     universe: r.universe,
     fullReads: Number(body.fullReads) || 0,
     breadth: typeof body.breadth === "number" ? body.breadth : null,
+    btc: body.btc ?? { d1: null, w1: null },
+    flowStatus: body.flowStatus ?? null,
+    liqStatus: body.liqStatus ?? null,
+    anomalies: Array.isArray(body.anomalies) ? body.anomalies : [],
     settings: readScreenerSettings(r.settings ? JSON.parse(r.settings) : null),
     rows,
   };
@@ -261,7 +275,7 @@ export async function latestScreenerRun(): Promise<ScreenerRun | null> {
 
 /* ------------------------------- the run ------------------------------- */
 
-const status: ScreenerStatus = { running: false, startedAt: null, progress: null, lastError: null, nextAllowedAt: null };
+const status: ScreenerStatus = { running: false, startedAt: null, progress: null, phase: null, lastError: null, nextAllowedAt: null };
 let lastRunAt = 0;
 let current: Promise<ScreenerRun> | null = null;
 
@@ -305,19 +319,19 @@ export async function saveScreenerSettings(patch: unknown): Promise<ScreenerSett
  * A run, one at a time. A second call while one is on gets the same
  * promise; a call inside the cooldown is refused unless `force`.
  */
-export function runScreener(opts: { force?: boolean; now?: () => number } = {}): Promise<ScreenerRun> {
+export function runScreener(opts: { force?: boolean; now?: () => number; ai?: boolean } = {}): Promise<ScreenerRun> {
   if (current) return current;
   const nowFn = opts.now ?? Date.now;
   if (!opts.force && lastRunAt && nowFn() - lastRunAt < COOLDOWN_MS) {
     return Promise.reject(Object.assign(new Error("Refreshed less than five minutes ago."), { status: 429, retryAt: new Date(lastRunAt + COOLDOWN_MS).toISOString() }));
   }
-  current = run(nowFn).finally(() => {
+  current = run(nowFn, !!opts.ai).finally(() => {
     current = null;
   });
   return current;
 }
 
-async function run(nowFn: () => number): Promise<ScreenerRun> {
+async function run(nowFn: () => number, ai = false): Promise<ScreenerRun> {
   const t0 = nowFn();
   const now = t0;
   // The instant every coin is measured at: the last completed hour.
@@ -335,6 +349,7 @@ async function run(nowFn: () => number): Promise<ScreenerRun> {
     if (ctxs.length === 0) throw new Error("metaAndAssetCtxs answered with no universe");
     const alts = ctxs.filter((c) => !c.delisted && !NOT_AN_ALT.test(c.coin) && (c.dayNtlVlm ?? 0) >= settings.minVolume);
     status.progress = { done: 0, total: alts.length + 1 };
+    status.phase = "Hyperliquid candles";
     const previous = await screenerStore.previousSnapshot(at);
 
     let fullReads = 0;
@@ -434,10 +449,25 @@ async function run(nowFn: () => number): Promise<ScreenerRun> {
       }
       rows.push(base);
     }
+    // Binance's flow through the relay, then Hyperliquid's liquidation map. Each pass's failure is its own.
+    const readable = rows.filter((r) => !r.error).map((r) => ({ coin: r.coin, mark: r.mark, fundingHourly: r.fundingHourly }));
+    status.phase = "Binance flow";
+    status.progress = { done: 0, total: readable.length };
+    const flowPass = await readBinanceFlow(readable, (done, total) => (status.progress = { done, total })).catch((err) => ({ status: { source: "none", account: null, outdated: false, coins: 0, failed: 0, error: String(err?.message ?? err) } as FlowStatus, byCoin: new Map() }));
+    status.phase = "Liquidation map";
+    status.progress = { done: 0, total: 0 };
+    const liqPass = await readLiqMap(readable, (done, total) => (status.progress = { done, total })).catch((err) => ({ status: { accounts: 0, failed: 0, error: String(err?.message ?? err) } as LiqStatus, byCoin: new Map() }));
+    for (const r of rows) {
+      r.flow = flowPass.byCoin.get(r.coin) ?? null;
+      r.liq = liqPass.byCoin.get(r.coin) ?? null;
+    }
     const flagged = flagRows(rows, settings);
+    const anomalies = findAnomalies(flagged.map((r) => ({ coin: r.coin, oi24hHl: r.positioning?.oi1d ?? null, px24h: r.positioning?.px1d ?? null, flow: r.flow ?? null, liq: r.liq ?? null, divergence: r.signals["1D"]?.divergence ?? null })));
+    const btcD = btc["1d"];
+    const btcMove = { d1: btcD.length > 1 ? btcD[btcD.length - 1].c / btcD[btcD.length - 2].c - 1 : null, w1: btcD.length > 7 ? btcD[btcD.length - 1].c / btcD[btcD.length - 8].c - 1 : null };
     const tookMs = nowFn() - t0;
     const errors = flagged.filter((r) => r.error).length;
-    const id = await screenerStore.saveRun({ at, tookMs, body: JSON.stringify({ barsTo, fullReads, breadth, rows: flagged }), errors, universe: flagged.length, settings: JSON.stringify(settings) });
+    const id = await screenerStore.saveRun({ at, tookMs, body: JSON.stringify({ barsTo, fullReads, breadth, btc: btcMove, flowStatus: flowPass.status, liqStatus: liqPass.status, anomalies, rows: flagged }), errors, universe: flagged.length, settings: JSON.stringify(settings) });
     // The whole snapshot is kept — every perp, filtered or not — so OI history exists before a coin crosses the volume line. After the run, so a failed one leaves none.
     await screenerStore.saveSnapshot(
       at,
@@ -445,8 +475,13 @@ async function run(nowFn: () => number): Promise<ScreenerRun> {
     );
     await screenerStore.prune(new Date(t0 - KEEP_DAYS * DAY_MS).toISOString()).catch(() => {});
     console.log(`[screener] ${flagged.length} coins in ${(tookMs / 1000).toFixed(1)}s, ${fullReads} full reads, ${errors} could not be read, ${ctxs.length} perps listed`);
-    latest = { id, at, barsTo, tookMs, errors, universe: flagged.length, fullReads, breadth, settings, rows: flagged };
+    latest = { id, at, barsTo, tookMs, errors, universe: flagged.length, fullReads, breadth, btc: btcMove, flowStatus: flowPass.status, liqStatus: liqPass.status, anomalies, settings, rows: flagged };
     notifyAll("screener");
+    // The AI read, after the scheduled runs only; it is slow and costs, so it never holds the run up.
+    if (ai) {
+      const done = latest;
+      void import("./screener-ai").then((m) => m.analyzeRun(done)).catch((err) => console.error(`[screener-ai] ${String(err?.message ?? err)}`));
+    }
     return latest;
   } catch (err: any) {
     status.lastError = String(err?.message ?? err).slice(0, 300);
@@ -455,6 +490,7 @@ async function run(nowFn: () => number): Promise<ScreenerRun> {
   } finally {
     status.running = false;
     status.progress = null;
+    status.phase = null;
   }
 }
 
@@ -578,7 +614,7 @@ export function startScreenerClock(everyMs = Number(process.env.SCREENER_CLOCK_M
       // A run that failed is not tried again every minute: the cooldown is the back-off.
       if (lastRunAt && Date.now() - lastRunAt < COOLDOWN_MS) return;
       const last = await latestScreenerRun();
-      if (runDue(Date.now(), last?.at ?? null)) await runScreener({ force: true });
+      if (runDue(Date.now(), last?.at ?? null)) await runScreener({ force: true, ai: true });
     } catch (err: any) {
       console.error(`[screener] clock: ${String(err?.message ?? err)}`);
     }

@@ -13,7 +13,8 @@
  * tracker, the terminal and the sync see a Binance that answers.
  *
  * Wire format, one JSON object per message:
- *   relay → server   {t:"hello", env, canTrade, keyHint}
+ *   relay → server   {t:"hello", env, canTrade, keyHint, features?: ["public"]}
+ *   server → relay   {t:"req", id, method:"GET", path, params, public:true} — a plain market-data read, unsigned
  *   server → relay   {t:"req", id, method, base, path, params}
  *   relay → server   {t:"res", id, status, body}            body: the venue's text
  *   relay → server   {t:"event", msg}                       a user-data stream event
@@ -34,6 +35,8 @@ interface Relay {
   env: "live" | "testnet";
   canTrade: boolean;
   keyHint: string;
+  /** What this copy of the relay can do beyond signed calls: "public" is a plain market-data GET. */
+  features: string[];
   connectedAt: number;
   lastSeenAt: number;
   pending: Map<number, { resolve: (r: { status: number; body: string }) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }>;
@@ -91,6 +94,40 @@ export function relayCall(
   });
 }
 
+/**
+ * A connected relay of this person's that can make public market-data
+ * reads, if any: the account it belongs to. A relay that is connected but
+ * an older copy (no "public" in its hello) is reported as such, so the
+ * page can say to update it.
+ */
+export function publicRelayFor(userId: number): { account: string | null; outdated: boolean } {
+  let outdated = false;
+  for (const r of Array.from(relays.values())) {
+    if (r.userId !== userId || r.ws.readyState !== r.ws.OPEN) continue;
+    if (r.features.includes("public")) return { account: r.account, outdated: false };
+    outdated = true;
+  }
+  return { account: null, outdated };
+}
+
+/** A plain public GET on Binance's futures host, made by the relay: market data, no key, no signature. */
+export function relayPublic(userId: number, account: string, path: string, params: Record<string, string | number | undefined>): Promise<{ status: number; body: string }> {
+  const r = relays.get(keyOf(userId, account));
+  if (!r || r.ws.readyState !== r.ws.OPEN) return Promise.reject(new RelayUnavailable(account));
+  const id = nextId++;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      r.pending.delete(id);
+      reject(new Error(`${account}'s relay did not answer in ${TIMEOUT_MS / 1000}s (GET ${path}).`));
+    }, TIMEOUT_MS);
+    timer.unref?.();
+    r.pending.set(id, { resolve, reject, timer });
+    const clean: Record<string, string | number> = {};
+    for (const [k, v] of Object.entries(params)) if (v !== undefined) clean[k] = v;
+    r.ws.send(JSON.stringify({ t: "req", id, method: "GET", base: "", path, params: clean, public: true }));
+  });
+}
+
 function dropRelay(key: string, why: string): void {
   const r = relays.get(key);
   if (!r) return;
@@ -129,6 +166,7 @@ export function attachRelay(httpServer: HttpServer): void {
             }
           }
           const relay: Relay = {
+            features: [],
             ws,
             userId: acct.userId,
             account: acct.name,
@@ -163,6 +201,7 @@ export function attachRelay(httpServer: HttpServer): void {
               relay.env = m.env === "testnet" ? "testnet" : "live";
               relay.canTrade = !!m.canTrade;
               relay.keyHint = typeof m.keyHint === "string" ? m.keyHint.slice(-8) : "";
+              relay.features = Array.isArray(m.features) ? m.features.filter((f: unknown) => typeof f === "string").slice(0, 10) : [];
               void setRelayFacts(relay.accountId, { binanceEnv: relay.env, binanceTrade: relay.canTrade, binanceKeyHint: relay.keyHint })
                 .then(() => notify(relay.userId, "settings"))
                 .catch(() => {});

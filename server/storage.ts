@@ -345,6 +345,15 @@ CREATE TABLE IF NOT EXISTS portfolio_snapshots (
   body TEXT,
   PRIMARY KEY (user_id, at)
 );
+-- The AI's read of a screener run (server/screener-ai.ts), twice a day.
+CREATE TABLE IF NOT EXISTS screener_ai (
+  id SERIAL PRIMARY KEY,
+  at TEXT NOT NULL,
+  run_id INTEGER,
+  model TEXT,
+  body TEXT,
+  error TEXT
+);
 CREATE TABLE IF NOT EXISTS screener_settings (
   id INTEGER PRIMARY KEY,
   body TEXT NOT NULL
@@ -1078,6 +1087,18 @@ export const screenerStore = {
   async prune(before: string): Promise<void> {
     await sql`DELETE FROM screener_snapshots WHERE at < ${before}`;
     await sql`DELETE FROM screener_runs WHERE at < ${before}`;
+  },
+};
+
+export const screenerAiStore = {
+  async save(r: { at: string; runId: number | null; model: string; body: string | null; error: string | null }): Promise<number> {
+    const rows = await sql<{ id: number }[]>`INSERT INTO screener_ai (at, run_id, model, body, error) VALUES (${r.at}, ${r.runId}, ${r.model}, ${r.body}, ${r.error}) RETURNING id`;
+    return rows[0].id;
+  },
+  async latest(): Promise<{ id: number; at: string; runId: number | null; model: string | null; body: string | null; error: string | null } | null> {
+    const rows = await sql<{ id: number; at: string; run_id: number | null; model: string | null; body: string | null; error: string | null }[]>`SELECT id, at, run_id, model, body, error FROM screener_ai ORDER BY id DESC LIMIT 1`;
+    const r = rows[0];
+    return r ? { id: r.id, at: r.at, runId: r.run_id, model: r.model, body: r.body, error: r.error } : null;
   },
 };
 

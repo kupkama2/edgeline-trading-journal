@@ -9,6 +9,7 @@ import { useToast } from "@/hooks/use-toast";
 import { ScreenerTable, type Filter } from "@/components/screener/table";
 import { SpaghettiChart } from "@/components/screener/chart";
 import { CoinDrawer } from "@/components/screener/drawer";
+import { ScreenerInsights } from "@/components/screener/insights";
 import { fmtPrague, useSaveScreenerSettings, useScreener, useScreenerLines, useScreenerLookup, useScreenerRefresh, useScreenerStatus } from "@/lib/screener";
 import { TIMEFRAMES, type ScreenerRow, type Timeframe } from "@shared/screener";
 
@@ -148,7 +149,7 @@ export default function ScreenerPage() {
             )}
             {status?.running && status.progress && (
               <span className="ml-2 inline-flex items-center gap-1 text-sky-400" data-testid="screener-progress">
-                <Loader2 className="h-3 w-3 animate-spin" /> reading {status.progress.done}/{status.progress.total}
+                <Loader2 className="h-3 w-3 animate-spin" /> {status.phase ?? "reading"} {status.progress.total ? `${status.progress.done}/${status.progress.total}` : ""}
               </span>
             )}
             {status?.lastError && !status.running && <span className="ml-2 text-red-400">Last run failed: {status.lastError}</span>}
@@ -198,6 +199,8 @@ export default function ScreenerPage() {
           </Button>
         </div>
       </div>
+
+      {run && <ScreenerInsights run={run} onOpen={setOpen} />}
 
       <Card className="border-card-border bg-card p-3 sm:p-4">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
