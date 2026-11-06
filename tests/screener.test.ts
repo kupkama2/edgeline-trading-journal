@@ -495,4 +495,29 @@ describe.skipIf(!DB)("the screener's run", () => {
     // Run two: the universe, BTC, SOL and ETH once each (the hours since the last bar), DOGE twice.
     expect(infoCalls).toBe(8 + 6 + 1);
   });
+
+  it("pins a coin found by the search under the volume line: on the chart now, in every run after, until unpinned", async () => {
+    const post = (path: string, method = "POST") => fetch(`${base}${path}`, { method });
+    expect((await post("/api/screener/pin/LIGHTER")).status).toBe(404);
+    expect((await post("/api/screener/pin/USDC")).status).toBe(400);
+    const pinned = await (await post("/api/screener/pin/tiny")).json();
+    // By the venue's own name, with its candles read straight away.
+    expect(pinned.coin).toBe("TINY");
+    expect(pinned.settings.pinned).toEqual(["TINY"]);
+    const lines = await get("/api/screener/series?tf=1D&coins=TINY");
+    expect(lines.lines.TINY?.length).toBeGreaterThan(80);
+    const asked = await get("/api/screener/lookup/TINY");
+    expect(asked).toMatchObject({ where: "under-volume", pinned: true, canPin: false });
+    // The next run reads it whatever its volume, marked as pinned.
+    const { runScreener } = await import("../server/screener");
+    const run = await runScreener({ force: true });
+    expect(run.rows.find((r) => r.coin === "TINY")).toMatchObject({ pinned: true });
+    expect(run.rows.find((r) => r.coin === "SOL")?.pinned).toBeUndefined();
+    // A settings save leaves the pins alone; unpinning takes it out of the next run.
+    await fetch(`${base}/api/screener/settings`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ rvolMin: 1.5 }) });
+    expect((await get("/api/screener/settings")).pinned).toEqual(["TINY"]);
+    expect((await (await post("/api/screener/pin/TINY", "DELETE")).json()).pinned).toEqual([]);
+    const after = await runScreener({ force: true });
+    expect(after.rows.some((r) => r.coin === "TINY")).toBe(false);
+  });
 });

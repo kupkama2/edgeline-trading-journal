@@ -125,7 +125,22 @@ export interface ScreenerLookup {
   where: "table" | "excluded" | "under-volume" | "not-read" | "not-listed";
   volume?: number | null;
   minVolume?: number;
+  /** Pinned already, or can be: a coin the venue lists that the volume line leaves out. */
+  pinned?: boolean;
+  canPin?: boolean;
   reason: string;
+}
+
+/** Pin a coin found by the search, or unpin one; the screener's settings come back. */
+export function usePinScreenerCoin() {
+  return useMutation({
+    mutationFn: async ({ coin, pin }: { coin: string; pin: boolean }) =>
+      (await apiRequest(pin ? "POST" : "DELETE", `/api/screener/pin/${encodeURIComponent(coin)}`)).json() as Promise<{ coin?: string }>,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["/api/screener"] });
+      void queryClient.invalidateQueries({ queryKey: ["/api/screener/lookup"] });
+    },
+  });
 }
 
 /** Why a coin typed into the search is or is not in the table; asked only when the search matches no row. */

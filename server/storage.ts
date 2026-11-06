@@ -337,6 +337,17 @@ CREATE TABLE IF NOT EXISTS portfolio_costs (
   cost DOUBLE PRECISION NOT NULL,
   PRIMARY KEY (user_id, key)
 );
+CREATE TABLE IF NOT EXISTS portfolio_pnl (
+  user_id INTEGER NOT NULL,
+  key TEXT NOT NULL,
+  pnl DOUBLE PRECISION NOT NULL,
+  PRIMARY KEY (user_id, key)
+);
+CREATE TABLE IF NOT EXISTS portfolio_hidden (
+  user_id INTEGER NOT NULL,
+  key TEXT NOT NULL,
+  PRIMARY KEY (user_id, key)
+);
 CREATE TABLE IF NOT EXISTS portfolio_snapshots (
   user_id INTEGER NOT NULL,
   at TEXT NOT NULL,
@@ -1164,6 +1175,24 @@ export const portfolioStore = {
   async setCost(userId: number, key: string, cost: number | null): Promise<void> {
     if (cost == null) await sql`DELETE FROM portfolio_costs WHERE user_id = ${userId} AND key = ${key}`;
     else await sql`INSERT INTO portfolio_costs (user_id, key, cost) VALUES (${userId}, ${key}, ${cost}) ON CONFLICT (user_id, key) DO UPDATE SET cost = EXCLUDED.cost`;
+  },
+  /** P&L figures the owner typed in over the source's, by key. */
+  async pnls(userId: number): Promise<Map<string, number>> {
+    const rows = await sql<{ key: string; pnl: number }[]>`SELECT key, pnl FROM portfolio_pnl WHERE user_id = ${userId}`;
+    return new Map(rows.map((r) => [r.key, r.pnl]));
+  },
+  async setPnl(userId: number, key: string, pnl: number | null): Promise<void> {
+    if (pnl == null) await sql`DELETE FROM portfolio_pnl WHERE user_id = ${userId} AND key = ${key}`;
+    else await sql`INSERT INTO portfolio_pnl (user_id, key, pnl) VALUES (${userId}, ${key}, ${pnl}) ON CONFLICT (user_id, key) DO UPDATE SET pnl = EXCLUDED.pnl`;
+  },
+  /** Positions and vaults the owner chose to hide, by key. */
+  async hidden(userId: number): Promise<Set<string>> {
+    const rows = await sql<{ key: string }[]>`SELECT key FROM portfolio_hidden WHERE user_id = ${userId}`;
+    return new Set(rows.map((r) => r.key));
+  },
+  async setHidden(userId: number, key: string, hidden: boolean): Promise<void> {
+    if (hidden) await sql`INSERT INTO portfolio_hidden (user_id, key) VALUES (${userId}, ${key}) ON CONFLICT DO NOTHING`;
+    else await sql`DELETE FROM portfolio_hidden WHERE user_id = ${userId} AND key = ${key}`;
   },
   async snapshot(userId: number, at: string, value: number, pnl: number, body: string | null): Promise<void> {
     await sql`INSERT INTO portfolio_snapshots (user_id, at, value, pnl, body) VALUES (${userId}, ${at}, ${value}, ${pnl}, ${body}) ON CONFLICT DO NOTHING`;

@@ -21,6 +21,8 @@ import {
   screenerSettings,
   screenerStatus,
   storedSeries,
+  pinCoin,
+  unpinCoin,
 } from "./screener";
 import { screenerStore } from "./storage";
 import { adminOnly } from "./admin";
@@ -121,15 +123,20 @@ export function registerScreenerRoutes(app: Express): void {
     const listed = snap?.coins.find((c) => same(c.coin, asked)) ?? null;
     if (listed) {
       const under = (listed.volume ?? 0) < settings.minVolume;
+      const pinned = settings.pinned.includes(listed.coin);
       return res.json({
         asked,
         coin: listed.coin,
         where: under ? "under-volume" : "not-read",
         volume: listed.volume,
         minVolume: settings.minVolume,
-        reason: under
-          ? `Listed on Hyperliquid, but its 24h volume at the last run was ${fmtUsd(listed.volume)}, under the ${fmtUsd(settings.minVolume)} line. Lower the line in the settings and refresh.`
-          : `Listed on Hyperliquid with ${fmtUsd(listed.volume)} of 24h volume, but not in the last run — it was listed after the run started, or was delisted. Refresh.`,
+        pinned,
+        canPin: !pinned,
+        reason: pinned
+          ? `Pinned: it can go on the chart now, and every run reads it from the next one on, whatever its volume.`
+          : under
+            ? `Listed on Hyperliquid, but its 24h volume at the last run was ${fmtUsd(listed.volume)}, under the ${fmtUsd(settings.minVolume)} line. Add it to the chart to compare it anyway; it is read in every run from then on.`
+            : `Listed on Hyperliquid with ${fmtUsd(listed.volume)} of 24h volume, but not in the last run — it was listed after the run started, or was delisted. Add it to the chart, or refresh.`,
       });
     }
     return res.json({
@@ -140,6 +147,22 @@ export function registerScreenerRoutes(app: Express): void {
         ? `Not on Hyperliquid's perp list at the last run (${new Date(snap.at).toISOString().slice(0, 16).replace("T", " ")}Z). Tokens often trade under another name — Lighter is LIT.`
         : "No run yet; refresh first.",
     });
+  });
+
+  /** Pin a coin found by the search: its candles read now, and read in every run whatever its volume. */
+  app.post("/api/screener/pin/:coin", async (req, res) => {
+    const coin = String(req.params.coin).trim();
+    if (!COIN.test(coin)) return res.status(400).json({ message: "No such coin" });
+    try {
+      res.json(await pinCoin(coin));
+    } catch (err: any) {
+      res.status(err?.status ?? 502).json({ message: String(err?.message ?? err).slice(0, 200) });
+    }
+  });
+  app.delete("/api/screener/pin/:coin", async (req, res) => {
+    const coin = String(req.params.coin).trim();
+    if (!COIN.test(coin)) return res.status(400).json({ message: "No such coin" });
+    res.json(await unpinCoin(coin));
   });
 
   /** One coin for the drawer: price and ratio on the timeframe, volume, the exit plan, the arithmetic, and the funding/OI history. */

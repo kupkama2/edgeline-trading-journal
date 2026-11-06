@@ -34,6 +34,7 @@ import { notifyAll } from "./events";
 import { readBinanceFlow, readLiqMap, type FlowStatus, type LiqStatus } from "./flow";
 import { findAnomalies, type Anomaly } from "@shared/flow";
 import {
+  PIN_LIMIT,
   annualizeFunding,
   basketSeries,
   breadthOf,
@@ -308,11 +309,41 @@ export async function saveScreenerSettings(patch: unknown): Promise<ScreenerSett
   const p = (patch && typeof patch === "object" ? patch : {}) as Record<string, unknown>;
   const next = readScreenerSettings({ ...before, ...p });
   for (const k of Object.keys(next) as (keyof ScreenerSettings)[]) {
+    if (k === "pinned") continue;
     // readScreenerSettings fell back to the default: an invalid value given, so the old one stays.
-    if (k in p && next[k] !== Number(p[k])) next[k] = before[k];
+    if (k in p && next[k] !== Number(p[k])) (next as any)[k] = before[k];
   }
   await screenerStore.saveSettings(next);
   return next;
+}
+
+/**
+ * A coin searched for and added by hand: pinned, so every run reads it
+ * whatever its volume, and its candles read now so it can go on the chart
+ * before the next run. Only a coin the venue lists, by the name it uses.
+ */
+export async function pinCoin(asked: string): Promise<{ coin: string; settings: ScreenerSettings }> {
+  const snap = await screenerStore.latestSnapshot();
+  const listed = snap?.coins.find((c) => c.coin.toLowerCase() === asked.toLowerCase());
+  if (!listed) throw Object.assign(new Error("Not on Hyperliquid's perp list at the last snapshot."), { status: 404 });
+  if (NOT_AN_ALT.test(listed.coin)) throw Object.assign(new Error("BTC and the dollar-pegged coins are not alts."), { status: 400 });
+  const before = await screenerSettings();
+  if (!before.pinned.includes(listed.coin) && before.pinned.length >= PIN_LIMIT) throw Object.assign(new Error(`At most ${PIN_LIMIT} pinned coins; unpin one in the settings.`), { status: 400 });
+  const now = Date.now();
+  const { series } = await fetchSeries(new Budget(WEIGHT_PER_MIN), listed.coin, now, await storedSeries(listed.coin));
+  if (series["1h"].length === 0) throw Object.assign(new Error("Hyperliquid sent no candles for it."), { status: 502 });
+  seriesCache.set(listed.coin, series);
+  await screenerStore.saveSeries(listed.coin, series["1h"], series["1d"]);
+  const settings = { ...before, pinned: Array.from(new Set([...before.pinned, listed.coin])) };
+  await screenerStore.saveSettings(settings);
+  return { coin: listed.coin, settings };
+}
+
+export async function unpinCoin(coin: string): Promise<ScreenerSettings> {
+  const before = await screenerSettings();
+  const settings = { ...before, pinned: before.pinned.filter((c) => c.toLowerCase() !== coin.toLowerCase()) };
+  await screenerStore.saveSettings(settings);
+  return settings;
 }
 
 /**
@@ -347,7 +378,9 @@ async function run(nowFn: () => number, ai = false): Promise<ScreenerRun> {
     const budget = new Budget(WEIGHT_PER_MIN);
     const ctxs = parseMetaAndAssetCtxs(await ask(budget, 20, { type: "metaAndAssetCtxs" }));
     if (ctxs.length === 0) throw new Error("metaAndAssetCtxs answered with no universe");
-    const alts = ctxs.filter((c) => !c.delisted && !NOT_AN_ALT.test(c.coin) && (c.dayNtlVlm ?? 0) >= settings.minVolume);
+    // Over the volume line, or pinned by hand from the search whatever its volume.
+    const pinned = new Set(settings.pinned);
+    const alts = ctxs.filter((c) => !c.delisted && !NOT_AN_ALT.test(c.coin) && ((c.dayNtlVlm ?? 0) >= settings.minVolume || pinned.has(c.coin)));
     status.progress = { done: 0, total: alts.length + 1 };
     status.phase = "Hyperliquid candles";
     const previous = await screenerStore.previousSnapshot(at);
@@ -414,6 +447,7 @@ async function run(nowFn: () => number, ai = false): Promise<ScreenerRun> {
       };
       const base: ScreenerRow = {
         coin: c.coin,
+        ...(pinned.has(c.coin) ? { pinned: true } : {}),
         mark: c.markPx,
         volume24h: c.dayNtlVlm,
         fundingHourly: c.funding,

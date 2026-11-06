@@ -30,6 +30,7 @@ import {
   totalsOf,
   validAddress,
   withCost,
+  withOwnPnl,
   type AddressKind,
   type PortfolioAddress,
   type PortfolioRead,
@@ -259,7 +260,7 @@ export function forgetPortfolio(userId: number): void {
 export async function readPortfolio(userId: number, opts: { fresh?: boolean } = {}): Promise<PortfolioRead> {
   const hit = cache.get(userId);
   if (hit && !opts.fresh && Date.now() - hit.at < CACHE_MS) return hit.read;
-  const [rows, costs] = await Promise.all([portfolioStore.addresses(userId), portfolioStore.costs(userId)]);
+  const [rows, costs, hidden, pnls] = await Promise.all([portfolioStore.addresses(userId), portfolioStore.costs(userId), portfolioStore.hidden(userId), portfolioStore.pnls(userId)]);
   const addresses: PortfolioAddress[] = rows.map((r) => ({ id: r.id, kind: r.kind as AddressKind, address: r.address, label: r.label }));
   // Spot prices are read once per portfolio, and only when a Hyperliquid spot balance needs them.
   let spot: Promise<Map<string, number>> | null = null;
@@ -267,8 +268,9 @@ export async function readPortfolio(userId: number, opts: { fresh?: boolean } = 
   const parts = await Promise.all(
     addresses.map((a) => (a.kind === "hyperliquid" ? readHyperliquid(a, costs, prices) : a.kind === "evm" ? readEvm(a, costs) : readSolana(a, costs))),
   );
-  const positions = parts.flatMap((p) => p.positions);
-  const vaults = parts.flatMap((p) => p.vaults);
+  // The owner's own P&L, where typed in, over the source's; never on an open perp.
+  const positions = parts.flatMap((p) => p.positions).map((p) => (p.source !== "hl-perp" && pnls.has(p.key) ? withOwnPnl(p, pnls.get(p.key)!, p.value) : p));
+  const vaults = parts.flatMap((p) => p.vaults).map((v) => (pnls.has(v.key) ? withOwnPnl(v, pnls.get(v.key)!, v.equity) : v));
   const accounts = parts.flatMap((p) => p.accounts);
   const read: PortfolioRead = {
     at: new Date().toISOString(),
@@ -276,7 +278,9 @@ export async function readPortfolio(userId: number, opts: { fresh?: boolean } = 
     positions,
     vaults,
     accounts,
-    totals: totalsOf({ positions, vaults, accounts }),
+    // What the owner hid is not counted; dust is, being real if small.
+    totals: totalsOf({ positions: positions.filter((p) => !hidden.has(p.key)), vaults: vaults.filter((v) => !hidden.has(v.key)), accounts }),
+    hidden: Array.from(hidden),
     errors: parts.flatMap((p) => p.errors),
   };
   cache.set(userId, { at: Date.now(), read });
@@ -326,6 +330,26 @@ export function registerPortfolioRoutes(app: Express): void {
 
   app.delete("/api/portfolio/addresses/:id", async (req: Request, res: Response) => {
     await portfolioStore.removeAddress(uid(req), Number(req.params.id));
+    forgetPortfolio(uid(req));
+    res.json({ ok: true });
+  });
+
+  /** Hide a holding or a vault from the page and the totals, or show it again. Open perps are not hidden: they are risk on. */
+  app.put("/api/portfolio/hidden", async (req: Request, res: Response) => {
+    const body = z.object({ key: z.string().min(3).max(200), hidden: z.boolean() }).safeParse(req.body);
+    if (!body.success) return res.status(400).json({ message: "Invalid request" });
+    if (body.data.key.includes(":perp:")) return res.status(400).json({ message: "An open perp is not hidden." });
+    await portfolioStore.setHidden(uid(req), body.data.key, body.data.hidden);
+    forgetPortfolio(uid(req));
+    res.json({ ok: true });
+  });
+
+  /** The owner's own P&L for a holding or a vault; null goes back to the source's. */
+  app.put("/api/portfolio/pnl", async (req: Request, res: Response) => {
+    const body = z.object({ key: z.string().min(3).max(200), pnl: z.number().finite().nullable() }).safeParse(req.body);
+    if (!body.success) return res.status(400).json({ message: "Invalid P&L" });
+    if (body.data.key.includes(":perp:")) return res.status(400).json({ message: "An open perp's P&L is the venue's live figure." });
+    await portfolioStore.setPnl(uid(req), body.data.key, body.data.pnl);
     forgetPortfolio(uid(req));
     res.json({ ok: true });
   });

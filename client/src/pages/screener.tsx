@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Loader2, RefreshCw, Search, Settings2 } from "lucide-react";
+import { Loader2, Pin, RefreshCw, Search, Settings2, X } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,7 +10,7 @@ import { ScreenerTable, type Filter } from "@/components/screener/table";
 import { SpaghettiChart } from "@/components/screener/chart";
 import { CoinDrawer } from "@/components/screener/drawer";
 import { ScreenerInsights } from "@/components/screener/insights";
-import { fmtPrague, useSaveScreenerSettings, useScreener, useScreenerLines, useScreenerLookup, useScreenerRefresh, useScreenerStatus } from "@/lib/screener";
+import { fmtPrague, usePinScreenerCoin, useSaveScreenerSettings, useScreener, useScreenerLines, useScreenerLookup, useScreenerRefresh, useScreenerStatus } from "@/lib/screener";
 import { TIMEFRAMES, type ScreenerRow, type Timeframe } from "@shared/screener";
 
 const TF_KEY = "edgeline.screener.tf";
@@ -92,6 +92,21 @@ export default function ScreenerPage() {
     else next.add(coin);
     setPicked(next);
     setPickedFor(tf);
+  };
+  // A coin found by the search, put on the chart beside what is there.
+  const addToChart = (coin: string) => {
+    setPicked(new Set([...Array.from(charted), coin]));
+    setPickedFor(tf);
+  };
+  const pin = usePinScreenerCoin();
+  const onPin = async (coin: string) => {
+    try {
+      const r = await pin.mutateAsync({ coin, pin: true });
+      addToChart(r.coin ?? coin);
+      toast({ title: `${r.coin ?? coin} is on the chart`, description: "Pinned: every run reads it from now on, whatever its volume, and it joins the table after the next one." });
+    } catch (err: any) {
+      toast({ title: "Not added", description: String(err?.message ?? err).replace(/^\d+:\s*/, "").replace(/^\{"message":"|"\}$/g, "").slice(0, 160), variant: "destructive" });
+    }
   };
   // Keep only this coin; a second double click on the only coin left brings the default set back.
   const solo = (coin: string) => {
@@ -211,6 +226,23 @@ export default function ScreenerPage() {
                   </label>
                 ))}
                 <p className="text-[10px] text-muted-foreground">The volume line applies on the next run.</p>
+                <div data-testid="screener-pinned">
+                  <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Pinned coins</span>
+                  {settings.pinned.length === 0 ? (
+                    <p className="text-[10px] text-muted-foreground">None. Search for a coin under the volume line to add it.</p>
+                  ) : (
+                    <div className="mt-0.5 flex flex-wrap gap-1">
+                      {settings.pinned.map((c) => (
+                        <span key={c} className="inline-flex items-center gap-0.5 rounded border border-border px-1 py-0.5 font-mono text-[10px]">
+                          {c}
+                          <button type="button" className="text-muted-foreground hover:text-red-400" onClick={() => pin.mutate({ coin: c, pin: false })} title={`Unpin ${c}: read only while over the volume line`} data-testid={`screener-unpin-${c}`}>
+                            <X className="h-2.5 w-2.5" />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </PopoverContent>
             </Popover>
           )}
@@ -280,6 +312,19 @@ export default function ScreenerPage() {
           {q && matches === 0 && (
             <p className="px-2 pb-2 text-center text-xs" data-testid="screener-lookup">
               {lookup.isLoading ? <span className="text-muted-foreground">Looking it up…</span> : lookup.data ? <span className={lookup.data.where === "not-listed" ? "text-amber-500" : "text-foreground/90"}>{lookup.data.reason}</span> : null}
+              {lookup.data?.coin && (lookup.data.canPin || lookup.data.pinned) && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="ml-2 h-7 text-[11px]"
+                  disabled={pin.isPending || (lookup.data.pinned && charted.has(lookup.data.coin))}
+                  onClick={() => (lookup.data!.pinned ? addToChart(lookup.data!.coin!) : void onPin(lookup.data!.coin!))}
+                  data-testid="screener-pin"
+                >
+                  {pin.isPending ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Pin className="mr-1 h-3 w-3" />}
+                  {lookup.data.pinned && charted.has(lookup.data.coin) ? `${lookup.data.coin} is on the chart` : `Add ${lookup.data.coin} to the chart`}
+                </Button>
+              )}
             </p>
           )}
         </div>
