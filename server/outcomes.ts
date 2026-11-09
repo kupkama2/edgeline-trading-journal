@@ -172,7 +172,8 @@ let refreshing: Promise<void> | null = null;
 let listMemo: { at: number; rows: BinanceSymbol[] } | null = null;
 /** Bumped by every replace, so a memo built from a read that predates one is not kept. */
 let listGeneration = 0;
-const LIST_MEMO_MS = 60_000;
+/** An hour: the list changes once a day, a refresh clears the memo anyway, and each miss reads a thousand rows. */
+const LIST_MEMO_MS = 60 * 60_000;
 
 /** Ask the bucket which listed perps still publish, and demote the rest. */
 async function runCensus(symbols: string[]): Promise<void> {
@@ -193,7 +194,9 @@ export async function ensureCatalogue(
   if (!force && listMemo && Date.now() - listMemo.at < LIST_MEMO_MS) return listMemo.rows;
   const generation = listGeneration;
   const last = await catalogue.lastFetchedAt();
-  const partial = (await catalogue.list()).every((r) => r.market !== "futures");
+  // One read of the list for everything below; this read three times on a miss.
+  let rows = await catalogue.list();
+  const partial = rows.every((r) => r.market !== "futures");
   const ttl = partial ? PARTIAL_TTL_MS : CATALOGUE_TTL_MS;
   const stale = force || !last || Date.now() - new Date(last).getTime() > ttl;
   if (stale) {
@@ -223,11 +226,14 @@ export async function ensureCatalogue(
      * day old and almost certainly the same. Forced, or with nothing cached
      * at all, the refresh is waited for. One refresh at a time.
      */
-    const have = last != null && (await catalogue.list()).length > 0;
+    const have = last != null && rows.length > 0;
     if (!refreshing) refreshing = refresh();
-    if (force || !have) await refreshing;
+    if (force || !have) {
+      await refreshing;
+      rows = await catalogue.list();
+    }
   }
-  const stored = (await catalogue.list()).map((r) => ({
+  const stored = rows.map((r) => ({
     symbol: r.symbol,
     baseAsset: r.baseAsset,
     quoteAsset: r.quoteAsset,

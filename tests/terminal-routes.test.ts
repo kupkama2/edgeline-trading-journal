@@ -789,16 +789,18 @@ describe.skipIf(!DB)("the terminal against a stub venue", () => {
     expect(ref.moves.map((x: any) => x.kind)).toEqual(["stop", "reduce", "close"]);
     expect(ref.review).toMatchObject({ verdict: "hurt", basis: { planVerdict: "target_first", planR: 1 } });
     expect(ref.review.lesson).toBe("Let the plan run to its target.");
-    expect(modelCalls).toHaveLength(1);
-    expect(modelCalls[0]).toContain("Stop 79010 → 80010 (breakeven)");
-    expect(modelCalls[0]).toContain("Tape reached the original target 81010");
+    // This trade's review alone: trades closed by earlier tests, with no plan verdict, are reviewed once their
+    // waiting time is up, and a slow run lets that fall in here.
+    const mine = () => modelCalls.filter((c) => c.includes("Stop 79010 → 80010 (breakeven)"));
+    expect(mine()).toHaveLength(1);
+    expect(mine()[0]).toContain("Tape reached the original target 81010");
     // Once: a second pass does not ask again.
     await send("POST", "/api/terminal/reconcile", {});
-    expect(modelCalls).toHaveLength(1);
+    expect(mine()).toHaveLength(1);
     // Asked by name, it reads again.
     const again = await send("POST", `/api/terminal/trades/${trade.id}/review`, {});
     expect(again.status).toBe(200);
-    expect(modelCalls).toHaveLength(2);
+    expect(mine()).toHaveLength(2);
     spikes.clear();
   });
 

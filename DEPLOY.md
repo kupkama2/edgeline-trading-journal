@@ -246,3 +246,31 @@ today; the page alerts the morning of a day with anything on (from 07:30
 your time) and an hour before each event — a toast, the chime if the bell
 is on, and a desktop notification once allowed. Alerts need a tab of the
 journal open.
+
+## Database transfer
+
+Neon meters the data the database sends out (5 GB a month on the free
+plan, more on Launch). When the allowance is spent the database stops
+answering, and the server, which waits on it before it serves anything,
+goes silent: the site shows nothing at all, not an error page.
+
+What keeps the figure down, and what to watch if it climbs:
+
+- The server's timers read only the rows they need. The terminal watch
+  (every 20 s) and the tracker read the trades still on; the closed
+  terminal trades, owed only the plan's answer and a review, every five
+  minutes. The chart warm (every minute) reads the trades on or closed in
+  the last day. Marks read the open trades. Reading the whole journal on
+  each of those was most of a day's transfer.
+- The Binance and Hyperliquid symbol lists stay in memory for an hour
+  between reads; each is a thousand rows.
+- The screener's candle series, run tables and the chart cache are stored
+  gzipped (`body_gz`), about seven times smaller than the text they
+  replace. Every series is read once per boot, so a service that sleeps
+  and wakes often reads them often.
+- The AI read's track record is recomputed hourly, not every five minutes.
+- Screener runs are kept seven days, snapshots sixty.
+
+Neon's console shows the running total under the project's usage. A
+service that is awake all day (the cron pinger) runs the hourly screener
+on time but also keeps every timer reading.

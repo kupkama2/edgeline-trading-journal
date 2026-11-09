@@ -550,10 +550,15 @@ export async function probeHyperliquid(): Promise<Record<string, unknown>> {
 let universeMemo: { at: number; rows: HyperliquidPerp[] } | null = null;
 let universeGeneration = 0;
 
+/** An hour in memory: the list changes once a day, and a refresh clears the memo. */
+const UNIVERSE_MEMO_MS = 60 * 60_000;
+
 export async function ensureHyperliquid(force = false): Promise<HyperliquidPerp[]> {
-  if (!force && universeMemo && Date.now() - universeMemo.at < 60_000) return universeMemo.rows;
+  if (!force && universeMemo && Date.now() - universeMemo.at < UNIVERSE_MEMO_MS) return universeMemo.rows;
   const generation = universeGeneration;
   const last = await universe.lastFetchedAt();
+  // One read of the list for everything below.
+  let rows = await universe.list();
   const stale = force || !last || Date.now() - new Date(last).getTime() > TTL_MS;
   const triedRecently =
     status.lastTriedAt != null && Date.now() - new Date(status.lastTriedAt).getTime() < RETRY_MS;
@@ -569,10 +574,12 @@ export async function ensureHyperliquid(force = false): Promise<HyperliquidPerp[
       }
     })();
     // A list that exists is served now and refreshed behind the answer; see ensureCatalogue.
-    const have = last != null && (await universe.list()).length > 0;
-    if (force || !have) await refresh;
+    const have = last != null && rows.length > 0;
+    if (force || !have) {
+      await refresh;
+      rows = await universe.list();
+    }
   }
-  const rows = await universe.list();
   if (generation === universeGeneration) universeMemo = { at: Date.now(), rows };
   return rows;
 }

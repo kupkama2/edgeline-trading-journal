@@ -72,6 +72,8 @@ const HOURLY_DAYS = 30;
 /** Enough daily bars for twenty 30-day blocks and the one being measured. */
 const DAILY_DAYS = 640;
 const KEEP_DAYS = 60;
+/** Runs are a table each; only the latest is read, so a week is plenty. */
+const RUNS_KEEP_DAYS = 7;
 export const COOLDOWN_MS = 5 * 60_000;
 const WEIGHT_PER_MIN = Number(process.env.SCREENER_WEIGHT_PER_MIN ?? "900");
 const RETRY_AFTER_429_MS = Number(process.env.SCREENER_RETRY_MS ?? "60000");
@@ -509,7 +511,7 @@ async function run(nowFn: () => number, ai = false): Promise<ScreenerRun> {
       at,
       ctxs.map((c) => ({ coin: c.coin, funding: c.funding, openInterest: c.openInterest, volume: c.dayNtlVlm, mark: c.markPx, oracle: c.oraclePx })),
     );
-    await screenerStore.prune(new Date(t0 - KEEP_DAYS * DAY_MS).toISOString()).catch(() => {});
+    await screenerStore.prune(new Date(t0 - KEEP_DAYS * DAY_MS).toISOString(), new Date(t0 - RUNS_KEEP_DAYS * DAY_MS).toISOString()).catch(() => {});
     console.log(`[screener] ${flagged.length} coins in ${(tookMs / 1000).toFixed(1)}s, ${fullReads} full reads, ${errors} could not be read, ${ctxs.length} perps listed`);
     latest = { id, at, barsTo, tookMs, errors, universe: flagged.length, fullReads, breadth, btc: btcMove, flowStatus: flowPass.status, liqStatus: liqPass.status, anomalies, settings, rows: flagged };
     notifyAll("screener");

@@ -200,7 +200,8 @@ export function analyzeRun(run: ScreenerRun): Promise<void> {
  * hourly snapshots, and the summary per stance. Kept five minutes; a new
  * read clears it.
  */
-const TRACK_TTL_MS = 5 * 60_000;
+/** An hour: the snapshots it is priced from are hourly, and the query reads thousands of rows. A new read clears it. */
+const TRACK_TTL_MS = 60 * 60_000;
 let trackCache: { at: number; days: number; value: Awaited<ReturnType<typeof computeTrack>> } | null = null;
 
 async function computeTrack(days: number, now = Date.now()) {
