@@ -49,9 +49,10 @@ import { noteFields } from "@shared/notes";
 import { collapseToInstrument } from "@shared/binance";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
-import { and, eq, desc, inArray, isNull, sql as sqlx } from "drizzle-orm";
+import { and, eq, desc, inArray, isNull, sql as sqlx, isNotNull, ne, gt, or } from "drizzle-orm";
 import { randomBytes } from "node:crypto";
 import { notify } from "./events";
+import { gunzipSync, gzipSync } from "node:zlib";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -383,6 +384,9 @@ CREATE TABLE IF NOT EXISTS screener_settings (
   body TEXT NOT NULL
 );
 ALTER TABLE screener_snapshots ADD COLUMN IF NOT EXISTS oracle DOUBLE PRECISION;
+ALTER TABLE screener_series ADD COLUMN IF NOT EXISTS body_gz BYTEA;
+ALTER TABLE screener_runs ADD COLUMN IF NOT EXISTS body_gz BYTEA;
+ALTER TABLE candle_cache ADD COLUMN IF NOT EXISTS body_gz BYTEA;
 CREATE TABLE IF NOT EXISTS account_balances (
   id SERIAL PRIMARY KEY,
   user_id INTEGER NOT NULL,
@@ -1022,6 +1026,20 @@ export const accounts = {
  */
 /** Bars read before, kept across restarts. Every call is best effort: a cache that fails is a cache that misses. */
 /** The screener's rows (server/screener.ts). Global, not per account: the market is the same for everyone. */
+/*
+ * The big JSON blobs — a coin's month of candles, a run's table, a chart's
+ * window — are kept gzipped. A month of hourly candles is 85 KB as text and
+ * near 12 KB packed, and every byte read back from the database counts
+ * against the host's transfer allowance (Neon's free plan allows 5 GB a
+ * month; the screener alone reads every series at each boot). Rows written
+ * before this keep their text, and a read takes whichever is there.
+ */
+const pack = (json: string): Buffer => gzipSync(Buffer.from(json, "utf8"));
+const unpack = (gz: Buffer | Uint8Array | null | undefined, text: string | null | undefined): string | null => {
+  if (gz && gz.length) return gunzipSync(Buffer.from(gz)).toString("utf8");
+  return text && text.length ? text : null;
+};
+
 export const screenerStore = {
   async settings(): Promise<unknown> {
     const rows = await sql<{ body: string }[]>`SELECT body FROM screener_settings WHERE id = 1`;
@@ -1036,14 +1054,14 @@ export const screenerStore = {
     await sql`INSERT INTO screener_settings (id, body) VALUES (1, ${text}) ON CONFLICT (id) DO UPDATE SET body = EXCLUDED.body`;
   },
   async latestRun(): Promise<{ id: number; at: string; tookMs: number; body: string; errors: number; universe: number; settings: string | null } | null> {
-    const rows = await sql<{ id: number; at: string; took_ms: number; body: string; errors: number; universe: number; settings: string | null }[]>`
-      SELECT id, at, took_ms, body, errors, universe, settings FROM screener_runs ORDER BY id DESC LIMIT 1`;
+    const rows = await sql<{ id: number; at: string; took_ms: number; body: string | null; body_gz: Buffer | null; errors: number; universe: number; settings: string | null }[]>`
+      SELECT id, at, took_ms, body, body_gz, errors, universe, settings FROM screener_runs ORDER BY id DESC LIMIT 1`;
     const r = rows[0];
-    return r ? { id: r.id, at: r.at, tookMs: r.took_ms, body: r.body, errors: r.errors, universe: r.universe, settings: r.settings } : null;
+    return r ? { id: r.id, at: r.at, tookMs: r.took_ms, body: unpack(r.body_gz, r.body) ?? "", errors: r.errors, universe: r.universe, settings: r.settings } : null;
   },
   async saveRun(r: { at: string; tookMs: number; body: string; errors: number; universe: number; settings: string }): Promise<number> {
-    const rows = await sql<{ id: number }[]>`INSERT INTO screener_runs (at, took_ms, body, errors, universe, settings)
-      VALUES (${r.at}, ${r.tookMs}, ${r.body}, ${r.errors}, ${r.universe}, ${r.settings}) RETURNING id`;
+    const rows = await sql<{ id: number }[]>`INSERT INTO screener_runs (at, took_ms, body, body_gz, errors, universe, settings)
+      VALUES (${r.at}, ${r.tookMs}, ${""}, ${pack(r.body)}, ${r.errors}, ${r.universe}, ${r.settings}) RETURNING id`;
     return rows[0].id;
   },
   /** The whole snapshot in one statement: a few hundred rows is one round trip, not a few hundred. */
@@ -1093,19 +1111,19 @@ export const screenerStore = {
   async saveSeries(coin: string, hourly: unknown[], daily: unknown[]): Promise<void> {
     const written_at = new Date().toISOString();
     const rows = [
-      { coin, interval: "1h", body: JSON.stringify(hourly), written_at },
-      { coin, interval: "1d", body: JSON.stringify(daily), written_at },
+      { coin, interval: "1h", body: "", body_gz: pack(JSON.stringify(hourly)), written_at },
+      { coin, interval: "1d", body: "", body_gz: pack(JSON.stringify(daily)), written_at },
     ];
-    await sql`INSERT INTO screener_series ${sql(rows)} ON CONFLICT (coin, interval) DO UPDATE SET body = EXCLUDED.body, written_at = EXCLUDED.written_at`;
+    await sql`INSERT INTO screener_series ${sql(rows)} ON CONFLICT (coin, interval) DO UPDATE SET body = EXCLUDED.body, body_gz = EXCLUDED.body_gz, written_at = EXCLUDED.written_at`;
   },
   async series(coin: string, interval: "1h" | "1d"): Promise<string | null> {
-    const rows = await sql<{ body: string }[]>`SELECT body FROM screener_series WHERE coin = ${coin} AND interval = ${interval}`;
-    return rows[0]?.body ?? null;
+    const rows = await sql<{ body: string | null; body_gz: Buffer | null }[]>`SELECT body, body_gz FROM screener_series WHERE coin = ${coin} AND interval = ${interval}`;
+    return rows[0] ? unpack(rows[0].body_gz, rows[0].body) : null;
   },
   async seriesFor(coins: string[], interval: "1h" | "1d"): Promise<Map<string, string>> {
     if (coins.length === 0) return new Map();
-    const rows = await sql<{ coin: string; body: string }[]>`SELECT coin, body FROM screener_series WHERE interval = ${interval} AND coin IN ${sql(coins)}`;
-    return new Map(rows.map((r) => [r.coin, r.body]));
+    const rows = await sql<{ coin: string; body: string | null; body_gz: Buffer | null }[]>`SELECT coin, body, body_gz FROM screener_series WHERE interval = ${interval} AND coin IN ${sql(coins)}`;
+    return new Map(rows.map((r) => [r.coin, unpack(r.body_gz, r.body) ?? ""]));
   },
   /** Everything but the settings, gone: a clean slate for a test. */
   async clearAll(): Promise<void> {
@@ -1113,10 +1131,10 @@ export const screenerStore = {
     await sql`DELETE FROM screener_runs`;
     await sql`DELETE FROM screener_series`;
   },
-  /** Runs and snapshots older than the window, gone. Series are one row per coin and replace themselves. */
-  async prune(before: string): Promise<void> {
+  /** Snapshots and runs older than their windows, gone. Series are one row per coin and replace themselves. */
+  async prune(before: string, runsBefore = before): Promise<void> {
     await sql`DELETE FROM screener_snapshots WHERE at < ${before}`;
-    await sql`DELETE FROM screener_runs WHERE at < ${before}`;
+    await sql`DELETE FROM screener_runs WHERE at < ${runsBefore}`;
   },
 };
 
@@ -1218,14 +1236,14 @@ export const portfolioStore = {
 
 export const candleStore = {
   async get(key: string): Promise<{ until: number; body: string } | null> {
-    const rows = await sql<{ until: string; body: string }[]>`SELECT until, body FROM candle_cache WHERE key = ${key}`;
+    const rows = await sql<{ until: string; body: string | null; body_gz: Buffer | null }[]>`SELECT until, body, body_gz FROM candle_cache WHERE key = ${key}`;
     const row = rows[0];
-    return row ? { until: Number(row.until), body: row.body } : null;
+    return row ? { until: Number(row.until), body: unpack(row.body_gz, row.body) ?? "" } : null;
   },
   async put(key: string, until: number, body: string): Promise<void> {
     const writtenAt = new Date().toISOString();
-    await sql`INSERT INTO candle_cache (key, until, body, written_at) VALUES (${key}, ${until}, ${body}, ${writtenAt})
-      ON CONFLICT (key) DO UPDATE SET until = EXCLUDED.until, body = EXCLUDED.body, written_at = EXCLUDED.written_at`;
+    await sql`INSERT INTO candle_cache (key, until, body, body_gz, written_at) VALUES (${key}, ${until}, ${""}, ${pack(body)}, ${writtenAt})
+      ON CONFLICT (key) DO UPDATE SET until = EXCLUDED.until, body = EXCLUDED.body, body_gz = EXCLUDED.body_gz, written_at = EXCLUDED.written_at`;
   },
   /** Rows past their time, gone. */
   async prune(now = Date.now()): Promise<number> {
@@ -1395,9 +1413,11 @@ export interface IStorage {
   deleteTradingStyle(id: number): Promise<void>;
 
   listTrades(): Promise<TradeWithTags[]>;
+  listOpenTrades(): Promise<TradeWithTags[]>;
+  listLiveTrades(since: string): Promise<TradeWithTags[]>;
   getTrade(id: number): Promise<TradeWithTags | undefined>;
   createTrade(t: InsertTrade, tagIds?: number[]): Promise<TradeWithTags>;
-  updateTrade(id: number, t: UpdateTrade, tagIds?: number[]): Promise<TradeWithTags | undefined>;
+  updateTrade(id: number, t: UpdateTrade, tagIds?: number[], opts?: { quiet?: boolean }): Promise<TradeWithTags | undefined>;
   deleteTrade(id: number): Promise<void>;
 
   listMistakeTags(): Promise<MistakeTag[]>;
@@ -1635,11 +1655,27 @@ export class DatabaseStorage implements IStorage {
 
   /** The journal: every trade but the paper ones, unless asked for those too (the terminal is). */
   async listTrades(includePaper = false): Promise<TradeWithTags[]> {
-    const rows = await db
-      .select()
-      .from(trades)
-      .where(includePaper ? this.owns(trades) : and(this.owns(trades), eq(trades.paper, false)))
-      .orderBy(desc(trades.entryTime));
+    return this.tradesWhere(includePaper ? this.owns(trades) : and(this.owns(trades), eq(trades.paper, false)));
+  }
+
+  /** The trades on now. What the marks, the open-position checks and the tracker need, without the whole journal behind them. */
+  async listOpenTrades(): Promise<TradeWithTags[]> {
+    return this.tradesWhere(and(this.owns(trades), eq(trades.paper, false), eq(trades.status, "open")));
+  }
+
+  /** The trades a chart is wanted for: on or pending, or closed since `since`. */
+  async listLiveTrades(since: string): Promise<TradeWithTags[]> {
+    return this.tradesWhere(and(this.owns(trades), eq(trades.paper, false), or(inArray(trades.status, ["open", "pending"]), and(eq(trades.status, "closed"), gt(trades.exitTime, since)))));
+  }
+
+  /*
+   * One query, filtered in the database. The journal page reads the whole
+   * list once; the watch, the tracker and the chart warm read every twenty
+   * seconds to a minute, and reading everything each time was most of what
+   * the database sent out in a day.
+   */
+  private async tradesWhere(where: ReturnType<typeof and>): Promise<TradeWithTags[]> {
+    const rows = await db.select().from(trades).where(where).orderBy(desc(trades.entryTime));
     if (rows.length === 0) return [];
     const ids = rows.map((t) => t.id);
 
@@ -1720,6 +1756,8 @@ export class DatabaseStorage implements IStorage {
     id: number,
     t: UpdateTrade,
     tagIds?: number[],
+    /** `quiet`: bookkeeping nobody is shown — the watch's "checked at" stamp — so no page is told to reload. */
+    opts: { quiet?: boolean } = {},
   ): Promise<TradeWithTags | undefined> {
     /*
      * The 1R default, kept in step: judged on the row as it will be, so a
@@ -1762,7 +1800,7 @@ export class DatabaseStorage implements IStorage {
       if (stamped) Object.assign(row, stamped);
     }
     if (tagIds) await this.setTags(id, tagIds);
-    notify(this.userId, "trades");
+    if (!opts.quiet) notify(this.userId, "trades");
     return {
       ...row,
       mistakeTagIds: await this.tagIdsFor(id),
@@ -1997,8 +2035,11 @@ export class DatabaseStorage implements IStorage {
   }
 
   /** Every trade the terminal sent and is still responsible for reading back. */
-  async listTerminalTrades(): Promise<TradeWithTags[]> {
-    return (await this.listTrades(true)).filter((t) => t.terminal && t.status !== "cancelled");
+  /** The trades the terminal or the tracker has a hand in: with `openOnly`, those still on or waiting to fill. */
+  async listTerminalTrades(openOnly = false): Promise<TradeWithTags[]> {
+    // A ref, not an empty string: a trade logged by hand carries "" there, and is nobody's errand.
+    const base = and(this.owns(trades), isNotNull(trades.terminal), ne(trades.terminal, ""), ne(trades.status, "cancelled"));
+    return this.tradesWhere(openOnly ? and(base, inArray(trades.status, ["open", "pending"])) : base);
   }
 
   async logTerminal(row: Omit<typeof terminalLog.$inferInsert, "userId" | "id">): Promise<void> {

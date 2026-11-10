@@ -817,7 +817,7 @@ export async function registerRoutes(
         return res.status(400).json({ message: `${p.symbol}: the stop is not on the losing side of the entry` });
     }
     const cat = await ensureCatalogue().catch(() => []);
-    const existing = (await store(req).listTrades()).filter((t) => t.status === "open");
+    const existing = await store(req).listOpenTrades();
     const entryTime = body.entryTime ?? new Date().toISOString();
     const created = [];
     const skipped: string[] = [];
@@ -1117,9 +1117,7 @@ export async function registerRoutes(
    * The standing against the plan is worked out on the client from this.
    */
   app.get("/api/marks", async (req, res) => {
-    const open = (await store(req).listTrades()).filter(
-      (t) => t.status === "open" && !t.contract?.trim(),
-    );
+    const open = (await store(req).listOpenTrades()).filter((t) => !t.contract?.trim());
     if (open.length === 0) return res.json({});
     const cat = await ensureCatalogue().catch(() => []);
     const hlNames = open.some((t) => venueOfAccount(t.account) === "hyperliquid")

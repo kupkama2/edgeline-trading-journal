@@ -32,9 +32,7 @@ export async function warmCharts(now = Date.now(), onlyUser?: number): Promise<{
   let hlNames: Awaited<ReturnType<typeof hyperliquidAssets>> | null = null;
   for (const { userId } of rows) {
     const s = storageFor(userId);
-    const mine = (await s.listTrades()).filter(
-      (t) => !t.scalp && (t.status === "open" || t.status === "pending" || (t.status === "closed" && t.exitTime != null && t.exitTime > since)),
-    );
+    const mine = (await s.listLiveTrades(since)).filter((t) => !t.scalp);
     for (const t of mine) {
       try {
         if (venueOfAccount(t.account) === "hyperliquid" && !hlNames) hlNames = await hyperliquidAssets().catch(() => []);

@@ -105,7 +105,7 @@ export async function trackAccount(s: DatabaseStorage, acct: AccountSettings): P
 
 /** This account's tracked trades still on. */
 async function trackedOpen(s: DatabaseStorage, account: string): Promise<{ t: TradeWithTags; ref: TerminalRef }[]> {
-  return (await s.listTerminalTrades())
+  return (await s.listTerminalTrades(true))
     .map((t) => ({ t, ref: parseTerminalRef(t.terminal)! }))
     .filter((x) => x.ref?.tracked && x.ref.account === account && x.t.status === "open");
 }

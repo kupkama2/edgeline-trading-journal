@@ -426,6 +426,9 @@ function Fig({
   );
 }
 
+/** More fills than this and the list starts folded; the ledger line still says what they add up to. */
+const FOLD_FILLS_OVER = 4;
+
 export default function TradeView({ under = "/" }: { under?: string }) {
   const [isNew] = useRoute("/trade/new");
   const [, params] = useRoute("/trade/:id");
@@ -1796,7 +1799,10 @@ export function TradeBody({
         {/* --------------------------- how it went -------------------------- */}
         <Card className={`border-card-border bg-card p-4 ${trade.fills.length ? "" : "py-2.5"}`}>
           {trade.fills.length > 0 && (
-            <h2 className="mb-3 text-sm font-semibold tracking-tight">How it was worked</h2>
+            <h2 className="mb-3 text-sm font-semibold tracking-tight">
+              How it was worked
+              <span className="ml-2 font-mono text-[11px] font-normal text-muted-foreground">{trade.fills.length} fills</span>
+            </h2>
           )}
 
           {trade.fills.length === 0 ? (
@@ -1806,6 +1812,14 @@ export function TradeBody({
             </p>
           ) : (
             <>
+              {/* A long list folds away by itself: the ledger line below says what it adds up to. */}
+              <details open={trade.fills.length <= FOLD_FILLS_OVER} className="group" data-testid="view-fills-fold">
+                {trade.fills.length > FOLD_FILLS_OVER && (
+                  <summary className="mb-2 cursor-pointer select-none text-xs text-muted-foreground hover:text-foreground" data-testid="view-fills-toggle">
+                    <span className="group-open:hidden">Show the {trade.fills.length} fills</span>
+                    <span className="hidden group-open:inline">Hide the fills</span>
+                  </summary>
+                )}
               <ul className="space-y-1" data-testid="view-fills">
                 {[...trade.fills]
                   .sort((a, b) => a.time.localeCompare(b.time))
@@ -1852,6 +1866,7 @@ export function TradeBody({
                     </li>
                   ))}
               </ul>
+              </details>
               <p className="mt-2 font-mono text-[11px] text-muted-foreground" data-testid="view-ledger">
                 avg entry {num(led.avgEntry)}
                 {trade.status === "open" && ` · ${maskIfQuote(trade.sizeUnit, num(led.openQty))} still on`} ·{" "}

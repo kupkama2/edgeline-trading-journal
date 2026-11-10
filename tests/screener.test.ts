@@ -276,6 +276,11 @@ function startVenue(): Promise<string> {
       let body = "";
       req.on("data", (c) => (body += c));
       req.on("end", () => {
+        // The liquidation map's leaderboard, answered empty and not counted among the venue's info calls.
+        if (req.url?.includes("/leaderboard")) {
+          res.writeHead(200, { "content-type": "application/json" });
+          return res.end(JSON.stringify({ leaderboardRows: [] }));
+        }
         infoCalls++;
         const q = JSON.parse(body || "{}");
         calls.push(`${q.type}:${q.req?.coin ?? ""}:${q.req?.interval ?? ""}`);
@@ -305,6 +310,9 @@ function startVenue(): Promise<string> {
 beforeAll(async () => {
   if (!DB) return;
   process.env.HYPERLIQUID_BASE = await startVenue();
+  // The liquidation map's leaderboard too: the fake answers it with an empty list. Left unset, the
+  // run reaches the real host, which GitHub's runners wait on until the test times out.
+  process.env.HL_STATS_BASE = process.env.HYPERLIQUID_BASE;
   process.env.SCREENER_CLOCK_MS = "0";
   process.env.SCREENER_WEIGHT_PER_MIN = "100000";
   const { initSchema, accounts, screenerStore } = await import("../server/storage");

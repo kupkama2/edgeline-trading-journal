@@ -618,7 +618,8 @@ export async function applySnapshot(
   const quiet = (r: TerminalRef) => formatTerminalRef({ ...r, checkedAt: undefined, planWatch: r.planWatch ? { ...r.planWatch, checkedAt: "", coveredTo: 0 } : undefined });
   const changed = Object.keys(patch).length > 0 || partials.length > 0 || adds.length > 0 || quiet(nextRef) !== quiet(before);
   if (!changed && before.checkedAt && Date.now() - new Date(before.checkedAt).getTime() < 60_000) return t;
-  const after = await s.updateTrade(t.id, { ...patch, terminal: formatTerminalRef(nextRef) } as any);
+  // Only the "checked at" stamp moved: written, but no page is told to reload for it.
+  const after = await s.updateTrade(t.id, { ...patch, terminal: formatTerminalRef(nextRef) } as any, undefined, { quiet: !changed });
   return after ?? t;
 }
 
@@ -668,8 +669,15 @@ export function noteFullRead(userId: number, account: string, who: Reader = "ter
   lastFullRead.set(accountKey(userId, account, who), Date.now());
 }
 
+/** How often the timed pass also takes the closed trades, owed only the plan's answer and a review. */
+const CLOSED_PASS_MS = 5 * 60_000;
+const lastClosedPass = new Map<number, number>();
+
 async function reconcilePass(s: DatabaseStorage, userId: number, mode: PassMode): Promise<{ id: number; status: string; error?: string }[]> {
-  const trades = await s.listTerminalTrades();
+  // The timed pass reads the trades still on; every closed terminal trade ever logged would be most of the read.
+  const withClosed = mode === "full" || Date.now() - (lastClosedPass.get(userId) ?? 0) >= CLOSED_PASS_MS;
+  if (withClosed) lastClosedPass.set(userId, Date.now());
+  const trades = await s.listTerminalTrades(!withClosed);
   const armedBy = new Map<string, Armed>();
   const settings = mode === "light" ? await s.listAccountSettings() : [];
   const out: { id: number; status: string; error?: string }[] = [];
