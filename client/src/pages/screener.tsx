@@ -12,6 +12,7 @@ import { CoinDrawer } from "@/components/screener/drawer";
 import { ScreenerInsights } from "@/components/screener/insights";
 import { fmtPrague, usePinScreenerCoin, useSaveScreenerSettings, useScreener, useScreenerLines, useScreenerLookup, useScreenerRefresh, useScreenerStatus } from "@/lib/screener";
 import { TIMEFRAMES, type ScreenerRow, type Timeframe } from "@shared/screener";
+import { parseLooseNumber } from "@shared/loose-number";
 
 const TF_KEY = "edgeline.screener.tf";
 
@@ -81,10 +82,14 @@ export default function ScreenerPage() {
     const more = extra.tf === tf ? extra.coins : [];
     return Array.from(new Set([...base, ...more, ...order]));
   }, [rows, tf, extra, order]);
+  // Remembered against the default set and the extras, not against `loaded` (which already holds the chart's
+  // coins, so nothing was ever "missing" and a coin dropped out of the load the moment it was hidden).
   useEffect(() => {
-    const missing = order.filter((c) => !loaded.includes(c));
-    if (missing.length) setExtra((x) => ({ tf, coins: Array.from(new Set([...(x.tf === tf ? x.coins : []), ...missing])) }));
-  }, [order, loaded, tf]);
+    const base = defaultSet(rows, tf);
+    const have = extra.tf === tf ? extra.coins : [];
+    const missing = order.filter((c) => !base.includes(c) && !have.includes(c));
+    if (missing.length || extra.tf !== tf) setExtra({ tf, coins: [...have, ...missing] });
+  }, [order, rows, tf, extra]);
   const lines = useScreenerLines(tf, loaded);
   // What shows, in a stable order; memoized so the chart only hears about real changes.
   const drawn = useMemo(() => order.filter((c) => !!lines.data?.lines[c]), [order, lines.data]);
@@ -93,16 +98,21 @@ export default function ScreenerPage() {
     setPicked(null);
     setResetCount((n) => n + 1);
   };
+  // From the set as it is when the update runs: a single click is acted on a beat late (it waits to see whether
+  // a second follows), and built from the render's copy it would undo whatever was clicked in between.
+  const current = (prev: Set<string> | null) => (prev && pickedFor === tf ? prev : new Set(defaultSet(rows, tf)));
   const toggle = (coin: string) => {
-    const next = new Set(charted);
-    if (next.has(coin)) next.delete(coin);
-    else next.add(coin);
-    setPicked(next);
+    setPicked((prev) => {
+      const next = new Set(current(prev));
+      if (next.has(coin)) next.delete(coin);
+      else next.add(coin);
+      return next;
+    });
     setPickedFor(tf);
   };
   // A coin found by the search, put on the chart beside what is there.
   const addToChart = (coin: string) => {
-    setPicked(new Set([...Array.from(charted), coin]));
+    setPicked((prev) => new Set([...Array.from(current(prev)), coin]));
     setPickedFor(tf);
   };
   const pin = usePinScreenerCoin();
@@ -126,14 +136,19 @@ export default function ScreenerPage() {
 
   // While a run is on, the small status answer is polled for the progress line; the table arrives with the "screener" event.
   const live = useScreenerStatus(!!page.data?.status.running);
-  const status = live.data ?? page.data?.status;
+  // The polled answer only while a run is on: once it stops, the cache holds the last run's cooldown, not this one's.
+  const status = page.data?.status.running ? (live.data ?? page.data.status) : page.data?.status;
   // The refresh button: off while a run is on, and for five minutes after one. The clock ticks only while there is something to count down.
   const [now, setNow] = useState(() => Date.now());
   const nextAt = status?.nextAllowedAt ? new Date(status.nextAllowedAt).getTime() : 0;
   const waitMs = Math.max(0, nextAt - now);
   useEffect(() => {
     if (!nextAt || nextAt <= Date.now()) return;
-    const t = setInterval(() => setNow(Date.now()), 1000);
+    // Stops itself when the wait is over; it used to tick, and re-render the page, for the life of the tab.
+    const t = setInterval(() => {
+      setNow(Date.now());
+      if (Date.now() >= nextAt) clearInterval(t);
+    }, 1000);
     return () => clearInterval(t);
   }, [nextAt]);
   const canRefresh = !!page.data && !status?.running && waitMs === 0 && !refresh.isPending;
@@ -229,8 +244,28 @@ export default function ScreenerPage() {
                       inputMode="decimal"
                       className="mt-0.5 h-7 text-xs"
                       onBlur={(e) => {
-                        const v = Number(e.target.value);
-                        if (Number.isFinite(v) && v !== settings[k]) save.mutate({ [k]: v });
+                        const raw = e.target.value.trim();
+                        // Blank is "leave it": Number("") is 0, which read every listed perp on the next run.
+                        if (raw === "") return void (e.target.value = String(settings[k]));
+                        const v = parseLooseNumber(raw);
+                        if (v == null) {
+                          e.target.value = String(settings[k]);
+                          return void toast({ title: "Not a number", description: `"${raw}" was not saved.`, variant: "destructive" });
+                        }
+                        if (v === settings[k]) return;
+                        const field = e.target;
+                        save.mutate(
+                          { [k]: v },
+                          {
+                            onSuccess: (saved) => {
+                              // Out of range, the server keeps what was there: show that, not what was typed.
+                              if (saved[k] !== v) {
+                                field.value = String(saved[k]);
+                                toast({ title: "Out of range", description: `${label} stays at ${saved[k]}.`, variant: "destructive" });
+                              }
+                            },
+                          },
+                        );
                       }}
                       data-testid={`screener-setting-${k}`}
                     />

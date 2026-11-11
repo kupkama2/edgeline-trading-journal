@@ -111,7 +111,7 @@ export function EventsChip() {
       <PopoverTrigger asChild>
         <button
           type="button"
-          className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border px-1.5 py-0.5 font-mono text-[10px] xl:px-2 ${soon ? "border-amber-500/60 bg-amber-500/10 text-amber-500" : today.length ? "border-sky-500/40 text-sky-400" : "border-border text-muted-foreground"}`}
+          className={`relative flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border px-1.5 py-0.5 font-mono text-[10px] after:absolute after:-inset-x-1 after:-inset-y-2.5 after:content-[''] xl:px-2 ${soon ? "border-amber-500/60 bg-amber-500/10 text-amber-500" : today.length ? "border-sky-500/40 text-sky-400" : "border-border text-muted-foreground"}`}
           title={next ? `Next: ${next.title} at ${hm(next.at)}, in ${left(new Date(next.at).getTime() - now)}` : today.length ? "Today's events are done" : "No events today. Click for the week."}
           aria-label="Macro releases and large earnings this week"
           data-testid="events-chip"

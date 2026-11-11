@@ -40,6 +40,7 @@ import {
 const FLOW_PER_MIN = Number(process.env.FLOW_PER_MIN ?? "150");
 const LIQ_ACCOUNTS = Number(process.env.LIQ_ACCOUNTS ?? "300");
 const LIQ_PER_MIN = Number(process.env.LIQ_PER_MIN ?? "200");
+const LIQ_GIVE_UP_AFTER = 12;
 const STATS_BASE = (process.env.HL_STATS_BASE || "https://stats-data.hyperliquid.xyz").replace(/\/+$/, "");
 
 export interface FlowStatus {
@@ -78,6 +79,14 @@ function pacer(perMin: number) {
 export async function readBinanceFlow(
   coins: { coin: string; mark: number | null; fundingHourly: number | null }[],
   onProgress?: (done: number, total: number) => void,
+  /**
+   * Hyperliquid's marks and funding as they are NOW, read just before
+   * Binance's. The marks handed in are from the start of the run, minutes
+   * (ten, on a first read) before this pass, and the basis between the two
+   * venues is measured to a third of a percent: an alt that moved in
+   * between read as a gap between venues.
+   */
+  marksNow?: () => Promise<Map<string, { mark: number | null; funding: number | null }>>,
 ): Promise<{ status: FlowStatus; byCoin: Map<string, FlowReadings> }> {
   const byCoin = new Map<string, FlowReadings>();
   const owner = await accountStore.owner().catch(() => undefined);
@@ -99,6 +108,8 @@ export async function readBinanceFlow(
   let premium: Map<string, { mark: number; funding: number }>;
   let intervals = new Map<string, number>();
   try {
+    const fresh = marksNow ? await marksNow().catch(() => null) : null;
+    if (fresh) coins = coins.map((c) => ({ ...c, mark: fresh.get(c.coin)?.mark ?? c.mark, fundingHourly: fresh.get(c.coin)?.funding ?? c.fundingHourly }));
     premium = parsePremiumIndex(await get("/fapi/v1/premiumIndex"));
     intervals = parseFundingInfo(await get("/fapi/v1/fundingInfo").catch(() => []));
   } catch (err: any) {
@@ -137,6 +148,8 @@ export async function readBinanceFlow(
 export async function readLiqMap(
   coins: { coin: string; mark: number | null }[],
   onProgress?: (done: number, total: number) => void,
+  /** The mids as they are once the accounts are read: the bands are a percent wide, and the marks handed in are from the start of the run. */
+  midsNow?: () => Promise<Map<string, number>>,
 ): Promise<{ status: LiqStatus; byCoin: Map<string, LiqMap> }> {
   const byCoin = new Map<string, LiqMap>();
   const status: LiqStatus = { accounts: 0, failed: 0, error: null };
@@ -161,6 +174,7 @@ export async function readLiqMap(
   const holders = new Map<string, Set<string>>();
   const wait = pacer(LIQ_PER_MIN);
   let done = 0;
+  let failedInARow = 0;
   for (const a of addresses) {
     await wait();
     try {
@@ -172,11 +186,19 @@ export async function readLiqMap(
         holders.get(p.coin)!.add(a);
       }
       status.accounts++;
+      failedInARow = 0;
     } catch {
       status.failed++;
+      // A venue that has stopped answering: three hundred timeouts would hold the run, and the next hour's, for an hour.
+      if (++failedInARow >= LIQ_GIVE_UP_AFTER) {
+        status.error = `Hyperliquid stopped answering after ${status.accounts} accounts; the map is from those.`;
+        break;
+      }
     }
     onProgress?.(++done, addresses.length);
   }
-  for (const [coin, list] of Array.from(positions)) byCoin.set(coin, liqMapOf(wanted.get(coin)!, list, holders.get(coin)?.size ?? 0));
+  // Only with something to place: an empty leaderboard asks nothing more of the venue.
+  const mids = midsNow && positions.size ? await midsNow().catch(() => null) : null;
+  for (const [coin, list] of Array.from(positions)) byCoin.set(coin, liqMapOf(mids?.get(coin) ?? wanted.get(coin)!, list, holders.get(coin)?.size ?? 0));
   return { status, byCoin };
 }

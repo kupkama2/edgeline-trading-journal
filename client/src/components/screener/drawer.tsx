@@ -1,3 +1,4 @@
+import { parseLooseNumber } from "@shared/loose-number";
 import { useEffect, useRef, useState } from "react";
 import { CandlestickSeries, ColorType, createChart, CrosshairMode, HistogramSeries, LineSeries, LineStyle, type IChartApi, type IPriceLine, type ISeriesApi, type UTCTimestamp } from "lightweight-charts";
 import { ExternalLink, Loader2, Newspaper } from "lucide-react";
@@ -7,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Segmented } from "@/components/trade-shared";
 import { OI_READ, SIGNAL_NAMES, SignalDots } from "@/components/screener/table";
 import { TIMEFRAMES, type Timeframe } from "@shared/screener";
+import { useTheme } from "@/components/shell";
 import { ACCEL_ARROW, fmtPct, fmtPx, fmtUsd, fmtX, hostOf, sizeFor, useScreenerCoin, useScreenerNews, type ScreenerCoin, type ScreenerNews } from "@/lib/screener";
 
 function palette(host: HTMLElement) {
@@ -17,6 +19,18 @@ function palette(host: HTMLElement) {
     return alpha == null ? `hsl(${v})` : `hsl(${v} / ${alpha})`;
   };
   return { bg: tok("--card", undefined, "transparent"), text: tok("--muted-foreground"), grid: tok("--border", 0.45) };
+}
+
+/** The theme changed under a chart that was made once: its colours are read again, after the paint, when the tokens are the new ones. */
+function useChartTheme(hostRef: React.RefObject<HTMLDivElement>, chartRef: React.MutableRefObject<IChartApi | null>) {
+  const { theme } = useTheme();
+  useEffect(() => {
+    const id = requestAnimationFrame(() => {
+      if (hostRef.current && chartRef.current) chartRef.current.applyOptions(baseOptions(palette(hostRef.current)));
+    });
+    return () => cancelAnimationFrame(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [theme]);
 }
 
 const baseOptions = (colors: ReturnType<typeof palette>) => ({
@@ -34,6 +48,7 @@ function PriceChart({ data, stop }: { data: ScreenerCoin["price"]; stop: number 
   const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const lineRef = useRef<IPriceLine | null>(null);
+  useChartTheme(hostRef, chartRef);
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
@@ -69,12 +84,14 @@ function RatioChart({ data, invalidation }: { data: ScreenerCoin["ratio"]; inval
   const lineRef = useRef<ISeriesApi<"Line"> | null>(null);
   const volRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const invRef = useRef<IPriceLine | null>(null);
+  useChartTheme(hostRef, chartRef);
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
     const chart = createChart(host, { ...baseOptions(palette(host)), rightPriceScale: { borderColor: palette(host).grid, scaleMargins: { top: 0.08, bottom: 0.28 } } });
     chartRef.current = chart;
-    lineRef.current = chart.addSeries(LineSeries, { color: "#38bdf8", lineWidth: 2, priceLineVisible: false, priceFormat: { type: "price", precision: 6, minMove: 0.000001 } });
+    // Four significant figures whatever the size: a $0.17 coin over BTC is near 0.0000017, which six fixed decimals printed as 0.000002 on every label.
+    lineRef.current = chart.addSeries(LineSeries, { color: "#38bdf8", lineWidth: 2, priceLineVisible: false, priceFormat: { type: "custom", minMove: 1e-12, formatter: (p: number) => (p === 0 ? "0" : String(Number(p.toPrecision(4)))) } });
     volRef.current = chart.addSeries(HistogramSeries, { priceScaleId: "vol", color: "rgba(148, 163, 184, 0.45)", priceFormat: { type: "volume" }, lastValueVisible: false, priceLineVisible: false });
     chart.priceScale("vol").applyOptions({ scaleMargins: { top: 0.78, bottom: 0 } });
     return () => {
@@ -267,10 +284,14 @@ export function CoinDrawer({
 }) {
   const [riskText, setRiskText] = useState(String(defaultRisk));
   useEffect(() => setRiskText(String(defaultRisk)), [defaultRisk]);
-  const risk = Number(riskText) > 0 ? Number(riskText) : defaultRisk;
+  const typedRisk = parseLooseNumber(riskText);
+  const risk = typedRisk != null && typedRisk > 0 ? typedRisk : defaultRisk;
   const q = useScreenerCoin(coin, tf);
   const news = useScreenerNews();
   const [got, setGot] = useState<ScreenerNews | null>(null);
+  // The coin on screen, for an answer that comes back late: a slow news read for one coin must not land under another.
+  const coinRef = useRef(coin);
+  coinRef.current = coin;
   useEffect(() => {
     setGot(null);
     news.reset();
@@ -451,15 +472,22 @@ export function CoinDrawer({
               variant="outline"
               className="h-7 px-2.5 text-[11px]"
               disabled={!coin || news.isPending}
-              onClick={() => coin && news.mutateAsync(coin).then(setGot).catch(() => setGot({ coin, links: [], summary: null, sources: [], reason: "The news could not be read." }))}
+              onClick={() => {
+                if (!coin) return;
+                const asked = coin;
+                const land = (n: ScreenerNews) => {
+                  if (coinRef.current === asked) setGot(n);
+                };
+                news.mutateAsync(asked).then(land).catch(() => land({ coin: asked, links: [], summary: null, sources: [], reason: "The news could not be read." }));
+              }}
               data-testid="screener-news-button"
             >
               {news.isPending ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Newspaper className="mr-1 h-3 w-3" />}
               Check news
             </Button>
           </div>
-          {!got && <p className="mt-1 text-[11px] text-muted-foreground">Fetched only when you ask: the links, and a 7-day read with web search when the server has an Anthropic key.</p>}
-          {got && (
+          {!(got && got.coin === coin) && <p className="mt-1 text-[11px] text-muted-foreground">Fetched only when you ask: the links, and a 7-day read with web search when the server has an Anthropic key.</p>}
+          {got && got.coin === coin && (
             <div className="mt-2 space-y-2 text-xs">
               <div className="flex flex-wrap gap-2">
                 {got.links.map((l) => (

@@ -280,13 +280,34 @@ describe.skipIf(!DB)("the portfolio", () => {
     expect(p.totals.value).toBeCloseTo(12500.5 + 5000 + 3200 + 7000 + 700, 6);
   });
 
+  it("measures the day's change against yesterday's snapshot, and only when the same things were counted", async () => {
+    const { dayChange } = await import("../server/portfolio");
+    const at = Date.UTC(2026, 5, 10, 12);
+    const ago = (h: number) => new Date(at - h * 3600_000).toISOString();
+    // The snapshot nearest 24 hours back, not the oldest and not the newest.
+    const history = [
+      { at: ago(47), value: 900, sig: "a" },
+      { at: ago(25), value: 1000, sig: "a" },
+      { at: ago(2), value: 1090, sig: "a" },
+    ];
+    expect(dayChange({ value: 1100, sig: "a" }, history, at)).toEqual({ change: 100, why: null });
+    // An address added since: the difference would be the address, not the day.
+    expect(dayChange({ value: 5100, sig: "b" }, history, at)).toMatchObject({ change: null, why: expect.stringMatching(/address|hidden/) });
+    // Snapshots from before the composition was recorded are compared as before.
+    expect(dayChange({ value: 1100, sig: "a" }, [{ at: ago(24), value: 1040, sig: null }], at).change).toBe(60);
+    // Nothing near a day back: no figure, and the reason.
+    expect(dayChange({ value: 1100, sig: "a" }, [{ at: ago(2), value: 1090, sig: "a" }], at)).toMatchObject({ change: null, why: expect.stringMatching(/day of snapshots/) });
+    expect(dayChange({ value: 1100, sig: "a" }, [{ at: ago(60), value: 700, sig: "a" }], at).change).toBeNull();
+  });
+
   it("takes a cost for a wallet token and shows its P&L; one chain failing is a line, not the page", async () => {
     const key = `evm:${EVM}:eth:native`;
     expect((await send("PUT", "/api/portfolio/cost", { key, cost: 3000 })).status).toBe(200);
     failBase = true;
     const p = await (await send("GET", "/api/portfolio")).json();
     expect(p.positions.find((x: any) => x.key === key)).toMatchObject({ cost: 3000, costFrom: "owner", pnl: 1500, pnlPct: 0.5 });
-    expect(p.errors).toEqual([{ address: EVM, where: "Base", message: expect.stringMatching(/HTTP 500/) }]);
+    // The chain that failed is a line, and its last good read stands in for it rather than its tokens dropping out of the total.
+    expect(p.errors).toEqual([{ address: EVM, where: "Base", stale: true, message: expect.stringMatching(/HTTP 500.*showing the read from/) }]);
     expect(p.vaults).toHaveLength(1);
     // Cleared, it goes back to no P&L.
     await send("PUT", "/api/portfolio/cost", { key, cost: null });

@@ -49,7 +49,10 @@ export async function refreshCalendar(now = Date.now()): Promise<CalendarStatus>
   const next: CalendarStatus = { fetchedAt: new Date(now).toISOString(), macro: { events: 0, error: null }, earnings: { events: 0, error: null } };
   let macro: CalendarEvent[] | null = null;
   try {
-    macro = parseForexFactory(await getJson(MACRO_URL));
+    const raw = await getJson(MACRO_URL);
+    // A 200 that is not the feed (an error page as JSON, a rate-limit notice) would parse as "no events" and wipe the stored week.
+    if (!Array.isArray(raw)) throw new Error("the macro feed did not send a list");
+    macro = parseForexFactory(raw);
     next.macro.events = macro.length;
   } catch (err: any) {
     next.macro.error = String(err?.message ?? err).slice(0, 200);
@@ -57,7 +60,13 @@ export async function refreshCalendar(now = Date.now()): Promise<CalendarStatus>
   let earnings: CalendarEvent[] | null = null;
   try {
     earnings = [];
-    for (const day of nextWeekdaysNy(now, 5)) earnings.push(...parseNasdaqEarnings(await getJson(`${EARNINGS_BASE}/api/calendar/earnings?date=${day}`), day));
+    // Seven weekdays, so a report on Tuesday week is on the list from this Tuesday, not from the day before it.
+    for (const day of nextWeekdaysNy(now, 7)) {
+      const raw = (await getJson(`${EARNINGS_BASE}/api/calendar/earnings?date=${day}`)) as { data?: unknown } | null;
+      // `data: null` is Nasdaq refusing, not a day without earnings (that is `data.rows: null`).
+      if (!raw || typeof raw !== "object" || raw.data == null || typeof raw.data !== "object") throw new Error(`the earnings feed sent no data for ${day}`);
+      earnings.push(...parseNasdaqEarnings(raw, day));
+    }
     next.earnings.events = earnings.length;
   } catch (err: any) {
     next.earnings.error = String(err?.message ?? err).slice(0, 200);

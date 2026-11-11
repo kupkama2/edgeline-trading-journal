@@ -23,12 +23,49 @@ const fmtLeft = (ms: number) => {
   return `${m}m ${String(s % 60).padStart(2, "0")}s`;
 };
 
+/*
+ * One audio context for the page, woken by a touch.
+ *
+ * A browser only lets a page make sound after the person has touched it,
+ * and a context made without that starts suspended. The chime used to make
+ * a new one each time: five minutes before the open, in a tab left alone
+ * since it was loaded, that one was suspended and the chime was silence.
+ * So the context is made once and resumed on the first click or key while
+ * a bell is on, and it stays awake for the chime that comes later.
+ */
+let audio: AudioContext | null = null;
+function audioContext(): AudioContext | null {
+  try {
+    const Ctx = (window as any).AudioContext || (window as any).webkitAudioContext;
+    if (!Ctx) return null;
+    if (!audio || audio.state === "closed") audio = new Ctx() as AudioContext;
+    if (audio.state === "suspended") void audio.resume().catch(() => {});
+    return audio;
+  } catch {
+    return null;
+  }
+}
+
+/** Wake the sound on the next click or key press; safe to call again. Returns the undo. */
+export function primeChimeOnTouch(): () => void {
+  const wake = () => {
+    audioContext();
+    off();
+  };
+  const off = () => {
+    window.removeEventListener("pointerdown", wake);
+    window.removeEventListener("keydown", wake);
+  };
+  window.addEventListener("pointerdown", wake);
+  window.addEventListener("keydown", wake);
+  return off;
+}
+
 /** A soft two-note chime, made here so there is nothing to download. */
 export function chime(): void {
   try {
-    const Ctx = (window as any).AudioContext || (window as any).webkitAudioContext;
-    if (!Ctx) return;
-    const ctx = new Ctx();
+    const ctx = audioContext();
+    if (!ctx) return;
     const note = (freq: number, at: number, len: number) => {
       const o = ctx.createOscillator();
       const g = ctx.createGain();
@@ -43,7 +80,6 @@ export function chime(): void {
     };
     note(659.25, 0, 0.9); // E5
     note(987.77, 0.35, 1.3); // B5
-    setTimeout(() => void ctx.close().catch(() => {}), 2500);
   } catch {
     /* no sound here */
   }
@@ -67,6 +103,9 @@ export function NyOpenChip() {
   const { openAt, inSession } = nextNyOpen(now);
   const left = openAt - now;
   const p = nyParts(now);
+
+  // With the bell on, the first click or key in this tab wakes the sound, so the chime can play later with nobody touching the page.
+  useEffect(() => (sound ? primeChimeOnTouch() : undefined), [sound]);
 
   // Five minutes before the bell, once per open, when the sound is on.
   useEffect(() => {
@@ -127,7 +166,7 @@ export function NyOpenChip() {
           </>
         )}
       </span>
-      <button type="button" onClick={toggle} className="ml-0.5 rounded p-0.5 hover:text-foreground" title={sound ? "Chime 5 minutes before the open: on. Click to turn off." : "Chime 5 minutes before the open: off. Click to turn on."} aria-pressed={sound} data-testid="ny-open-sound">
+      <button type="button" onClick={toggle} className="relative ml-0.5 rounded p-0.5 after:absolute after:-inset-x-1.5 after:-inset-y-3 after:content-[''] hover:text-foreground" title={sound ? "Chime 5 minutes before the open: on. Click to turn off." : "Chime 5 minutes before the open: off. Click to turn on."} aria-pressed={sound} data-testid="ny-open-sound">
         {sound ? <Bell className="h-3 w-3" /> : <BellOff className="h-3 w-3" />}
       </button>
     </div>

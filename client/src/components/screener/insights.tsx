@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Check, ChevronDown, ChevronRight, Loader2, Sparkles, Undo2 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -9,6 +9,15 @@ import { TRACK_KEYS, type CallStance, type TrackKey, type TrackedCall } from "@s
 const TRACK_LABEL: Record<TrackKey, string> = { "4h": "4h", "24h": "1 day", "3d": "3 days", "1w": "1 week", now: "now" };
 /** Green when the move went the call's way, red when against it; a watch is coloured by the price move itself. */
 const scoreTone = (x: number | null | undefined) => (x == null ? "text-muted-foreground" : x > 0 ? "text-emerald-400" : x < 0 ? "text-red-400" : "");
+
+/** A coin's name that opens it. At module scope: declared inside the card it was a new component on every render, and its buttons were remounted (losing focus) each time. */
+function CoinName({ c, onOpen }: { c: string; onOpen: (coin: string) => void }) {
+  return (
+    <button type="button" className="font-semibold hover:text-sky-400" onClick={() => onOpen(c)} data-testid={`insight-coin-${c}`}>
+      {c}
+    </button>
+  );
+}
 
 /** The scorecard: per stance, how many calls went its way and the mean move in its direction, at each horizon. */
 function TrackRecord({ onOpen }: { onOpen: (coin: string) => void }) {
@@ -33,7 +42,7 @@ function TrackRecord({ onOpen }: { onOpen: (coin: string) => void }) {
         </button>
       </div>
       <div className="mt-1 overflow-x-auto">
-        <table className="w-full min-w-[520px] text-[11px]">
+        <table className="w-full text-[11px] sm:min-w-[520px]">
           <thead className="text-[10px] text-muted-foreground">
             <tr>
               <th className="py-0.5 text-left font-normal" />
@@ -47,17 +56,21 @@ function TrackRecord({ onOpen }: { onOpen: (coin: string) => void }) {
           <tbody>
             {rows.map(({ stance, label }) => (
               <tr key={stance} className="border-t border-border/30" data-testid={`screener-ai-track-${stance}`}>
-                <td className="py-1 pr-2">{label}</td>
+                <td className="py-1 pr-1 leading-tight">{label}</td>
                 {TRACK_KEYS.map((k) => {
                   const c = d.summary[stance][k];
                   return (
                     <td key={k} className="py-1 text-right font-mono" title={c.n ? `${c.hits} of ${c.n} ${stance === "watch" ? "rose" : "went the call's way"}; mean ${fmtPct(c.avg)}${c.avgRs != null ? `, against BTC ${fmtPct(c.avgRs)}` : ""}` : "No call has reached this yet"}>
                       {c.n ? (
-                        <>
-                          <span className="text-muted-foreground">{stance === "watch" ? "" : `${Math.round((c.hits / c.n) * 100)}% · `}</span>
+                        <span className="inline-flex flex-col items-end leading-tight sm:flex-row sm:items-baseline sm:gap-1">
+                          {stance !== "watch" && (
+                            <span className="text-muted-foreground">
+                              {Math.round((c.hits / c.n) * 100)}%<span className="hidden sm:inline"> ·</span>
+                            </span>
+                          )}
                           <span className={stance === "watch" ? "" : scoreTone(c.avg)}>{fmtPct(c.avg)}</span>
-                          <span className="ml-1 text-[9px] text-muted-foreground">n{c.n}</span>
-                        </>
+                          <span className="text-[9px] text-muted-foreground">n{c.n}</span>
+                        </span>
                       ) : (
                         <span className="text-muted-foreground">—</span>
                       )}
@@ -69,7 +82,7 @@ function TrackRecord({ onOpen }: { onOpen: (coin: string) => void }) {
           </tbody>
         </table>
       </div>
-      <p className="mt-1 text-[10px] text-muted-foreground">Share of calls that went their way, then the mean move in the call's direction. "Avoid" is scored as if it had been a short; hover a cell for the move against BTC.</p>
+      <p className="mt-1 text-[10px] text-muted-foreground">Share of calls that went their way, then the mean move in the call's direction. "Avoid" is scored as if it had been a short.</p>
       {showCalls && (
         <div className="mt-2 max-h-80 overflow-auto">
           <table className="w-full min-w-[620px] text-[11px]" data-testid="screener-ai-track-list">
@@ -203,10 +216,22 @@ export function ScreenerInsights({ run, onOpen }: { run: NonNullable<ScreenerPag
   const callFor = (coin: string) => track.data?.calls.find((c) => latest && c.readAt === latest.at && c.coin === coin);
   const status = ai.data?.status;
   const anomalies = run.anomalies ?? [];
-  const shown = showAll ? anomalies : anomalies.filter((a) => a.severity >= 2).slice(0, 8);
+  const notable = anomalies.filter((a) => a.severity >= 2);
+  // Nothing notable: the first few of the rest, so the heading is never over an empty list.
+  const shown = showAll ? anomalies : notable.length ? notable.slice(0, 8) : anomalies.slice(0, 4);
   const flow = run.flowStatus;
   const liq = run.liqStatus;
-  const wait = status?.nextAllowedAt ? Math.max(0, new Date(status.nextAllowedAt).getTime() - Date.now()) : 0;
+  const waitUntil = status?.nextAllowedAt ? new Date(status.nextAllowedAt).getTime() : 0;
+  const [clock, setClock] = useState(() => Date.now());
+  useEffect(() => {
+    if (!waitUntil || waitUntil <= Date.now()) return;
+    const t = setInterval(() => {
+      setClock(Date.now());
+      if (Date.now() >= waitUntil) clearInterval(t);
+    }, 15_000);
+    return () => clearInterval(t);
+  }, [waitUntil]);
+  const wait = Math.max(0, waitUntil - clock);
 
   const onAsk = async () => {
     try {
@@ -220,12 +245,6 @@ export function ScreenerInsights({ run, onOpen }: { run: NonNullable<ScreenerPag
       toast({ title: "Not now", description: String(err?.message ?? err).replace(/^\d+:\s*/, "").replace(/^\{"message":"|".*$/g, "").slice(0, 160), variant: "destructive" });
     }
   };
-
-  const Coin = ({ c }: { c: string }) => (
-    <button type="button" className="font-semibold hover:text-sky-400" onClick={() => onOpen(c)} data-testid={`insight-coin-${c}`}>
-      {c}
-    </button>
-  );
 
   return (
     <Card className="border-card-border bg-card p-3 sm:p-4" data-testid="screener-insights">
@@ -272,7 +291,7 @@ export function ScreenerInsights({ run, onOpen }: { run: NonNullable<ScreenerPag
               return (
               <li key={`${t.coin}-${i}`} className={`rounded-md border border-border/60 p-2 text-xs ${isDone ? "opacity-50" : ""}`} data-testid={`screener-ai-tip-${t.coin}`}>
                 <div className="flex flex-wrap items-center gap-2">
-                  <Coin c={t.coin} />
+                  <CoinName c={t.coin} onOpen={onOpen} />
                   <span className={`rounded border px-1 text-[10px] font-semibold uppercase ${STANCE[t.stance]}`}>{t.stance}</span>
                   <span className="text-[10px] text-muted-foreground">
                     {t.horizon} · {t.confidence} confidence
@@ -317,7 +336,7 @@ export function ScreenerInsights({ run, onOpen }: { run: NonNullable<ScreenerPag
             <ul className="space-y-0.5 text-[11px] text-muted-foreground">
               {read.anomalies.map((a, i) => (
                 <li key={i}>
-                  <Coin c={a.coin} />: {a.note}
+                  <CoinName c={a.coin} onOpen={onOpen} />: {a.note}
                 </li>
               ))}
             </ul>
@@ -330,7 +349,10 @@ export function ScreenerInsights({ run, onOpen }: { run: NonNullable<ScreenerPag
       {anomalies.length > 0 && (
         <div className="mt-3 border-t border-border/50 pt-2" data-testid="screener-anomalies">
           <div className="flex items-baseline justify-between gap-2">
-            <p className="text-[10px] uppercase tracking-wider text-muted-foreground">What stands out this run · {anomalies.length}</p>
+            <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+              What stands out this run · {anomalies.length}
+              {!showAll && notable.length === 0 && " · none notable, the first few"}
+            </p>
             {anomalies.length > shown.length || showAll ? (
               <button type="button" className="text-[11px] text-muted-foreground hover:text-foreground" onClick={() => setShowAll((x) => !x)} data-testid="screener-anomalies-all">
                 {showAll ? "Only the notable" : "All of them"}
@@ -342,7 +364,7 @@ export function ScreenerInsights({ run, onOpen }: { run: NonNullable<ScreenerPag
               <li key={`${a.coin}-${a.kind}-${i}`} className="flex items-baseline gap-1.5">
                 <span className={`mt-1 inline-block h-1.5 w-1.5 shrink-0 rounded-full ${SEV[a.severity]}`} />
                 <span>
-                  <Coin c={a.coin} /> <span className="text-foreground/85">{a.text}</span>
+                  <CoinName c={a.coin} onOpen={onOpen} /> <span className="text-foreground/85">{a.text}</span>
                 </span>
               </li>
             ))}

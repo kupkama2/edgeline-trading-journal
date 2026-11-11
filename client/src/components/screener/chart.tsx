@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ColorType, createChart, CrosshairMode, LineSeries, LineStyle, type IChartApi, type ISeriesApi, type UTCTimestamp } from "lightweight-charts";
 import { fmtPct } from "@/lib/screener";
+import { useTheme } from "@/components/shell";
 
 /** Twelve hues that stay apart on a dark card; a coin keeps its colour by its position in the set. */
 const HUES = ["#38bdf8", "#f472b6", "#a3e635", "#fb923c", "#c084fc", "#2dd4bf", "#facc15", "#60a5fa", "#f87171", "#34d399", "#e879f9", "#fbbf24"];
@@ -14,6 +15,9 @@ function palette(host: HTMLElement) {
   };
   return { bg: tok("--card", undefined, "transparent"), text: tok("--muted-foreground"), grid: tok("--border", 0.45), base: tok("--foreground", 0.5) };
 }
+
+/** Under this width the lines' name tags on the price scale are left off: they covered a third of a phone's chart. */
+const NAME_TAGS_FROM = 520;
 
 const withAlpha = (hex: string, a: number) => {
   const n = parseInt(hex.slice(1), 16);
@@ -32,18 +36,28 @@ const withAlpha = (hex: string, a: number) => {
  * click twice before dblclick, so the first action must not run on its own.
  */
 export function useClickOrDouble() {
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  return (one: () => void, two: () => void) => ({
+  // A timer per thing clicked: one shared timer meant a click on a second name inside the beat cancelled the first's.
+  const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  useEffect(() => {
+    const held = timers.current;
+    return () => held.forEach((t) => clearTimeout(t));
+  }, []);
+  return (key: string, one: () => void, two: () => void) => ({
     onClick: () => {
-      if (timer.current) clearTimeout(timer.current);
-      timer.current = setTimeout(() => {
-        timer.current = null;
-        one();
-      }, 230);
+      const was = timers.current.get(key);
+      if (was) clearTimeout(was);
+      timers.current.set(
+        key,
+        setTimeout(() => {
+          timers.current.delete(key);
+          one();
+        }, 230),
+      );
     },
     onDoubleClick: () => {
-      if (timer.current) clearTimeout(timer.current);
-      timer.current = null;
+      const was = timers.current.get(key);
+      if (was) clearTimeout(was);
+      timers.current.delete(key);
       two();
     },
   });
@@ -72,6 +86,7 @@ export function SpaghettiChart({
   onSolo?: (coin: string) => void;
 }) {
   const clicks = useClickOrDouble();
+  const { theme } = useTheme();
   const hostRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<Map<string, ISeriesApi<"Line">>>(new Map());
@@ -125,7 +140,8 @@ export function SpaghettiChart({
       if (!pts || pts.length === 0) continue;
       let s = seriesRef.current.get(coin);
       if (!s) {
-        s = chart.addSeries(LineSeries, { color: colorOf(coin), lineWidth: 2, priceLineVisible: false, lastValueVisible: true, title: coin, crosshairMarkerRadius: 3, visible: order.includes(coin) });
+        const roomy = (hostRef.current?.clientWidth ?? 800) >= NAME_TAGS_FROM;
+        s = chart.addSeries(LineSeries, { color: colorOf(coin), lineWidth: 2, priceLineVisible: false, lastValueVisible: roomy, title: roomy ? coin : "", crosshairMarkerRadius: 3, visible: order.includes(coin) });
         seriesRef.current.set(coin, s);
       }
       s.setData(pts.map((p) => ({ time: Math.floor(p.t / 1000) as UTCTimestamp, value: p.pct * 100 })));
@@ -146,6 +162,34 @@ export function SpaghettiChart({
   useEffect(() => {
     for (const [coin, s] of Array.from(seriesRef.current)) s.applyOptions({ visible: order.includes(coin) });
   }, [order, lines]);
+
+  // A phone turned on its side, a window dragged narrow: the name tags come and go with the room for them.
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host || typeof ResizeObserver === "undefined") return;
+    let was = host.clientWidth >= NAME_TAGS_FROM;
+    const ro = new ResizeObserver(() => {
+      const roomy = host.clientWidth >= NAME_TAGS_FROM;
+      if (roomy === was) return;
+      was = roomy;
+      for (const [coin, s] of Array.from(seriesRef.current)) s.applyOptions({ lastValueVisible: roomy, title: roomy ? coin : "" });
+    });
+    ro.observe(host);
+    return () => ro.disconnect();
+  }, []);
+
+  // The theme changed: the chart was made with the old one's colours. Read after the paint, when the tokens are the new ones.
+  useEffect(() => {
+    const id = requestAnimationFrame(() => {
+      const host = hostRef.current;
+      const chart = chartRef.current;
+      if (!host || !chart) return;
+      const c = palette(host);
+      chart.applyOptions({ layout: { background: { type: ColorType.Solid, color: c.bg }, textColor: c.text }, grid: { vertLines: { color: c.grid }, horzLines: { color: c.grid } }, rightPriceScale: { borderColor: c.grid }, timeScale: { borderColor: c.grid } });
+      baseRef.current?.applyOptions({ color: c.base });
+    });
+    return () => cancelAnimationFrame(id);
+  }, [theme]);
 
   // Reset: zoom back out to fit everything shown.
   useEffect(() => {
@@ -177,11 +221,11 @@ export function SpaghettiChart({
           <button
             key={coin}
             type="button"
-            className={`inline-flex items-center gap-1 rounded px-0.5 transition-opacity ${hover && hover !== coin ? "opacity-40" : ""}`}
+            className={`inline-flex touch-manipulation items-center gap-1 rounded px-0.5 py-0.5 transition-opacity ${hover && hover !== coin ? "opacity-40" : ""}`}
             onMouseEnter={() => setHover(coin)}
             onMouseLeave={() => setHover(null)}
             title="Click to hide this line; double-click to keep only it"
-            {...clicks(() => onHide?.(coin), () => onSolo?.(coin))}
+            {...clicks(coin, () => onHide?.(coin), () => onSolo?.(coin))}
             data-testid={`screener-legend-${coin}`}
           >
             <span className="inline-block h-0.5 w-3" style={{ background: colorOf(coin) }} />

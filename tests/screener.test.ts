@@ -90,6 +90,18 @@ describe("the other readings", () => {
     const basket = basketSeries([{ candles: a, weight: 3 }, { candles: b, weight: 1 }]);
     // Each coin as a share of its own first close, weighted 3:1.
     expect(basket[4].c).toBeCloseTo((1.4 * 3 + 1 * 1) / 4, 12);
+    // A coin listed on day three joins without moving the index: it used to come in at 1.0 against a basket at 1.2,
+    // a step down on the day it joined that every coin's strength against the basket then showed as a step up.
+    const old1 = daily(5, (i) => 10 * (1 + i * 0.1));
+    const old2 = daily(5, (i) => 20 * (1 + i * 0.1));
+    const late = daily(5, () => 7).slice(3);
+    const joined = basketSeries([{ candles: old1, weight: 1 }, { candles: old2, weight: 1 }, { candles: late, weight: 1 }]);
+    expect(joined.map((b) => b.t)).toEqual(old1.map((b) => b.t));
+    expect(joined[2].c).toBeCloseTo(1.2, 12);
+    // Day three: the two old coins went 1.2 -> 1.3; the newcomer has no day before, so it says nothing yet.
+    expect(joined[3].c).toBeCloseTo(1.3, 12);
+    // Day four: 1.3 -> 1.4 for two, flat for the third, each weighted by where it stands.
+    expect(joined[4].c).toBeCloseTo(1.3 * ((1.4 + 1.4 + 1) / (1.3 + 1.3 + 1)), 12);
     const rising = Array.from({ length: 25 }, (_, i) => ({ t: i, r: 1 + i * 0.01 }));
     const falling = Array.from({ length: 25 }, (_, i) => ({ t: i, r: 1 - i * 0.01 }));
     expect(breadthOf([rising, rising, falling, rising.slice(0, 10)])).toBeCloseTo(2 / 3, 12);
@@ -219,6 +231,9 @@ describe("the screener's arithmetic", () => {
     // A store that ends before the hours begin cannot be bridged; nor can no store at all.
     expect(deriveDaily(storedDays.slice(0, 30), hrs, -Infinity)).toBeNull();
     expect(deriveDaily([], hrs, -Infinity)).toBeNull();
+    // A store whose last bar is the very day the hours start inside: that bar was still forming when it was stored,
+    // so it is not kept as a finished day. The venue is asked.
+    expect(deriveDaily(storedDays.slice(0, 39), hrs, -Infinity)).toBeNull();
 
     // RVOL on a day seven hours old: the seven hours' volume against seven twenty-fourths of a day, not a whole one.
     const btc = daily(40, () => 100);
@@ -474,12 +489,14 @@ describe.skipIf(!DB)("the screener's run", () => {
     const { takeSnapshot } = await import("../server/screener");
     // The run just wrote one: nothing to do.
     expect(await takeSnapshot()).toBeNull();
-    const later = await takeSnapshot(() => Date.now() + 51 * 60_000);
+    // A little over the hour: at fifty minutes it landed between two hourly runs, and the second measured against it.
+    expect(await takeSnapshot(() => Date.now() + 51 * 60_000)).toBeNull();
+    const later = await takeSnapshot(() => Date.now() + 66 * 60_000);
     expect(later?.perps).toBe(7);
   });
 
   it("knows when a run is due on the Prague clock", async () => {
-    const { runDue: hourlyDue, aiReadDue: runDue, nextRunAt } = await import("../server/screener");
+    const { runDue: hourlyDue, aiReadDue: runDue, nextRunAt, aiRidesHourly } = await import("../server/screener");
     const prague = (iso: string) => new Date(iso).getTime();
     // The hourly run: at five past, once per hour; the slot before five past is the previous hour's.
     expect(hourlyDue(prague("2026-01-10T14:06:00Z"), "2026-01-10T13:05:30Z")).toBe(true);
@@ -488,6 +505,10 @@ describe.skipIf(!DB)("the screener's run", () => {
     expect(hourlyDue(prague("2026-01-10T14:03:00Z"), null)).toBe(true);
     expect(new Date(nextRunAt(prague("2026-01-10T14:03:00Z"))).toISOString()).toBe("2026-01-10T14:05:00.000Z");
     expect(new Date(nextRunAt(prague("2026-01-10T14:06:00Z"))).toISOString()).toBe("2026-01-10T15:05:00.000Z");
+    // 08:00 Prague's read goes with the 08:05 run; 13:30's, half an hour from the next, gets a run of its own.
+    expect(aiRidesHourly(prague("2026-01-10T07:00:00Z"))).toBe(true);
+    expect(aiRidesHourly(prague("2026-01-10T07:06:00Z"))).toBe(false);
+    expect(aiRidesHourly(prague("2026-01-10T12:30:00Z"))).toBe(false);
     // The AI read's slots, 08:00 and 13:30 Prague:
     // 09:00 Prague in winter is 08:00Z. Nothing ran today: due.
     expect(runDue(prague("2026-01-10T08:00:00Z"), "2026-01-09T12:40:00Z")).toBe(true);

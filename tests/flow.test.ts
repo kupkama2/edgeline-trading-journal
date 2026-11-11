@@ -98,6 +98,16 @@ describe("the flow arithmetic", () => {
     ]);
     expect(m.nearestLong).toMatchObject({ usd: 1500 });
     expect(m.nearestShort?.price).toBeCloseTo(103, 9);
+
+    // Right at the mark: each on its own side's first band, counted in that side's total. They used to round to a
+    // band at zero, which is neither side's, so the liquidations nearest the price were in no total at all.
+    const near = liqMapOf(100, [{ szi: 10, liquidationPx: 99.8 }, { szi: -5, liquidationPx: 100.3 }], 2);
+    expect(near.bands.map((b) => [b.at.toFixed(2), b.usd])).toEqual([
+      ["-0.01", 1000],
+      ["0.01", 500],
+    ]);
+    expect(near.longUsd10).toBe(1000);
+    expect(near.shortUsd10).toBe(500);
     expect(m.longUsd10).toBe(1500);
     expect(parseLeaderboard({ leaderboardRows: [{ ethAddress: "0x" + "a".repeat(40), accountValue: "5" }, { ethAddress: "0x" + "b".repeat(40), accountValue: "50" }, { ethAddress: "junk" }] }, 1)).toEqual(["0x" + "b".repeat(40)]);
     expect(parsePremiumIndex([{ symbol: "SOLUSDT", markPrice: "150", lastFundingRate: "0.0001" }]).get("SOLUSDT")).toEqual({ mark: 150, funding: 0.0001 });

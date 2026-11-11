@@ -37,6 +37,12 @@ interface Relay {
   keyHint: string;
   /** What this copy of the relay can do beyond signed calls: "public" is a plain market-data GET. */
   features: string[];
+  /**
+   * Whether the relay's Binance user-data stream is open, when it says
+   * ("stream-state" in its features). Null from a copy that does not say:
+   * connected is then taken for streaming, as before.
+   */
+  streamUp: boolean | null;
   connectedAt: number;
   lastSeenAt: number;
   pending: Map<number, { resolve: (r: { status: number; body: string }) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }>;
@@ -55,6 +61,18 @@ export function setRelayEventHandler(fn: (userId: number, account: string, msg: 
 export function relayConnected(userId: number, account: string): boolean {
   const r = relays.get(keyOf(userId, account));
   return !!r && r.ws.readyState === r.ws.OPEN;
+}
+
+/**
+ * Whether fills on this account reach the journal as they happen: the
+ * relay is connected AND its stream to Binance is open. A relay can be
+ * linked to the journal with no stream behind it (a listen key refused,
+ * the home network back but the stream not yet), and a pass that leaned
+ * on it then saw nothing until the next full read.
+ */
+export function relayStreaming(userId: number, account: string): boolean {
+  const r = relays.get(keyOf(userId, account));
+  return !!r && r.ws.readyState === r.ws.OPEN && r.streamUp !== false;
 }
 
 export function relayStatus(userId: number, account: string): { connected: boolean; lastSeenAt: string | null; env: string | null; canTrade: boolean | null } {
@@ -103,7 +121,8 @@ export function relayCall(
 export function publicRelayFor(userId: number): { account: string | null; outdated: boolean } {
   let outdated = false;
   for (const r of Array.from(relays.values())) {
-    if (r.userId !== userId || r.ws.readyState !== r.ws.OPEN) continue;
+    // A live relay only: a testnet one would answer with the testnet's market, presented as Binance's.
+    if (r.userId !== userId || r.ws.readyState !== r.ws.OPEN || r.env !== "live") continue;
     if (r.features.includes("public")) return { account: r.account, outdated: false };
     outdated = true;
   }
@@ -124,7 +143,9 @@ export function relayPublic(userId: number, account: string, path: string, param
     r.pending.set(id, { resolve, reject, timer });
     const clean: Record<string, string | number> = {};
     for (const [k, v] of Object.entries(params)) if (v !== undefined) clean[k] = v;
-    r.ws.send(JSON.stringify({ t: "req", id, method: "GET", base: "", path, params: clean, public: true }));
+    // A real base, though the relay ignores it for a public read: copies of the relay from before this
+    // parsed the base first and answered an empty one with "Invalid URL", so no market data ever came back.
+    r.ws.send(JSON.stringify({ t: "req", id, method: "GET", base: "https://fapi.binance.com", path, params: clean, public: true }));
   });
 }
 
@@ -167,6 +188,7 @@ export function attachRelay(httpServer: HttpServer): void {
           }
           const relay: Relay = {
             features: [],
+            streamUp: null,
             ws,
             userId: acct.userId,
             account: acct.name,
@@ -196,12 +218,18 @@ export function attachRelay(httpServer: HttpServer): void {
               clearTimeout(p.timer);
               p.resolve({ status: Number(m.status) || 0, body: typeof m.body === "string" ? m.body : JSON.stringify(m.body ?? null) });
             } else if (m?.t === "event") {
+              // An event proves the stream is up, whatever was last said.
+              if (relay.streamUp === false) relay.streamUp = true;
               onEvent?.(relay.userId, relay.account, m.msg);
+            } else if (m?.t === "stream") {
+              relay.streamUp = !!m.up;
             } else if (m?.t === "hello") {
               relay.env = m.env === "testnet" ? "testnet" : "live";
               relay.canTrade = !!m.canTrade;
               relay.keyHint = typeof m.keyHint === "string" ? m.keyHint.slice(-8) : "";
               relay.features = Array.isArray(m.features) ? m.features.filter((f: unknown) => typeof f === "string").slice(0, 10) : [];
+              // A copy that reports its stream starts as "not yet"; one that does not is taken at its word by being connected.
+              relay.streamUp = relay.features.includes("stream-state") ? (relay.streamUp ?? false) : null;
               void setRelayFacts(relay.accountId, { binanceEnv: relay.env, binanceTrade: relay.canTrade, binanceKeyHint: relay.keyHint })
                 .then(() => notify(relay.userId, "settings"))
                 .catch(() => {});

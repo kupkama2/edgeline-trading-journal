@@ -51,6 +51,11 @@ export function useScreenerRefresh() {
       const res = await apiRequest("POST", "/api/screener/run");
       return res.json();
     },
+    // The answer carries the run's status: put where the progress line reads it, so the button is off at once
+    // instead of looking idle until the first poll four seconds later.
+    onSuccess: (r: { status?: ScreenerPage["status"] }) => {
+      if (r?.status) queryClient.setQueryData(["/api/screener/status"], r.status);
+    },
     onSettled: () => void queryClient.invalidateQueries({ queryKey: ["/api/screener"] }),
   });
 }

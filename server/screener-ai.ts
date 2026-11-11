@@ -173,7 +173,7 @@ export function analyzeRun(run: ScreenerRun): Promise<void> {
       if (!client) client = new Anthropic({ apiKey: key });
       const res = await client.messages.create({
         model: AI_MODEL,
-        max_tokens: 8000,
+        max_tokens: 16000,
         thinking: { type: "adaptive" },
         system: SYSTEM,
         messages: [{ role: "user", content: `Screener run:\n${JSON.stringify(digestOf(run, await upcomingEvents(), await trackRecordForPrompt()))}` }],
@@ -183,7 +183,8 @@ export function analyzeRun(run: ScreenerRun): Promise<void> {
         .map((b: any) => b.text)
         .join("");
       const read = parseAiRead(text);
-      await screenerAiStore.save({ at, runId: run.id, model: AI_MODEL, body: read ? JSON.stringify(read) : null, error: read ? null : `The reply was not the JSON asked for: ${text.slice(0, 200)}` });
+      const cut = (res as any).stop_reason === "max_tokens";
+      await screenerAiStore.save({ at, runId: run.id, model: AI_MODEL, body: read ? JSON.stringify(read) : null, error: read ? null : cut ? "The reply ran out of room before it finished; ask again." : `The reply was not the JSON asked for: ${text.slice(0, 200)}` });
     } catch (err: any) {
       await screenerAiStore.save({ at, runId: run.id, model: AI_MODEL, body: null, error: String(err?.message ?? err).slice(0, 300) }).catch(() => {});
     } finally {

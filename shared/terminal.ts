@@ -328,9 +328,13 @@ export interface TerminalRef {
    * What each bracket that left the book turned out to be, asked of the
    * venue once: the plain order it fired into, when it fired without naming
    * one, or gone (cancelled, or a plain order the conditional-order lookup
-   * does not know). Keyed by the bracket's id.
+   * does not know). Keyed by the bracket's id. `plain` is noted while a
+   * bracket rests as a plain order, so it is never looked up as a
+   * conditional one; `missAt`/`askedAt` are a "no such order" not yet taken
+   * as final — a bracket placed a moment ago can be unknown to the lookup
+   * for a beat, and calling it gone then lost its fills when it fired.
    */
-  bracketFate?: Record<string, { to?: number; firedAt?: number; side?: "BUY" | "SELL"; gone?: boolean }>;
+  bracketFate?: Record<string, { to?: number; firedAt?: number; side?: "BUY" | "SELL"; gone?: boolean; plain?: boolean; missAt?: number; askedAt?: number }>;
   /** Brackets that were asked for and refused — the trade is on the book without them. */
   unprotected?: boolean;
   /** When the terminal last read this trade back from the venue. */

@@ -7,6 +7,7 @@
  * Hosts are overridable (HYPERLIQUID_BASE, PORTFOLIO_EVM_BASE,
  * SOLANA_RPC, LLAMA_BASE) so the tests can stand a fake in for each.
  */
+import { createHash } from "node:crypto";
 import { fetch as undiciFetch } from "undici";
 import type { Express, Request, Response } from "express";
 import { z } from "zod";
@@ -79,23 +80,26 @@ type Part = { positions: Position[]; vaults: VaultHolding[]; accounts: Portfolio
 const lastGood = new Map<string, { at: number; value: unknown }>();
 const KEEP_MS = 24 * 60 * 60_000;
 
-async function hlKept(body: Record<string, unknown>, where: string, a: PortfolioAddress, out: Part): Promise<unknown> {
-  const key = JSON.stringify(body);
+/** Any read, with the last answer standing in when this one fails. Every source goes through here, so one chain down for an hour is a note, not a hole in the total. */
+async function kept<T>(key: string, where: string, a: PortfolioAddress, out: Part, read: () => Promise<T>): Promise<T> {
   try {
-    const value = await hlInfo(body);
+    const value = await read();
     lastGood.set(key, { at: Date.now(), value });
     return value;
   } catch (err: any) {
-    const kept = lastGood.get(key);
-    const why = err instanceof HlHttpError && err.status === 429 ? "Hyperliquid is limiting requests from the server" : String(err?.message ?? err);
-    if (kept && Date.now() - kept.at < KEEP_MS) {
-      const mins = Math.max(1, Math.round((Date.now() - kept.at) / 60_000));
+    const was = lastGood.get(key);
+    const limited = err instanceof HlHttpError && err.status === 429;
+    const why = limited ? "Hyperliquid is limiting requests from the server" : String(err?.message ?? err);
+    if (was && Date.now() - was.at < KEEP_MS) {
+      const mins = Math.max(1, Math.round((Date.now() - was.at) / 60_000));
       out.errors.push({ address: a.address, where, message: `${why}; showing the read from ${mins} min ago`, stale: true });
-      return kept.value;
+      return was.value as T;
     }
-    throw new Error(err instanceof HlHttpError && err.status === 429 ? `${why}. Try Refresh in a minute.` : why);
+    throw new Error(limited ? `${why}. Try Refresh in a minute.` : why);
   }
 }
+
+const hlKept = (body: Record<string, unknown>, where: string, a: PortfolioAddress, out: Part): Promise<unknown> => kept(JSON.stringify(body), where, a, out, () => hlInfo(body));
 
 async function readHyperliquid(a: PortfolioAddress, costs: Map<string, number>, prices: () => Promise<Map<string, number>>): Promise<Part> {
   const out: Part = { positions: [], vaults: [], accounts: [], errors: [] };
@@ -195,7 +199,9 @@ async function readEvm(a: PortfolioAddress, costs: Map<string, number>): Promise
   await Promise.all(
     EVM_CHAINS.map(async (chain) => {
       try {
-        const [native, tokens] = await Promise.all([getJson(evmUrl(chain, `/api/v2/addresses/${a.address}`)).catch((e) => (String(e?.message).includes("404") ? {} : Promise.reject(e))), getJson(evmUrl(chain, `/api/v2/addresses/${a.address}/token-balances`)).catch((e) => (String(e?.message).includes("404") ? [] : Promise.reject(e)))]);
+        const [native, tokens] = await kept(`evm:${a.address}:${chain.id}`, chain.name, a, out, () =>
+          Promise.all([getJson(evmUrl(chain, `/api/v2/addresses/${a.address}`)).catch((e) => (String(e?.message).includes("404") ? {} : Promise.reject(e))), getJson(evmUrl(chain, `/api/v2/addresses/${a.address}/token-balances`)).catch((e) => (String(e?.message).includes("404") ? [] : Promise.reject(e)))]),
+        );
         const n = parseEvmNative(native);
         const rows: { asset: string; id: string; amount: number; price: number | null }[] = [];
         if (n.amount > 0) rows.push({ asset: chain.native, id: "native", amount: n.amount, price: n.price });
@@ -218,17 +224,25 @@ async function readSolana(a: PortfolioAddress, costs: Map<string, number>): Prom
   const out: Part = { positions: [], vaults: [], accounts: [], errors: [] };
   try {
     const rpc = (method: string, params: unknown[]) => getJson(SOLANA_RPC, { method: "POST", body: { jsonrpc: "2.0", id: 1, method, params } });
-    const [bal, spl] = await Promise.all([
-      rpc("getBalance", [a.address]),
-      rpc("getTokenAccountsByOwner", [a.address, { programId: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" }, { encoding: "jsonParsed" }]),
-    ]);
+    const [bal, spl] = await kept(`solana:${a.address}`, "Solana", a, out, () =>
+      Promise.all([
+        rpc("getBalance", [a.address]),
+        rpc("getTokenAccountsByOwner", [a.address, { programId: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" }, { encoding: "jsonParsed" }]),
+      ]),
+    );
     const sol = parseSolBalance(bal);
     const tokens = parseSplBalances(spl);
     const ids = ["coingecko:solana", ...tokens.map((t) => `solana:${t.mint}`)];
     const prices = new Map<string, { price: number; symbol: string | null }>();
     for (let i = 0; i < ids.length; i += 80) {
-      const got = parseLlamaPrices(await getJson(`${LLAMA}/prices/current/${ids.slice(i, i + 80).join(",")}`).catch(() => ({})));
-      got.forEach((v, k) => prices.set(k, v));
+      const batch = ids.slice(i, i + 80);
+      // A price read that fails is an error on the read, with the last prices standing in when there are some:
+      // swallowed, every Solana holding read as worth nothing and the hourly chart recorded the dip.
+      const raw = await kept(`llama:${batch.join(",")}`, "Solana prices", a, out, () => getJson(`${LLAMA}/prices/current/${batch.join(",")}`)).catch((err: any) => {
+        out.errors.push({ address: a.address, where: "Solana prices", message: String(err?.message ?? err) });
+        return {};
+      });
+      parseLlamaPrices(raw).forEach((v, k) => prices.set(k, v));
     }
     const rows = [
       ...(sol > 0 ? [{ id: "native", asset: "SOL", amount: sol, price: prices.get("coingecko:solana")?.price ?? null }] : []),
@@ -257,6 +271,32 @@ export function forgetPortfolio(userId: number): void {
   cache.delete(userId);
 }
 
+/**
+ * What a total is a total of: the addresses followed and the rows hidden.
+ * Two snapshots with the same answer differ by the market; with different
+ * ones, by a wallet added or a holding hidden, which is not a gain or a loss.
+ */
+export const compositionOf = (r: Pick<PortfolioRead, "addresses" | "hidden">): string =>
+  createHash("sha1")
+    .update(JSON.stringify([r.addresses.map((a) => `${a.kind}:${a.address}`).sort(), [...r.hidden].sort()]))
+    .digest("hex")
+    .slice(0, 12);
+
+/**
+ * The change over the last day: against the snapshot nearest 24 hours back
+ * (within 12 hours of it), and only when it is a total of the same things.
+ */
+export function dayChange(now: { value: number; sig: string }, history: { at: string; value: number; sig: string | null }[], nowMs = Date.now()): { change: number | null; why: string | null } {
+  const target = nowMs - 24 * 3600_000;
+  const near = history
+    .map((h) => ({ ...h, gap: Math.abs(new Date(h.at).getTime() - target) }))
+    .filter((h) => h.gap <= 12 * 3600_000 && new Date(h.at).getTime() <= nowMs - 12 * 3600_000)
+    .sort((a, b) => a.gap - b.gap)[0];
+  if (!near) return { change: null, why: "24h change once a day of snapshots exists" };
+  if (near.sig && near.sig !== now.sig) return { change: null, why: "no 24h change: an address or a hidden row changed since yesterday" };
+  return { change: now.value - near.value, why: null };
+}
+
 export async function readPortfolio(userId: number, opts: { fresh?: boolean } = {}): Promise<PortfolioRead> {
   const hit = cache.get(userId);
   if (hit && !opts.fresh && Date.now() - hit.at < CACHE_MS) return hit.read;
@@ -264,7 +304,16 @@ export async function readPortfolio(userId: number, opts: { fresh?: boolean } = 
   const addresses: PortfolioAddress[] = rows.map((r) => ({ id: r.id, kind: r.kind as AddressKind, address: r.address, label: r.label }));
   // Spot prices are read once per portfolio, and only when a Hyperliquid spot balance needs them.
   let spot: Promise<Map<string, number>> | null = null;
-  const prices = () => (spot ??= hlInfo({ type: "spotMetaAndAssetCtxs" }).then(spotPrices).catch(() => new Map([["USDC", 1]])));
+  // The same rule as the balances: the last prices stand in for a refused read, and with none to stand in it is an error, not silence.
+  const priceNotes: Part = { positions: [], vaults: [], accounts: [], errors: [] };
+  const firstHl = addresses.find((a) => a.kind === "hyperliquid");
+  const prices = () =>
+    (spot ??= kept("hl:spotMeta", "Hyperliquid spot prices", firstHl ?? addresses[0], priceNotes, () => hlInfo({ type: "spotMetaAndAssetCtxs" }))
+      .then(spotPrices)
+      .catch((err: any) => {
+        priceNotes.errors.push({ address: (firstHl ?? addresses[0]).address, where: "Hyperliquid spot prices", message: String(err?.message ?? err) });
+        return new Map([["USDC", 1]]);
+      }));
   const parts = await Promise.all(
     addresses.map((a) => (a.kind === "hyperliquid" ? readHyperliquid(a, costs, prices) : a.kind === "evm" ? readEvm(a, costs) : readSolana(a, costs))),
   );
@@ -281,7 +330,7 @@ export async function readPortfolio(userId: number, opts: { fresh?: boolean } = 
     // What the owner hid is not counted; dust is, being real if small.
     totals: totalsOf({ positions: positions.filter((p) => !hidden.has(p.key)), vaults: vaults.filter((v) => !hidden.has(v.key)), accounts }),
     hidden: Array.from(hidden),
-    errors: parts.flatMap((p) => p.errors),
+    errors: [...parts.flatMap((p) => p.errors), ...priceNotes.errors],
   };
   cache.set(userId, { at: Date.now(), read });
   // The value over time: a row an hour at most, from whichever read comes first —
@@ -289,7 +338,7 @@ export async function readPortfolio(userId: number, opts: { fresh?: boolean } = 
   if (addresses.length && read.errors.every((e) => e.stale)) {
     const last = await portfolioStore.lastSnapshotAt(userId);
     if (!last || Date.now() - new Date(last).getTime() >= SNAPSHOT_EVERY_MS) {
-      await portfolioStore.snapshot(userId, read.at, read.totals.value, read.totals.pnl, JSON.stringify(read.totals.byKind)).catch(() => {});
+      await portfolioStore.snapshot(userId, read.at, read.totals.value, read.totals.pnl, JSON.stringify({ ...read.totals.byKind, sig: compositionOf(read) })).catch(() => {});
     }
   }
   return read;
@@ -306,7 +355,9 @@ export function registerPortfolioRoutes(app: Express): void {
   app.get("/api/portfolio", async (req: Request, res: Response) => {
     const read = await readPortfolio(uid(req), { fresh: req.query.fresh === "1" });
     const since = new Date(Date.now() - 90 * 86400_000).toISOString();
-    res.json({ ...read, history: await portfolioStore.history(uid(req), since) });
+    const history = await portfolioStore.history(uid(req), since);
+    const day = dayChange({ value: read.totals.value, sig: compositionOf(read) }, history);
+    res.json({ ...read, history: history.map(({ at, value, pnl }) => ({ at, value, pnl })), change24: day.change, change24Why: day.why });
   });
 
   app.post("/api/portfolio/addresses", async (req: Request, res: Response) => {

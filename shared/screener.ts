@@ -349,6 +349,13 @@ export function deriveDaily(storedDays: ScreenerCandle[], hours: ScreenerCandle[
   const last = kept[kept.length - 1];
   // A gap the hours cannot bridge: the store is too old.
   if (!last || last.t + DAY_MS < firstFullDay) return null;
+  /*
+   * The store's own last bar was the day still forming when it was
+   * written. Normally the hours rebuild it; when the hours begin after it
+   * (a coin not read for a month), it would be kept as a finished day with
+   * part of its range and volume. The venue is asked instead.
+   */
+  if (last.t === storedDays[storedDays.length - 1].t) return null;
   return [...kept, ...full];
 }
 
@@ -682,23 +689,60 @@ export function rsiExtremes(candles: ScreenerCandle[], tf: Timeframe): { peak: n
  * arithmetic as against BTC.
  */
 export function basketSeries(alts: { candles: ScreenerCandle[]; weight: number }[]): ScreenerCandle[] {
-  const sum = new Map<number, { v: number; w: number }>();
-  for (const a of alts) {
-    const first = a.candles.find((c) => c.c > 0)?.c;
-    if (!first || !(a.weight > 0)) continue;
-    for (const c of a.candles) {
-      const cur = sum.get(c.t) ?? { v: 0, w: 0 };
-      cur.v += (c.c / first) * a.weight;
-      cur.w += a.weight;
-      sum.set(c.t, cur);
-    }
-  }
+  // Each coin as its value against its own first close, by time.
+  const coins = alts
+    .filter((a) => a.weight > 0)
+    .map((a) => {
+      const first = a.candles.find((c) => c.c > 0)?.c;
+      return first ? { w: a.weight, v: new Map(a.candles.filter((c) => c.c > 0).map((c) => [c.t, c.c / first])) } : null;
+    })
+    .filter((x): x is { w: number; v: Map<number, number> } => x !== null);
+  const weightAt = new Map<number, number>();
+  for (const c of coins) c.v.forEach((_v, t) => weightAt.set(t, (weightAt.get(t) ?? 0) + c.w));
   // Only timestamps most of the basket has, so a thin early history does not swing the index.
-  const full = Math.max(...Array.from(sum.values()).map((x) => x.w), 0);
-  return Array.from(sum.entries())
-    .filter(([, x]) => x.w >= full * 0.6)
-    .map(([t, x]) => ({ t, o: x.v / x.w, h: x.v / x.w, l: x.v / x.w, c: x.v / x.w, v: 0 }))
-    .sort((a, b) => a.t - b.t);
+  const full = Math.max(...Array.from(weightAt.values()), 0);
+  const times = Array.from(weightAt.entries())
+    .filter(([, w]) => w >= full * 0.6)
+    .map(([t]) => t)
+    .sort((a, b) => a - b);
+  /*
+   * Chain-linked: each step is the move of the coins present at both ends
+   * of it. Averaging the levels outright made the index jump on the day a
+   * coin with a shorter history joined — it came in at 1.0 whatever level
+   * the rest stood at — and every coin's RS against the basket jumped with
+   * it. With every coin present throughout, this is the same average.
+   */
+  const out: ScreenerCandle[] = [];
+  let level = 1;
+  let prev: number | null = null;
+  for (const t of times) {
+    if (prev != null) {
+      let now = 0;
+      let then = 0;
+      for (const c of coins) {
+        const a = c.v.get(prev);
+        const b = c.v.get(t);
+        if (a == null || b == null) continue;
+        then += c.w * a;
+        now += c.w * b;
+      }
+      if (then > 0) level *= now / then;
+    } else {
+      // The first step's level is the average itself, so a basket of coins that all start together reads as before.
+      let v = 0;
+      let w = 0;
+      for (const c of coins) {
+        const a = c.v.get(t);
+        if (a == null) continue;
+        v += c.w * a;
+        w += c.w;
+      }
+      level = w > 0 ? v / w : 1;
+    }
+    out.push({ t, o: level, h: level, l: level, c: level, v: 0 });
+    prev = t;
+  }
+  return out;
 }
 
 /** The share of alts whose BTC ratio is above its own 20-day average: the breadth of the tape. */

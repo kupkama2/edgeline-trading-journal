@@ -108,6 +108,22 @@ describe.skipIf(!DB)("through the real routes", () => {
     expect(JSON.stringify(await res.json())).toContain("exitPrice");
   });
 
+  it("does not take the terminal's own fields from a journal request", async () => {
+    // `terminal` says which venue order a trade belongs to, and the watch acts on it: cancels, closes, reads the
+    // account it names. Only the terminal's routes write it. Sent through the journal's, it is dropped.
+    const ref = JSON.stringify({ account: "Somebody's", symbol: "BTCUSDT", entryOrderId: 1 });
+    const made = await send("POST", "/api/trades", { trade: { ...live, status: "open", terminal: ref, paper: true }, mistakeTagIds: [] });
+    expect(made.status).toBe(201);
+    const t = await made.json();
+    expect(t.terminal ?? null).toBeNull();
+    expect(t.paper ?? false).toBe(false);
+    const patched = await send("PATCH", `/api/trades/${t.id}`, { trade: { terminal: ref, notes: "kept" } });
+    expect(patched.status).toBe(200);
+    const after = await patched.json();
+    expect(after.terminal ?? null).toBeNull();
+    expect(after.notes).toBe("kept");
+  });
+
   it("will not close a trade without giving it an exit", async () => {
     const t = await openTrade();
     const res = await send("PATCH", `/api/trades/${t.id}`, { trade: { status: "closed" } });
