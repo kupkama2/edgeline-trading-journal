@@ -174,6 +174,8 @@ ALTER TABLE trades ADD COLUMN IF NOT EXISTS traded_poorly BOOLEAN NOT NULL DEFAU
 -- Recorded as a result rather than as prices: the scalp log's three words.
 -- Off and null everywhere else, so every trade already logged is untouched.
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS scalp BOOLEAN NOT NULL DEFAULT FALSE;
+-- How a trade was entered: 'limit' or 'market' (shared/entry-type.ts).
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS entry_type TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS net_pnl DOUBLE PRECISION;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS risk_amount DOUBLE PRECISION;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS net_mfe DOUBLE PRECISION;
@@ -702,6 +704,20 @@ UPDATE trades
    AND COALESCE(scalp, false) = false
    AND (CASE WHEN direction = 'short' THEN initial_stop > entry_price ELSE initial_stop < entry_price END)
    AND (CASE WHEN direction = 'short' THEN entry_price - ABS(entry_price - initial_stop) > 0 ELSE true END);
+
+-- The terminal's trades from before entry_type: the plan it sent is in its
+-- log, and the plan says market or limit. Read with a pattern rather than a
+-- JSON cast, so one malformed log row cannot stop the server from starting.
+-- Idempotent: only rows still without an entry type.
+UPDATE trades t
+   SET entry_type = substring(l.request from '"entryType":"(market|limit)"')
+  FROM terminal_log l
+ WHERE l.trade_id = t.id
+   AND l.user_id = t.user_id
+   AND l.action = 'journal'
+   AND t.entry_type IS NULL
+   AND t.terminal IS NOT NULL
+   AND substring(l.request from '"entryType":"(market|limit)"') IS NOT NULL;
 `);
 
   await syncDemonTaxonomy();

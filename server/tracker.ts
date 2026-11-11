@@ -20,6 +20,7 @@
  * Read-only throughout. Binance needs a key with reading on; Hyperliquid
  * needs the wallet address and nothing else.
  */
+import { entryTypeOf, type EntryType } from "@shared/entry-type";
 import type { AccountSettings, TradeWithTags } from "@shared/schema";
 import { tradesFromFills, type HlFill, type HlOpenOrder, type HlTrade } from "@shared/hyperliquid";
 import { addNote, cutAtFlat, formatTerminalRef, parseTerminalRef, partialNote, type Brackets, type TerminalMove, type TerminalRef, type VenueSnapshot } from "@shared/terminal";
@@ -125,6 +126,8 @@ interface Opening {
   entryTime: number;
   entryOrderId: number | null;
   addOrderIds: number[];
+  /** Whether the entry order rested or crossed, from its fills; null when they do not say. */
+  entryType?: EntryType | null;
   leverage: number;
   externalId: string | null;
   brackets: Brackets;
@@ -253,6 +256,7 @@ async function openTracked(s: DatabaseStorage, o: Opening): Promise<TradeWithTag
     account: o.account,
     riskAmount: ref.idea!.riskDollars,
     externalId: o.externalId,
+    entryType: o.entryType ?? null,
     terminal: formatTerminalRef(ref),
     paper: o.paper,
   } as any);
@@ -387,6 +391,7 @@ function sideFills(rows: BinanceUserTrade[], symbol: string, side: "LONG" | "SHO
       fee: USD_COMMISSION.has(r.commissionAsset) ? r.commission : Number.NaN,
       tid: r.id,
       oid: r.orderId,
+      maker: r.maker ?? null,
     });
     pos += r.side === openSide ? r.qty : -r.qty;
   }
@@ -403,14 +408,15 @@ function entryOf(
   open: HlTrade | null,
   orderOf: (tid: number) => number | null,
   fallback: { size: number; price: number; time: number },
-): { size: number; entryPrice: number; entryTime: number; entryOrderId: number | null; addOrderIds: number[] } {
-  if (!open || open.opens.length === 0) return { size: fallback.size, entryPrice: fallback.price, entryTime: fallback.time, entryOrderId: null, addOrderIds: [] };
+): { size: number; entryPrice: number; entryTime: number; entryOrderId: number | null; addOrderIds: number[]; entryType: EntryType | null } {
+  if (!open || open.opens.length === 0) return { size: fallback.size, entryPrice: fallback.price, entryTime: fallback.time, entryOrderId: null, addOrderIds: [], entryType: null };
   const entryOrderId = orderOf(open.opens[0].tid);
   const legs = entryOrderId != null ? open.opens.filter((l) => orderOf(l.tid) === entryOrderId) : [open.opens[0]];
   const size = legs.reduce((s, l) => s + l.sz, 0);
   const entryPrice = legs.reduce((s, l) => s + l.px * l.sz, 0) / size;
   const addOrderIds = Array.from(new Set(open.opens.map((l) => orderOf(l.tid)).filter((x): x is number => x != null && x !== entryOrderId)));
-  return { size, entryPrice, entryTime: open.entryTime, entryOrderId, addOrderIds };
+  // Whether the entry order rested or crossed, from its own fills.
+  return { size, entryPrice, entryTime: open.entryTime, entryOrderId, addOrderIds, entryType: entryTypeOf(legs.map((l) => ({ sz: l.sz, maker: l.maker }))) };
 }
 
 /**

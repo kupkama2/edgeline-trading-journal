@@ -23,6 +23,7 @@ function store(req: { userId?: number }) {
 }
 import { ProxyAgent, fetch as undiciFetch } from "undici";
 import { CHECK_FIELDS, checkOutcomes, ensureCatalogue } from "./outcomes";
+import { backfillEntryTypes } from "./entry-backfill";
 import {
   feedStatus,
   fetchCandles,
@@ -51,7 +52,7 @@ import { debriefTrades, normalizeDebrief } from "@shared/debrief";
 import { syncBinance, verifyKey, verifyTradingKey } from "./binance-account";
 import { registerTerminalRoutes } from "./terminal";
 import { trackUser } from "./tracker";
-import { subscribe } from "./events";
+import { notify, subscribe } from "./events";
 import { registerScreenerRoutes } from "./screener-routes";
 import { registerPortfolioRoutes } from "./portfolio";
 import { registerCalendarRoutes } from "./calendar";
@@ -607,6 +608,17 @@ export async function registerRoutes(
   /* ------------------------------- trades ------------------------------- */
   app.get("/api/trades", async (req, res) => {
     res.json(await store(req).listTrades());
+  });
+
+  // How past trades were entered, asked of the venues for the ones that do not say (server/entry-backfill.ts).
+  app.post("/api/trades/entry-types", async (req, res) => {
+    try {
+      const out = await backfillEntryTypes((req as any).userId);
+      if (out.filled) notify((req as any).userId, "trades");
+      res.json(out);
+    } catch (err: any) {
+      res.status(502).json({ message: String(err?.message ?? err).slice(0, 200) });
+    }
   });
 
   // The relative-strength screener (server/screener-routes.ts).

@@ -33,6 +33,7 @@ export function trade(over: Partial<TradeWithTags> = {}): TradeWithTags {
     reviewNote: null,
     exitReason: "target",
     cancelReason: null,
+    entryType: null,
     wouldHaveHitTarget: null,
     mae: null,
     mfe: null,

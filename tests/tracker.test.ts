@@ -39,7 +39,8 @@ let hlOrders: any[] = [
   { coin: "BTC", oid: 902, side: "A", limitPx: "82000", sz: "0.5", isTrigger: true, triggerPx: "82000", orderType: "Take Profit Market", reduceOnly: true, isPositionTpsl: true, timestamp: now - 9 * MIN },
 ];
 const hlFills: any[] = [
-  { coin: "BTC", px: "80000", sz: "0.5", side: "B", time: now - 10 * MIN, startPosition: "0", dir: "Open Long", closedPnl: "0", fee: "0.4", tid: 7001, oid: 700 },
+  // `crossed: false`: the fill rested on the book — a limit entry.
+  { coin: "BTC", px: "80000", sz: "0.5", side: "B", time: now - 10 * MIN, startPosition: "0", dir: "Open Long", closedPnl: "0", fee: "0.4", tid: 7001, oid: 700, crossed: false },
 ];
 let hlMid = "80500";
 
@@ -132,8 +133,13 @@ function startVenue(): Promise<string> {
           return json(bnPositions);
         case "GET /fapi/v1/income":
           return json(bnIncome.filter((r) => r.time >= Number(params.startTime ?? 0) && r.time <= Number(params.endTime ?? Infinity)));
-        case "GET /fapi/v1/userTrades":
-          return json(bnFills.filter((f) => f.symbol === params.symbol && f.time >= Number(params.startTime ?? 0)));
+        case "GET /fapi/v1/userTrades": {
+          // By order, by trade id onward, or by time — the three ways the venue can be asked.
+          const mine = bnFills.filter((f) => f.symbol === params.symbol);
+          if (params.orderId) return json(mine.filter((f) => f.orderId === Number(params.orderId)));
+          if (params.fromId) return json(mine.filter((f) => f.id >= Number(params.fromId)).slice(0, Number(params.limit ?? 500)));
+          return json(mine.filter((f) => f.time >= Number(params.startTime ?? 0)));
+        }
         case "GET /fapi/v1/openOrders":
           return json(bnOrders.filter((o) => o.status === "NEW" && (!params.symbol || o.symbol === params.symbol)));
         case "GET /fapi/v1/openAlgoOrders":
@@ -304,6 +310,10 @@ describe.skipIf(!DB)("the journal following an account on its venue", () => {
     const [eth] = await tradesOf("ETH", BN);
     expect(eth).toMatchObject({ direction: "short", size: 2, entryPrice: 3000, initialStop: 3100, initialTarget: 2800, status: "open", externalId: "binance:ETHUSDT:9001", paper: false });
     expect(ref(eth)).toMatchObject({ venue: "binance", env: "live", tracked: true, symbol: "ETHUSDT", positionSide: "SHORT", entryOrderId: 5000, stopOrderId: 6001, targetOrderIds: [6002], leverage: 10 });
+    // The entry fill took liquidity (`maker: false`): a market entry.
+    expect(eth.entryType).toBe("market");
+    // Written from the position alone, there is no fill to say.
+    expect((await tradesOf("XRP", BN))[0].entryType ?? null).toBeNull();
 
     // The position older than the record: written from the position itself, with no entry order to point at.
     const [xrp] = await tradesOf("XRP", BN);
@@ -488,6 +498,52 @@ describe.skipIf(!DB)("the journal following an account on its venue", () => {
     expect(again.accounts.find((a) => a.account === HL).caughtUp).toEqual([]);
     expect(await tradesOf("SOL", BN)).toHaveLength(1);
     expect(await tradesOf("DOGE", HL)).toHaveLength(1);
+  });
+
+  it("reads how past trades were entered from the venues, and fills only the blanks", async () => {
+    // A synced Binance trade from before entry types: the external id names its first fill, which leads to its order.
+    // The order rested for most of its size and crossed for a sliver: a limit entry.
+    bnFills.push(
+      { symbol: "LINKUSDT", id: 9500, orderId: 5500, side: "BUY", positionSide: "BOTH", price: "150", qty: "9", realizedPnl: "0", commission: "0.1", commissionAsset: "USDT", time: now - 3 * 86400_000, buyer: true, maker: true },
+      { symbol: "LINKUSDT", id: 9501, orderId: 5500, side: "BUY", positionSide: "BOTH", price: "150.1", qty: "1", realizedPnl: "0", commission: "0.1", commissionAsset: "USDT", time: now - 3 * 86400_000 + 1, buyer: true, maker: false },
+    );
+    const sol = await store.createTrade({
+      symbol: "LINK", direction: "long", size: 10, sizeUnit: "base", pointValue: 1, entryPrice: 150, initialStop: 145, initialTarget: 160,
+      entryTime: new Date(now - 3 * 86400_000).toISOString(), status: "closed", exitPrice: 158, exitTime: new Date(now - 2 * 86400_000).toISOString(),
+      account: BN, externalId: "binance:LINKUSDT:9500",
+    });
+    // The tracked ETH short as it was before entry types: its ref keeps the entry order.
+    const [eth] = await tradesOf("ETH", BN);
+    await store.updateTrade(eth.id, { entryType: null });
+    // A trade a person marked keeps the mark, whatever the venue would say.
+    const marked = await store.createTrade({
+      symbol: "LINK", direction: "long", size: 10, sizeUnit: "base", pointValue: 1, entryPrice: 150, initialStop: 145, initialTarget: 160,
+      entryTime: new Date(now - 3 * 86400_000).toISOString(), status: "closed", exitPrice: 158, exitTime: new Date(now - 2 * 86400_000).toISOString(),
+      account: BN, entryType: "market",
+    });
+    // Logged by hand on an account with no venue: nothing to ask.
+    await store.createTrade({
+      symbol: "NQ", direction: "long", size: 1, sizeUnit: "base", pointValue: 20, entryPrice: 100, initialStop: 90, initialTarget: 130,
+      entryTime: new Date(now - 86400_000).toISOString(), status: "closed", exitPrice: 120, exitTime: new Date(now - 86000_000).toISOString(), account: "Futures",
+    });
+
+    const r = await send("POST", "/api/trades/entry-types");
+    expect(r.status).toBe(200);
+    const out = await r.json();
+    expect(out.errors).toEqual([]);
+    expect(out.filled).toBeGreaterThanOrEqual(3);
+    expect(out.noVenue).toBeGreaterThanOrEqual(1);
+
+    expect((await store.getTrade(sol.id)).entryType).toBe("limit");
+    expect((await store.getTrade(eth.id)).entryType).toBe("market");
+    expect((await store.getTrade(marked.id)).entryType).toBe("market");
+    // The Hyperliquid BTC long the sync wrote and the tracker took under watch: its first fill rested.
+    const [btc] = await tradesOf("BTC", HL);
+    expect(btc.entryType).toBe("limit");
+
+    // Asked again, nothing is left to fill.
+    const again = await (await send("POST", "/api/trades/entry-types")).json();
+    expect(again.filled).toBe(0);
   });
 
   it("stops following an account when asked, and leaves what it wrote", async () => {

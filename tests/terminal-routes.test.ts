@@ -440,7 +440,7 @@ describe.skipIf(!DB)("the terminal against a stub venue", () => {
     expect(ref.armOnFill.targets).toHaveLength(1);
 
     const t = await store.getTrade(tradeId);
-    expect(t).toMatchObject({ symbol: "BTC", direction: "long", size: 0.05, entryPrice: 80000, initialStop: 79000, initialTarget: 82500, status: "pending", account: ACCOUNT });
+    expect(t).toMatchObject({ symbol: "BTC", direction: "long", size: 0.05, entryPrice: 80000, initialStop: 79000, initialTarget: 82500, status: "pending", account: ACCOUNT, entryType: "limit" });
     expect(ref).toMatchObject({ symbol: "BTCUSDT", positionSide: "LONG", leverage: 7, unprotected: false, stopOrderId: null, targetOrderIds: [] });
     expect(ref.entryOrderId).toBe(orders.find((o) => o.type === "LIMIT")!.orderId);
 
@@ -569,6 +569,8 @@ describe.skipIf(!DB)("the terminal against a stub venue", () => {
     const body = await r.json();
     const id = body.trade.id;
     expect(body.trade.status).toBe("open");
+    // The order it sent says how it was entered.
+    expect(body.trade.entryType).toBe("market");
     // Entry first — the venue holds no bracket for a position that does not exist — then the stop, at once.
     expect(calls.filter((c) => c.method === "POST" && /\/fapi\/v1\/(algo)?[oO]rder$/.test(c.path)).map((c) => c.params.type)).toEqual(["MARKET", "STOP_MARKET"]);
     expect(position.amt).toBeCloseTo(0.1);

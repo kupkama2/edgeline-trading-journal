@@ -115,6 +115,8 @@ export interface BinanceUserTrade {
   /** "BOTH" in one-way mode; "LONG"/"SHORT" in hedge mode. */
   positionSide: string;
   time: number;
+  /** The fill rested on the book. Null when the row did not say. */
+  maker?: boolean | null;
 }
 
 /**
@@ -148,6 +150,7 @@ export function parseUserTrades(json: unknown): BinanceUserTrade[] {
       commissionAsset: typeof r.commissionAsset === "string" ? r.commissionAsset.trim().toUpperCase() : "USDT",
       positionSide: typeof r.positionSide === "string" ? r.positionSide.trim().toUpperCase() : "BOTH",
       time,
+      maker: typeof r.maker === "boolean" ? r.maker : null,
     });
   }
   return out.sort((a, b) => a.time - b.time || a.id - b.id);
@@ -251,6 +254,7 @@ export function fillsFromUserTrades(
         fee: USD_COMMISSION.has(r.commissionAsset) ? r.commission : Number.NaN,
         tid: r.id,
         oid: r.orderId,
+        maker: r.maker ?? null,
       });
       pos += r.side === "BUY" ? r.qty : -r.qty;
     }

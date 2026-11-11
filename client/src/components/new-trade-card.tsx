@@ -54,6 +54,7 @@ import { knownHighlights, serializeHighlights } from "@shared/highlights";
 import { suggestSize, notionalReadout } from "@shared/sizing";
 import { inSessionWindow, windowLabel } from "@shared/session";
 import { LevelLabel, LevelLadder, type LevelKind } from "@/components/levels";
+import type { EntryType } from "@shared/entry-type";
 
 /* ============================ new trade card ========================== */
 
@@ -381,6 +382,8 @@ export function NewTradeCard({
    * you cannot use; from then on a disagreement is said out loud instead.
    */
   const [directionPicked, setDirectionPicked] = useState(false);
+  // Limit or market, if said; nothing is assumed.
+  const [entryType, setEntryType] = useState<EntryType | null>(null);
   const levelRead = useMemo(
     () =>
       readDirection(priceOrNull(v.entryPrice), priceOrNull(v.initialStop), priceOrNull(v.initialTarget)),
@@ -847,6 +850,7 @@ export function NewTradeCard({
         initialStop,
         initialTarget,
         tilt: asTilt,
+        entryType,
         wellTraded: loggingClosed && !asTilt && wellTraded,
         extraTargets: extras.length ? JSON.stringify(extras) : null,
         account: account.trim() || null,
@@ -943,6 +947,7 @@ export function NewTradeCard({
     // A new trade is a new blank. Left set, one manual pick would switch the
     // inference off for every trade logged afterwards in the same session.
     setDirectionPicked(false);
+    setEntryType(null);
     setTiltMode(false);
     setPlanWord("");
     setCloseNote("");
@@ -1345,7 +1350,39 @@ export function NewTradeCard({
                 </p>
               </div>
             )}
-            {levelField("entryPrice", "entry")}
+            <FormField
+              control={form.control}
+              name="entryPrice"
+              render={({ field }) => (
+                <FormItem className="space-y-1">
+                  {/* How it was (or will be) entered, beside the price it was entered at. Optional: unset is "not said". */}
+                  <LevelLabel kind="entry">
+                    <Segmented
+                      size="xs"
+                      value={entryType}
+                      onChange={(t) => setEntryType((cur) => (cur === t ? null : t))}
+                      ariaLabel="Entered with"
+                      options={[
+                        { id: "limit", label: "Lmt", title: "A limit that rested on the book. Click again to unset.", testId: "button-entry-type-limit" },
+                        { id: "market", label: "Mkt", title: "At market: took what was there. Click again to unset.", testId: "button-entry-type-market" },
+                      ]}
+                    />
+                  </LevelLabel>
+                  <FormControl>
+                    <Input
+                      {...field}
+                      type="number"
+                      step="any"
+                      inputMode="decimal"
+                      className="h-9 font-mono text-sm"
+                      data-testid="input-entryPrice"
+                      value={(field.value as any) ?? ""}
+                    />
+                  </FormControl>
+                  <FormMessage className="text-[10px]" />
+                </FormItem>
+              )}
+            />
             {levelField("initialStop", "stop")}
 
             {/* First target plus optional extra TPs. TP1 stays the target the

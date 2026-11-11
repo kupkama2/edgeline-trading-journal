@@ -301,6 +301,11 @@ export interface HlFill {
   /** Trade id, unique per fill. */
   tid: number;
   oid: number;
+  /**
+   * The fill rested on the book (maker) rather than crossing it (taker).
+   * Hyperliquid's `crossed`, inverted; Binance's `maker`. Null when the venue did not say.
+   */
+  maker?: boolean | null;
 }
 
 const num = (v: unknown): number | null => {
@@ -336,6 +341,8 @@ export function parseUserFills(json: unknown): HlFill[] {
       fee: num(f.fee) ?? 0,
       tid,
       oid: num(f.oid) ?? 0,
+      // `crossed` is true when the fill took liquidity.
+      maker: f.crossed === true ? false : f.crossed === false ? true : null,
     });
   }
   return out.sort((a, b) => a.time - b.time || a.tid - b.tid);
@@ -347,6 +354,9 @@ export interface HlLeg {
   time: number;
   fee: number;
   tid: number;
+  /** The order this fill belongs to, and whether it rested: what says how the trade was entered (shared/entry-type.ts). */
+  oid?: number;
+  maker?: boolean | null;
 }
 
 /** A position from open to flat, as the journal understands a trade. */
@@ -471,6 +481,8 @@ export function tradesFromFills(
         time: f.time,
         fee: f.sz > 0 ? (f.fee * sz) / f.sz : 0,
         tid: f.tid,
+        oid: f.oid,
+        maker: f.maker ?? null,
       });
 
       if (sb === 0) {
