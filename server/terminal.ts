@@ -17,9 +17,9 @@
  */
 import type { Express, NextFunction, Request, Response } from "express";
 import { z } from "zod";
-import { storageFor, terminalUsers, trackedAccountsEverywhere, tradingAccountsEverywhere, type DatabaseStorage } from "./storage";
+import { accounts, storageFor, terminalUsers, trackedAccountsEverywhere, tradingAccountsEverywhere, type DatabaseStorage } from "./storage";
 import { openUserStream, worthAReadBack, type StreamHandle } from "./binance-stream";
-import { relayConnected, setRelayEventHandler } from "./relay";
+import { relayConnected, setRelayEventHandler, relayStreaming } from "./relay";
 import { oneAtATime } from "./venue-sync";
 import { trackEverywhere, trackUser } from "./tracker";
 import { fetch as undiciFetch } from "undici";
@@ -31,6 +31,8 @@ import { fetchCandlesAt } from "./candles";
 import {
   addToPosition,
   algoOrderById,
+  algoOrderLookup,
+  isAlgoType,
   cancelBracket,
   cancelOrder,
   closeAtMarket,
@@ -368,6 +370,13 @@ async function afterClose(s: DatabaseStorage, t: TradeWithTags): Promise<void> {
   if (changed) await s.updateTrade(t.id, { ...watched.patch, terminal: formatTerminalRef(reviewed) } as any);
 }
 
+/** A ref with the watch's own bookkeeping left out: two that match this way differ only in when they were last checked. */
+const quietRef = (r: TerminalRef) => formatTerminalRef({ ...r, checkedAt: undefined, planWatch: r.planWatch ? { ...r.planWatch, checkedAt: "", coveredTo: 0 } : undefined });
+
+/** A "no such order" for a bracket is asked about again this often, and taken as final after this long. */
+const BRACKET_REASK_MS = 2 * 60_000;
+const BRACKET_GONE_AFTER_MS = 15 * 60_000;
+
 export async function reconcileOne(s: DatabaseStorage, t: TradeWithTags, armed: Armed): Promise<TradeWithTags> {
   let ref = refOf(t);
   const v = armed.venue;
@@ -405,20 +414,49 @@ export async function reconcileOne(s: DatabaseStorage, t: TradeWithTags, armed: 
    */
   const onBook = new Set(resting.filter((o) => o.triggeredOrderId == null).map((o) => o.orderId));
   const fate: NonNullable<TerminalRef["bracketFate"]> = { ...(ref.bracketFate ?? {}) };
+  const fateBefore = JSON.stringify(fate);
+  const nowMs = Date.now();
   for (const id of bracketIds) {
-    if (onBook.has(id)) continue;
-    let known = fate[String(id)];
-    if (!known) {
-      const a = await algoOrderById(v, id).catch(() => undefined);
-      if (a === undefined) continue; // the venue did not answer: ask next pass
-      if (a === null) known = { gone: true };
-      else if (a.triggeredOrderId != null) known = { to: a.triggeredOrderId };
-      else if (/TRIGGER|FINISHED|FILLED/.test(a.status)) {
+    const key = String(id);
+    if (onBook.has(id)) {
+      // Seen resting as a plain order (a limit target): never one for the conditional lookup, and its fills carry its own id.
+      const o = resting.find((x) => x.orderId === id);
+      if (o && !isAlgoType(o.type) && !fate[key]?.plain) fate[key] = { plain: true };
+      // Resting after all: a "no such order" that was still in doubt is forgotten, so it is not counted from then if it leaves later.
+      else if (fate[key]?.missAt != null && !fate[key]?.gone) delete fate[key];
+      continue;
+    }
+    let known: NonNullable<TerminalRef["bracketFate"]>[string] | undefined = fate[key];
+    if (known?.plain) continue;
+    const final = known && (known.gone || known.to != null || known.firedAt != null);
+    if (!final) {
+      // A "no such order" still in doubt is asked about again, but not on every pass.
+      if (known?.askedAt && nowMs - known.askedAt < BRACKET_REASK_MS) continue;
+      const a = await algoOrderLookup(v, id);
+      if ("unknown" in a) continue; // says nothing about the order: ask next pass
+      if ("missing" in a) {
+        /*
+         * No such order. A host without the endpoint will never know more.
+         * Otherwise it is only taken as final once it has been the answer for
+         * a while: a bracket placed a moment ago can be missing from the
+         * lookup for a beat, and marked gone then, the fills of the order it
+         * later fired into were read as a close made by hand.
+         */
+        const missAt = known?.missAt ?? nowMs;
+        known = a.missing === "no-endpoint" || nowMs - missAt >= BRACKET_GONE_AFTER_MS ? { gone: true } : { missAt, askedAt: nowMs };
+        fate[key] = known;
+        continue;
+      }
+      const o = a.order;
+      known = undefined;
+      if (o.triggeredOrderId != null) known = { to: o.triggeredOrderId };
+      else if (/TRIGGER|FINISHED|FILLED/.test(o.status)) {
         // Fired without naming its order yet; final only once it is finished.
-        if (/FINISHED|FILLED/.test(a.status)) known = { firedAt: a.updateTime, side: a.side };
-        else fired.push({ algoId: id, side: a.side, at: a.updateTime });
-      } else if (/CANCEL|EXPIRE|REJECT/.test(a.status)) known = { gone: true };
-      if (known) fate[String(id)] = known;
+        if (/FINISHED|FILLED/.test(o.status)) known = { firedAt: o.updateTime, side: o.side };
+        else fired.push({ algoId: id, side: o.side, at: o.updateTime });
+      } else if (/CANCEL|EXPIRE|REJECT/.test(o.status)) known = { gone: true };
+      if (known) fate[key] = known;
+      else delete fate[key]; // on the venue and not fired: whatever doubt there was is over
     }
     if (!known) continue;
     if (known.to != null) {
@@ -426,7 +464,7 @@ export async function reconcileOne(s: DatabaseStorage, t: TradeWithTags, armed: 
       mine.add(known.to);
     } else if (known.firedAt != null && known.side) fired.push({ algoId: id, side: known.side, at: known.firedAt });
   }
-  if (Object.keys(fate).length !== Object.keys(ref.bracketFate ?? {}).length) ref = { ...ref, bracketFate: fate };
+  if (JSON.stringify(fate) !== fateBefore) ref = { ...ref, bracketFate: fate };
   let rows = await fillsSince(v, ref.symbol, since);
   const closeSide = ref.positionSide === "LONG" ? "SELL" : "BUY";
   const openSide = closeSide === "SELL" ? "BUY" : "SELL";
@@ -522,13 +560,16 @@ export async function applySnapshot(
   // A target that took its share while the rest stayed on, a take from here,
   // an add: rows in the ledger, once each, by the venue's fill id.
   const already = new Set((t.fills ?? []).map((f) => f.note ?? ""));
+  let newFills = 0;
   for (const f of partials) {
     if (already.has(partialNote(f.tid))) continue;
     await s.addFill(t.id, { kind: "partial", price: f.price, size: f.qty, time: new Date(f.time).toISOString(), note: partialNote(f.tid) });
+    newFills += 1;
   }
   for (const f of adds) {
     if (already.has(addNote(f.tid))) continue;
     await s.addFill(t.id, { kind: "add", price: f.price, size: f.qty, time: new Date(f.time).toISOString(), note: addNote(f.tid) });
+    newFills += 1;
   }
   const nowOpen = (patch.status ?? t.status) === "open";
   /*
@@ -615,8 +656,8 @@ export async function applySnapshot(
   nextRef = watched.ref;
   Object.assign(patch, watched.patch);
   const before = refOf(t);
-  const quiet = (r: TerminalRef) => formatTerminalRef({ ...r, checkedAt: undefined, planWatch: r.planWatch ? { ...r.planWatch, checkedAt: "", coveredTo: 0 } : undefined });
-  const changed = Object.keys(patch).length > 0 || partials.length > 0 || adds.length > 0 || quiet(nextRef) !== quiet(before);
+  // New fills, not every fill: a trade with a take or an add in its ledger used to count as changed on every pass, so it was never quiet.
+  const changed = Object.keys(patch).length > 0 || newFills > 0 || quietRef(nextRef) !== quietRef(before);
   if (!changed && before.checkedAt && Date.now() - new Date(before.checkedAt).getTime() < 60_000) return t;
   // Only the "checked at" stamp moved: written, but no page is told to reload for it.
   const after = await s.updateTrade(t.id, { ...patch, terminal: formatTerminalRef(nextRef) } as any, undefined, { quiet: !changed });
@@ -654,7 +695,7 @@ const accountKey = (userId: number, account: string, who: Reader) => `${who}:${u
 /** Whether the timed pass may lean on the stream for this account right now. */
 export function restingOnStream(userId: number, a: { name: string; binanceKey?: string | null; binanceEnv?: string | null; relayToken?: string | null }, who: Reader = "terminal"): boolean {
   // A relay carries the account's user-data stream itself: connected means streaming.
-  const streaming = a.relayToken ? relayConnected(userId, a.name) : (() => {
+  const streaming = a.relayToken ? relayStreaming(userId, a.name) : (() => {
     if (!a.binanceKey) return false;
     const env: BinanceEnv = a.binanceEnv === "testnet" ? "testnet" : "live";
     return !!streams.get(streamId(userId, a.name, env, a.binanceKey))?.connected;
@@ -667,6 +708,24 @@ export function restingOnStream(userId: number, a: { name: string; binanceKey?: 
 /** A full read of this account just happened: the stream carries it from here. */
 export function noteFullRead(userId: number, account: string, who: Reader = "terminal"): void {
   lastFullRead.set(accountKey(userId, account, who), Date.now());
+}
+
+/**
+ * Whether the terminal is this person's to use: on the allowlist, the
+ * rule its routes apply on every call, applied to the watch too — so a
+ * trade carrying a terminal record is only ever acted on for someone the
+ * terminal is open to. Remembered ten minutes; the watch asks every
+ * twenty seconds.
+ */
+const openTo = new Map<number, { at: number; ok: boolean }>();
+async function terminalOpenTo(userId: number): Promise<boolean> {
+  const hit = openTo.get(userId);
+  if (hit && Date.now() - hit.at < 10 * 60_000) return hit.ok;
+  const u = await accounts.byId(userId).catch(() => undefined);
+  // The allowlist: the routes also ask for the owner, which the session knows; here the list is the gate.
+  const ok = terminalAllowed(u?.email);
+  openTo.set(userId, { at: Date.now(), ok });
+  return ok;
 }
 
 /** How often the timed pass also takes the closed trades, owed only the plan's answer and a review. */
@@ -682,6 +741,7 @@ async function reconcilePass(s: DatabaseStorage, userId: number, mode: PassMode)
   const settings = mode === "light" ? await s.listAccountSettings() : [];
   const out: { id: number; status: string; error?: string }[] = [];
   const readInFull = new Set<string>();
+  const failedOn = new Set<string>();
   for (const t of trades) {
     if (t.status === "closed") {
       // Finished, but still owed the plan's answer and the review.
@@ -696,12 +756,16 @@ async function reconcilePass(s: DatabaseStorage, userId: number, mode: PassMode)
       const ref = refOf(t);
       // Watched trades are read by the tracker, with read credentials, whether or not the account may trade.
       if (ref.tracked) continue;
+      // A trade the terminal sent is read back, and its brackets armed, only for someone the terminal is open to.
+      if (!(await terminalOpenTo(userId))) continue;
       const acct = settings.find((a) => a.name === ref.account);
       if (mode === "light" && acct && restingOnStream(userId, acct)) {
         // The stream is awake for this account: only the tape is read.
         const watched = await watchPlan(s, t, ref).catch(() => ({ ref, patch: {} as Record<string, unknown> }));
-        if (Object.keys(watched.patch).length || formatTerminalRef(watched.ref) !== formatTerminalRef(ref)) {
-          await s.updateTrade(t.id, { ...watched.patch, terminal: formatTerminalRef(watched.ref) } as any);
+        const real = Object.keys(watched.patch).length > 0 || quietRef(watched.ref) !== quietRef(ref);
+        if (real || formatTerminalRef(watched.ref) !== formatTerminalRef(ref)) {
+          // Only the watch's "checked at" moved: written, but no page is told to reload for it.
+          await s.updateTrade(t.id, { ...watched.patch, terminal: formatTerminalRef(watched.ref) } as any, undefined, { quiet: !real });
         }
         out.push({ id: t.id, status: t.status });
         continue;
@@ -716,9 +780,22 @@ async function reconcilePass(s: DatabaseStorage, userId: number, mode: PassMode)
       out.push({ id: t.id, status: after.status });
     } catch (err) {
       out.push({ id: t.id, status: t.status, error: said(err) });
+      try {
+        failedOn.add(refOf(t).account);
+      } catch {
+        /* a ref that does not parse names no account */
+      }
     }
   }
-  for (const account of Array.from(readInFull)) noteFullRead(userId, account);
+  /*
+   * An account with a trade that could not be read is not resting on its
+   * stream: the fill that triggered this pass is still unread, and the
+   * stream will not say it twice. Forgetting the last full read makes the
+   * next tick, twenty seconds on, read in full instead of waiting out the
+   * five minutes.
+   */
+  for (const account of Array.from(failedOn)) lastFullRead.delete(accountKey(userId, account, "terminal"));
+  for (const account of Array.from(readInFull)) if (!failedOn.has(account)) noteFullRead(userId, account);
   return out;
 }
 

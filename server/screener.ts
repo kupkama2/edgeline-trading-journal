@@ -457,7 +457,10 @@ async function run(nowFn: () => number, ai = false): Promise<ScreenerRun> {
         fundingHourly: c.funding,
         fundingAnnual: c.funding != null ? annualizeFunding(c.funding) : null,
         openInterest: c.openInterest,
-        oiChange: oiChange(c.openInterest, previous.get(c.coin)?.openInterest ?? null),
+        // Over a day, or four hours until a day of snapshots exists. It was measured against the newest snapshot,
+        // which since the hourly schedule is minutes old (seconds, after a wake): the change read as nothing, and
+        // "leverage-driven" — OI up by the setting with top-decile funding — could not fire.
+        oiChange: positioning.oi1d ?? positioning.oi4h,
         leverageDriven: false,
         tf: emptyMetrics(),
         flags: emptyFlags(),
@@ -491,10 +494,17 @@ async function run(nowFn: () => number, ai = false): Promise<ScreenerRun> {
     const readable = rows.filter((r) => !r.error).map((r) => ({ coin: r.coin, mark: r.mark, fundingHourly: r.fundingHourly }));
     status.phase = "Binance flow";
     status.progress = { done: 0, total: readable.length };
-    const flowPass = await readBinanceFlow(readable, (done, total) => (status.progress = { done, total })).catch((err) => ({ status: { source: "none", account: null, outdated: false, coins: 0, failed: 0, error: String(err?.message ?? err) } as FlowStatus, byCoin: new Map() }));
+    const marksNow = async () => new Map(parseMetaAndAssetCtxs(await ask(budget, 20, { type: "metaAndAssetCtxs" })).map((c) => [c.coin, { mark: c.markPx, funding: c.funding }]));
+    const midsNow = async () => {
+      const mids = (await ask(budget, 2, { type: "allMids" })) as Record<string, string>;
+      const out = new Map<string, number>();
+      for (const [coin, px] of Object.entries(mids && typeof mids === "object" ? mids : {})) if (Number(px) > 0) out.set(coin, Number(px));
+      return out;
+    };
+    const flowPass = await readBinanceFlow(readable, (done, total) => (status.progress = { done, total }), marksNow).catch((err) => ({ status: { source: "none", account: null, outdated: false, coins: 0, failed: 0, error: String(err?.message ?? err) } as FlowStatus, byCoin: new Map() }));
     status.phase = "Liquidation map";
     status.progress = { done: 0, total: 0 };
-    const liqPass = await readLiqMap(readable, (done, total) => (status.progress = { done, total })).catch((err) => ({ status: { accounts: 0, failed: 0, error: String(err?.message ?? err) } as LiqStatus, byCoin: new Map() }));
+    const liqPass = await readLiqMap(readable, (done, total) => (status.progress = { done, total }), midsNow).catch((err) => ({ status: { accounts: 0, failed: 0, error: String(err?.message ?? err) } as LiqStatus, byCoin: new Map() }));
     for (const r of rows) {
       r.flow = flowPass.byCoin.get(r.coin) ?? null;
       r.liq = liqPass.byCoin.get(r.coin) ?? null;
@@ -511,12 +521,15 @@ async function run(nowFn: () => number, ai = false): Promise<ScreenerRun> {
       at,
       ctxs.map((c) => ({ coin: c.coin, funding: c.funding, openInterest: c.openInterest, volume: c.dayNtlVlm, mark: c.markPx, oracle: c.oraclePx })),
     );
+    snapshotAt = t0;
     await screenerStore.prune(new Date(t0 - KEEP_DAYS * DAY_MS).toISOString(), new Date(t0 - RUNS_KEEP_DAYS * DAY_MS).toISOString()).catch(() => {});
     console.log(`[screener] ${flagged.length} coins in ${(tookMs / 1000).toFixed(1)}s, ${fullReads} full reads, ${errors} could not be read, ${ctxs.length} perps listed`);
     latest = { id, at, barsTo, tookMs, errors, universe: flagged.length, fullReads, breadth, btc: btcMove, flowStatus: flowPass.status, liqStatus: liqPass.status, anomalies, settings, rows: flagged };
     notifyAll("screener");
     // The AI read, after the scheduled runs only; it is slow and costs, so it never holds the run up.
     if (ai) {
+      // Counted as tried here, where the read actually starts: counted before the run, a run that failed cancelled the slot's read.
+      aiTriedAt = Date.now();
       const done = latest;
       void import("./screener-ai").then((m) => m.analyzeRun(done)).catch((err) => console.error(`[screener-ai] ${String(err?.message ?? err)}`));
     }
@@ -524,6 +537,8 @@ async function run(nowFn: () => number, ai = false): Promise<ScreenerRun> {
   } catch (err: any) {
     status.lastError = String(err?.message ?? err).slice(0, 300);
     console.error(`[screener] run failed: ${status.lastError}`);
+    // The page is told of a failure too: it polls the status while a run is on, and nothing else would stop it.
+    setTimeout(() => notifyAll("screener"), 0);
     throw err;
   } finally {
     status.running = false;
@@ -565,6 +580,11 @@ const oiChange = (now: number | null, before: number | null) => (now != null && 
 
 /* ------------------------------- the hourly snapshot ------------------------------- */
 
+/** When the last snapshot was written, in memory; null until first asked. A run sets it too. */
+let snapshotAt: number | null = null;
+/** A little over the hour: a snapshot written between two hourly runs made the second measure OI against one nine minutes old. */
+const SNAPSHOT_GAP_MS = 65 * 60_000;
+
 /**
  * Open interest, funding, mark and oracle for every perp, once an hour:
  * one request (20 of the venue's 1200 weight a minute). Hyperliquid keeps
@@ -573,9 +593,14 @@ const oiChange = (now: number | null, before: number | null) => (now != null && 
  * and the hourly tick do not both write one.
  */
 export async function takeSnapshot(nowFn: () => number = Date.now): Promise<{ at: string; perps: number } | null> {
-  const last = await screenerStore.latestSnapshotAt();
   const now = nowFn();
-  if (last && now - new Date(last).getTime() < 50 * 60_000) return null;
+  // Remembered between ticks: asked of the database every minute it was a read a minute for an answer that changes hourly.
+  if (snapshotAt == null) {
+    const last = await screenerStore.latestSnapshotAt();
+    snapshotAt = last ? new Date(last).getTime() : 0;
+  }
+  // Each run writes its own snapshot, so on the hourly schedule this has nothing to do; it fills in when runs are failing.
+  if (snapshotAt && now - snapshotAt < SNAPSHOT_GAP_MS) return null;
   const ctxs = parseMetaAndAssetCtxs(await hlInfo({ type: "metaAndAssetCtxs" }, 20_000, { lane: "background" }));
   if (ctxs.length === 0) return null;
   const at = new Date(now).toISOString();
@@ -583,6 +608,7 @@ export async function takeSnapshot(nowFn: () => number = Date.now): Promise<{ at
     at,
     ctxs.map((c) => ({ coin: c.coin, funding: c.funding, openInterest: c.openInterest, volume: c.dayNtlVlm, mark: c.markPx, oracle: c.oraclePx })),
   );
+  snapshotAt = now;
   return { at, perps: ctxs.length };
 }
 
@@ -646,12 +672,25 @@ export function aiReadDue(now: number, lastRunIso: string | null): boolean {
   return false;
 }
 
-async function ownerPortfolioTick(): Promise<void> {
+/**
+ * The owner's portfolio read once an hour, so its chart fills in with the
+ * page closed. Timed in memory: asked of the database every minute it was
+ * two reads a minute for nothing, and while one source was down (so no
+ * snapshot could be written) it re-read every wallet every minute. After
+ * any attempt the next is at least a quarter of an hour on.
+ */
+let portfolioNextAt = 0;
+async function ownerPortfolioTick(now = Date.now()): Promise<void> {
+  if (now < portfolioNextAt) return;
+  portfolioNextAt = now + 15 * 60_000;
   const { accounts, portfolioStore } = await import("./storage");
   const owner = await accounts.owner();
   if (!owner) return;
+  // Nothing followed: nothing to read, and no reason to ask again soon.
+  if ((await portfolioStore.addresses(owner.id)).length === 0) return void (portfolioNextAt = now + 60 * 60_000);
   const last = await portfolioStore.lastSnapshotAt(owner.id);
-  if (last && Date.now() - new Date(last).getTime() < 60 * 60_000) return;
+  const lastMs = last ? new Date(last).getTime() : 0;
+  if (lastMs && now - lastMs < 60 * 60_000) return void (portfolioNextAt = lastMs + 60 * 60_000);
   const { readPortfolio } = await import("./portfolio");
   await readPortfolio(owner.id, { fresh: true });
 }
@@ -672,32 +711,44 @@ export async function aiDueNow(now = Date.now()): Promise<boolean> {
 /** Whatever is due now — the hourly run, the AI read's run — started; false when nothing is. */
 export async function scheduledRun(now = Date.now()): Promise<boolean> {
   if (status.running) return false;
+  // A run that failed is not tried again at once, whoever asks: the clock every minute, or a pinger as often as it likes.
+  if (lastRunAt && now - lastRunAt < COOLDOWN_MS) return false;
   const last = await latestScreenerRun();
+  const hourly = runDue(now, last?.at ?? null);
   const ai = await aiDueNow(now);
-  if (!runDue(now, last?.at ?? null) && !ai) return false;
-  if (ai) aiTriedAt = now;
+  /*
+   * The read rides the hourly run when one is minutes away: 08:00's goes
+   * with the 08:05 run. Forced at 08:00 it made two full runs back to back
+   * every morning, and the read described the one the page had already
+   * replaced. 13:30, half an hour from the next, gets a run of its own.
+   */
+  const aiOwnRun = ai && !aiRidesHourly(now);
+  if (!hourly && !aiOwnRun) return false;
   await runScreener({ force: true, ai });
   return true;
 }
+
+const AI_RIDES_WITHIN_MS = 10 * 60_000;
+/** Whether a read due now waits for the hourly run about to start, rather than forcing a run of its own. */
+export const aiRidesHourly = (now: number): boolean => nextRunAt(now) - now <= AI_RIDES_WITHIN_MS;
 
 /** The clock: a minute's tick, a run when one is due. `SCREENER_CLOCK_MS=0` is off (tests). */
 export function startScreenerClock(everyMs = Number(process.env.SCREENER_CLOCK_MS ?? "60000")): void {
   if (!(everyMs > 0)) return;
   const tick = async () => {
-    // The hourly snapshot, whatever the run schedule says; its own failure is its own.
-    if (!status.running) await takeSnapshot().catch((err) => console.error(`[screener] snapshot: ${String(err?.message ?? err)}`));
     // The macro and earnings calendar, downloaded once a day.
     await import("./calendar").then((m) => m.calendarTick()).catch((err) => console.error(`[calendar] ${String(err?.message ?? err)}`));
     // The owner's portfolio value, an hour at most apart, so its chart fills in with the page closed.
     await ownerPortfolioTick().catch((err) => console.error(`[portfolio] ${String(err?.message ?? err)}`));
     try {
       if (status.running) return;
-      // A run that failed is not tried again every minute: the cooldown is the back-off.
-      if (lastRunAt && Date.now() - lastRunAt < COOLDOWN_MS) return;
       await scheduledRun();
     } catch (err: any) {
       console.error(`[screener] clock: ${String(err?.message ?? err)}`);
     }
+    // The snapshot after the run, not before it: a run writes its own, and one written a second earlier was the
+    // "previous" its OI change was then measured against. This one only fills in when no run has for over an hour.
+    if (!status.running) await takeSnapshot().catch((err) => console.error(`[screener] snapshot: ${String(err?.message ?? err)}`));
   };
   // The catch-up: a service that slept through a slot runs once it is up.
   setTimeout(() => void tick(), 15_000).unref?.();

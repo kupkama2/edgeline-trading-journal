@@ -526,6 +526,28 @@ describe.skipIf(!DB)("the terminal against a stub venue", () => {
     expect(ref.unprotected).toBe(false);
   });
 
+  it("does not take one 'no such order' as the end of a bracket", async () => {
+    // The venue's lookup can not know an order for a beat. Taken as final, the fills of the order the stop later
+    // fired into were read as a close by hand; so it is noted, asked again, and forgotten when the order shows.
+    const stop = algos.find((a) => a.algoId === ref.stopOrderId)!;
+    const at = algos.indexOf(stop);
+    algos.splice(at, 1);
+    await send("POST", "/api/terminal/reconcile", {});
+    const doubted = JSON.parse((await store.getTrade(tradeId)).terminal).bracketFate?.[String(stop.algoId)];
+    expect(doubted).toMatchObject({ missAt: expect.any(Number), askedAt: expect.any(Number) });
+    expect(doubted.gone).toBeUndefined();
+    // Asked a moment later, it is not asked about again yet.
+    const asks = () => calls.filter((c) => c.method === "GET" && c.path === "/fapi/v1/algoOrder" && Number(c.params.algoId) === stop.algoId).length;
+    const before = asks();
+    await send("POST", "/api/terminal/reconcile", {});
+    expect(asks()).toBe(before);
+    algos.splice(at, 0, stop);
+    await send("POST", "/api/terminal/reconcile", {});
+    const back = JSON.parse((await store.getTrade(tradeId)).terminal);
+    expect(back.bracketFate?.[String(stop.algoId)]).toBeUndefined();
+    expect(back.unprotected).toBe(false);
+  });
+
   it("closes the trade at the stop's fill once the position side is flat", async () => {
     fillOrder(ref.stopOrderId, 79598);
     expect(position.amt).toBe(0);

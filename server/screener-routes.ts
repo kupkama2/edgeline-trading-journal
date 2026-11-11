@@ -277,10 +277,15 @@ async function newsRead(apiKey: string, ticker: string): Promise<{ summary: stri
       },
     ],
   });
+  // The answer is the text after the last search result: before it comes a line saying it will search. And the
+  // text arrives in pieces, one per cited span, which belong together: joined with newlines, a bullet was cut in
+  // two at every citation and the first three "lines" were the preamble and two halves of one bullet.
+  const lastResult = res.content.map((b) => b.type as string).lastIndexOf("web_search_tool_result");
   const text = res.content
+    .slice(lastResult + 1)
     .filter((b): b is Anthropic.TextBlock => b.type === "text")
     .map((b) => b.text)
-    .join("\n");
+    .join("");
   const sources = new Map<string, string | null>();
   for (const b of res.content) {
     if (b.type !== "text") continue;

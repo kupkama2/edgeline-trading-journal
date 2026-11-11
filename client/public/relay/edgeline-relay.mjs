@@ -92,8 +92,23 @@ async function publicGet(path, params = {}) {
 }
 
 async function unsignedWithKey(method, base, path) {
-  const res = await fetch(`${base}${path}`, { method, headers: { "X-MBX-APIKEY": KEY, accept: "application/json" } });
-  return { status: res.status, body: await res.text() };
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 20_000);
+  try {
+    const res = await fetch(`${base}${path}`, { method, headers: { "X-MBX-APIKEY": KEY, accept: "application/json" }, signal: ctl.signal });
+    return { status: res.status, body: await res.text() };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Whether a base the journal named is one of Binance's own hosts. */
+function venueHost(base) {
+  try {
+    return /(^|\.)binance(future)?\.com$/.test(new URL(String(base)).hostname);
+  } catch {
+    return false;
+  }
 }
 
 /** What the key may do, asked of the venue — so the journal knows whether this account may trade. */
@@ -125,6 +140,9 @@ async function openStream() {
   streamWs = ws;
   ws.onopen = () => {
     log("Binance stream open");
+    streamBackoff = 5_000;
+    streamUp = true;
+    sendToJournal({ t: "stream", up: true });
     keepalive = setInterval(() => unsignedWithKey("PUT", FUTURES, "/fapi/v1/listenKey").catch(() => {}), 20 * 60_000);
   };
   ws.onmessage = (ev) => {
@@ -142,9 +160,30 @@ async function openStream() {
     if (keepalive) clearInterval(keepalive);
     keepalive = null;
     streamWs = null;
-    setTimeout(() => openStream().catch((e) => log("stream:", e.message)), 5_000);
+    streamUp = false;
+    sendToJournal({ t: "stream", up: false });
+    setTimeout(keepStream, 5_000);
   };
   ws.onerror = () => {};
+}
+
+/**
+ * The stream, opened and kept: a failed attempt — the network down, the
+ * laptop just awake, Binance refusing a listen key — is tried again, a
+ * little later each time up to a minute. It used to be tried once, and a
+ * relay whose one attempt failed sat connected to the journal with no
+ * stream behind it, so fills were only seen by the five-minute read.
+ */
+let streamBackoff = 5_000;
+let streamUp = false;
+function keepStream() {
+  openStream().catch((e) => {
+    log(`stream: ${e.message}; trying again in ${Math.round(streamBackoff / 1000)}s`);
+    streamUp = false;
+    sendToJournal({ t: "stream", up: false });
+    setTimeout(keepStream, streamBackoff);
+    streamBackoff = Math.min(streamBackoff * 2, 60_000);
+  });
 }
 
 /** One line per thing the venue says happened, so the window shows the account moving. */
@@ -181,7 +220,9 @@ async function connect(facts) {
   ws.onopen = () => {
     backoff = 1_000;
     log(`connected to ${URL_}`);
-    ws.send(JSON.stringify({ t: "hello", env: ENV, canTrade: facts.canTrade, keyHint: KEY.slice(-8), features: ["public"] }));
+    ws.send(JSON.stringify({ t: "hello", env: ENV, canTrade: facts.canTrade, keyHint: KEY.slice(-8), features: ["public", "stream-state"] }));
+    // The journal leans on the stream only while it is up: say where it stands on every (re)connect.
+    ws.send(JSON.stringify({ t: "stream", up: streamUp }));
   };
   ws.onmessage = async (ev) => {
     let m;
@@ -192,8 +233,10 @@ async function connect(facts) {
     }
     if (m?.t === "req") {
       try {
-        // The venue's own hosts are asked as named; anything else — a stub the server was pointed at — becomes this relay's futures host.
-        const base = /binance(future)?\.com$/.test(new URL(m.base).hostname) ? m.base : FUTURES;
+        // A market-data read names no host: it goes to this relay's futures host, whatever was sent.
+        // Otherwise the venue's own hosts are asked as named; anything else — a stub the server was pointed at —
+        // becomes this relay's futures host. The dot matters: "evilbinance.com" is not Binance's.
+        const base = m.public ? FUTURES : venueHost(m.base) ? m.base : FUTURES;
         const r = m.public ? await publicGet(m.path, m.params ?? {}) : m.path === "/fapi/v1/listenKey" ? await unsignedWithKey(m.method, base, m.path) : await signed(m.method, base, m.path, m.params ?? {});
         if (m.public) publicServed += 1;
         served += 1;
@@ -233,4 +276,4 @@ if (process.env.PORT) {
 const facts = await describeKey();
 log(`key …${KEY.slice(-4)} on ${ENV}: ${facts.canTrade ? "may trade" : "read-only"}`);
 await connect(facts);
-openStream().catch((e) => log("stream:", e.message));
+keepStream();

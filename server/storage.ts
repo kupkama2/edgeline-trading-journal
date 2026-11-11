@@ -886,7 +886,8 @@ export async function terminalUsers(): Promise<number[]> {
   const rows = await db
     .selectDistinct({ userId: trades.userId })
     .from(trades)
-    .where(and(sqlx`${trades.terminal} IS NOT NULL`, inArray(trades.status, ["pending", "open"])));
+    // A ref, not an empty string: a hand-logged trade carries "" and is nobody's errand.
+    .where(and(sqlx`${trades.terminal} IS NOT NULL AND ${trades.terminal} <> ''`, inArray(trades.status, ["pending", "open"])));
   return rows.map((r) => r.userId);
 }
 
@@ -1229,8 +1230,19 @@ export const portfolioStore = {
     const rows = await sql<{ at: string }[]>`SELECT at FROM portfolio_snapshots WHERE user_id = ${userId} ORDER BY at DESC LIMIT 1`;
     return rows[0]?.at ?? null;
   },
-  async history(userId: number, since: string): Promise<{ at: string; value: number; pnl: number }[]> {
-    return sql<{ at: string; value: number; pnl: number }[]>`SELECT at, value, pnl FROM portfolio_snapshots WHERE user_id = ${userId} AND at >= ${since} ORDER BY at`;
+  /** The value over time, each point with what it was a total of (`sig`; null on rows from before that was kept). */
+  async history(userId: number, since: string): Promise<{ at: string; value: number; pnl: number; sig: string | null }[]> {
+    const rows = await sql<{ at: string; value: number; pnl: number; body: string | null }[]>`SELECT at, value, pnl, body FROM portfolio_snapshots WHERE user_id = ${userId} AND at >= ${since} ORDER BY at`;
+    return rows.map((r) => {
+      let sig: string | null = null;
+      try {
+        const b = r.body ? JSON.parse(r.body) : null;
+        sig = typeof b?.sig === "string" ? b.sig : null;
+      } catch {
+        sig = null;
+      }
+      return { at: r.at, value: r.value, pnl: r.pnl, sig };
+    });
   },
 };
 

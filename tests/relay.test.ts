@@ -40,6 +40,8 @@ const algos = [
   { algoId: 6002, clientAlgoId: "web_tp", symbol: "ETHUSDT", side: "BUY", positionSide: "SHORT", orderType: "TAKE_PROFIT_MARKET", algoType: "CONDITIONAL", algoStatus: "NEW", quantity: "0", triggerPrice: "2800", closePosition: true, createTime: now - 19 * MIN, updateTime: now - 19 * MIN, triggerTime: 0, actualOrderId: "" },
 ];
 const answered: { method: string; path: string; params: Record<string, unknown> }[] = [];
+/** Every request as it came down the socket. */
+const raw: Record<string, any>[] = [];
 function answer(method: string, path: string, params: Record<string, any>): { status: number; body: unknown } {
   answered.push({ method, path, params });
   switch (`${method} ${path}`) {
@@ -70,6 +72,7 @@ function fakeRelay(token: string): Promise<WebSocket> {
     });
     ws.on("message", (data) => {
       const m = JSON.parse(String(data));
+      if (m.t === "req") raw.push(m);
       if (m.t === "req") {
         const r = answer(m.method, m.path, m.params ?? {});
         ws.send(JSON.stringify({ t: "res", id: m.id, status: r.status, body: JSON.stringify(r.body) }));
@@ -190,6 +193,25 @@ describe.skipIf(!DB)("the relay", () => {
     const ref = JSON.parse(eth.terminal);
     expect(ref.moves).toMatchObject([{ kind: "stop", from: 3100, to: 3050 }]);
     expect(answered.some((a) => a.path === "/fapi/v2/positionRisk")).toBe(true);
+  });
+
+  it("asks for public market data with a real host, from a live relay that says it can", async () => {
+    const { publicRelayFor, relayPublic } = await import("../server/relay");
+    // This relay's hello named no features: an older copy, reported as one to update.
+    expect(publicRelayFor(userId)).toEqual({ account: null, outdated: true });
+    relay!.send(JSON.stringify({ t: "hello", env: "live", canTrade: false, keyHint: "relaykey", features: ["public"] }));
+    await waitFor(async () => publicRelayFor(userId), (r) => r.account === ACCOUNT);
+    expect(publicRelayFor(userId)).toEqual({ account: ACCOUNT, outdated: false });
+    await relayPublic(userId, ACCOUNT, "/fapi/v1/premiumIndex", { symbol: "ETHUSDT", skipped: undefined });
+    const sent = raw.find((m) => m.public);
+    // The base is Binance's own: sent empty, every copy of the relay answered "Invalid URL" and no flow was ever read.
+    expect(sent).toMatchObject({ method: "GET", path: "/fapi/v1/premiumIndex", public: true, base: "https://fapi.binance.com", params: { symbol: "ETHUSDT" } });
+    expect(() => new URL(sent!.base)).not.toThrow();
+    // A testnet relay is never asked for the market: its prices are the testnet's.
+    relay!.send(JSON.stringify({ t: "hello", env: "testnet", canTrade: false, keyHint: "relaykey", features: ["public"] }));
+    await waitFor(async () => publicRelayFor(userId), (r) => r.account === null);
+    expect(publicRelayFor(userId).account).toBeNull();
+    relay!.send(JSON.stringify({ t: "hello", env: "live", canTrade: false, keyHint: "relaykey" }));
   });
 
   it("says so when the relay is gone, instead of waiting on a host", async () => {

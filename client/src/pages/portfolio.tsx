@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { ColorType, createChart, LineSeries, type UTCTimestamp } from "lightweight-charts";
+import { ColorType, createChart, LineSeries, type IChartApi, type UTCTimestamp } from "lightweight-charts";
 import { AlertTriangle, Eye, EyeOff, Loader2, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -8,10 +8,35 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { usePublicMode } from "@/lib/public-mode";
+import { useTheme } from "@/components/shell";
 import { DUST_USD, isDust, type AddressKind, type PortfolioRead, type Position, type VaultHolding } from "@shared/portfolio";
 import { fmtAmount, fmtMoney } from "@shared/metrics";
+import { parseLooseNumber } from "@shared/loose-number";
+import { amountsHidden, WITHHELD } from "@shared/redact";
 
-type Page = PortfolioRead & { history: { at: string; value: number; pnl: number }[] };
+type Page = PortfolioRead & { history: { at: string; value: number; pnl: number }[]; change24?: number | null; change24Why?: string | null };
+
+/** What a failed request said, without the status and the JSON around it. */
+const said = (err: unknown) =>
+  String((err as any)?.message ?? err)
+    .replace(/^\d+:\s*/, "")
+    .replace(/^\{"message":"|"\}$/g, "")
+    .slice(0, 160);
+
+/** A phone's width: the tables become lists, with the asset, its value and its P&L first. */
+const NARROW = "(max-width: 639px)";
+function useNarrow(): boolean {
+  const [narrow, setNarrow] = useState(() => typeof window !== "undefined" && window.matchMedia(NARROW).matches);
+  useEffect(() => {
+    const mql = window.matchMedia(NARROW);
+    const onChange = () => setNarrow(mql.matches);
+    mql.addEventListener("change", onChange);
+    onChange();
+    return () => mql.removeEventListener("change", onChange);
+  }, []);
+  return narrow;
+}
 
 /* Through the journal's own formatters, so public mode hides these figures like every other amount. */
 const usd = (x: number | null | undefined, signed = false) => {
@@ -20,6 +45,8 @@ const usd = (x: number | null | undefined, signed = false) => {
 };
 const pct = (x: number | null | undefined) => (x == null || !Number.isFinite(x) ? "—" : `${x >= 0 ? "+" : "−"}${Math.abs(x * 100).toFixed(1)}%`);
 const qty = (x: number) => {
+  // A quantity next to a public price is the value by one multiplication: withheld with the amounts.
+  if (amountsHidden()) return WITHHELD;
   const a = Math.abs(x);
   return x.toLocaleString(undefined, { maximumFractionDigits: a >= 1000 ? 0 : a >= 1 ? 4 : 6 });
 };
@@ -47,26 +74,46 @@ function Sparkline({ points }: { points: [number, number][] }) {
 /** The portfolio's value over time, from the server's hourly snapshots. */
 function ValueChart({ history }: { history: Page["history"] }) {
   const host = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const el = host.current;
-    if (!el || history.length < 2) return;
+  const chartRef = useRef<IChartApi | null>(null);
+  const { isPublic } = usePublicMode();
+  const { theme } = useTheme();
+  const themed = (el: HTMLElement) => {
     const cs = getComputedStyle(el);
     const tok = (n: string, a?: number) => {
       const v = cs.getPropertyValue(n).trim();
       return v ? (a == null ? `hsl(${v})` : `hsl(${v} / ${a})`) : "#888";
     };
-    const chart = createChart(el, {
-      autoSize: true,
-      layout: { background: { type: ColorType.Solid, color: tok("--card") }, textColor: tok("--muted-foreground"), fontSize: 10 },
+    return {
+      layout: { background: { type: ColorType.Solid as const, color: tok("--card") }, textColor: tok("--muted-foreground"), fontSize: 10 },
       grid: { vertLines: { color: tok("--border", 0.4) }, horzLines: { color: tok("--border", 0.4) } },
-      rightPriceScale: { borderColor: tok("--border", 0.4) },
+      // In public mode the shape stays and the scale goes: the axis, the last-value tag and the crosshair's label each printed the account's size.
+      rightPriceScale: { borderColor: tok("--border", 0.4), visible: !isPublic },
       timeScale: { borderColor: tok("--border", 0.4), timeVisible: true },
-    });
-    const line = chart.addSeries(LineSeries, { color: "#38bdf8", lineWidth: 2, priceLineVisible: false });
+      crosshair: { horzLine: { labelVisible: !isPublic } },
+    };
+  };
+  useEffect(() => {
+    const el = host.current;
+    if (!el || history.length < 2) return;
+    const chart = createChart(el, { autoSize: true, ...themed(el) });
+    chartRef.current = chart;
+    const line = chart.addSeries(LineSeries, { color: "#38bdf8", lineWidth: 2, priceLineVisible: false, lastValueVisible: !isPublic });
     line.setData(history.map((h) => ({ time: Math.floor(new Date(h.at).getTime() / 1000) as UTCTimestamp, value: h.value })));
     chart.timeScale().fitContent();
-    return () => chart.remove();
-  }, [history]);
+    return () => {
+      chart.remove();
+      chartRef.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [history, isPublic]);
+  // The theme changed: the chart was drawn in the old one's colours. Read after the paint, when the tokens are the new ones.
+  useEffect(() => {
+    const id = requestAnimationFrame(() => {
+      if (host.current && chartRef.current) chartRef.current.applyOptions(themed(host.current));
+    });
+    return () => cancelAnimationFrame(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [theme]);
   if (history.length < 2) return <p className="py-6 text-center text-xs text-muted-foreground">The value over time builds from an hourly snapshot; it shows once there are two.</p>;
   return <div ref={host} className="h-44 w-full" data-testid="portfolio-chart" />;
 }
@@ -80,7 +127,7 @@ function HideButton({ k, hidden, onHide }: { k: string; hidden: boolean; onHide:
     <button
       type="button"
       onClick={() => onHide(k, !hidden)}
-      className="rounded p-0.5 text-muted-foreground hover:text-foreground"
+      className="relative rounded p-0.5 text-muted-foreground after:absolute after:-inset-1.5 after:content-[''] hover:text-foreground"
       title={hidden ? "Show again, and count it in the totals" : "Hide, and leave it out of the totals"}
       aria-label={hidden ? "Unhide" : "Hide"}
       data-testid={`portfolio-hide-${k}`}
@@ -98,18 +145,34 @@ const ShadeTag = ({ shade }: { shade: Shade }) =>
   ) : null;
 
 /**
- * A P&L figure that can be rewritten: a click on the pencil turns it into a
- * field, Enter or leaving it saves, blank goes back to the source's figure.
+ * A P&L figure that can be rewritten: a click on the figure turns it into a
+ * field, Enter or leaving it saves, Escape leaves it as it was, blank goes
+ * back to the source's figure.
  */
-function PnlCell({ k, pnl, pct: pctOf, own, onSave, big = false }: { k: string; pnl: number | null; pct?: number | null; own: boolean; onSave: (key: string, pnl: number | null) => void; big?: boolean }) {
+function PnlCell({ k, pnl, pct: pctOf, own, onSave }: { k: string; pnl: number | null; pct?: number | null; own: boolean; onSave: (key: string, pnl: number | null) => void }) {
+  const { toast } = useToast();
   const [editing, setEditing] = useState(false);
   const [v, setV] = useState("");
+  // Escape closes the field, and a field that closes loses focus: without this the blur saved what Escape was pressed to discard.
+  const cancelled = useRef(false);
+  // Public mode: the figure is withheld, and so is the field that would show it.
+  if (amountsHidden()) return <span className={tone(pnl)}>{usd(pnl, true)}</span>;
   if (editing) {
     const done = () => {
       setEditing(false);
+      if (cancelled.current) return;
       const raw = v.trim();
-      const n = raw === "" ? null : Number(raw.replace(/[$,\s]/g, "").replace(/^\+/, "").replace("\u2212", "-"));
-      if (n === null ? own : Number.isFinite(n) && n !== pnl) onSave(k, n);
+      if (raw === "") {
+        if (own) onSave(k, null);
+        return;
+      }
+      // As it was copied: "1,234.50", "−310", "(310)", "$1 200".
+      const n = parseLooseNumber(raw);
+      if (n == null) {
+        toast({ title: "Not a number", description: `"${raw.slice(0, 24)}" was not saved as a P&L.`, variant: "destructive" });
+        return;
+      }
+      if (n !== pnl || !own) onSave(k, n);
     };
     return (
       <Input
@@ -119,7 +182,10 @@ function PnlCell({ k, pnl, pct: pctOf, own, onSave, big = false }: { k: string; 
         onBlur={done}
         onKeyDown={(e) => {
           if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-          if (e.key === "Escape") setEditing(false);
+          if (e.key === "Escape") {
+            cancelled.current = true;
+            setEditing(false);
+          }
         }}
         placeholder="P&L, blank = source"
         inputMode="decimal"
@@ -128,45 +194,56 @@ function PnlCell({ k, pnl, pct: pctOf, own, onSave, big = false }: { k: string; 
       />
     );
   }
+  // The figure is the button: the pencil alone was twelve pixels, and showed only under a mouse.
   return (
-    <span className="group inline-flex items-center justify-end gap-1">
+    <button
+      type="button"
+      onClick={() => {
+        cancelled.current = false;
+        setV(own && pnl != null ? String(pnl) : "");
+        setEditing(true);
+      }}
+      className="group -mx-1 -my-0.5 inline-flex items-center justify-end gap-1 rounded px-1 py-0.5 font-mono hover:bg-muted/60 focus-visible:bg-muted/60"
+      title={own ? "Your figure, over the source's. Click to change it; leave it blank to go back." : "Click to rewrite this P&L"}
+      aria-label="Rewrite P&L"
+      data-testid={`portfolio-pnl-edit-${k}`}
+    >
       <span className={tone(pnl)}>
         {usd(pnl, true)}
         {pctOf !== undefined && pnl != null && <span className="ml-1 text-[10px]">{pct(pctOf)}</span>}
       </span>
-      {own && (
-        <span className="text-[9px] text-sky-400" title="Your figure, over the source's. Edit it and leave it blank to go back.">
-          yours
-        </span>
-      )}
-      <button
-        type="button"
-        onClick={() => {
-          setV(own && pnl != null ? String(pnl) : "");
-          setEditing(true);
-        }}
-        className={`rounded p-0.5 text-muted-foreground hover:text-foreground ${big ? "" : "opacity-0 group-hover:opacity-100 focus:opacity-100"}`}
-        title="Rewrite this P&L"
-        aria-label="Rewrite P&L"
-        data-testid={`portfolio-pnl-edit-${k}`}
-      >
-        <Pencil className="h-3 w-3" />
-      </button>
-    </span>
+      {own && <span className="text-[9px] text-sky-400">yours</span>}
+      <Pencil className="h-3 w-3 shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 [@media(hover:none)]:opacity-60" aria-hidden />
+    </button>
   );
 }
 
 /** A wallet token's cost, typed in; blank clears it. */
 function CostCell({ p, onSave }: { p: Position; onSave: (key: string, cost: number | null) => void }) {
-  const [v, setV] = useState(p.cost != null && p.costFrom === "owner" ? String(p.cost) : "");
+  const { toast } = useToast();
+  const mine = p.cost != null && p.costFrom === "owner" ? String(p.cost) : "";
+  const [v, setV] = useState(mine);
   if (p.costFrom === "venue") return <span className="font-mono" title="What it cost, as Hyperliquid states it">{usd(p.cost)}</span>;
+  // Public mode: a field would show the figure the mode withholds.
+  if (amountsHidden()) return <span className="font-mono">{usd(p.cost)}</span>;
   return (
     <Input
       value={v}
       onChange={(e) => setV(e.target.value)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+        if (e.key === "Escape") setV(mine);
+      }}
       onBlur={() => {
-        const n = v.trim() === "" ? null : Number(v.replace(/[$,\s]/g, ""));
-        if (n === null || (Number.isFinite(n) && n >= 0)) if (n !== (p.costFrom === "owner" ? p.cost : null)) onSave(p.key, n);
+        const raw = v.trim();
+        const n = raw === "" ? null : parseLooseNumber(raw);
+        if (raw !== "" && (n == null || n < 0)) {
+          // Said, and put back: it used to be dropped without a word, the field still showing what was typed.
+          toast({ title: "Not a cost", description: `"${raw.slice(0, 24)}" is not an amount paid; nothing was saved.`, variant: "destructive" });
+          setV(mine);
+          return;
+        }
+        if (n !== (p.costFrom === "owner" ? p.cost : null)) onSave(p.key, n);
       }}
       placeholder="cost $"
       inputMode="decimal"
@@ -182,17 +259,26 @@ export default function PortfolioPage() {
   const refresh = useMutation({
     mutationFn: async () => (await apiRequest("GET", "/api/portfolio?fresh=1")).json(),
     onSuccess: (d) => queryClient.setQueryData(["/api/portfolio"], d),
+    onError: (err) => toast({ title: "Not refreshed", description: said(err), variant: "destructive" }),
   });
   const invalidate = () => void queryClient.invalidateQueries({ queryKey: ["/api/portfolio"] });
+  // A change that did not save says so: each of these used to fail in silence, the page showing the old figure as if nothing had been typed.
+  const failed = (what: string) => (err: unknown) => {
+    toast({ title: what, description: said(err), variant: "destructive" });
+    invalidate();
+  };
   const add = useMutation({
     mutationFn: async (b: { kind: AddressKind; address: string; label: string }) => (await apiRequest("POST", "/api/portfolio/addresses", b)).json(),
     onSuccess: invalidate,
   });
-  const remove = useMutation({ mutationFn: async (id: number) => (await apiRequest("DELETE", `/api/portfolio/addresses/${id}`)).json(), onSuccess: invalidate });
-  const saveCost = useMutation({ mutationFn: async (b: { key: string; cost: number | null }) => (await apiRequest("PUT", "/api/portfolio/cost", b)).json(), onSuccess: invalidate });
-  const hide = useMutation({ mutationFn: async (b: { key: string; hidden: boolean }) => (await apiRequest("PUT", "/api/portfolio/hidden", b)).json(), onSuccess: invalidate });
+  const remove = useMutation({ mutationFn: async (id: number) => (await apiRequest("DELETE", `/api/portfolio/addresses/${id}`)).json(), onSuccess: invalidate, onError: failed("Still followed") });
+  const saveCost = useMutation({ mutationFn: async (b: { key: string; cost: number | null }) => (await apiRequest("PUT", "/api/portfolio/cost", b)).json(), onSuccess: invalidate, onError: failed("Cost not saved") });
+  const hide = useMutation({ mutationFn: async (b: { key: string; hidden: boolean }) => (await apiRequest("PUT", "/api/portfolio/hidden", b)).json(), onSuccess: invalidate, onError: failed("Not changed") });
   const onHide = (key: string, hidden: boolean) => hide.mutate({ key, hidden });
-  const savePnl = useMutation({ mutationFn: async (b: { key: string; pnl: number | null }) => (await apiRequest("PUT", "/api/portfolio/pnl", b)).json(), onSuccess: invalidate });
+  const savePnl = useMutation({ mutationFn: async (b: { key: string; pnl: number | null }) => (await apiRequest("PUT", "/api/portfolio/pnl", b)).json(), onSuccess: invalidate, onError: failed("P&L not saved") });
+  const narrow = useNarrow();
+  // Read so the page draws again when the mode flips; the formatters themselves ask the switch.
+  usePublicMode();
   const onPnl = (key: string, pnl: number | null) => savePnl.mutate({ key, pnl });
   // The P&L up top can be kept off the screen; remembered in this browser.
   const [pnlOff, setPnlOff] = useState<boolean>(() => {
@@ -251,13 +337,10 @@ export default function PortfolioPage() {
     const dust = (d?.positions ?? []).filter((p) => !hiddenKeys.has(p.key) && isDust(p)).length;
     return { hidden, dust };
   }, [d, hiddenKeys]);
-  const change24 = useMemo(() => {
-    const h = d?.history ?? [];
-    if (!d || h.length === 0) return null;
-    const dayAgo = Date.now() - 86400_000;
-    const then = [...h].reverse().find((x) => new Date(x.at).getTime() <= dayAgo);
-    return then ? d.totals.value - then.value : null;
-  }, [d]);
+  // The server's figure: it compares against the snapshot nearest a day back, and only when that one counted the same
+  // addresses and hidden rows. Worked out here it took any snapshot older than a day, so an address added this
+  // morning showed as the day's gain.
+  const change24 = d?.change24 ?? null;
 
   const onAdd = async () => {
     try {
@@ -265,7 +348,7 @@ export default function PortfolioPage() {
       setAddress("");
       setLabel("");
     } catch (err: any) {
-      toast({ title: "Not added", description: String(err?.message ?? err).replace(/^\d+:\s*/, "").replace(/^\{"message":"|"\}$/g, "").slice(0, 160), variant: "destructive" });
+      toast({ title: "Not added", description: said(err), variant: "destructive" });
     }
   };
 
@@ -290,6 +373,17 @@ export default function PortfolioPage() {
         </div>
       </div>
 
+      {page.isError && !d && (
+        <Card className="flex flex-wrap items-center justify-between gap-2 border-amber-500/40 bg-card p-4 text-xs" data-testid="portfolio-failed">
+          <span className="flex items-center gap-1.5 text-amber-500">
+            <AlertTriangle className="h-3.5 w-3.5" /> The portfolio could not be read: {said(page.error)}
+          </span>
+          <Button size="sm" variant="outline" className="h-7" onClick={() => void page.refetch()}>
+            Try again
+          </Button>
+        </Card>
+      )}
+
       {/* ------------------------------ the totals ------------------------------ */}
       {d && d.addresses.length > 0 && (
         <Card className="border-card-border bg-card p-4" data-testid="portfolio-totals">
@@ -297,12 +391,14 @@ export default function PortfolioPage() {
             <div>
               <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Value</p>
               <p className="font-mono text-2xl font-bold" data-testid="portfolio-value">{usd(d.totals.value)}</p>
-              <p className={`font-mono text-[11px] ${tone(change24)}`}>{change24 != null ? `${usd(change24, true)} 24h` : "24h change once a day of snapshots exists"}</p>
+              <p className={`font-mono text-[11px] ${change24 != null ? tone(change24) : "text-muted-foreground"}`} data-testid="portfolio-change24">
+                {change24 != null ? `${usd(change24, true)} 24h` : (d.change24Why ?? "24h change once a day of snapshots exists")}
+              </p>
             </div>
             <div>
               <p className="flex items-center gap-1 text-[10px] uppercase tracking-wider text-muted-foreground">
                 P&L
-                <button type="button" onClick={togglePnl} className="rounded p-0.5 hover:text-foreground" title={pnlOff ? "Show the P&L" : "Hide the P&L from this card"} aria-pressed={pnlOff} data-testid="portfolio-pnl-toggle">
+                <button type="button" onClick={togglePnl} className="relative rounded p-0.5 after:absolute after:-inset-2 after:content-[''] hover:text-foreground" title={pnlOff ? "Show the P&L" : "Hide the P&L from this card"} aria-pressed={pnlOff} data-testid="portfolio-pnl-toggle">
                   {pnlOff ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3" />}
                 </button>
               </p>
@@ -313,7 +409,7 @@ export default function PortfolioPage() {
               ) : (
                 <>
                   <p className={`font-mono text-2xl font-bold ${tone(d.totals.pnl)}`} data-testid="portfolio-pnl">{usd(d.totals.pnl, true)}</p>
-                  <p className="text-[11px] text-muted-foreground">on {usd(d.totals.valueWithCost)} with a known cost or your own P&L, plus open perps. Click a row's P&L to rewrite it.</p>
+                  <p className="text-[11px] text-muted-foreground">on {usd(d.totals.valueWithCost)} with a known cost or your own P&L, plus open perps. {narrow ? "Tap" : "Click"} a row's P&L to rewrite it.</p>
                 </>
               )}
             </div>
@@ -348,6 +444,42 @@ export default function PortfolioPage() {
       {d && vaults.length > 0 && (
         <Card className="border-card-border bg-card p-4" data-testid="portfolio-vaults">
           <h2 className="text-sm font-semibold">Hyperliquid vaults</h2>
+          {narrow ? (
+            <ul className="mt-1 divide-y divide-border/40 text-xs" data-testid="portfolio-vault-list">
+              {vaults.map((v: VaultHolding) => (
+                <li key={v.key} className={`py-2 ${hiddenKeys.has(v.key) ? "opacity-50" : ""}`} data-testid={`portfolio-vault-${v.vaultAddress}`}>
+                  <div className="flex items-baseline justify-between gap-2">
+                    <span className="min-w-0 truncate">
+                      <a href={`https://app.hyperliquid.xyz/vaults/${v.vaultAddress}`} target="_blank" rel="noreferrer" className="font-semibold hover:text-sky-400">
+                        {v.name}
+                      </a>
+                      <ShadeTag shade={shadeOf(v.key)} />
+                    </span>
+                    <span className="shrink-0 font-mono text-sm font-semibold">{usd(v.equity)}</span>
+                  </div>
+                  <div className="mt-1 flex items-center justify-between gap-2">
+                    <span className="min-w-0 truncate text-[11px] text-muted-foreground">
+                      {v.label ?? short(v.address)}
+                      {v.daysFollowing != null ? ` · ${v.daysFollowing}d in` : ""}
+                    </span>
+                    <span className="flex shrink-0 items-center gap-2.5">
+                      <PnlCell k={v.key} pnl={v.pnl} pct={v.pnl != null && v.equity - v.pnl > 0 ? v.pnl / (v.equity - v.pnl) : null} own={v.pnlFrom === "owner"} onSave={onPnl} />
+                      <HideButton k={v.key} hidden={hiddenKeys.has(v.key)} onHide={onHide} />
+                    </span>
+                  </div>
+                  <div className="mt-1 flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
+                    <span className="min-w-0 truncate">
+                      APR <span className={`font-mono ${tone(v.apr)}`}>{pct(v.apr)}</span> · all-time <span className={`font-mono ${tone(v.allTimePnl)}`}>{usd(v.allTimePnl, true)}</span>
+                      {v.lockedUntil && v.lockedUntil > Date.now() ? ` · locked until ${new Date(v.lockedUntil).toLocaleDateString()}` : ""}
+                    </span>
+                    <span className="shrink-0">
+                      <Sparkline points={v.history} />
+                    </span>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          ) : (
           <div className="mt-2 overflow-x-auto">
             <table className="w-full min-w-[620px] text-xs">
               <thead className="text-[10px] uppercase tracking-wider text-muted-foreground">
@@ -390,6 +522,7 @@ export default function PortfolioPage() {
               </tbody>
             </table>
           </div>
+          )}
         </Card>
       )}
 
@@ -402,7 +535,33 @@ export default function PortfolioPage() {
               {d.accounts.map((a) => `${a.label ?? short(a.address)} ${usd(a.accountValue)} margin account`).join(" · ")}
             </span>
           </div>
-          {perps.length > 0 && (
+          {perps.length > 0 && narrow && (
+            <ul className="mt-1 divide-y divide-border/40 text-xs" data-testid="portfolio-perp-list">
+              {perps.map((p) => (
+                <li key={p.key} className="py-2" data-testid={`portfolio-perp-${p.asset}`}>
+                  <div className="flex items-baseline justify-between gap-2">
+                    <span className="min-w-0 truncate">
+                      <span className={`mr-1 rounded px-1 text-[10px] font-bold ${p.amount > 0 ? "bg-emerald-500/15 text-emerald-400" : "bg-red-500/15 text-red-400"}`}>{p.amount > 0 ? "LONG" : "SHORT"}</span>
+                      <span className="font-semibold">{p.asset}</span>
+                      <span className="ml-1 text-[10px] text-muted-foreground">{p.leverage ? `${p.leverage}×` : ""} {p.label ?? short(p.address)}</span>
+                    </span>
+                    <span className={`shrink-0 font-mono text-sm font-semibold ${tone(p.pnl)}`}>
+                      {usd(p.pnl, true)} <span className="text-[10px] font-normal">{pct(p.pnlPct)}</span>
+                    </span>
+                  </div>
+                  <div className="mt-1 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 font-mono text-[11px] text-muted-foreground">
+                    <span>
+                      {qty(Math.abs(p.amount))} @ {px(p.entryPx)} → {px(p.price)}
+                    </span>
+                    <span>
+                      {usd(p.value)} · <span className="text-amber-500">liq {px(p.liquidationPx)}</span>
+                    </span>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+          {perps.length > 0 && !narrow && (
             <div className="mt-2 overflow-x-auto">
               <table className="w-full min-w-[640px] text-xs">
                 <thead className="text-[10px] uppercase tracking-wider text-muted-foreground">
@@ -438,7 +597,7 @@ export default function PortfolioPage() {
               </table>
             </div>
           )}
-          {spot.shown.length > 0 && <HoldingsTable rows={spot.shown} title="Spot on Hyperliquid" onCost={(key, cost) => saveCost.mutate({ key, cost })} onPnl={onPnl} onHide={onHide} shadeOf={shadeOf} testId="portfolio-spot" />}
+          {spot.shown.length > 0 && <HoldingsTable rows={spot.shown} title="Spot on Hyperliquid" onCost={(key, cost) => saveCost.mutate({ key, cost })} onPnl={onPnl} onHide={onHide} shadeOf={shadeOf} testId="portfolio-spot" narrow={narrow} />}
           {!showHidden && spot.out > 0 && <p className="mt-2 text-[11px] text-muted-foreground">{spot.out} spot {spot.out === 1 ? "balance" : "balances"} out of view: dust or hidden.</p>}
         </Card>
       )}
@@ -450,7 +609,7 @@ export default function PortfolioPage() {
             <h2 className="text-sm font-semibold">Wallets</h2>
             {!showHidden && wallets.out > 0 && <span className="text-[11px] text-muted-foreground">{wallets.out} out of view: dust or hidden</span>}
           </div>
-          <HoldingsTable rows={wallets.shown} onCost={(key, cost) => saveCost.mutate({ key, cost })} onPnl={onPnl} onHide={onHide} shadeOf={shadeOf} testId="portfolio-wallet-table" showChain />
+          <HoldingsTable rows={wallets.shown} onCost={(key, cost) => saveCost.mutate({ key, cost })} onPnl={onPnl} onHide={onHide} shadeOf={shadeOf} testId="portfolio-wallet-table" showChain narrow={narrow} />
           <p className="mt-2 text-[11px] text-muted-foreground">A wallet token's cost is not on chain in a form a read can trust — a transfer in is not a purchase — so type what you paid and its P&L appears.</p>
         </Card>
       )}
@@ -507,6 +666,7 @@ function HoldingsTable({
   shadeOf,
   testId,
   showChain = false,
+  narrow = false,
 }: {
   rows: Position[];
   title?: string;
@@ -516,8 +676,51 @@ function HoldingsTable({
   shadeOf: (key: string, p?: Position) => Shade;
   testId: string;
   showChain?: boolean;
+  narrow?: boolean;
 }) {
   if (rows.length === 0) return null;
+  // A phone: the asset, what it is worth and its P&L first; the table's seven columns put the last three off the screen.
+  if (narrow)
+    return (
+      <div className="mt-3" data-testid={testId}>
+        {title && <p className="mb-1 text-[10px] uppercase tracking-wider text-muted-foreground">{title}</p>}
+        <ul className="divide-y divide-border/40 text-xs">
+          {rows.map((p) => {
+            const shade = shadeOf(p.key, p);
+            return (
+              <li key={p.key} className={`py-2 ${shade ? "opacity-50" : ""}`} data-testid={`portfolio-row-${p.asset}`}>
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="min-w-0 truncate">
+                    <span className="font-semibold">{p.asset}</span>
+                    <span className="ml-1 text-[10px] text-muted-foreground">
+                      {showChain ? `${p.chain} · ` : ""}
+                      {p.label ?? short(p.address)}
+                    </span>
+                    <ShadeTag shade={shade} />
+                  </span>
+                  <span className="shrink-0 font-mono text-sm font-semibold">{usd(p.value)}</span>
+                </div>
+                <div className="mt-1 flex items-center justify-between gap-2">
+                  <span className="min-w-0 truncate font-mono text-[11px] text-muted-foreground">
+                    {qty(p.amount)} @ {px(p.price)}
+                  </span>
+                  <span className="flex shrink-0 items-center gap-2.5">
+                    <PnlCell k={p.key} pnl={p.pnl} pct={p.pnlPct} own={p.pnlFrom === "owner"} onSave={onPnl} />
+                    <HideButton k={p.key} hidden={shade === "hidden"} onHide={onHide} />
+                  </span>
+                </div>
+                {!(p.asset === "USDC" && p.source === "hl-spot") && (
+                  <div className="mt-1 flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
+                    <span>Cost</span>
+                    <CostCell p={p} onSave={onCost} />
+                  </div>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+    );
   return (
     <div className="mt-3 overflow-x-auto" data-testid={testId}>
       {title && <p className="mb-1 text-[10px] uppercase tracking-wider text-muted-foreground">{title}</p>}

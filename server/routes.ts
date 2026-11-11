@@ -311,13 +311,26 @@ function extractJson(text: string): any {
   return JSON.parse(raw.slice(start, end + 1));
 }
 
+/**
+ * What only the server writes, dropped from anything a client sends: the
+ * terminal's order record and the practice flag. The watch acts on
+ * `terminal` — it arms the brackets named there with the account's key —
+ * so a trade POSTed with one of its own making was a way past the
+ * terminal's owner-and-allowlist gate. Dropped, not refused: the form
+ * sends back the row it was given.
+ */
+const serverOnly = <T extends Record<string, unknown>>(t: T): T => {
+  const { terminal: _terminal, paper: _paper, ...rest } = t as Record<string, unknown>;
+  return rest as T;
+};
+
 const tradeBodySchema = z.object({
-  trade: insertTradeSchema,
+  trade: insertTradeSchema.transform(serverOnly),
   mistakeTagIds: z.array(z.number()).optional(),
 });
 
 const tradeUpdateBodySchema = z.object({
-  trade: updateTradeSchema,
+  trade: updateTradeSchema.transform(serverOnly),
   mistakeTagIds: z.array(z.number()).optional(),
 });
 

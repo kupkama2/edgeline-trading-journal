@@ -16,6 +16,41 @@ type SortKey = `rs:${Timeframe}` | "coin" | "rvol" | "funding" | "oi" | "volume"
  * it; a click on a row opens the coin; the chart's set is toggled from
  * the dot at the left.
  */
+type Sort = { key: SortKey; desc: boolean };
+
+/**
+ * A candidate row's sticky cells: the card's own colour with the row's green
+ * wash over it, opaque so the columns scroll under. A fixed dark hex here put
+ * dark text on near-black in the Paper theme.
+ */
+const CANDIDATE_CELL = "bg-card [background-image:linear-gradient(rgb(16_185_129/0.07),rgb(16_185_129/0.07))]";
+
+/**
+ * A column heading that sorts. At module scope and with a real button in it:
+ * declared inside the table it was a new component on every render (remounted,
+ * so focus and tooltips were lost), and a bare `th` could not be reached by keyboard.
+ */
+function Head({ k, sort, setSort, children, className = "", title }: { k: SortKey; sort: Sort; setSort: (s: Sort) => void; children: React.ReactNode; className?: string; title?: string }) {
+  const on = sort.key === k;
+  return (
+    <th
+      className={`select-none whitespace-nowrap px-1.5 py-1.5 text-[10px] font-semibold uppercase tracking-wider ${on ? "text-foreground" : "text-muted-foreground"} ${className}`}
+      aria-sort={on ? (sort.desc ? "descending" : "ascending") : "none"}
+    >
+      <button
+        type="button"
+        className="inline-flex cursor-pointer items-center gap-0.5 uppercase tracking-wider hover:text-foreground"
+        onClick={() => setSort({ key: k, desc: on ? !sort.desc : true })}
+        title={title}
+        data-testid={`screener-head-${k.replace(":", "-")}`}
+      >
+        {children}
+        {on && (sort.desc ? <ArrowDown className="h-3 w-3" /> : <ArrowUp className="h-3 w-3" />)}
+      </button>
+    </th>
+  );
+}
+
 export function ScreenerTable({
   rows,
   tf,
@@ -40,7 +75,7 @@ export function ScreenerTable({
   onOpen: (coin: string) => void;
 }) {
   const clicks = useClickOrDouble();
-  const [sort, setSort] = useState<{ key: SortKey; desc: boolean }>({ key: `rs:${tf}`, desc: true });
+  const [sort, setSort] = useState<Sort>({ key: `rs:${tf}`, desc: true });
   const [lastTf, setLastTf] = useState(tf);
   // The timeframe picker moves the default sort with it, unless a column was chosen by hand.
   if (lastTf !== tf) {
@@ -90,28 +125,12 @@ export function ScreenerTable({
     return sorted;
   }, [rows, tf, filter, sort, q]);
 
-  const Head = ({ k, children, className = "", title }: { k: SortKey; children: React.ReactNode; className?: string; title?: string }) => {
-    const on = sort.key === k;
-    return (
-      <th
-        className={`cursor-pointer select-none whitespace-nowrap px-1.5 py-1.5 text-[10px] font-semibold uppercase tracking-wider ${on ? "text-foreground" : "text-muted-foreground hover:text-foreground"} ${className}`}
-        onClick={() => setSort({ key: k, desc: on ? !sort.desc : true })}
-        title={title}
-        data-testid={`screener-head-${k.replace(":", "-")}`}
-        aria-sort={on ? (sort.desc ? "descending" : "ascending") : "none"}
-      >
-        <span className="inline-flex items-center gap-0.5">
-          {children}
-          {on && (sort.desc ? <ArrowDown className="h-3 w-3" /> : <ArrowUp className="h-3 w-3" />)}
-        </span>
-      </th>
-    );
-  };
-
   if (shown.length === 0) {
+    // In the table but filtered out is a different answer from not in the table.
+    const elsewhere = q && filter !== "all" ? rows.filter((r) => r.coin.toLowerCase().includes(q)).length : 0;
     return (
       <p className="px-2 py-6 text-center text-xs text-muted-foreground" data-testid="screener-empty">
-        {q ? `No coin matching "${search.trim()}" in the table.` : "Nothing here on this timeframe with this filter."}
+        {elsewhere ? `"${search.trim()}" is in the table, but not under this filter. Choose All to see it.` : q ? `No coin matching "${search.trim()}" in the table.` : "Nothing here on this timeframe with this filter."}
       </p>
     );
   }
@@ -122,33 +141,33 @@ export function ScreenerTable({
         <thead>
           <tr>
             <th className="sticky left-0 z-10 w-5 bg-card px-1" />
-            <Head k="coin" className="sticky left-5 z-10 bg-card text-left">
+            <Head sort={sort} setSort={setSort} k="coin" className="sticky left-5 z-10 bg-card text-left">
               Coin
             </Head>
             {TIMEFRAMES.map((t) => (
-              <Head key={t} k={`rs:${t}`} className={`text-right ${t === tf ? "text-foreground" : ""}`} title={`RS change vs BTC over the last ${t}`}>
+              <Head sort={sort} setSort={setSort} key={t} k={`rs:${t}`} className={`text-right ${t === tf ? "text-foreground" : ""}`} title={`RS change vs BTC over the last ${t}`}>
                 {t}
               </Head>
             ))}
-            <Head k="rvol" className="text-right" title={`Relative volume on ${tf}: the last period over the mean of the previous 20`}>
+            <Head sort={sort} setSort={setSort} k="rvol" className="text-right" title={`Relative volume on ${tf}: the last period over the mean of the previous 20`}>
               RVOL
             </Head>
-            <Head k="funding" className="text-right" title="Current funding, annualized">
+            <Head sort={sort} setSort={setSort} k="funding" className="text-right" title="Current funding, annualized">
               Fund.
             </Head>
-            <Head k="score" className="text-right" title={`Readings that agree on ${tf}: RS vs BTC, its acceleration, RSI, trend, open interest against price, funding crowding. Each +1, 0 or −1.`}>
+            <Head sort={sort} setSort={setSort} k="score" className="text-right" title={`Readings that agree on ${tf}: RS vs BTC, its acceleration, RSI, trend, open interest against price, funding crowding. Each +1, 0 or −1.`}>
               Signals
             </Head>
-            <Head k="rsi" className="text-right" title={`RSI 14 on ${tf} candles`}>
+            <Head sort={sort} setSort={setSort} k="rsi" className="text-right" title={`RSI 14 on ${tf} candles`}>
               RSI
             </Head>
-            <Head k="cvd" className="text-right" title="Binance taker flow over 24 hours: net taker buying as a share of volume, read through your relay">
+            <Head sort={sort} setSort={setSort} k="cvd" className="text-right" title="Binance taker flow over 24 hours: net taker buying as a share of volume, read through your relay">
               CVD
             </Head>
-            <Head k="oi" className="text-right" title="Open interest over the last 24 hours, and what it says against price">
+            <Head sort={sort} setSort={setSort} k="oi" className="text-right" title="Open interest over the last 24 hours, and what it says against price">
               OI 24h
             </Head>
-            <Head k="volume" className="text-right hidden sm:table-cell" title="24h notional volume">
+            <Head sort={sort} setSort={setSort} k="volume" className="text-right hidden sm:table-cell" title="24h notional volume">
               Vol 24h
             </Head>
             <th className="px-1.5 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Flags</th>
@@ -162,32 +181,39 @@ export function ScreenerTable({
             return (
               <tr
                 key={r.coin}
-                className={`cursor-pointer border-t border-border/40 transition-colors hover:bg-secondary/40 ${f.candidate ? "bg-emerald-500/5" : ""}`}
+                className={`cursor-pointer border-t border-border/40 transition-colors hover:bg-secondary/40 focus-visible:bg-secondary/40 focus-visible:outline-none ${f.candidate ? "bg-emerald-500/5" : ""}`}
                 onClick={() => onOpen(r.coin)}
+                // A row is opened by keyboard too: Enter on it, as on a button.
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && e.target === e.currentTarget) onOpen(r.coin);
+                }}
+                aria-label={`Open ${r.coin}`}
                 data-testid={`screener-row-${r.coin}`}
               >
-                <td className={`sticky left-0 z-10 px-1 py-1 align-middle ${f.candidate ? "bg-[#0b1511]" : "bg-card"}`}>
+                {/* The whole cell is the dot's target, and a near miss does not open the coin. */}
+                <td className={`sticky left-0 z-10 p-0 align-middle ${f.candidate ? CANDIDATE_CELL : "bg-card"}`} onClick={(e) => e.stopPropagation()}>
                   <button
                     type="button"
-                    className={`h-3 w-3 rounded-full border transition-colors ${on ? "border-sky-400 bg-sky-400" : "border-border hover:border-sky-400"}`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onToggleChart(r.coin);
-                    }}
+                    className="group/dot flex h-7 w-5 items-center justify-center"
+                    onClick={() => onToggleChart(r.coin)}
                     title={on ? "Take off the chart" : "Put on the chart"}
+                    aria-label={on ? `Take ${r.coin} off the chart` : `Put ${r.coin} on the chart`}
                     aria-pressed={on}
                     data-testid={`screener-chart-${r.coin}`}
-                  />
+                  >
+                    <span className={`h-3 w-3 rounded-full border transition-colors ${on ? "border-sky-400 bg-sky-400" : "border-border group-hover/dot:border-sky-400"}`} />
+                  </button>
                 </td>
                 <td
-                  className={`sticky left-5 z-10 whitespace-nowrap px-1.5 py-1 font-semibold ${f.candidate ? "bg-[#0b1511]" : "bg-card"}`}
+                  className={`sticky left-5 z-10 whitespace-nowrap px-1.5 py-1 font-semibold ${f.candidate ? CANDIDATE_CELL : "bg-card"}`}
                   onClick={(e) => e.stopPropagation()}
                 >
                   <button
                     type="button"
-                    className={`rounded px-0.5 hover:text-sky-400 ${on ? "text-sky-300" : ""}`}
+                    className={`touch-manipulation rounded px-0.5 hover:text-sky-400 ${on ? "text-sky-400" : ""}`}
                     title={on ? "Click to take it off the chart; double-click to keep only it" : "Click to put it on the chart; double-click to keep only it"}
-                    {...clicks(() => onToggleChart(r.coin), () => onSolo(r.coin))}
+                    {...clicks(r.coin, () => onToggleChart(r.coin), () => onSolo(r.coin))}
                     data-testid={`screener-name-${r.coin}`}
                   >
                     {r.coin}

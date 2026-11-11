@@ -250,7 +250,10 @@ export function liqMapOf(mark: number, positions: { szi: number; liquidationPx: 
     if (p.szi > 0 && at >= 0) continue;
     if (p.szi < 0 && at <= 0) continue;
     if (Math.abs(at) > LIQ_SPAN) continue;
-    const band = Math.round(at / LIQ_STEP);
+    // Never band zero: it belongs to neither side, so the liquidations nearest the mark — the ones that matter
+    // most — fell out of both sides' totals. Inside half a step, a long goes to the first band below, a short to the first above.
+    const nearest = Math.round(at / LIQ_STEP);
+    const band = nearest === 0 ? (p.szi > 0 ? -1 : 1) : nearest;
     bands.set(band, (bands.get(band) ?? 0) + Math.abs(p.szi) * mark);
   }
   const list: LiqBand[] = Array.from(bands, ([b, usd]) => ({ at: b * LIQ_STEP, price: mark * (1 + b * LIQ_STEP), usd })).sort((a, b) => a.at - b.at);

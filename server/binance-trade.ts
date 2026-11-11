@@ -278,6 +278,24 @@ export async function orderHistory(v: Venue, symbol: string, since: number): Pro
   return dedupeOrders(plain, algo);
 }
 
+/**
+ * One conditional order by its algo id, with the three answers told apart:
+ * the order; "missing" (the venue says no such order, or the host has no
+ * such endpoint); or "unknown" — any other refusal (a clock skew, a bad
+ * request, a reply that did not parse), which says nothing about the order
+ * and must be asked again.
+ */
+export async function algoOrderLookup(v: Venue, algoId: number): Promise<{ order: VenueOrder } | { missing: "no-order" | "no-endpoint" } | { unknown: string }> {
+  try {
+    const order = parseAlgoOrder(await call(v, "GET", "/fapi/v1/algoOrder", { algoId }));
+    return order ? { order } : { unknown: "the answer did not parse" };
+  } catch (err) {
+    if (err instanceof BinanceError && err.code === -2013) return { missing: "no-order" };
+    if (err instanceof BinanceError && err.status === 404) return { missing: "no-endpoint" };
+    return { unknown: String((err as any)?.message ?? err).slice(0, 120) };
+  }
+}
+
 /** One conditional order by its algo id, or null once the venue has forgotten it. */
 export async function algoOrderById(v: Venue, algoId: number): Promise<VenueOrder | null> {
   try {

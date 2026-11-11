@@ -179,7 +179,12 @@ const LIST_MEMO_MS = 60 * 60_000;
 async function runCensus(symbols: string[]): Promise<void> {
   try {
     const { dead } = await probeListed(symbols);
-    if (dead.length) await catalogue.markDelisted(dead);
+    if (dead.length) {
+      await catalogue.markDelisted(dead);
+      // The list just changed under the memo: with an hour's memory, the dead contracts read as trading until it ran out.
+      listMemo = null;
+      listGeneration += 1;
+    }
   } catch {
     // A failed census leaves every row as it was: provisional, not wrong.
   }
