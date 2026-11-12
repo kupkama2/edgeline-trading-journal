@@ -21,6 +21,7 @@
  *      created is a trade, not a draft to confirm.
  */
 import { findClaim, type VenueTrade } from "@shared/claim";
+import { entryTypeOf } from "@shared/entry-type";
 import type { HlTrade, MarketSeen } from "@shared/hyperliquid";
 import type { InsertTrade, TradeWithTags } from "@shared/schema";
 import type { storageFor } from "./storage";
@@ -167,6 +168,7 @@ export function asInsert(
     fees: feesOf(t),
     account,
     externalId: t.externalId,
+    entryType: entryTypeOf(t.opens),
   } as InsertTrade;
 }
 
@@ -203,6 +205,9 @@ export function closingPatch(existing: TradeWithTags, t: HlTrade, levels: Levels
   }
   if (existing.initialStop == null && levels.initialStop != null) patch.initialStop = levels.initialStop;
   if (existing.initialTarget == null && levels.initialTarget != null) patch.initialTarget = levels.initialTarget;
+  // How it was entered, where nothing says yet: the trades written before the fills were read for it get it on the next sync.
+  const entryType = existing.entryType == null ? entryTypeOf(t.opens) : null;
+  if (entryType) patch.entryType = entryType;
   return Object.keys(patch).length ? (patch as Partial<InsertTrade>) : null;
 }
 
@@ -235,6 +240,9 @@ export function claimPatch(
   }
   if (existing.initialStop == null && levels.initialStop != null) patch.initialStop = levels.initialStop;
   if (existing.initialTarget == null && levels.initialTarget != null) patch.initialTarget = levels.initialTarget;
+  // Not something a person types often; the venue knows it exactly. Theirs stands if they gave one.
+  const entryType = existing.entryType == null ? entryTypeOf(t.opens) : null;
+  if (entryType) patch.entryType = entryType;
   return patch as Partial<InsertTrade>;
 }
 

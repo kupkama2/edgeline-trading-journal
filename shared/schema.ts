@@ -1,3 +1,4 @@
+import { ENTRY_TYPES } from "./entry-type";
 import {
   pgTable,
   text,
@@ -293,6 +294,14 @@ export const trades = pgTable("trades", {
    * exitReason, which describes how a position that DID exist was closed.
    */
   cancelReason: text("cancel_reason"), // 'not_filled' | 'pulled' | 'changed_mind'
+  /**
+   * How the trade was entered: 'limit' (rested on the book and was filled)
+   * or 'market' (took liquidity: a market order, a stop, or a limit priced
+   * through the book). Null when nothing says. Venue syncs read it from the
+   * entry order's maker/taker flag, the terminal from the order it sent; a
+   * person can set it or correct it. See shared/entry-type.ts.
+   */
+  entryType: text("entry_type"),
   /**
    * For an order that never filled: would the target have been reached anyway?
    * This is the counterfactual that makes "Didn't Take Planned Trade" costly
@@ -610,6 +619,7 @@ const tradeFields = createInsertSchema(trades)
     stopGrade: stopGradeEnum.nullable().optional(),
     exitGrade: exitGradeEnum.nullable().optional(),
     cancelReason: cancelReasonEnum.nullable().optional(),
+    entryType: z.enum(ENTRY_TYPES).nullable().optional(),
     wouldHaveHitTarget: z.boolean().nullable().optional(),
     noManagementOutcome: noManagementOutcomeEnum.nullable().optional(),
   });

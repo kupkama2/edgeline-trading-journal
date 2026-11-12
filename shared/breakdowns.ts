@@ -16,6 +16,7 @@ import type { MistakeTag, TradeWithTags } from "./schema";
 import { closedTrades, computeMetrics, outcomeOf } from "./metrics";
 import { summarizeDays } from "./daily";
 import { parseHighlights } from "./highlights";
+import { ENTRY_TYPE_LABEL, isEntryType } from "./entry-type";
 
 // Re-exported so slice consumers keep one import site for "trades stats may
 // speak about"; the definition lives with the rest of the metric vocabulary.
@@ -169,6 +170,18 @@ export function byAccount(trades: TradeWithTags[]): Slice[] {
  * other row.
  */
 export const OWN_IDEA_LABEL = "My own ideas";
+
+/**
+ * By how the trade was entered: a limit that rested, or a market entry that
+ * took liquidity (shared/entry-type.ts). Trades with nothing recorded are
+ * their own row, so the share still unknown is in view beside the two.
+ */
+export function byEntryType(trades: TradeWithTags[]): Slice[] {
+  const order: Record<string, number> = { limit: 0, market: 1, "": 2 };
+  return sliceBy(trades, (t) =>
+    isEntryType(t.entryType) ? { key: t.entryType, label: ENTRY_TYPE_LABEL[t.entryType] } : { key: "", label: "Not recorded" },
+  ).sort((a, b) => order[a.key] - order[b.key]);
+}
 
 export function bySource(trades: TradeWithTags[]): Slice[] {
   return sliceBy(trades, (t) => {

@@ -1126,6 +1126,8 @@ export function registerTerminalRoutes(app: Express, deps: { llm?: (prompt: stri
         extraTargets: rest.length ? JSON.stringify(rest) : null,
         entryTime: new Date().toISOString(),
         status: plan.entryType === "market" ? "open" : "pending",
+        // The order it sent: a limit rests for its price, a market takes what is there.
+        entryType: plan.entryType,
         account: acct.name,
         riskAmount: sized.riskDollars,
         terminal: formatTerminalRef(ref),

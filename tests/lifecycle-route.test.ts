@@ -124,6 +124,18 @@ describe.skipIf(!DB)("through the real routes", () => {
     expect(after.notes).toBe("kept");
   });
 
+  it("takes how a trade was entered, limit or market, and nothing else", async () => {
+    const made = await send("POST", "/api/trades", { trade: { ...live, status: "open", entryType: "limit" }, mistakeTagIds: [] });
+    expect(made.status).toBe(201);
+    const t = await made.json();
+    expect(t.entryType).toBe("limit");
+    const changed = await send("PATCH", `/api/trades/${t.id}`, { trade: { entryType: "market" } });
+    expect((await changed.json()).entryType).toBe("market");
+    const cleared = await send("PATCH", `/api/trades/${t.id}`, { trade: { entryType: null } });
+    expect((await cleared.json()).entryType).toBeNull();
+    expect((await send("PATCH", `/api/trades/${t.id}`, { trade: { entryType: "stop" } })).status).toBe(400);
+  });
+
   it("will not close a trade without giving it an exit", async () => {
     const t = await openTrade();
     const res = await send("PATCH", `/api/trades/${t.id}`, { trade: { status: "closed" } });

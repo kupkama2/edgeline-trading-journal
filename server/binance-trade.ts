@@ -508,3 +508,13 @@ export async function addToPosition(
       : { symbol, positionSide, side, type: "MARKET", quantity: qty, newClientOrderId: tag },
   );
 }
+
+/**
+ * The fills of one order, or the one fill with a trade id: what says whether
+ * a trade's entry rested on the book (shared/entry-type.ts). By id rather
+ * than by time, so it reaches past the seven-day window the time query has.
+ */
+export async function orderFills(v: Venue, symbol: string, by: { orderId: number } | { fromId: number }): Promise<BinanceUserTrade[]> {
+  const params = "orderId" in by ? { symbol, orderId: by.orderId } : { symbol, fromId: by.fromId, limit: 1 };
+  return parseUserTrades(await call(v, "GET", "/fapi/v1/userTrades", params));
+}

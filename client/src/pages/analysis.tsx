@@ -13,6 +13,7 @@ import { ExcursionChart } from "@/components/excursion-chart";
 import { EdgeCard } from "@/components/edge-card";
 import { CohortCard } from "@/components/cohort-card";
 import { SizeCard } from "@/components/size-card";
+import { EntryTypeCard } from "@/components/entry-type-card";
 import { FixedTargetCard } from "@/components/fixed-target-card";
 import { RDistributionChart } from "@/components/r-distribution";
 import { describeShape, rDistribution } from "@shared/distribution";
@@ -20,6 +21,7 @@ import { setJumpDay } from "@/lib/jump";
 import { useLocation } from "wouter";
 import {
   byAccount,
+  byEntryType,
   bySource,
   byHighlight,
   byHour,
@@ -56,6 +58,7 @@ const TABS = [
   { id: "weekday", label: "Weekday" },
   { id: "symbol", label: "Instrument" },
   { id: "account", label: "Account" },
+  { id: "entry", label: "Entry" },
   { id: "source", label: "Source" },
   { id: "setup", label: "Setup" },
   { id: "confluence", label: "Reasons" },
@@ -232,6 +235,8 @@ export default function Analysis({ embedded = false }: { embedded?: boolean } = 
         return bySymbol(scoped);
       case "account":
         return byAccount(scoped);
+      case "entry":
+        return byEntryType(scoped);
       case "source":
         return bySource(scoped);
       case "setup":
@@ -441,6 +446,9 @@ export default function Analysis({ embedded = false }: { embedded?: boolean } = 
           but how much you had on when you did it. */}
       <SizeCard trades={scoped} />
 
+      {/* How the trade was entered: whether waiting for a limit beats taking the market. */}
+      <EntryTypeCard trades={scoped} />
+
       {/* Not how you managed the exit, but whether one plain target would
           have beaten it — and which. */}
       <FixedTargetCard trades={scoped} />
@@ -628,6 +636,8 @@ export default function Analysis({ embedded = false }: { embedded?: boolean } = 
                 ? "No demons tagged on closed trades yet."
                 : tab === "highlight"
                   ? "Nothing marked as done right yet — flag what you nailed when closing a trade."
+                  : tab === "entry"
+                    ? "No closed trades yet."
                   : tab === "account"
                     ? "No accounts recorded yet — pick one when logging a trade and it shows up here."
                     : tab === "source"

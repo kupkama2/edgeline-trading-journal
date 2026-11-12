@@ -1046,6 +1046,35 @@ export function TradeBody({
             {trade.account}
           </Badge>
         )}
+        {/*
+          How it was entered. Filled in by the venue's fills or the terminal's
+          order where there is one; a click cycles it (limit, market, unset)
+          for a trade nothing could read it from, or to correct one.
+        */}
+        <button
+          type="button"
+          onClick={() => {
+            const next = trade.entryType === "limit" ? "market" : trade.entryType === "market" ? null : "limit";
+            updateTrade.mutate({ id: trade.id, trade: { entryType: next } as any }, { onError: failed("Entry type") });
+          }}
+          title={
+            trade.entryType === "limit"
+              ? "Entered with a limit that rested on the book. Click for market."
+              : trade.entryType === "market"
+                ? "Entered at market: took liquidity (a market order, a stop, or a limit through the book). Click to clear."
+                : "How was it entered? Click to mark it a limit entry; again for market."
+          }
+          className={`flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] transition-colors ${
+            trade.entryType === "limit"
+              ? "border-sky-500/50 bg-sky-500/10 text-sky-400"
+              : trade.entryType === "market"
+                ? "border-violet-500/50 bg-violet-500/10 text-violet-400"
+                : "border-dashed border-border text-muted-foreground hover:text-foreground"
+          }`}
+          data-testid="button-view-entry-type"
+        >
+          {trade.entryType === "limit" ? "limit entry" : trade.entryType === "market" ? "market entry" : "entry?"}
+        </button>
 
         <div className="ml-auto flex flex-wrap items-center gap-1.5">
           {trade.status === "open" && (
