@@ -173,6 +173,11 @@ export function TradeChart({
      keyed on the object would be no memo at all. */
   const dTps = draft?.extraTargets;
   const dTpsKey = dTps ? dTps.join(",") : "";
+  // The adds and takes, for their marks on the bars they filled in.
+  const fillMarks = useMemo(
+    () => (trade.fills ?? []).map((f) => ({ kind: f.kind === "add" ? ("add" as const) : ("partial" as const), time: new Date(f.time).getTime(), size: f.size })),
+    [trade.fills],
+  );
   const levels = useMemo<Level[]>(() => chartLevels(trade, draft), [
     trade,
     draft?.entryPrice,
@@ -348,6 +353,7 @@ export function TradeChart({
           direction={trade.direction}
           entryMs={new Date(trade.entryTime).getTime()}
           exitMs={trade.exitTime ? new Date(trade.exitTime).getTime() : null}
+          fills={fillMarks}
           visibleUntil={replaying ? replay.untilMs : null}
           events={replaying ? replay.shown : undefined}
         />
@@ -566,6 +572,7 @@ export function Candles({
   entryActions,
   visibleUntil,
   events,
+  fills,
 }: {
   /** The trade whose candle route pages history. Omit it and pass `loadPage`. */
   tradeId?: number;
@@ -593,6 +600,8 @@ export function Candles({
   visibleUntil?: number | null;
   /** The replay's events so far, marked on the bars they fell in. */
   events?: ReplayEvent[];
+  /** Adds and takes, marked on their bars outside the replay; several on one bar are one mark with a count. */
+  fills?: { kind: "add" | "partial"; time: number; size: number }[];
 }) {
   const { theme } = useTheme();
   const hostRef = useRef<HTMLDivElement>(null);
@@ -916,6 +925,35 @@ export function Candles({
           text: "out",
         });
       }
+      /*
+       * The adds and the takes, on the bars they filled in. One order often
+       * fills in many pieces, so a bar's fills of one kind are one mark with
+       * a count; takes on the exit's own bar are the exit's pieces, already
+       * marked "out".
+       */
+      const exitBar = exitMs != null ? snap(exitMs) : null;
+      const byBar = new Map<string, { time: Time; kind: "add" | "partial"; n: number }>();
+      for (const f of fills ?? []) {
+        if (f.time > drawnUntil) continue;
+        const time = snap(f.time);
+        if (f.kind === "partial" && exitBar != null && time === exitBar) continue;
+        const key = `${time}:${f.kind}`;
+        const had = byBar.get(key);
+        if (had) had.n += 1;
+        else byBar.set(key, { time, kind: f.kind, n: 1 });
+      }
+      for (const m of Array.from(byBar.values())) {
+        marks.push({
+          time: m.time,
+          // An add sits with the entry, a take with the exit.
+          position: m.kind === "add" ? (long ? "belowBar" : "aboveBar") : long ? "aboveBar" : "belowBar",
+          shape: "square",
+          color: m.kind === "add" ? colors.entry : colors.target,
+          text: `${m.kind === "add" ? "add" : "took"}${m.n > 1 ? ` ×${m.n}` : ""}`,
+        });
+      }
+      // The engine wants its marks in time order.
+      marks.sort((x, y) => (x.time as number) - (y.time as number));
     }
     a.markers.setMarkers(marks);
     // The replay's view follows the newest bar, as a live chart would, with room on the right for its marks.
@@ -934,7 +972,7 @@ export function Candles({
       a.shape = shape;
       a.chart.timeScale().fitContent();
     }
-  }, [candles, direction, entryMs, exitMs, epoch, visibleUntil, events]);
+  }, [candles, direction, entryMs, exitMs, epoch, visibleUntil, events, fills]);
 
   useEffect(() => {
     const a = api.current;

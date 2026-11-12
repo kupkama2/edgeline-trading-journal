@@ -362,6 +362,36 @@ describe("the idea, watched on the tape", () => {
     expect(brief).toContain("Management cost 1.55R");
   });
 
+  it("writes an order's many fills as one line, says where the average entry moved to, and folds the stop's pieces into the exit", () => {
+    // The trade in the report: a short, a large add in four pieces, then a stop-out that filled in many.
+    const ref: TerminalRef = { venue: "binance", env: "live", account: "T", symbol: "XUSDT", positionSide: "SHORT", tag: "e", leverage: 1, qty: 2644.4, entryOrderId: 1, stopOrderId: null, targetOrderIds: [],
+      idea: { entry: 1.230846, stop: 1.328, targets: [], qty: 2644.4, riskDollars: null, at: "2026-11-12T15:02:00.000Z" } };
+    const fill = (kind: string, size: number, price: number, time: string, i: number) => ({ kind, size, price, time, note: `terminal · fill ${i}` });
+    const t = {
+      direction: "short", status: "closed", entryPrice: 1.230846, entryTime: "2026-11-12T15:02:00.000Z", size: 2644.4, exitPrice: 1.279, exitTime: "2026-11-12T17:04:30.000Z", exitReason: "stop",
+      fills: [
+        fill("add", 39.3, 1.259, "2026-11-12T15:48:01.000Z", 1),
+        fill("add", 33, 1.259, "2026-11-12T15:48:01.000Z", 2),
+        fill("add", 11.2, 1.259, "2026-11-12T15:48:02.000Z", 3),
+        fill("add", 2299.3, 1.259, "2026-11-12T15:48:02.000Z", 4),
+        fill("partial", 4.9, 1.279, "2026-11-12T17:04:10.000Z", 5),
+        fill("partial", 7.9, 1.279, "2026-11-12T17:04:11.000Z", 6),
+        fill("partial", 312.7, 1.279, "2026-11-12T17:04:20.000Z", 7),
+      ],
+    } as any;
+    const rows = managementTimeline(t, ref);
+    expect(rows.map((r) => r.kind)).toEqual(["entry-fill", "add", "exit"]);
+    const add = rows[1].text;
+    expect(add).toContain("Add filled: 2382.8 at 1.259 (4 fills)");
+    // (2644.4 × 1.230846 + 2382.8 × 1.259) / 5027.2
+    const avg = (2644.4 * 1.230846 + 2382.8 * 1.259) / 5027.2;
+    expect(add).toContain(`avg entry now ${Number(avg.toPrecision(6))}`);
+    expect(rows[2].text).toContain("Exit at 1.279 — stop (4 fills)");
+    // A take in a minute of its own is still its own line.
+    const later = { ...t, fills: [...t.fills, fill("partial", 100, 1.25, "2026-11-12T16:10:00.000Z", 8)] };
+    expect(managementTimeline(later, ref).map((r) => r.kind)).toEqual(["entry-fill", "add", "reduce", "exit"]);
+  });
+
   it("takes a model's verdict only as far as it fits", () => {
     const basis = { actualR: 0.45, planR: 2, planVerdict: "target_first" };
     expect(parseManagementReview({ verdict: "HURT", summary: "You moved the stop to breakeven at +0.7R and were taken out on the pullback that then ran to target.", lesson: "Give it the room the plan drew." }, basis, "now"))

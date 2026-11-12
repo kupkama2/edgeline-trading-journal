@@ -8,6 +8,7 @@
  */
 import { parseExtraTargets, type TradeWithTags } from "@shared/schema";
 import { currentStop } from "@shared/stops";
+import { positionLedger } from "@shared/fills";
 
 /**
  * The trade columns a line on the chart can be dragged into.
@@ -128,10 +129,22 @@ export function chartLevels(trade: TradeWithTags, draft?: LevelDraft): Level[] {
   const targetField: LevelField | undefined = record ? undefined : "initialTarget";
   const exitField: LevelField | undefined = editing ? "exitPrice" : undefined;
   const stopField: LevelField | undefined = managed || record || (live_ && !editing) ? undefined : "initialStop";
+  /*
+   * Adds move where the position stands. The entry column is the FIRST
+   * fill — it is half of 1R and the plan is measured from it — so its line
+   * stays, faint, as "1st entry", and the average the position is actually
+   * held at after every add is the solid line. Without it a trade that
+   * doubled its size above the first fill showed every candle as further in
+   * profit than the position was.
+   */
+  const hasAdds = (trade.fills ?? []).some((f) => f.kind === "add");
+  const avg = hasAdds && entry != null ? positionLedger({ ...trade, entryPrice: entry }).avgEntry : null;
+  const averaged = avg != null && entry != null && Number.isFinite(avg) && Math.abs(avg - entry) > Math.abs(entry) * 1e-9;
   return [
     ...(entry != null
-      ? [{ price: entry, label: "entry", color: "entry", dashed: false, field: entryField }]
+      ? [{ price: entry, label: averaged ? "1st entry" : "entry", color: "entry", dashed: false, ...(averaged ? { faint: true } : {}), field: entryField }]
       : []),
+    ...(averaged ? [{ price: avg!, label: "avg entry", color: "entry", dashed: false }] : []),
     ...(stop != null
       ? [{ price: stop, label: "stop", color: "stop", dashed: true, field: stopField }]
       : []),
