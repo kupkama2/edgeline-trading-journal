@@ -130,4 +130,18 @@ describe("a stop that has been moved", () => {
     expect(at(l, "stop")?.price).toBe(95);
     expect(at(l, "was")).toBeUndefined();
   });
+
+  it("keeps the first entry faint and draws the average the position is held at once it has been added to", () => {
+    const added = { ...base, direction: "short", entryPrice: 100, initialStop: 110, size: 1, fills: [{ kind: "add", price: 106, size: 1, time: "2026-11-12T10:00:00.000Z" }] };
+    const l = chartLevels(added);
+    expect(at(l, "1st entry")).toMatchObject({ price: 100, faint: true });
+    expect(at(l, "avg entry")).toMatchObject({ price: 103 });
+    expect(at(l, "avg entry")?.faint).toBeUndefined();
+    expect(at(l, "entry")).toBeUndefined();
+    // A take does not move the average; without adds there is one entry line, as before.
+    expect(at(chartLevels({ ...base, fills: [{ kind: "partial", price: 120, size: 0.5, time: "2026-11-12T10:00:00.000Z" }] }), "entry")).toMatchObject({ price: 100 });
+    expect(at(chartLevels({ ...base, fills: [] }), "avg entry")).toBeUndefined();
+    // Pending, the first entry is still the one a drag moves.
+    expect(at(chartLevels({ ...added, status: "pending" }), "1st entry")?.field).toBe("entryPrice");
+  });
 });

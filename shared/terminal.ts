@@ -890,15 +890,51 @@ export function managementTimeline(
   const w = ref.planWatch;
   if (w?.stopHitAt) rows.push({ at: w.stopHitAt, kind: "plan-hit", text: `Tape reached the original stop ${fmtN(w.stopHitPrice)}` });
   if (w?.targetHitAt) rows.push({ at: w.targetHitAt, kind: "plan-hit", text: `Tape reached the original target ${fmtN(w.targetHitPrice)}` });
-  for (const f of t.fills ?? []) {
-    if (!(f.note ?? "").startsWith("terminal")) continue;
+  /*
+   * The fills, one line per burst. An order fills in pieces — a stop-out
+   * in twenty-five, an add in four — and a line per piece buried the
+   * decisions in the record. Fills of one kind within the same minute are
+   * one line, at their size-weighted price, with the count; takes in the
+   * exit's minute are the exit's own pieces and fold into it.
+   */
+  const minute = (iso: string) => iso.slice(0, 16);
+  const exitMinute = t.status === "closed" && t.exitTime ? minute(t.exitTime) : null;
+  const bursts: { at: string; kind: "add" | "reduce"; size: number; cost: number; n: number }[] = [];
+  let exitPieces = 0;
+  const own = (t.fills ?? []).filter((f) => (f.note ?? "").startsWith("terminal")).sort((a, b) => a.time.localeCompare(b.time));
+  for (const f of own) {
+    const kind = f.kind === "add" ? ("add" as const) : ("reduce" as const);
+    if (kind === "reduce" && exitMinute != null && minute(f.time) === exitMinute) {
+      exitPieces += 1;
+      continue;
+    }
+    const last = bursts[bursts.length - 1];
+    if (last && last.kind === kind && minute(last.at) === minute(f.time)) {
+      last.size += f.size;
+      last.cost += f.price * f.size;
+      last.n += 1;
+    } else bursts.push({ at: f.time, kind, size: f.size, cost: f.price * f.size, n: 1 });
+  }
+  // The position's average entry as the adds land, so the line says where the position now stands.
+  let held = t.size;
+  let avg = t.entryPrice;
+  for (const b of bursts) {
+    const price = b.size > 0 ? b.cost / b.size : 0;
     // Every R here is against the same footing as the moves: the fill, over the original risk.
-    const r = rAt(f.price, t.entryPrice, idea.stop, t.direction);
-    rows.push({ at: f.time, kind: f.kind === "add" ? "add" : "reduce", text: `${f.kind === "add" ? "Add filled" : "Partial filled"}: ${fmtN(f.size)} at ${fmtN(f.price)}${fmtR(r)}`, mark: f.price, r });
+    const r = rAt(price, t.entryPrice, idea.stop, t.direction);
+    let after = "";
+    if (b.kind === "add") {
+      avg = held + b.size > 0 ? (avg * held + price * b.size) / (held + b.size) : avg;
+      held += b.size;
+      after = ` · avg entry now ${fmtN(Number(avg.toPrecision(6)))}`;
+    } else held = Math.max(0, held - b.size);
+    const pieces = b.n > 1 ? ` (${b.n} fills)` : "";
+    rows.push({ at: b.at, kind: b.kind, text: `${b.kind === "add" ? "Add filled" : "Partial filled"}: ${fmtN(Number(b.size.toPrecision(8)))} at ${fmtN(price)}${pieces}${after}${fmtR(r)}`, mark: price, r });
   }
   if (t.status === "closed" && t.exitPrice != null && t.exitTime) {
     const r = rAt(t.exitPrice, t.entryPrice, idea.stop, t.direction);
-    rows.push({ at: t.exitTime, kind: "exit", text: `Exit at ${fmtN(t.exitPrice)}${t.exitReason ? ` — ${t.exitReason}` : ""}${fmtR(r)}`, mark: t.exitPrice, r });
+    const pieces = exitPieces > 0 ? ` (${exitPieces + 1} fills)` : "";
+    rows.push({ at: t.exitTime, kind: "exit", text: `Exit at ${fmtN(t.exitPrice)}${t.exitReason ? ` — ${t.exitReason}` : ""}${pieces}${fmtR(r)}`, mark: t.exitPrice, r });
   }
   // In time order, the exit last among anything stamped the same second.
   const rank = (r: TimelineRow) => (r.kind === "exit" ? 1 : 0);
