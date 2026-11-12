@@ -1,3 +1,4 @@
+import { ScreenerScanCard } from "@/components/screener/scan";
 import { useEffect, useMemo, useState } from "react";
 import { Loader2, Pin, RefreshCw, Search, Settings2, X } from "lucide-react";
 import { Card } from "@/components/ui/card";
@@ -313,6 +314,8 @@ export default function ScreenerPage() {
       </Card>
 
       {run && <ScreenerInsights run={run} onOpen={setOpen} />}
+
+      <ScreenerScanCard onOpen={setOpen} />
 
       <Card className="border-card-border bg-card p-3 sm:p-4">
         <div className="flex flex-wrap items-center gap-2">

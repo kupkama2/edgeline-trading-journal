@@ -57,6 +57,7 @@ import {
   deriveDaily,
   emptyFlags,
   emptyMetrics,
+  exitPlan,
   flagRows,
   HOUR_MS,
   mergeBars,
@@ -343,6 +344,147 @@ export async function pinCoin(asked: string): Promise<{ coin: string; settings: 
   return { coin: listed.coin, settings };
 }
 
+type Snap = Map<string, { openInterest: number | null; mark: number | null }>;
+
+/**
+ * One coin measured on every timeframe, before the universe-wide flags:
+ * the venue's numbers, the positioning from the hourly snapshots, and each
+ * timeframe's RS, price readings and RSI extremes. The hourly run and a
+ * scan of a single coin both measure through here, so they agree.
+ */
+function measureRow(
+  c: AssetCtx,
+  alt: Series | undefined,
+  ctx: { btc: Series; eth: Series | null; basket: Series; dayPartial: number; snaps: { h1: Snap; h4: Snap; d1: Snap }; pinned: boolean; error: string | null },
+): ScreenerRow {
+  const pos = (snap: Snap) => {
+    const was = snap.get(c.coin);
+    return { oi: oiChange(c.openInterest, was?.openInterest ?? null), px: c.markPx != null && was?.mark ? c.markPx / was.mark - 1 : null };
+  };
+  const d1 = pos(ctx.snaps.d1);
+  const positioning: Positioning = {
+    oi1h: pos(ctx.snaps.h1).oi,
+    oi4h: pos(ctx.snaps.h4).oi,
+    oi1d: d1.oi,
+    px1d: d1.px,
+    read: oiRead(d1.px, d1.oi),
+    premium: c.markPx != null && c.oraclePx ? c.markPx / c.oraclePx - 1 : null,
+    fundingPct: null,
+  };
+  const base: ScreenerRow = {
+    coin: c.coin,
+    ...(ctx.pinned ? { pinned: true } : {}),
+    mark: c.markPx,
+    volume24h: c.dayNtlVlm,
+    fundingHourly: c.funding,
+    fundingAnnual: c.funding != null ? annualizeFunding(c.funding) : null,
+    openInterest: c.openInterest,
+    // Over a day, or four hours until a day of snapshots exists. It was measured against the newest snapshot,
+    // which since the hourly schedule is minutes old (seconds, after a wake): the change read as nothing, and
+    // "leverage-driven" — OI up by the setting with top-decile funding — could not fire.
+    oiChange: positioning.oi1d ?? positioning.oi4h,
+    leverageDriven: false,
+    tf: emptyMetrics(),
+    flags: emptyFlags(),
+    price: emptyPrice(),
+    signals: emptySignals(),
+    positioning,
+    error: ctx.error,
+    bars: { "1h": 0, "1d": 0 },
+  };
+  if (alt) {
+    base.bars = { "1h": alt["1h"].length, "1d": alt["1d"].length };
+    base.tf = coinMetrics(alt, ctx.btc, ctx.dayPartial);
+    const peaks = {} as Record<Timeframe, number | null>;
+    const troughs = {} as Record<Timeframe, number | null>;
+    for (const tf of TIMEFRAMES) {
+      const b = TF_SPEC[tf].base;
+      const vsEth = ctx.eth && c.coin !== "ETH" ? tfMetrics(ratioSeries(alt[b], ctx.eth[b]), tf).rs : null;
+      const vsBasket = ctx.basket[b].length ? tfMetrics(ratioSeries(alt[b], ctx.basket[b]), tf).rs : null;
+      base.price[tf] = priceReadings(alt[b], tf, vsEth, vsBasket);
+      const ex = rsiExtremes(alt[b], tf);
+      peaks[tf] = ex.peak;
+      troughs[tf] = ex.trough;
+    }
+    base.rsiPeak = peaks;
+    base.rsiTrough = troughs;
+  }
+  return base;
+}
+
+/** One coin on every timeframe, as the scan returns it. */
+export interface CoinScan {
+  coin: string;
+  /** From the latest run's table, or measured now because the run did not read it. */
+  source: "run" | "scanned";
+  /** When the readings were taken, and the last completed hour they measure to. */
+  at: string;
+  barsTo: number;
+  row: ScreenerRow;
+  /** The structure stop per timeframe, from the stop lookback in the settings. */
+  stops: Record<Timeframe, { stop: number | null; distance: number | null }>;
+  /** How many coins its flags were ranked against. */
+  universe: number;
+}
+
+/**
+ * Any listed coin on every timeframe at once. A coin the latest run read is
+ * its row from that run; any other — under the volume line, listed since —
+ * has its candles read now and is measured exactly as the run would have,
+ * against the same BTC and ETH, with its flags ranked against the run's
+ * universe. The alt basket is the run's own and is not rebuilt for one coin,
+ * so RS against the basket is left out for a scanned coin.
+ */
+export async function scanCoin(asked: string): Promise<CoinScan> {
+  const run = await latestScreenerRun();
+  if (!run) throw Object.assign(new Error("No run yet; refresh the screener first."), { status: 409 });
+  const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+  if (NOT_AN_ALT.test(asked)) throw Object.assign(new Error("BTC and the dollar-pegged coins are not alts; the screener measures the rest against BTC."), { status: 400 });
+  const settings = await screenerSettings();
+  const to = run.barsTo ?? Date.now();
+  const stopsFor = (alt: Series, row: ScreenerRow): CoinScan["stops"] => {
+    const out = {} as CoinScan["stops"];
+    for (const tf of TIMEFRAMES) {
+      const plan = exitPlan(alt[TF_SPEC[tf].base], tf, row.mark, row.tf[tf], null, settings);
+      out[tf] = { stop: plan.structureStop, distance: plan.stopDistance };
+    }
+    return out;
+  };
+
+  const fromRun = run.rows.find((r) => same(r.coin, asked) && !r.error);
+  if (fromRun) {
+    const alt = measuredSeries(await storedSeries(fromRun.coin), to);
+    return { coin: fromRun.coin, source: "run", at: run.at, barsTo: to, row: fromRun, stops: stopsFor(alt, fromRun), universe: run.rows.length };
+  }
+
+  const budget = new Budget(WEIGHT_PER_MIN);
+  const c = parseMetaAndAssetCtxs(await ask(budget, 20, { type: "metaAndAssetCtxs" })).find((x) => same(x.coin, asked) && !x.delisted);
+  if (!c) throw Object.assign(new Error("Not on Hyperliquid's perp list. Tokens often trade under another name — Lighter is LIT."), { status: 404 });
+  const now = Date.now();
+  const { series } = await fetchSeries(budget, c.coin, now, await storedSeries(c.coin));
+  if (series["1h"].length === 0) throw Object.assign(new Error("Hyperliquid sent no candles for it."), { status: 502 });
+  seriesCache.set(c.coin, series);
+  await screenerStore.saveSeries(c.coin, series["1h"], series["1d"]);
+  // Measured to the run's hour, so it lines up with the BTC the run measured against.
+  const alt = measuredSeries(series, to);
+  const btc = measuredSeries(await storedSeries("BTC"), to);
+  if (btc["1h"].length === 0) throw Object.assign(new Error("No BTC series stored to measure against; refresh the screener first."), { status: 409 });
+  const ethStored = await storedSeries("ETH");
+  const eth = ethStored["1h"].length ? measuredSeries(ethStored, to) : null;
+  const dayPartial = Math.max(1 / 24, ((to - Math.floor(to / DAY_MS) * DAY_MS) / DAY_MS) || 1);
+  const ago = (ms: number) => new Date(now - ms).toISOString();
+  const [h1, h4, d1] = await Promise.all([
+    screenerStore.snapshotNear(ago(HOUR_MS), ago(2.5 * HOUR_MS)),
+    screenerStore.snapshotNear(ago(4 * HOUR_MS), ago(6 * HOUR_MS)),
+    screenerStore.snapshotNear(ago(DAY_MS), ago(DAY_MS + 6 * HOUR_MS)),
+  ]);
+  const measured = measureRow(c, alt, { btc, eth, basket: { "1h": [], "1d": [] }, dayPartial, snaps: { h1, h4, d1 }, pinned: settings.pinned.includes(c.coin), error: null });
+  // Ranked against the run's universe: "moving fast" and "weakest" are places in it, not properties of the coin.
+  const others = run.rows.filter((r) => r.coin !== c.coin);
+  const row = flagRows([...others, measured], settings)[others.length];
+  return { coin: c.coin, source: "scanned", at: new Date(now).toISOString(), barsTo: to, row, stops: stopsFor(alt, row), universe: others.length + 1 };
+}
+
 export async function unpinCoin(coin: string): Promise<ScreenerSettings> {
   const before = await screenerSettings();
   const settings = { ...before, pinned: before.pinned.filter((c) => c.toLowerCase() !== coin.toLowerCase()) };
@@ -433,63 +575,9 @@ async function run(nowFn: () => number, ai = false): Promise<ScreenerRun> {
     const eth = measured.get("ETH") ?? null;
     const breadth = breadthOf(Array.from(measured.values()).map((s) => ratioSeries(s["1d"], btc["1d"])));
 
-    const rows: ScreenerRow[] = [];
-    for (const c of alts) {
-      const pos = (snap: Map<string, { openInterest: number | null; mark: number | null }>) => {
-        const was = snap.get(c.coin);
-        return { oi: oiChange(c.openInterest, was?.openInterest ?? null), px: c.markPx != null && was?.mark ? c.markPx / was.mark - 1 : null };
-      };
-      const d1 = pos(snap1d);
-      const positioning: Positioning = {
-        oi1h: pos(snap1h).oi,
-        oi4h: pos(snap4h).oi,
-        oi1d: d1.oi,
-        px1d: d1.px,
-        read: oiRead(d1.px, d1.oi),
-        premium: c.markPx != null && c.oraclePx ? c.markPx / c.oraclePx - 1 : null,
-        fundingPct: null,
-      };
-      const base: ScreenerRow = {
-        coin: c.coin,
-        ...(pinned.has(c.coin) ? { pinned: true } : {}),
-        mark: c.markPx,
-        volume24h: c.dayNtlVlm,
-        fundingHourly: c.funding,
-        fundingAnnual: c.funding != null ? annualizeFunding(c.funding) : null,
-        openInterest: c.openInterest,
-        // Over a day, or four hours until a day of snapshots exists. It was measured against the newest snapshot,
-        // which since the hourly schedule is minutes old (seconds, after a wake): the change read as nothing, and
-        // "leverage-driven" — OI up by the setting with top-decile funding — could not fire.
-        oiChange: positioning.oi1d ?? positioning.oi4h,
-        leverageDriven: false,
-        tf: emptyMetrics(),
-        flags: emptyFlags(),
-        price: emptyPrice(),
-        signals: emptySignals(),
-        positioning,
-        error: failed.get(c.coin) ?? null,
-        bars: { "1h": 0, "1d": 0 },
-      };
-      const alt = measured.get(c.coin);
-      if (alt) {
-        base.bars = { "1h": alt["1h"].length, "1d": alt["1d"].length };
-        base.tf = coinMetrics(alt, btc, dayPartial);
-        const peaks = {} as Record<Timeframe, number | null>;
-        const troughs = {} as Record<Timeframe, number | null>;
-        for (const tf of TIMEFRAMES) {
-          const b = TF_SPEC[tf].base;
-          const vsEth = eth && c.coin !== "ETH" ? tfMetrics(ratioSeries(alt[b], eth[b]), tf).rs : null;
-          const vsBasket = basket[b].length ? tfMetrics(ratioSeries(alt[b], basket[b]), tf).rs : null;
-          base.price[tf] = priceReadings(alt[b], tf, vsEth, vsBasket);
-          const ex = rsiExtremes(alt[b], tf);
-          peaks[tf] = ex.peak;
-          troughs[tf] = ex.trough;
-        }
-        base.rsiPeak = peaks;
-        base.rsiTrough = troughs;
-      }
-      rows.push(base);
-    }
+    const rows: ScreenerRow[] = alts.map((c) =>
+      measureRow(c, measured.get(c.coin), { btc, eth, basket, dayPartial, snaps: { h1: snap1h, h4: snap4h, d1: snap1d }, pinned: pinned.has(c.coin), error: failed.get(c.coin) ?? null }),
+    );
     // Binance's flow through the relay, then Hyperliquid's liquidation map. Each pass's failure is its own.
     const readable = rows.filter((r) => !r.error).map((r) => ({ coin: r.coin, mark: r.mark, fundingHourly: r.fundingHourly }));
     status.phase = "Binance flow";

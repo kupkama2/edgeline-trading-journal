@@ -245,3 +245,25 @@ export function useAskScreenerAi() {
     onSettled: () => void queryClient.invalidateQueries({ queryKey: ["/api/screener/ai"] }),
   });
 }
+
+/** One coin on every timeframe (server/screener.ts, scanCoin). */
+export interface ScreenerScan {
+  coin: string;
+  source: "run" | "scanned";
+  at: string;
+  barsTo: number;
+  row: ScreenerRow;
+  stops: Record<Timeframe, { stop: number | null; distance: number | null }>;
+  universe: number;
+}
+
+/** The scan of a coin, asked when one is chosen; kept a few minutes, since a scanned coin reads the venue. */
+export function useScreenerScan(coin: string | null) {
+  return useQuery<ScreenerScan>({
+    queryKey: ["/api/screener/scan", coin],
+    queryFn: async () => (await apiRequest("GET", `/api/screener/scan/${encodeURIComponent(coin!)}`)).json(),
+    enabled: !!coin,
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+}
