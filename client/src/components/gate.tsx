@@ -16,9 +16,10 @@ export function GateQuestions({
   onDone,
   onSkip,
   title = "Pre-trade gate",
-  blurb = "Six questions before every entry. Any red answer, no trade.",
+  blurb,
   testId = "gate",
   afterTheFact = false,
+  compact = false,
 }: {
   questions: GateQuestion[];
   where: GateRecord["where"];
@@ -36,6 +37,8 @@ export function GateQuestions({
    * through on its own.
    */
   afterTheFact?: boolean;
+  /** One line a question, small buttons beside it: for a card on a page, not a gate in the way. */
+  compact?: boolean;
 }) {
   const [answers, setAnswers] = useState<Record<string, "yes" | "no">>({});
   const left = afterTheFact ? gateUnanswered(questions, answers) : gateLeft(questions, answers);
@@ -48,32 +51,44 @@ export function GateQuestions({
     if (gateLeft(questions, next) === 0) record(next);
   };
   const ready = afterTheFact && left === 0 && anyRed;
+  const said = blurb ?? `${countWord(questions.length)} before every entry. Any red answer, no trade.`;
   return (
     <div data-testid={testId}>
-      <h3 className="text-lg font-bold tracking-tight">{title}</h3>
-      <p className="mt-0.5 text-[11px] text-muted-foreground">{blurb}</p>
+      <h3 className={compact ? "text-sm font-semibold tracking-tight" : "text-lg font-bold tracking-tight"}>{title}</h3>
+      {said && <p className="mt-0.5 text-[11px] text-muted-foreground">{said}</p>}
       <div className={`mt-2 divide-y divide-border/60 rounded-lg border ${anyRed ? "border-red-500/60" : left === 0 ? "border-emerald-500/60" : "border-border"}`}>
         {questions.map((q) => {
           const a = answers[q.id];
           const tone = (v: "yes" | "no") => (a !== v ? "border-border text-foreground hover:border-primary/40" : v === q.good ? "border-emerald-500/60 bg-emerald-500/15 text-emerald-400" : "border-red-500/60 bg-red-500/15 text-red-400");
-          return (
+          const buttons = (
+            <div className={compact ? "flex shrink-0 gap-1" : "mt-1.5 flex gap-1.5"}>
+              {(["yes", "no"] as const).map((v) => (
+                <button
+                  key={v}
+                  type="button"
+                  onClick={() => answer(q, v)}
+                  aria-pressed={a === v}
+                  className={`rounded-md border font-medium transition-colors ${compact ? "min-w-[2.5rem] px-2 py-0.5 text-[11px]" : "px-3 py-1 text-xs"} ${tone(v)}`}
+                  data-testid={`${testId}-${q.id}-${v}`}
+                >
+                  {v === "yes" ? "Yes" : "No"}
+                </button>
+              ))}
+            </div>
+          );
+          return compact ? (
+            <div key={q.id} className="flex items-center justify-between gap-2 px-2.5 py-1.5" data-testid={`${testId}-q-${q.id}`}>
+              <p className="min-w-0 text-[12px] leading-snug" title={q.hint}>
+                {q.text}
+                {q.hint && <span className="block text-[10px] leading-snug text-muted-foreground">{q.hint}</span>}
+              </p>
+              {buttons}
+            </div>
+          ) : (
             <div key={q.id} className="px-3 py-2.5" data-testid={`${testId}-q-${q.id}`}>
               <p className="text-[13px] font-semibold leading-snug">{q.text}</p>
               {q.hint && <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">{q.hint}</p>}
-              <div className="mt-1.5 flex gap-1.5">
-                {(["yes", "no"] as const).map((v) => (
-                  <button
-                    key={v}
-                    type="button"
-                    onClick={() => answer(q, v)}
-                    aria-pressed={a === v}
-                    className={`rounded-md border px-3 py-1 text-xs font-medium transition-colors ${tone(v)}`}
-                    data-testid={`${testId}-${q.id}-${v}`}
-                  >
-                    {v === "yes" ? "Yes" : "No"}
-                  </button>
-                ))}
-              </div>
+              {buttons}
             </div>
           );
         })}
@@ -107,6 +122,9 @@ export function GateQuestions({
     </div>
   );
 }
+
+const WORDS = ["No questions", "One question", "Two questions", "Three questions", "Four questions", "Five questions", "Six questions", "Seven questions", "Eight questions", "Nine questions", "Ten questions"];
+const countWord = (n: number) => WORDS[n] ?? `${n} questions`;
 
 /** The gate over something: the form stays underneath, blurred, until every answer is green. */
 export function GateOverlay(props: Parameters<typeof GateQuestions>[0]) {

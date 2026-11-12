@@ -104,15 +104,16 @@ export function TradeGateCard({ trade }: { trade: TradeWithTags }) {
     }
   };
   return (
-    <Card className="border-amber-500/50 bg-card p-4" data-testid="card-trade-gate">
+    <Card className="border-amber-500/50 bg-card p-3" data-testid="card-trade-gate">
       <GateQuestions
         questions={prefs.gate.questions}
         where="tracked"
         afterTheFact
+        compact
         onDone={write}
         onSkip={write}
-        title="Was this trade through the gate?"
-        blurb="The position is already on. Answer honestly; a red answer goes on the record, not on the trade's way."
+        title="Pre-trade questions"
+        blurb="Already on, so a red answer goes on the record, not in the way."
         testId="trade-gate-q"
       />
     </Card>
@@ -176,7 +177,7 @@ export function TrackedGateBanner({ trades }: { trades: TradeWithTags[] }) {
       await update.mutateAsync({ id: first.id, gate: record });
       const reds = redAnswers(prefs.gate.questions, record);
       toast({
-        title: reds.length ? `${first.symbol}: entered against the gate` : `${first.symbol}: gate green`,
+        title: reds.length ? `${first.symbol}: entered with ${reds.length === 1 ? "a red answer" : "red answers"}` : `${first.symbol}: every answer green`,
         description: reds.length ? `${reds.length} red ${reds.length === 1 ? "answer" : "answers"} on the record.` : "Every answer green, on the record.",
         variant: reds.length ? "destructive" : undefined,
       });
@@ -185,11 +186,11 @@ export function TrackedGateBanner({ trades }: { trades: TradeWithTags[] }) {
     }
   };
   return (
-    <Card className="border-amber-500/50 bg-card p-4" data-testid="tracked-gate">
-      <p className="mb-1.5 text-[11px] text-amber-500">
+    <Card className="border-amber-500/50 bg-card p-3" data-testid="tracked-gate">
+      <p className="mb-1 text-[11px] text-amber-500">
         New position seen on the venue{open.length > 1 ? ` · ${open.length - 1} more waiting behind it` : ""}.
       </p>
-      <div className="mb-3 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2">
+      <div className="mb-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-1.5">
         <GateTradeLine trade={first} onOpen={() => navigate(`/trade/${first.id}`)} />
       </div>
       <GateQuestions
@@ -197,10 +198,11 @@ export function TrackedGateBanner({ trades }: { trades: TradeWithTags[] }) {
         questions={prefs.gate.questions}
         where="tracked"
         afterTheFact
+        compact
         onDone={write}
         onSkip={write}
-        title="Was this trade through the gate?"
-        blurb="The position is already on. Answer honestly; a red answer goes on the record, not on the trade's way."
+        title="Pre-trade questions"
+        blurb="Already on, so a red answer goes on the record, not in the way."
         testId="tracked-gate-q"
       />
     </Card>
@@ -223,12 +225,12 @@ export function GateStatsCard({ trades }: { trades: TradeWithTags[] }) {
       <p className="mt-0.5 text-[11px] text-muted-foreground">Trades that went in green against trades that went in red. The number that changes behaviour is the question that goes red most.</p>
       <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
         <div className="rounded-md bg-secondary/40 p-2.5">
-          <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Through the gate</p>
+          <p className="text-[10px] uppercase tracking-wider text-muted-foreground">All green</p>
           <p className="font-mono text-lg text-emerald-400" data-testid="text-gate-passed">{fmtR(report.passed.avgR)}</p>
           <p className="text-[10px] text-muted-foreground">{report.passed.n} {report.passed.n === 1 ? "trade" : "trades"} · average R</p>
         </div>
         <div className="rounded-md bg-secondary/40 p-2.5">
-          <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Against it</p>
+          <p className="text-[10px] uppercase tracking-wider text-muted-foreground">With a red answer</p>
           <p className="font-mono text-lg text-red-400" data-testid="text-gate-failed">{fmtR(report.failed.avgR)}</p>
           <p className="text-[10px] text-muted-foreground">{report.failed.n} {report.failed.n === 1 ? "trade" : "trades"} · average R</p>
         </div>
@@ -329,7 +331,7 @@ export function GateSettingsCard() {
           + question
         </Button>
         <Button size="sm" variant="ghost" className="h-7 px-2 text-[11px] text-muted-foreground" onClick={() => edit({ questions: DEFAULT_GATE_QUESTIONS })} data-testid="button-gate-defaults">
-          the six defaults
+          the defaults
         </Button>
         {draft && (
           <span className="ml-auto flex gap-1">

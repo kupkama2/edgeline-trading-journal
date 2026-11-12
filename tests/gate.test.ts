@@ -4,22 +4,22 @@ import { DEFAULT_GATE_QUESTIONS, formatGate, gateLeft, gatePassed, gateReport, g
 
 /** The pre-trade gate: its rules, and the answers on the record. */
 const Q = DEFAULT_GATE_QUESTIONS;
-const green = { calm: "yes", planned: "yes", entry: "yes", stop: "no", bias: "yes", loss: "yes" } as const;
+const green = { calm: "yes", planned: "yes", entry: "yes", stop: "no", bias: "yes", loss: "yes", size: "yes" } as const;
 
 describe("the gate's rules", () => {
   it("is green only when every answer is the good one — the stop question on No", () => {
     expect(gatePassed(Q, { at: "x", answers: { ...green }, where: "entry-card" })).toBe(true);
     expect(gatePassed(Q, { at: "x", answers: { ...green, stop: "yes" }, where: "entry-card" })).toBe(false);
     expect(redAnswers(Q, { at: "x", answers: { ...green, stop: "yes", calm: "no" }, where: "entry-card" })).toEqual(["calm", "stop"]);
-    expect(gateLeft(Q, {})).toBe(6);
-    expect(gateLeft(Q, { calm: "yes", planned: "no" })).toBe(5);
+    expect(gateLeft(Q, {})).toBe(7);
+    expect(gateLeft(Q, { calm: "yes", planned: "no" })).toBe(6);
     // Asked after the fact, a red answer is an answer: only the unanswered are left.
-    expect(gateUnanswered(Q, { calm: "yes", planned: "no" })).toBe(4);
+    expect(gateUnanswered(Q, { calm: "yes", planned: "no" })).toBe(5);
     expect(gateUnanswered(Q, { ...green, stop: "yes" })).toBe(0);
     // Skipped is red on all of them, and never a pass.
     const skipped = { at: "x", answers: {}, skipped: true, where: "tracked" as const };
     expect(gatePassed(Q, skipped)).toBe(false);
-    expect(redAnswers(Q, skipped)).toHaveLength(6);
+    expect(redAnswers(Q, skipped)).toHaveLength(7);
   });
 
   it("reads settings leniently and a record strictly", () => {
@@ -29,6 +29,21 @@ describe("the gate's rules", () => {
     expect(parseGate(formatGate({ at: "x", answers: { calm: "yes" }, where: "terminal" }))).toMatchObject({ where: "terminal" });
     expect(parseGate('{"answers":{"calm":"maybe"}}')).toBeNull();
     expect(parseGate("nonsense")).toBeNull();
+  });
+
+  it("adds the sizing question to a list saved before it existed, once", () => {
+    const saved = { entryCard: true, terminal: true, tracked: true, questions: [{ id: "calm", text: "Calm?", good: "yes" }] };
+    const read = readGate(saved);
+    expect(read.questions.map((q) => q.id)).toEqual(["calm", "size"]);
+    expect(read.offered).toEqual(["size"]);
+    // Deleted afterwards, it stays deleted: the list says it was offered.
+    expect(readGate({ ...saved, offered: ["size"] }).questions.map((q) => q.id)).toEqual(["calm"]);
+    // A list that already has it is left as it is.
+    const has = { ...saved, questions: [{ id: "size", text: "Sized right?", good: "yes" }, { id: "calm", text: "Calm?", good: "yes" }] };
+    expect(readGate(has).questions.map((q) => q.text)).toEqual(["Sized right?", "Calm?"]);
+    // The defaults have it, and say so.
+    expect(readGate(undefined).questions.map((q) => q.id)).toContain("size");
+    expect(readGate(undefined).offered).toEqual(["size"]);
   });
 
   it("reports the record: green trades against red ones, and the question that goes red most", () => {
@@ -79,7 +94,8 @@ describe.skipIf(!DB)("the gate on the record", () => {
   it("keeps the questions and where the gate stands in the person's prefs", async () => {
     const before = await send("GET", "/api/prefs").then((x) => x.json());
     expect(before.gate).toMatchObject({ entryCard: true, terminal: true, tracked: true });
-    expect(before.gate.questions).toHaveLength(6);
+    expect(before.gate.questions).toHaveLength(7);
+    expect(before.gate.questions.at(-1)).toMatchObject({ id: "size", good: "yes" });
     const r = await send("PATCH", "/api/prefs", { gate: { terminal: false, questions: [{ id: "calm", text: "Calm?", good: "yes" }, { id: "stop", text: "Enter at the stop?", hint: "No.", good: "no" }] } });
     expect(r.status).toBe(200);
     const after = await send("GET", "/api/prefs").then((x) => x.json());
