@@ -27,6 +27,7 @@ import { fetchCandles, readCandles, type CandleRead, type Interval } from "./bin
 import { readHlCandles } from "./hyperliquid";
 import { BAR_MS } from "./binance";
 import { candleStore } from "./storage";
+import { publicRelayFor, relayPublic } from "./relay";
 
 /** The pair a trade is read against, on the venue its account names. */
 export function pairForTradeAt(
@@ -175,4 +176,37 @@ export async function fetchCandlesAt(
     return (await readHlCandles(pair.symbol, interval, startMs, endMs, maxBars)).candles;
   }
   return fetchCandles(pair, interval, startMs, endMs, maxBars);
+}
+
+/**
+ * A Binance perp's bars asked through the person's own relay.
+ *
+ * Binance's futures API refuses this server (a US host), so a read from here
+ * falls back to the daily archive, which stops at the end of yesterday: the
+ * plan watch on a trade from today could not see today's tape until tomorrow,
+ * and "set and forget" sat at "?" for a day. The relay is the person's own
+ * machine, which Binance answers. Null when no live relay that makes public
+ * reads is connected; the caller then reads as before.
+ */
+export async function relayFuturesCandles(userId: number, symbol: string, interval: Interval, startMs: number, endMs: number, maxBars = 1500): Promise<Candle[] | null> {
+  const relay = publicRelayFor(userId);
+  if (!relay.account) return null;
+  const out: Candle[] = [];
+  let cursor = Math.floor(startMs);
+  while (cursor < endMs && out.length < maxBars) {
+    const r = await relayPublic(userId, relay.account, "/fapi/v1/klines", { symbol, interval, startTime: cursor, endTime: Math.floor(endMs), limit: 1000 });
+    if (r.status !== 200) throw new Error(`The relay's klines answered HTTP ${r.status}`);
+    const page = JSON.parse(r.body) as unknown;
+    if (!Array.isArray(page) || page.length === 0) break;
+    for (const k of page as unknown[][]) {
+      const c = { t: Number(k[0]), o: Number(k[1]), h: Number(k[2]), l: Number(k[3]), c: Number(k[4]) };
+      if ([c.t, c.o, c.h, c.l, c.c].every(Number.isFinite)) out.push(c);
+    }
+    const last = Number((page[page.length - 1] as unknown[])[0]);
+    // A page that cannot move the cursor would loop forever.
+    if (!Number.isFinite(last) || last < cursor) break;
+    cursor = last + 1;
+    if (page.length < 1000) break;
+  }
+  return out.slice(0, maxBars);
 }
