@@ -57,6 +57,11 @@ function answer(method: string, path: string, params: Record<string, any>): { st
       return { status: 200, body: orders.find((o) => o.orderId === Number(params.orderId)) ?? { code: -2013, msg: "Order does not exist." } };
     case "GET /fapi/v1/algoOrder":
       return { status: 200, body: algos.find((a) => a.algoId === Number(params.algoId)) ?? { code: -2013, msg: "Order does not exist." } };
+    case "GET /fapi/v1/klines": {
+      // Three one-minute bars from the start asked for, as Binance writes them: arrays of strings.
+      const t0 = Number(params.startTime);
+      return { status: 200, body: [0, 1, 2].map((i) => [t0 + i * 60_000, "3000", String(3010 + i), "2990", String(3005 + i), "12", t0 + i * 60_000 + 59_999]) };
+    }
     default:
       return { status: 400, body: { code: -1121, msg: "Invalid symbol." } };
   }
@@ -211,6 +216,20 @@ describe.skipIf(!DB)("the relay", () => {
     relay!.send(JSON.stringify({ t: "hello", env: "testnet", canTrade: false, keyHint: "relaykey", features: ["public"] }));
     await waitFor(async () => publicRelayFor(userId), (r) => r.account === null);
     expect(publicRelayFor(userId).account).toBeNull();
+    relay!.send(JSON.stringify({ t: "hello", env: "live", canTrade: false, keyHint: "relaykey" }));
+  });
+
+  it("reads a perp's minutes through the relay, so the plan watch is not a day behind", async () => {
+    const { relayFuturesCandles } = await import("../server/candles");
+    // An older relay, with no public reads: nothing asked, and the caller reads as before.
+    expect(await relayFuturesCandles(userId, "ETHUSDT", "1m", now - 10 * MIN, now)).toBeNull();
+    relay!.send(JSON.stringify({ t: "hello", env: "live", canTrade: false, keyHint: "relaykey", features: ["public"] }));
+    await waitFor(async () => (await import("../server/relay")).publicRelayFor(userId), (r) => r.account === ACCOUNT);
+    const start = now - 10 * MIN;
+    const bars = await relayFuturesCandles(userId, "ETHUSDT", "1m", start, now);
+    expect(bars).toEqual([0, 1, 2].map((i) => ({ t: start + i * 60_000, o: 3000, h: 3010 + i, l: 2990, c: 3005 + i })));
+    const asked = raw.filter((m) => m.path === "/fapi/v1/klines").at(-1);
+    expect(asked).toMatchObject({ public: true, params: { symbol: "ETHUSDT", interval: "1m", startTime: start, limit: 1000 } });
     relay!.send(JSON.stringify({ t: "hello", env: "live", canTrade: false, keyHint: "relaykey" }));
   });
 

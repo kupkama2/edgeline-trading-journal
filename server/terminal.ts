@@ -27,7 +27,7 @@ import { egressFor } from "./egress";
 import { open } from "./secrets";
 import { futuresBase, signedCall, type BinanceEnv, type Creds } from "./binance-account";
 import { fetchCandles, type Interval } from "./binance";
-import { fetchCandlesAt } from "./candles";
+import { fetchCandlesAt, relayFuturesCandles } from "./candles";
 import {
   addToPosition,
   algoOrderById,
@@ -295,7 +295,10 @@ async function watchPlan(
   if (w?.checkedAt && now - new Date(w.checkedAt).getTime() < gap) return none;
   const from = Math.max(w?.coveredTo ?? 0, entryMs - 60_000);
   // The tape of the venue the trade is on: a Hyperliquid coin's minutes come from Hyperliquid.
-  const bars = await fetchCandlesAt({ symbol: ref.symbol, market: "futures", venue: ref.venue === "hyperliquid" ? "hyperliquid" : "binance" }, "1m", from, now, 1500);
+  // A Binance perp's, through the person's relay first: from this server Binance answers only out of
+  // yesterday's archive, and the watch would see today's tape a day late (see relayFuturesCandles).
+  const viaRelay = ref.venue === "hyperliquid" ? null : await relayFuturesCandles(t.userId, ref.symbol, "1m", from, now, 1500).catch(() => null);
+  const bars = viaRelay?.length ? viaRelay : await fetchCandlesAt({ symbol: ref.symbol, market: "futures", venue: ref.venue === "hyperliquid" ? "hyperliquid" : "binance" }, "1m", from, now, 1500);
   // The entry's own minute counts only from the entry: a print before the fill is not a touch.
   const after = bars.filter((c) => c.t + 60_000 > entryMs);
   const touches = planTouches(after, { direction: t.direction, stop: idea.stop, target });
