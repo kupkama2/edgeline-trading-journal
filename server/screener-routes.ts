@@ -22,6 +22,7 @@ import {
   screenerStatus,
   storedSeries,
   pinCoin,
+  scanCoin,
   unpinCoin,
 } from "./screener";
 import { screenerStore } from "./storage";
@@ -176,6 +177,17 @@ export function registerScreenerRoutes(app: Express): void {
     const coin = String(req.params.coin).trim();
     if (!COIN.test(coin)) return res.status(400).json({ message: "No such coin" });
     res.json(await unpinCoin(coin));
+  });
+
+  /** Any listed coin on every timeframe: the run's row, or measured now for one the run did not read. */
+  app.get("/api/screener/scan/:coin", async (req, res) => {
+    const coin = String(req.params.coin).trim();
+    if (!COIN.test(coin)) return res.status(400).json({ message: "No such coin" });
+    try {
+      res.json(await scanCoin(coin));
+    } catch (err: any) {
+      res.status(err?.status ?? 502).json({ message: String(err?.message ?? err).slice(0, 200) });
+    }
   });
 
   /** One coin for the drawer: price and ratio on the timeframe, volume, the exit plan, the arithmetic, and the funding/OI history. */

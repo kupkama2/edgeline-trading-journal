@@ -557,4 +557,36 @@ describe.skipIf(!DB)("the screener's run", () => {
     const after = await runScreener({ force: true });
     expect(after.rows.some((r) => r.coin === "TINY")).toBe(false);
   });
+
+  it("scans any listed coin on every timeframe: the run's row when it has one, measured now when it does not", async () => {
+    const { latestScreenerRun } = await import("../server/screener");
+    const run = (await latestScreenerRun())!;
+    // In the run: its row from the run, every timeframe, with a structure stop for each.
+    const sol = await get("/api/screener/scan/sol");
+    expect(sol).toMatchObject({ coin: "SOL", source: "run", at: run.at, universe: run.rows.length });
+    const fromRun = run.rows.find((r) => r.coin === "SOL")!;
+    for (const tf of ["1h", "4h", "12h", "1D", "1W", "1M"]) {
+      expect(sol.row.tf[tf]).toEqual(fromRun.tf[tf]);
+      expect(sol.stops[tf]).toHaveProperty("stop");
+    }
+    expect(sol.stops["1D"].stop).toEqual(expect.any(Number));
+
+    // Under the volume line and not pinned, so not in the run: read now, measured the same way, ranked against the run.
+    expect(run.rows.some((r) => r.coin === "TINY")).toBe(false);
+    const tiny = await get("/api/screener/scan/TINY");
+    expect(tiny).toMatchObject({ coin: "TINY", source: "scanned", universe: run.rows.length + 1, barsTo: run.barsTo });
+    expect(tiny.row.tf["1D"].rs).toEqual(expect.any(Number));
+    expect(tiny.row.price["1D"].rsi).toEqual(expect.any(Number));
+    expect(tiny.row.flags["1D"]).toHaveProperty("candidate");
+    expect(tiny.row.signals["1D"]).toHaveProperty("score");
+    // The run's alt basket is not rebuilt for one coin.
+    expect(tiny.row.price["1D"].rsBasket).toBeNull();
+    // Scanning does not pin it.
+    expect((await get("/api/screener/settings")).pinned).toEqual([]);
+
+    // Not a coin, not an alt, not listed.
+    expect((await fetch(`${base}/api/screener/scan/USDC`)).status).toBe(400);
+    expect((await fetch(`${base}/api/screener/scan/LIGHTER`)).status).toBe(404);
+    expect((await fetch(`${base}/api/screener/scan/no%20such`)).status).toBe(400);
+  });
 });
