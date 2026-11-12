@@ -1,5 +1,5 @@
 /**
- * The pre-trade gate: six questions before every entry. Any red answer, no trade.
+ * The pre-trade gate: the questions before every entry. Any red answer, no trade.
  *
  * The questions are the trader's own (editable in Settings), each with the
  * answer that is "green". One is inverted on purpose — "Would I want to
@@ -25,7 +25,15 @@ export const DEFAULT_GATE_QUESTIONS: GateQuestion[] = [
   { id: "stop", text: "Would I want to enter where my stop is?", hint: "Right answer is No. If you'd buy there, the stop is in the wrong place.", good: "no" },
   { id: "bias", text: "Am I with my directional bias?", good: "yes" },
   { id: "loss", text: "If I lose this trade, would I still consider it a good trade?", good: "yes" },
+  { id: "size", text: "Is my size right for this stop?", hint: "Sized from the stop and the risk per trade, not from how sure it feels.", good: "yes" },
 ];
+
+/**
+ * Default questions added after people had already saved their own lists.
+ * Each is put at the end of a saved list once; `offered` remembers it, so a
+ * question deleted afterwards stays deleted.
+ */
+const LATER_DEFAULTS = ["size"];
 
 export interface GateSettings {
   questions: GateQuestion[];
@@ -35,9 +43,21 @@ export interface GateSettings {
   terminal: boolean;
   /** A position the tracker found asks the questions after the fact. */
   tracked: boolean;
+  /** Later default questions already offered to this list (see LATER_DEFAULTS). */
+  offered?: string[];
 }
 
-export const DEFAULT_GATE: GateSettings = { questions: DEFAULT_GATE_QUESTIONS, entryCard: true, terminal: true, tracked: true };
+export const DEFAULT_GATE: GateSettings = { questions: DEFAULT_GATE_QUESTIONS, entryCard: true, terminal: true, tracked: true, offered: LATER_DEFAULTS };
+
+/** A saved list with the later defaults it has not been offered yet, at the end. */
+function withLaterDefaults(g: GateSettings): GateSettings {
+  const offered = new Set(g.offered ?? []);
+  const fresh = LATER_DEFAULTS.filter((id) => !offered.has(id));
+  if (!fresh.length) return g;
+  const have = new Set(g.questions.map((q) => q.id));
+  const add = DEFAULT_GATE_QUESTIONS.filter((q) => fresh.includes(q.id) && !have.has(q.id));
+  return { ...g, questions: [...g.questions, ...add].slice(0, 20), offered: [...Array.from(offered), ...fresh] };
+}
 
 const questionSchema = z.object({
   id: z.string().min(1).max(40).regex(/^[a-z0-9-]+$/),
@@ -50,21 +70,25 @@ export const gateSettingsSchema = z.object({
   entryCard: z.boolean(),
   terminal: z.boolean(),
   tracked: z.boolean(),
+  offered: z.array(z.string().max(40)).max(50).optional(),
 });
 export const gateSettingsPatchSchema = gateSettingsSchema.partial().strict();
 
 /** Stored settings, read leniently: anything malformed takes its default. */
 export function readGate(raw: unknown): GateSettings {
   const r = gateSettingsSchema.safeParse(raw);
-  if (r.success) return r.data;
+  if (r.success) return withLaterDefaults(r.data);
   const o = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
   const qs = z.array(questionSchema).safeParse(o.questions);
-  return {
+  const offered = z.array(z.string()).safeParse(o.offered);
+  return withLaterDefaults({
     questions: qs.success && qs.data.length ? qs.data : DEFAULT_GATE_QUESTIONS,
     entryCard: typeof o.entryCard === "boolean" ? o.entryCard : DEFAULT_GATE.entryCard,
     terminal: typeof o.terminal === "boolean" ? o.terminal : DEFAULT_GATE.terminal,
     tracked: typeof o.tracked === "boolean" ? o.tracked : DEFAULT_GATE.tracked,
-  };
+    // A list that fell back to the defaults has every default already.
+    offered: qs.success && qs.data.length ? (offered.success ? offered.data : []) : LATER_DEFAULTS,
+  });
 }
 
 /** What a trade carries: each answer as given, when, and whether it was skipped. */
