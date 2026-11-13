@@ -112,6 +112,8 @@ export interface CohortLine {
   planR: number | null;
   /** Realised minus plan. Positive means the hand was worth taking. */
   deltaR: number | null;
+  /** The same difference in money: what the hand made or cost in the account's currency. */
+  deltaPnL: number | null;
 }
 
 /* Bounds on what gets sent to the model: enough to find a pattern, not so much
@@ -165,6 +167,7 @@ export function buildInsightsBundle(
       actualR: c.actualOnMeasuredR,
       planR: c.planR,
       deltaR: c.deltaR,
+      deltaPnL: c.deltaPnL,
     };
   };
 

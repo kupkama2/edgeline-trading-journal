@@ -1505,7 +1505,10 @@ export function TradeEditor({
                   <span className={(previewMetrics.actualR ?? 0) >= 0 ? "text-emerald-400" : "text-primary"}>
                     {fmtR(previewMetrics.actualR)}
                   </span>
-                  <span title="What the untouched plan would have made">no-mgmt {fmtR(previewMetrics.potentialR)}</span>
+                  <span title="What the untouched plan would have made">
+                    no-mgmt {fmtR(previewMetrics.potentialR)}
+                    {previewMetrics.potentialPnL != null && ` (${fmtMoney(previewMetrics.potentialPnL)})`}
+                  </span>
                   <span title="How much of the best price while in you kept">
                     capture{" "}
                     {previewMetrics.captureRatioClipped != null

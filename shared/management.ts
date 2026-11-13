@@ -19,7 +19,7 @@
  * the unanswered.
  */
 import type { Trade, TradeFill } from "./schema";
-import { computeMetrics } from "./metrics";
+import { computeMetrics, fmtMoney } from "./metrics";
 
 /** Nothing under this is a decision, it is rounding and slippage. */
 const FLAT = 0.05;
@@ -36,6 +36,12 @@ export interface EdgeBucket {
   trades: number;
   /** Summed management delta for the bucket, in R. */
   r: number;
+  /**
+   * The same, in money: each trade's delta times what 1R was on it. R says
+   * whether the habit is good; this says what it has cost or paid, which
+   * differs from R whenever the trades were sized differently.
+   */
+  dollars: number;
   /** The ids behind it, so a number on a card can open the trades under it. */
   tradeIds: number[];
 }
@@ -47,6 +53,8 @@ export interface ManagementEdge {
   unmeasured: number;
   /** Management, net, in R. The headline — and the least useful figure here. */
   totalR: number;
+  /** Management, net, in money. */
+  totalDollars: number;
   /** What it came FROM, biggest first. */
   edges: EdgeBucket[];
   /** What it leaked TO, biggest first. */
@@ -133,6 +141,7 @@ export function managementEdge(
   let measured = 0;
   let unmeasured = 0;
   let totalR = 0;
+  let totalDollars = 0;
 
   for (const t of trades) {
     if (t.status !== "closed") continue;
@@ -151,12 +160,15 @@ export function managementEdge(
 
     measured++;
     totalR += m.managementDeltaR;
+    const dollars = m.managementDeltaDollars ?? 0;
+    totalDollars += dollars;
     const row = fileTrade(plan, m.actualR, m.managementDeltaR);
     const b =
       byId.get(row.id) ??
-      ({ ...row, trades: 0, r: 0, tradeIds: [] } as EdgeBucket);
+      ({ ...row, trades: 0, r: 0, dollars: 0, tradeIds: [] } as EdgeBucket);
     b.trades++;
     b.r += m.managementDeltaR;
+    b.dollars += dollars;
     b.tradeIds.push(t.id);
     byId.set(row.id, b);
   }
@@ -170,6 +182,7 @@ export function managementEdge(
     measured,
     unmeasured,
     totalR,
+    totalDollars,
     edges: of("edge"),
     leaks: of("leak"),
     neutral: of("neutral"),
@@ -189,13 +202,15 @@ export function edgeSentence(e: ManagementEdge): string | null {
   const best = e.edges[0];
   const worst = e.leaks[0];
   const r = (n: number) => `${n > 0 ? "+" : ""}${n.toFixed(1)}R`;
+  // R and the money it was, side by side: the habit, and what it came to.
+  const rd = (b: EdgeBucket) => `${r(b.r)}, ${fmtMoney(b.dollars)}`;
 
   if (!best && !worst) return "Every measured trade went exactly as planned.";
   if (best && !worst) {
-    return `Your management is all gain: ${best.label.toLowerCase()} is worth ${r(best.r)} across ${best.trades}.`;
+    return `Your management is all gain: ${best.label.toLowerCase()} is worth ${rd(best)} across ${best.trades}.`;
   }
   if (!best && worst) {
-    return `Your management only costs you here: ${worst.label.toLowerCase()} has taken ${r(worst.r)} across ${worst.trades}.`;
+    return `Your management only costs you here: ${worst.label.toLowerCase()} has taken ${rd(worst)} across ${worst.trades}.`;
   }
-  return `Your edge comes from ${best!.label.toLowerCase()} (${r(best!.r)} across ${best!.trades}); it leaks to ${worst!.label.toLowerCase()} (${r(worst!.r)} across ${worst!.trades}).`;
+  return `Your edge comes from ${best!.label.toLowerCase()} (${rd(best!)} across ${best!.trades}); it leaks to ${worst!.label.toLowerCase()} (${rd(worst!)} across ${worst!.trades}).`;
 }

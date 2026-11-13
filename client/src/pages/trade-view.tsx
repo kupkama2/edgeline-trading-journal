@@ -1401,6 +1401,7 @@ export function TradeBody({
                         }
                       >
                         {fmtR(m.managementDeltaR)}
+                        {m.managementDeltaDollars != null && ` (${fmtMoney(m.managementDeltaDollars)})`}
                       </span>
                     </>
                   ) : (

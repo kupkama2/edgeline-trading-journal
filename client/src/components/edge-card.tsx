@@ -4,6 +4,7 @@ import { Card } from "@/components/ui/card";
 import { Scale } from "lucide-react";
 import { edgeSentence, managementEdge, type EdgeBucket } from "@shared/management";
 import type { TradeWithTags } from "@shared/schema";
+import { fmtMoney } from "@shared/metrics";
 
 /**
  * Where the management edge comes from, and where it leaks.
@@ -76,11 +77,12 @@ export function EdgeCard({ trades }: { trades: TradeWithTags[] }) {
           things. */}
       <p className="mt-2 text-[10px] leading-snug text-muted-foreground" data-testid="edge-sample">
         Over {e.measured} measured {e.measured === 1 ? "trade" : "trades"}, management is{" "}
-        <span className={e.totalR >= 0 ? "text-emerald-400" : "text-primary"}>
+        <span className={e.totalR >= 0 ? "text-emerald-400" : "text-primary"} data-testid="edge-total">
           {e.totalR > 0 ? "+" : ""}
           {e.totalR.toFixed(1)}R
         </span>{" "}
-        net.
+        net, <span className={e.totalDollars >= 0 ? "text-emerald-400" : "text-primary"} data-testid="edge-total-dollars">{fmtMoney(e.totalDollars)}</span>{" "}
+        in money.
         {e.unmeasured > 0 &&
           ` ${e.unmeasured} more closed ${e.unmeasured === 1 ? "trade has" : "trades have"} no plan outcome yet and are left out.`}
       </p>
@@ -91,7 +93,7 @@ export function EdgeCard({ trades }: { trades: TradeWithTags[] }) {
             {term.totalR > 0 ? "+" : ""}
             {term.totalR.toFixed(1)}R
           </span>{" "}
-          net.
+          net ({fmtMoney(term.totalDollars)}).
         </p>
       )}
     </Card>
@@ -146,6 +148,9 @@ function Column({
                 >
                   {b.r > 0 ? "+" : ""}
                   {b.r.toFixed(1)}R
+                  <span className="ml-1.5 font-normal" data-testid={`edge-bucket-dollars-${b.id}`}>
+                    {fmtMoney(b.dollars)}
+                  </span>
                 </span>
               </div>
               <p className="text-[10px] leading-snug text-muted-foreground">

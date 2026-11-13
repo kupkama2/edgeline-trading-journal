@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { edgeSentence, managementEdge } from "../shared/management";
 import { trade } from "./helpers";
+import { aggregate } from "../shared/metrics";
 
 /**
  * Where the management edge comes from, and where it leaks.
@@ -92,6 +93,28 @@ describe("what the whole book says", () => {
     // Net says "down 1.5R", which is true and tells you nothing.
     expect(e.totalR).toBeCloseTo(-1.5);
     expect(edgeSentence(e)).toMatch(/comes from cutting losers early.*leaks to cutting winners early/i);
+  });
+
+  it("prices management in money as well as R, which differ when the trades were sized differently", () => {
+    // The same decision twice — out at half the stop — on a small trade and a ten-times bigger one.
+    // In R the two are equal (+0.5R each); in money the big one is ten times the small one.
+    const e = managementEdge([
+      t({ id: 1, noManagementOutcome: "stop_first", exitPrice: 95, size: 1 }),
+      t({ id: 2, noManagementOutcome: "stop_first", exitPrice: 95, size: 10 }),
+    ]);
+    const saved = bucket(e, "savedOnLosers")!;
+    expect(saved.r).toBeCloseTo(1);
+    // 1R is $10 on the first and $100 on the second: +$5 and +$50.
+    expect(saved.dollars).toBeCloseTo(55);
+    expect(e.totalDollars).toBeCloseTo(55);
+    expect(edgeSentence(e)).toContain("+1.0R, +$55.00");
+    // The book's own total says the same.
+    const agg = aggregate([
+      t({ id: 1, noManagementOutcome: "stop_first", exitPrice: 95, size: 1 }),
+      t({ id: 2, noManagementOutcome: "stop_first", exitPrice: 95, size: 10 }),
+    ]);
+    expect(agg.totalDeltaR).toBeCloseTo(1);
+    expect(agg.totalDeltaDollars).toBeCloseTo(55);
   });
 
   it("counts what it cannot measure rather than averaging over it", () => {

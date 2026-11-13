@@ -13,7 +13,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { GitCompareArrows, Loader2, Sparkles } from "lucide-react";
 import type { TradeWithTags } from "@shared/schema";
-import { computeMetrics } from "@shared/metrics";
+import { computeMetrics, fmtMoney } from "@shared/metrics";
 import { ideaOf, managementTimeline, parseTerminalRef, planVerdictOf, rAt } from "@shared/terminal";
 import { useReviewTrade } from "@/lib/terminal";
 import { useToast } from "@/hooks/use-toast";
@@ -37,6 +37,16 @@ export function ManagementCard({ trade }: { trade: TradeWithTags }) {
   const planR = m.potentialR ?? plan.planR;
   const actualR = closed ? m.actualR : null;
   const delta = actualR != null && planR != null ? actualR - planR : null;
+  /*
+   * The same three in money. The plan is the idea as drawn — its size, its
+   * stop — so its dollars are its R times what 1R was on it; what was made is
+   * what hit the account, adds and takes included. The difference is what
+   * managing this trade made or cost.
+   */
+  const oneR = m.riskDollars > 0 ? m.riskDollars : null;
+  const planDollars = m.potentialPnL ?? (planR != null && oneR != null ? planR * oneR : null);
+  const actualDollars = closed ? m.actualPnL : null;
+  const deltaDollars = actualDollars != null && planDollars != null ? actualDollars - planDollars : null;
   const w = ref.planWatch;
   const touched = (ref.moves?.length ?? 0) > 0 || (trade.fills ?? []).some((f) => (f.note ?? "").startsWith("terminal"));
   const exitR = closed && trade.exitPrice != null ? rAt(trade.exitPrice, trade.entryPrice, idea.stop, trade.direction) : null;
@@ -69,9 +79,9 @@ export function ManagementCard({ trade }: { trade: TradeWithTags }) {
 
       {/* The three numbers. */}
       <div className="grid grid-cols-3 gap-2 text-center">
-        <Stat label="Set and forget" value={fmtR(planR, plan.verdict ? "—" : "?")} tone={planR == null ? "" : planR >= 0 ? "text-emerald-400" : "text-red-400"} testId="stat-plan-r" />
-        <Stat label={closed ? "As managed" : "Open now"} value={closed ? fmtR(actualR) : "running"} tone={actualR == null ? "" : actualR >= 0 ? "text-emerald-400" : "text-red-400"} testId="stat-actual-r" />
-        <Stat label="Management" value={fmtR(delta)} tone={delta == null ? "" : Math.abs(delta) < 0.1 ? "text-muted-foreground" : delta > 0 ? "text-emerald-400" : "text-red-400"} testId="stat-delta-r" />
+        <Stat label="Set and forget" value={fmtR(planR, plan.verdict ? "—" : "?")} money={planDollars} tone={planR == null ? "" : planR >= 0 ? "text-emerald-400" : "text-red-400"} testId="stat-plan-r" />
+        <Stat label={closed ? "As managed" : "Open now"} value={closed ? fmtR(actualR) : "running"} money={actualDollars} tone={actualR == null ? "" : actualR >= 0 ? "text-emerald-400" : "text-red-400"} testId="stat-actual-r" />
+        <Stat label="Management" value={fmtR(delta)} money={deltaDollars} tone={delta == null ? "" : Math.abs(delta) < 0.1 ? "text-muted-foreground" : delta > 0 ? "text-emerald-400" : "text-red-400"} testId="stat-delta-r" />
       </div>
       <p className="mt-2 text-[11px] leading-snug text-muted-foreground" data-testid="text-plan-line">
         {planLine}
@@ -125,12 +135,16 @@ export function ManagementCard({ trade }: { trade: TradeWithTags }) {
   );
 }
 
-function Stat({ label, value, tone, testId }: { label: string; value: string; tone: string; testId: string }) {
+function Stat({ label, value, money, tone, testId }: { label: string; value: string; money?: number | null; tone: string; testId: string }) {
   return (
     <div className="rounded-md bg-background/40 px-2 py-1.5">
       <div className="text-[9px] uppercase tracking-wider text-muted-foreground">{label}</div>
       <div className={`font-mono text-sm font-semibold ${tone}`} data-testid={testId}>
         {value}
+      </div>
+      {/* The same figure in money, under it: what it was in the account's own currency. */}
+      <div className={`font-mono text-[11px] ${money == null ? "text-muted-foreground/60" : tone || "text-muted-foreground"}`} data-testid={`${testId}-dollars`}>
+        {money == null ? "—" : fmtMoney(money)}
       </div>
     </div>
   );

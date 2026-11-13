@@ -533,7 +533,7 @@ export default function Dashboard({ embedded = false }: { embedded?: boolean } =
               label={`No management ${fmtR(equity[equity.length - 1].potential)}`}
               dashed
             />
-            <Legend color={C.delta} label={`Δ management ${fmtR(stats.totalDeltaR)}`} />
+            <Legend color={C.delta} label={`Δ management ${fmtR(stats.totalDeltaR)} · ${fmtMoney(stats.totalDeltaDollars)}`} />
           </div>
         )}
       </ChartCard>
