@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { edgeSentence, managementEdge } from "../shared/management";
+import { edgeSentence, managementCurve, managementEdge } from "../shared/management";
 import { trade } from "./helpers";
 import { aggregate } from "../shared/metrics";
 
@@ -145,5 +145,28 @@ describe("what the whole book says", () => {
       t({ id: 1, status: "open", exitPrice: null, noManagementOutcome: "target_first" }),
     ]);
     expect(e.measured).toBe(0);
+  });
+});
+
+describe("the actual vs no-management curve", () => {
+  it("adds up: actual minus no-management is the management total, in R and in money", () => {
+    const curve = managementCurve([
+      // Measured: out at half the stop on a plan that lost 1R (+0.5R), on a ten-unit trade (1R = $100).
+      t({ id: 1, noManagementOutcome: "stop_first", exitPrice: 95, size: 10 }),
+      // Not measured yet: no plan outcome. It counts the same on both lines.
+      t({ id: 2, noManagementOutcome: null, exitPrice: 80, size: 1 }),
+      // Measured: took less than a target that was reached (+1R against a +3R plan).
+      t({ id: 3, noManagementOutcome: "target_first", exitPrice: 110, size: 1 }),
+    ] as any);
+    const last = curve[curve.length - 1];
+    expect(last.actual).toBeCloseTo(-0.5 - 2 + 1, 9);
+    expect(last.delta).toBeCloseTo(0.5 - 2, 9);
+    expect(last.actual - last.potential).toBeCloseTo(last.delta, 9);
+    // In money: -$50, -$20, +$10 actual; delta +$50 and -$20.
+    expect(last.dollars).toBeCloseTo(-60, 6);
+    expect(last.deltaUsd).toBeCloseTo(30, 6);
+    expect(last.dollars - last.potentialUsd).toBeCloseTo(last.deltaUsd, 6);
+    // The unmeasured trade moves both lines by its own result.
+    expect(curve[1].actual - curve[0].actual).toBeCloseTo(curve[1].potential - curve[0].potential, 9);
   });
 });

@@ -1,3 +1,5 @@
+import { maskAmount } from "@shared/redact";
+import { managementCurve } from "@shared/management";
 import { GateStatsCard } from "@/components/gate-card";
 import { useMemo, useState } from "react";
 import { weekKey } from "@shared/review";
@@ -50,7 +52,9 @@ import {
   getPrestige,
   isSettled,
 } from "@shared/metrics";
-import { useFig } from "@/lib/denom";
+import { useDenom, useFig } from "@/lib/denom";
+import { usePublicMode } from "@/lib/public-mode";
+import { Segmented } from "@/components/trade-shared";
 import type { TradeWithTags } from "@shared/schema";
 
 /* ------------------------------ utilities ------------------------------ */
@@ -80,6 +84,7 @@ function ChartCard({
   testId,
   className = "",
   anchorId,
+  action,
 }: {
   title: string;
   subtitle?: string;
@@ -89,6 +94,8 @@ function ChartCard({
   className?: string;
   /** Landing target for a figure clicked on the homepage; see lib/jump.ts. */
   anchorId?: string;
+  /** A control on the right of the header, such as the unit switch. */
+  action?: React.ReactNode;
 }) {
   return (
     <Card
@@ -98,12 +105,13 @@ function ChartCard({
     >
       <div className="mb-3 flex items-start gap-2">
         {Icon && <Icon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <h3 className="text-sm font-semibold leading-tight tracking-tight">{title}</h3>
           {subtitle && (
             <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">{subtitle}</p>
           )}
         </div>
+        {action && <div className="shrink-0">{action}</div>}
       </div>
       {children}
     </Card>
@@ -132,6 +140,20 @@ function ChartTooltip({ active, payload, label, unit }: any) {
       ))}
     </div>
   );
+}
+
+/**
+ * Axis ticks in dollars, short: $1.2k, -$850, $2.4M. Masked like every other
+ * amount; the chart is held in R in public mode anyway.
+ */
+function compactUsd(v: number): string {
+  const masked = maskAmount();
+  if (masked) return masked;
+  const a = Math.abs(v);
+  const sign = v < 0 ? "-$" : "$";
+  if (a >= 1e6) return sign + (a / 1e6).toFixed(a >= 1e7 ? 0 : 1) + "M";
+  if (a >= 1e3) return sign + (a / 1e3).toFixed(a >= 1e4 ? 0 : 1) + "k";
+  return sign + String(Math.round(a));
 }
 
 function EmptyChart({ msg }: { msg: string }) {
@@ -244,6 +266,12 @@ function WeeklyGate({
 
 export default function Dashboard({ embedded = false }: { embedded?: boolean } = {}) {
   const fig = useFig();
+  // The equity chart's unit: the app's choice to start with, switchable here. Public mode keeps it in R.
+  const { denom } = useDenom();
+  const { isPublic } = usePublicMode();
+  const [equityUnitPicked, setEquityUnit] = useState<"R" | "USD">(denom);
+  const equityUnit = isPublic ? "R" : equityUnitPicked;
+  const usd = equityUnit === "USD";
   const { data: trades, isLoading } = useTrades();
   const { data: tags = [] } = useMistakeTags();
   const { activeStyleId, scope } = useStyleFilter();
@@ -275,29 +303,9 @@ export default function Dashboard({ embedded = false }: { embedded?: boolean } =
   );
 
   /* Equity curves: actual vs no-management vs cumulative management delta */
-  const equity = useMemo(() => {
-    let a = 0;
-    let p = 0;
-    let d = 0;
-    let a$ = 0;
-    return closed.map((t, i) => {
-      const m = computeMetrics(t);
-      a += m.actualR ?? 0;
-      a$ += m.actualPnL ?? 0;
-      p += m.potentialR ?? 0;
-      d += m.managementDeltaR ?? 0;
-      return {
-        i: i + 1,
-        // Carried so a click on the curve can find its way back to the row.
-        tradeId: t.id,
-        label: `#${i + 1} ${t.symbol}`,
-        actual: +a.toFixed(3),
-        potential: +p.toFixed(3),
-        delta: +d.toFixed(3),
-        dollars: +a$.toFixed(2),
-      };
-    });
-  }, [closed]);
+  const equity = useMemo(() => managementCurve(closed), [closed]);
+
+  const last = equity[equity.length - 1] ?? { actual: 0, potential: 0, delta: 0, dollars: 0, potentialUsd: 0, deltaUsd: 0 };
 
   const leaderboard = useMemo(
     () => mistakeCostLeaderboard(all, tagNames),
@@ -467,10 +475,23 @@ export default function Dashboard({ embedded = false }: { embedded?: boolean } =
       {/* equity curves */}
       <ChartCard
         title="Actual vs. no-management equity"
-        subtitle="Cumulative R if you managed the trade (green) vs. leaving the original stop and target untouched (blue). Amber is the running R your management added or destroyed."
+        subtitle={`Cumulative ${usd ? "P&L" : "R"} if you managed the trade (green) vs. leaving the original stop and target untouched (blue). Amber is the running ${usd ? "money" : "R"} your management added or destroyed. A trade with no known plan outcome counts the same on both lines.`}
         icon={TrendingUp}
         testId="chart-equity"
         anchorId="jump-equity"
+        action={
+          <Segmented
+            size="xs"
+            value={equityUnit}
+            onChange={setEquityUnit}
+            ariaLabel="Show the curves in R or dollars"
+            testId="equity-unit"
+            options={[
+              { id: "R", label: "R", testId: "equity-unit-r" },
+              { id: "USD", label: "$", disabled: isPublic, title: isPublic ? "Public mode hides amounts" : "Show the curves in dollars", testId: "equity-unit-usd" },
+            ]}
+          />
+        }
       >
         {equity.length === 0 ? (
           <EmptyChart msg="Close a few trades with an outcome screenshot (or a no-management verdict) and both curves appear here." />
@@ -495,11 +516,11 @@ export default function Dashboard({ embedded = false }: { embedded?: boolean } =
               </defs>
               <CartesianGrid stroke={C.grid} strokeDasharray="2 4" vertical={false} />
               <XAxis dataKey="i" {...axisProps} />
-              <YAxis {...axisProps} width={42} tickFormatter={(v) => `${v}R`} />
-              <Tooltip content={<ChartTooltip />} cursor={{ stroke: C.grid }} />
+              <YAxis {...axisProps} width={usd ? 56 : 42} tickFormatter={(v) => (usd ? compactUsd(v) : `${v}R`)} />
+              <Tooltip content={<ChartTooltip unit={usd ? "$" : "R"} />} cursor={{ stroke: C.grid }} />
               <Area
                 type="monotone"
-                dataKey="delta"
+                dataKey={usd ? "deltaUsd" : "delta"}
                 name="Δ management"
                 stroke={C.delta}
                 strokeWidth={1.5}
@@ -507,7 +528,7 @@ export default function Dashboard({ embedded = false }: { embedded?: boolean } =
               />
               <Line
                 type="monotone"
-                dataKey="potential"
+                dataKey={usd ? "potentialUsd" : "potential"}
                 name="No management"
                 stroke={C.potential}
                 strokeWidth={2}
@@ -516,7 +537,7 @@ export default function Dashboard({ embedded = false }: { embedded?: boolean } =
               />
               <Line
                 type="monotone"
-                dataKey="actual"
+                dataKey={usd ? "dollars" : "actual"}
                 name="Actual"
                 stroke={C.actual}
                 strokeWidth={2.4}
@@ -527,13 +548,14 @@ export default function Dashboard({ embedded = false }: { embedded?: boolean } =
         )}
         {equity.length > 0 && (
           <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1.5 text-[11px] text-muted-foreground">
-            <Legend color={C.actual} label={`Actual ${fmtR(stats.totalR)}`} />
+            {/* The unit on screen first, the other after it: switching changes the lines, not what is known. */}
+            <Legend color={C.actual} label={`Actual ${usd ? `${fmtMoney(last.dollars)} · ${fmtR(last.actual)}` : `${fmtR(last.actual)} · ${fmtMoney(last.dollars)}`}`} />
             <Legend
               color={C.potential}
-              label={`No management ${fmtR(equity[equity.length - 1].potential)}`}
+              label={`No management ${usd ? `${fmtMoney(last.potentialUsd)} · ${fmtR(last.potential)}` : `${fmtR(last.potential)} · ${fmtMoney(last.potentialUsd)}`}`}
               dashed
             />
-            <Legend color={C.delta} label={`Δ management ${fmtR(stats.totalDeltaR)} · ${fmtMoney(stats.totalDeltaDollars)}`} />
+            <Legend color={C.delta} label={`Δ management ${usd ? `${fmtMoney(last.deltaUsd)} · ${fmtR(last.delta)}` : `${fmtR(last.delta)} · ${fmtMoney(last.deltaUsd)}`}`} />
           </div>
         )}
       </ChartCard>

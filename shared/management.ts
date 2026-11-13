@@ -214,3 +214,55 @@ export function edgeSentence(e: ManagementEdge): string | null {
   }
   return `Your edge comes from ${best!.label.toLowerCase()} (${rd(best!)} across ${best!.trades}); it leaks to ${worst!.label.toLowerCase()} (${rd(worst!)} across ${worst!.trades}).`;
 }
+
+/** One point of the management curve: running totals after each closed trade, in R and in money. */
+export interface CurvePoint {
+  i: number;
+  tradeId: number;
+  label: string;
+  actual: number;
+  potential: number;
+  delta: number;
+  dollars: number;
+  potentialUsd: number;
+  deltaUsd: number;
+}
+
+/**
+ * Actual against no-management, trade by trade, in R and in money.
+ *
+ * A trade whose plan outcome is not known yet has no counterfactual, so it
+ * counts the same on both lines. It used to count on the actual line and as
+ * nothing on the no-management one: the gap between the lines was then the
+ * management delta PLUS every unmeasured trade's result, and the chart's
+ * three totals did not add up. Now actual − no-management = delta, always.
+ */
+export function managementCurve(closed: (Trade & { fills?: TradeFill[] })[]): CurvePoint[] {
+  let a = 0;
+  let p = 0;
+  let d = 0;
+  let a$ = 0;
+  let p$ = 0;
+  let d$ = 0;
+  return closed.map((t, i) => {
+    const m = computeMetrics(t);
+    a += m.actualR ?? 0;
+    a$ += m.actualPnL ?? 0;
+    const known = m.potentialR != null;
+    p += known ? m.potentialR! : (m.actualR ?? 0);
+    p$ += known ? (m.potentialPnL ?? 0) : (m.actualPnL ?? 0);
+    d += m.managementDeltaR ?? 0;
+    d$ += m.managementDeltaDollars ?? 0;
+    return {
+      i: i + 1,
+      tradeId: t.id,
+      label: `#${i + 1} ${t.symbol}`,
+      actual: +a.toFixed(3),
+      potential: +p.toFixed(3),
+      delta: +d.toFixed(3),
+      dollars: +a$.toFixed(2),
+      potentialUsd: +p$.toFixed(2),
+      deltaUsd: +d$.toFixed(2),
+    };
+  });
+}
