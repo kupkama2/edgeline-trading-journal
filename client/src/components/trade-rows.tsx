@@ -625,6 +625,7 @@ export function ClosedTradeRow({
           }
         >
           Δ {fmtR(m.managementDeltaR)}
+          {m.managementDeltaDollars != null && ` · ${fmtMoney(m.managementDeltaDollars)}`}
         </span>
         <span>
           Capture{" "}

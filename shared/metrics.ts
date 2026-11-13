@@ -370,6 +370,8 @@ export interface AggregateStats {
   totalR: number;
   totalPnL: number;
   totalDeltaR: number;
+  /** The same management total in money: what managing the trades made or cost, against leaving each plan alone. */
+  totalDeltaDollars: number;
 }
 
 /**
@@ -428,6 +430,9 @@ export function aggregate(trades: Trade[]): AggregateStats {
   const deltas = rows
     .map((r) => r.m.managementDeltaR)
     .filter((d): d is number => d != null);
+  const deltaDollars = rows
+    .map((r) => r.m.managementDeltaDollars)
+    .filter((d): d is number => d != null);
 
   const avg = (a: number[]) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0);
 
@@ -449,6 +454,7 @@ export function aggregate(trades: Trade[]): AggregateStats {
     totalR: rs.reduce((a, b) => a + b, 0),
     totalPnL: pnls.reduce((a, b) => a + b, 0),
     totalDeltaR: deltas.reduce((a, b) => a + b, 0),
+    totalDeltaDollars: deltaDollars.reduce((a, b) => a + b, 0),
   };
 }
 
