@@ -396,14 +396,28 @@ export async function fetchUserFillsSince(address: string, startTime: number): P
   return parseUserFills(await info({ type: "userFillsByTime", user: address, startTime: Math.max(0, Math.floor(startTime)) }, 20_000));
 }
 
-/** The wallet's open positions now. */
-export async function fetchClearinghouseState(address: string): Promise<HlPosition[]> {
-  return parseClearinghouseState(await info({ type: "clearinghouseState", user: address }));
+/**
+ * A builder book's coin in its qualified form. The venue names them "xyz:XYZ100"
+ * in fills; a per-book answer is qualified the same way, but should one ever
+ * come back bare, it is qualified here so it matches the fills it belongs to.
+ */
+function onBook(coin: string, dex?: string | null): string {
+  return dex && !coin.includes(":") ? `${dex}:${coin}` : coin;
 }
 
-/** The wallet's resting orders now, trigger prices included. */
-export async function fetchFrontendOpenOrders(address: string): Promise<HlOpenOrder[]> {
-  return parseFrontendOpenOrders(await info({ type: "frontendOpenOrders", user: address }));
+/**
+ * The wallet's open positions now. Without `dex` the venue answers for its own
+ * book only; a builder book (HIP-3) is asked for by name.
+ */
+export async function fetchClearinghouseState(address: string, dex?: string | null): Promise<HlPosition[]> {
+  const rows = parseClearinghouseState(await info(dex ? { type: "clearinghouseState", user: address, dex } : { type: "clearinghouseState", user: address }));
+  return dex ? rows.map((p) => ({ ...p, coin: onBook(p.coin, dex) })) : rows;
+}
+
+/** The wallet's resting orders now, trigger prices included. A builder book is asked for by name, as above. */
+export async function fetchFrontendOpenOrders(address: string, dex?: string | null): Promise<HlOpenOrder[]> {
+  const rows = parseFrontendOpenOrders(await info(dex ? { type: "frontendOpenOrders", user: address, dex } : { type: "frontendOpenOrders", user: address }));
+  return dex ? rows.map((o) => ({ ...o, coin: onBook(o.coin, dex) })) : rows;
 }
 
 /**
