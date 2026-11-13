@@ -43,6 +43,9 @@ const hlFills: any[] = [
   { coin: "BTC", px: "80000", sz: "0.5", side: "B", time: now - 10 * MIN, startPosition: "0", dir: "Open Long", closedPnl: "0", fee: "0.4", tid: 7001, oid: 700, crossed: false },
 ];
 let hlMid = "80500";
+/** The "xyz" builder book (HIP-3): asked for by name, or the venue answers for its own book only. */
+let xyzPositions: any[] = [];
+let xyzOrders: any[] = [];
 
 /* --------------------------------- Binance --------------------------------- */
 
@@ -88,15 +91,20 @@ function startVenue(): Promise<string> {
           case "meta":
             return json({ universe: [{ name: "BTC", maxLeverage: 40 }, { name: "ETH", maxLeverage: 25 }] });
           case "clearinghouseState":
-            return json(q.user === WALLET ? { assetPositions: hlPositions, marginSummary: {} } : { assetPositions: [] });
+            if (q.user !== WALLET) return json({ assetPositions: [] });
+            if (q.dex === "xyz") return json({ assetPositions: xyzPositions, marginSummary: {} });
+            return json({ assetPositions: q.dex ? [] : hlPositions, marginSummary: {} });
           case "frontendOpenOrders":
-            return json(q.user === WALLET ? hlOrders : []);
+            if (q.user !== WALLET) return json([]);
+            if (q.dex === "xyz") return json(xyzOrders);
+            return json(q.dex ? [] : hlOrders);
           case "userFillsByTime":
             return json(q.user === WALLET ? hlFills.filter((f) => f.time >= Number(q.startTime ?? 0)) : []);
           case "userFills":
             return json(q.user === WALLET ? hlFills : []);
           case "allMids":
-            return json({ BTC: hlMid, ETH: "3000" });
+            if (q.dex === "xyz") return json({ "xyz:XYZ100": "28400" });
+            return json(q.dex ? {} : { BTC: hlMid, ETH: "3000" });
           case "candleSnapshot":
             return json([]);
           case "historicalOrders":
@@ -498,6 +506,43 @@ describe.skipIf(!DB)("the journal following an account on its venue", () => {
     expect(again.accounts.find((a) => a.account === HL).caughtUp).toEqual([]);
     expect(await tradesOf("SOL", BN)).toHaveLength(1);
     expect(await tradesOf("DOGE", HL)).toHaveLength(1);
+  });
+
+  it("follows the wallet onto a builder book: a round trip there is written, and a position there is tracked with its stop", async () => {
+    const t0 = Date.now() - 90_000;
+    // Opened and closed between passes on xyz, as in the report: a short in and out.
+    hlFills.push(
+      { coin: "xyz:XYZ100", px: "28354", sz: "0.5134", side: "A", time: t0, startPosition: "0", dir: "Open Short", closedPnl: "0", fee: "0.42", tid: 9301, oid: 1301, crossed: true },
+      { coin: "xyz:XYZ100", px: "28420", sz: "0.5134", side: "B", time: t0 + 20_000, startPosition: "-0.5134", dir: "Close Short", closedPnl: "-33.9", fee: "0.4", tid: 9302, oid: 1302, crossed: true },
+    );
+    const out = await run();
+    const hl = out.accounts.find((a) => a.account === HL);
+    expect(hl.error).toBeUndefined();
+    expect(hl.caughtUp).toHaveLength(1);
+    // Written under the coin's own name, with the book it trades on, as the sync writes it.
+    const [round] = await tradesOf("XYZ100", HL);
+    expect(round).toMatchObject({ direction: "short", status: "closed", entryPrice: 28354, exitPrice: 28420, externalId: "hl:xyz:XYZ100:9301", pricePair: "hyperliquid:xyz:XYZ100" });
+
+    // Now one held there, with a stop resting on the same book.
+    hlFills.push({ coin: "xyz:XYZ100", px: "28300", sz: "0.4", side: "A", time: Date.now() - 30_000, startPosition: "0", dir: "Open Short", closedPnl: "0", fee: "0.3", tid: 9303, oid: 1303, crossed: false });
+    xyzPositions = [{ position: { coin: "xyz:XYZ100", szi: "-0.4", entryPx: "28300", liquidationPx: "40000", unrealizedPnl: "-40", leverage: { type: "isolated", value: 10 } } }];
+    xyzOrders = [{ coin: "xyz:XYZ100", oid: 1304, side: "B", limitPx: "28800", sz: "0.4", isTrigger: true, triggerPx: "28800", orderType: "Stop Market", reduceOnly: true, isPositionTpsl: true, timestamp: Date.now() - 20_000 }];
+    const out2 = await run();
+    const hl2 = out2.accounts.find((a) => a.account === HL);
+    expect(hl2.error).toBeUndefined();
+    const open = (await tradesOf("XYZ100", HL)).find((t: any) => t.status === "open");
+    expect(open).toMatchObject({ direction: "short", size: 0.4, entryPrice: 28300, initialStop: 28800, externalId: "hl:xyz:XYZ100:9303", pricePair: "hyperliquid:xyz:XYZ100", entryType: "limit" });
+    expect(ref(open)).toMatchObject({ venue: "hyperliquid", symbol: "xyz:XYZ100", positionSide: "SHORT", stopOrderId: 1304, tracked: true });
+    // The main book's positions are not read twice for asking the builder book too.
+    expect((await tradesOf("BTC", HL)).filter((t: any) => t.status === "open").length).toBeLessThanOrEqual(1);
+
+    // Flat again on xyz: the trade closes on the next pass, at the closing fill.
+    hlFills.push({ coin: "xyz:XYZ100", px: "28800", sz: "0.4", side: "B", time: Date.now() - 5_000, startPosition: "-0.4", dir: "Close Short", closedPnl: "-200", fee: "0.3", tid: 9304, oid: 1304, crossed: true });
+    xyzPositions = [];
+    xyzOrders = [];
+    await run();
+    const closed = (await tradesOf("XYZ100", HL)).find((t: any) => t.externalId === "hl:xyz:XYZ100:9303");
+    expect(closed).toMatchObject({ status: "closed", exitPrice: 28800 });
   });
 
   it("reads how past trades were entered from the venues, and fills only the blanks", async () => {

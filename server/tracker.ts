@@ -22,7 +22,8 @@
  */
 import { entryTypeOf, type EntryType } from "@shared/entry-type";
 import type { AccountSettings, TradeWithTags } from "@shared/schema";
-import { tradesFromFills, type HlFill, type HlOpenOrder, type HlTrade } from "@shared/hyperliquid";
+import { splitHlAsset, tradesFromFills, type HlFill, type HlOpenOrder, type HlPosition, type HlTrade } from "@shared/hyperliquid";
+import { formatPricePair } from "@shared/price-pair";
 import { addNote, cutAtFlat, formatTerminalRef, parseTerminalRef, partialNote, type Brackets, type TerminalMove, type TerminalRef, type VenueSnapshot } from "@shared/terminal";
 import { USD_COMMISSION, type BinanceUserTrade } from "@shared/binance-account";
 import { setTrackedThrough, storageFor, trackedAccountsEverywhere, type DatabaseStorage } from "./storage";
@@ -120,6 +121,8 @@ interface Opening {
   /** The venue's symbol ("BTCUSDT", "kPEPE") and the journal's ("BTC", "KPEPE"). */
   symbol: string;
   journalSymbol: string;
+  /** The book, when the symbol alone cannot say: a Hyperliquid builder coin ("hyperliquid:xyz:XYZ100"). */
+  pricePair?: string | null;
   positionSide: "LONG" | "SHORT";
   size: number;
   entryPrice: number;
@@ -243,6 +246,7 @@ async function openTracked(s: DatabaseStorage, o: Opening): Promise<TradeWithTag
   };
   const trade = await s.createTrade({
     symbol: o.journalSymbol,
+    pricePair: o.pricePair ?? null,
     direction: o.positionSide === "LONG" ? "long" : "short",
     size: o.size,
     sizeUnit: "base",
@@ -434,6 +438,7 @@ async function catchUp(
   round: HlTrade,
   symbol: string,
   journalSymbol: string,
+  pricePair: string | null = null,
 ): Promise<number | null> {
   if (round.status !== "closed" || !round.externalId) return null;
   if (await s.tradeByExternalId(round.externalId)) return null;
@@ -457,7 +462,7 @@ async function catchUp(
   // As the live read-back writes a trade: the takes before the last in the ledger, the exit the last leg out.
   const last = round.closes[round.closes.length - 1];
   const trade = await s.createTrade({
-    ...asInsert(round, acct.name, { initialStop: null, initialTarget: null }, journalSymbol),
+    ...asInsert(round, acct.name, { initialStop: null, initialTarget: null }, journalSymbol, pricePair),
     ...(last ? { exitPrice: last.px, exitTime: new Date(last.time).toISOString() } : {}),
     terminal: formatTerminalRef(ref),
     paper: env === "testnet",
@@ -601,17 +606,67 @@ function bracketsOnHl(orders: HlOpenOrder[], coin: string, long: boolean): Brack
   return { stopId: stop?.oid ?? null, stopPrice: stop?.triggerPx ?? null, targetIds: targets.map((x) => x.id), targetPrices: targets.map((x) => x.price) };
 }
 
+/**
+ * A Hyperliquid coin as the journal writes it: a builder-book coin
+ * ("xyz:XYZ100") under its own name, with the book it trades on as the price
+ * pair — as the Hyperliquid sync writes it, so the two find the same trade.
+ */
+function hlNames(coin: string): { journalSymbol: string; pricePair: string | null } {
+  const { dex, coin: name } = splitHlAsset(coin);
+  return {
+    journalSymbol: name.toUpperCase(),
+    pricePair: dex ? formatPricePair({ venue: "hyperliquid", market: "futures", symbol: coin }) : null,
+  };
+}
+
 async function trackHyperliquid(s: DatabaseStorage, acct: AccountSettings): Promise<TrackSummary> {
   const out: TrackSummary = { account: acct.name, venue: "hyperliquid", opened: [], read: 0, caughtUp: [] };
   const address = acct.wallet!;
   const now = Date.now();
-  const [held, orders, fills, mids] = await Promise.all([
+  const [mainHeld, mainOrders, fills, mainMids, tracked] = await Promise.all([
     fetchClearinghouseState(address),
     fetchFrontendOpenOrders(address),
     fetchUserFillsSince(address, now - WINDOW_MS),
     fetchAllMids().catch(() => ({}) as Record<string, number>),
+    trackedOpen(s, acct.name),
   ]);
-  const tracked = await trackedOpen(s, acct.name);
+  /*
+   * The builder books (HIP-3: "xyz" and the like). The venue answers for its
+   * own book unless one is named, so a position held on a builder book, and
+   * the stop resting on it, were invisible to the tracker: nothing was
+   * adopted, and a tracked one would have read as closed. Every book the
+   * wallet has traded on lately, or holds a tracked trade on, is asked for.
+   * A book whose read fails is left alone this pass: its tracked trades are
+   * not read back, since an empty answer would close them.
+   */
+  const books = Array.from(
+    new Set(
+      [...fills.map((f) => f.coin), ...tracked.filter((x) => x.ref.venue === "hyperliquid").map((x) => x.ref.symbol)]
+        .map((c) => splitHlAsset(c).dex)
+        .filter((d): d is string => !!d),
+    ),
+  );
+  const unread = new Set<string>();
+  const perBook = await Promise.all(
+    books.map(async (dex) => {
+      try {
+        const [h, o, m] = await Promise.all([
+          fetchClearinghouseState(address, dex),
+          fetchFrontendOpenOrders(address, dex),
+          fetchAllMids(dex).catch(() => ({}) as Record<string, number>),
+        ]);
+        // Only this book's coins: should the venue ever answer with the main book too, it is not counted twice.
+        const mine = (c: string) => splitHlAsset(c).dex === dex;
+        return { h: h.filter((p) => mine(p.coin)), o: o.filter((x) => mine(x.coin)), m };
+      } catch {
+        unread.add(dex);
+        return { h: [] as HlPosition[], o: [] as HlOpenOrder[], m: {} as Record<string, number> };
+      }
+    }),
+  );
+  const held = [...mainHeld, ...perBook.flatMap((b) => b.h)];
+  const orders = [...mainOrders, ...perBook.flatMap((b) => b.o)];
+  const mids: Record<string, number> = Object.assign({}, mainMids, ...perBook.map((b) => b.m));
 
   for (const p of held) {
     const long = p.szi > 0;
@@ -625,7 +680,7 @@ async function trackHyperliquid(s: DatabaseStorage, acct: AccountSettings): Prom
       env: "live",
       account: acct.name,
       symbol: p.coin,
-      journalSymbol: p.coin.toUpperCase(),
+      ...hlNames(p.coin),
       positionSide: side,
       ...entryOf(fromFills, (tid) => coinFills.find((f) => f.tid === tid)?.oid || null, { size: Math.abs(p.szi), price: p.entryPx, time: now }),
       leverage: p.leverage,
@@ -646,13 +701,16 @@ async function trackHyperliquid(s: DatabaseStorage, acct: AccountSettings): Prom
       if (tracked.some((x) => x.ref.symbol === coin)) continue;
       for (const round of tradesFromFills(fills.filter((f) => f.coin === coin), "hl").trades) {
         if (round.exitTime == null || round.exitTime < since) continue;
-        const id = await catchUp(s, acct, "hyperliquid", "live", round, coin, coin.toUpperCase());
+        const { journalSymbol, pricePair } = hlNames(coin);
+        const id = await catchUp(s, acct, "hyperliquid", "live", round, coin, journalSymbol, pricePair);
         if (id != null) out.caughtUp.push(id);
       }
     }
   }
 
   for (const { t, ref } of tracked) {
+    const book = splitHlAsset(ref.symbol).dex;
+    if (book && unread.has(book)) continue;
     const long = ref.positionSide === "LONG";
     const p = held.find((x) => x.coin === ref.symbol && (x.szi > 0) === long) ?? null;
     const entryAt = new Date(t.entryTime).getTime();
