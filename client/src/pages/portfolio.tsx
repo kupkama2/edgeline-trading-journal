@@ -1,3 +1,6 @@
+import { Fold } from "@/components/fold";
+import { SigilSection } from "@/components/portfolio/sigil";
+import { AstekzSection } from "@/components/portfolio/astekz";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { ColorType, createChart, LineSeries, type IChartApi, type UTCTimestamp } from "lightweight-charts";
@@ -653,6 +656,14 @@ export default function PortfolioPage() {
         )}
         {d && d.addresses.length === 0 && <p className="mt-3 text-xs text-muted-foreground">Nothing followed yet. Add a Hyperliquid address to see its vaults, perps and spot.</p>}
       </Card>
+
+      {/* Two portfolios followed from outside: each folds away under its own name. */}
+      <Fold id="portfolio-sigil" title="Sigil Core" hint="a fund's holdings from its tracker's daily export">
+        <SigilSection />
+      </Fold>
+      <Fold id="portfolio-astekz" title="Astekz" hint="the public portfolio, read once a day">
+        <AstekzSection />
+      </Fold>
     </div>
   );
 }

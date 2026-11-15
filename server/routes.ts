@@ -55,6 +55,8 @@ import { trackUser } from "./tracker";
 import { notify, subscribe } from "./events";
 import { registerScreenerRoutes } from "./screener-routes";
 import { registerPortfolioRoutes } from "./portfolio";
+import { registerSigilRoutes } from "./sigil";
+import { registerAstekzRoutes } from "./astekz";
 import { registerChatRoutes } from "./chat-routes";
 import { registerCalendarRoutes } from "./calendar";
 import { formatGate, gateRecordSchema, redAnswers } from "@shared/gate";
@@ -626,6 +628,9 @@ export async function registerRoutes(
   registerScreenerRoutes(app);
   // The owner's portfolio: vaults, Hyperliquid accounts, wallets (server/portfolio.ts).
   registerPortfolioRoutes(app);
+  // Two portfolios the owner follows: Sigil Core from its tracker's exports, Astekz from its public page.
+  registerSigilRoutes(app);
+  registerAstekzRoutes(app);
   // The owner's chat: a model of their choosing, with read-only tools over the site's data.
   registerChatRoutes(app);
   // The macro and earnings calendar (server/calendar.ts).

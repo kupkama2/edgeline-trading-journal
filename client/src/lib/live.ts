@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { queryClient } from "./queryClient";
 import { invalidateTrades } from "./data";
 import { invalidateScreener } from "./screener";
+import { invalidateFollowed } from "./sigil";
 
 /**
  * The page kept current without a refresh.
@@ -25,6 +26,7 @@ export function useLiveUpdates(): void {
     es.addEventListener("trades", trades);
     es.addEventListener("settings", settings);
     es.addEventListener("screener", invalidateScreener);
+    es.addEventListener("sigil", invalidateFollowed);
     return () => es.close();
   }, []);
 }

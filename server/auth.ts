@@ -7,6 +7,7 @@ import { ProxyAgent, fetch as undiciFetch } from "undici";
 import { accounts, invitations, storageFor } from "./storage";
 import type { SessionUser, User } from "@shared/schema";
 import { demoEnabled, demoReadOnly, isDemoEmail, registerDemoDoor } from "./demo";
+import { registerSigilPush } from "./sigil";
 
 /**
  * Sign in with Google.
@@ -335,6 +336,8 @@ export function setupAuth(app: Express) {
 
   // The demo's door, before the wall: a visitor with no account is let into the sample journal, read-only.
   registerDemoDoor(app);
+  // Sigil Core's push door takes a personal token in place of a session, so it too stands before the wall.
+  registerSigilPush(app);
 
   app.get("/api/session", async (req: Request, res: Response) => {
     const user = req.session?.userId ? await accounts.byId(req.session.userId) : undefined;

@@ -274,6 +274,45 @@ question that reads the screener is roughly ten to twenty thousand tokens
 in, most of it cached on the turns that follow. Conversations are stored in
 the database (`chat_threads`, `chat_messages`) and deleted from the page.
 
+## The two followed portfolios (Portfolio tab)
+
+Both are the owner's alone, under the Portfolio tab, each in its own fold.
+
+**Sigil Core** is fed by hand: the morning's Crypkit export
+(`Crypkit_portfolio-table_<time>Z.csv`) dropped anywhere on the page, or
+picked. The file is read and compared with the previous day by plain code;
+the same day sent twice replaces that day.
+
+- History so far comes from the seed pack. On the page: "Load a seed pack
+  (.zip)". From a shell with the database's address:
+  `DATABASE_URL=… npx tsx script/sigil-seed.ts sigil-core-seed.zip`.
+  Either can be run again without harm.
+- `ANTHROPIC_API_KEY` (the same one the chat uses) lets the server describe
+  an asset it has not seen: segment, ecosystem, a chart link. Without it the
+  asset shows as Uncategorized and is edited by hand. `SIGIL_AI_MODEL`
+  overrides the model.
+- `SIGIL_UPLOAD_TOKEN`, optional: a long random string of your own (24
+  characters or more). With it set, a script or a phone shortcut can send
+  the file without signing in:
+
+  ```
+  curl -X POST "https://<host>/api/sigil/push?filename=Crypkit_portfolio-table_2026-11-15T10_40_12.929Z.csv" \
+    -H "Authorization: Bearer $SIGIL_UPLOAD_TOKEN" -H "Content-Type: text/csv" \
+    --data-binary @Crypkit_portfolio-table_2026-11-15T10_40_12.929Z.csv
+  ```
+
+  The file's own name has to be passed: the time of the export is read from
+  it. Unset, the address answers 404.
+
+**Astekz** is read by the server once a day (UTC) from the public page's
+widget, which lists its own holdings, and priced from CoinGecko, falling
+back to DefiLlama. A read that fails leaves the last good day on screen
+with its date and the reason, and is tried again after an hour. On the free
+plan the server sleeps, so the day's read happens at the first request of
+the day, or on the keep-awake pinger's. `ASTEKZ=off` switches it off.
+If the page is ever rebuilt so that its holdings are no longer in the
+widget's source, the read fails with a message saying so.
+
 ## The event calendar
 
 US macro releases of high impact (NFP, CPI, PPI, FOMC, GDP, PCE…) come from
