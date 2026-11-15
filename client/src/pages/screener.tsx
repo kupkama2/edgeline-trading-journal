@@ -12,6 +12,7 @@ import { SpaghettiChart } from "@/components/screener/chart";
 import { CoinDrawer } from "@/components/screener/drawer";
 import { ScreenerInsights } from "@/components/screener/insights";
 import { ScreenerTrackCard } from "@/components/screener/track";
+import { Fold } from "@/components/fold";
 import { ASSET_CLASSES, ASSET_CLASS_LABEL, assetClassOf, sectorOf, type AssetClass } from "@shared/sectors";
 import { fmtPct, fmtPrague, usePinScreenerCoin, useSaveScreenerSettings, useScreener, useScreenerLines, useScreenerLookup, useScreenerRefresh, useScreenerStatus } from "@/lib/screener";
 import { sectorTable, TIMEFRAMES, type ScreenerRow, type Timeframe } from "@shared/screener";
@@ -372,6 +373,7 @@ export default function ScreenerPage() {
         </div>
       )}
 
+      <Fold id="screener.chart" title="Chart" hint="relative strength against BTC">
       <Card className="border-card-border bg-card p-3 sm:p-4">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
           <h2 className="text-sm font-semibold">Relative strength vs BTC · {tf}{shownUniverse !== "all" ? ` · ${ASSET_CLASS_LABEL[shownUniverse]}` : ""}</h2>
@@ -383,12 +385,7 @@ export default function ScreenerPage() {
           <SpaghettiChart lines={lines.data?.lines ?? {}} order={drawn} colors={loaded} resetKey={resetCount} loading={lines.isLoading} onHide={toggle} onSolo={solo} />
         </div>
       </Card>
-
-      {run && <ScreenerInsights run={run} onOpen={setOpen} />}
-
-      <ScreenerScanCard onOpen={setOpen} />
-
-      <ScreenerTrackCard />
+      </Fold>
 
       <Card className="border-card-border bg-card p-3 sm:p-4">
         <div className="flex flex-wrap items-center gap-2">
@@ -472,6 +469,15 @@ export default function ScreenerPage() {
           )}
         </div>
       </Card>
+
+      {/* Below the chart and the table: the AI's read of the run, whether the badges have worked, and the one-coin scan. */}
+      {run && <ScreenerInsights run={run} onOpen={setOpen} />}
+
+      <ScreenerTrackCard />
+
+      <Fold id="screener.scan" title="Scan one market" hint="any coin, stock or index on every timeframe">
+        <ScreenerScanCard onOpen={setOpen} />
+      </Fold>
 
       <CoinDrawer coin={open} tf={tf} onTf={setTf} defaultRisk={settings?.riskDollars ?? 250} onClose={() => setOpen(null)} />
     </div>

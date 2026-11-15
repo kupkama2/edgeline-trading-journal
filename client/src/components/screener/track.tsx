@@ -50,21 +50,24 @@ export function ScreenerTrackCard() {
     <Card className="border-card-border bg-card p-3 sm:p-4" data-testid="screener-track">
       <button type="button" onClick={toggle} className="flex items-center gap-1.5 text-left text-sm font-semibold hover:text-sky-400" aria-expanded={open} data-testid="screener-track-toggle">
         {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-        Did the flags work?
-        <span className="text-[11px] font-normal text-muted-foreground">· flagged coins against BTC, afterwards</span>
+        Do the screener's badges work?
+        <span className="text-[11px] font-normal text-muted-foreground">· what badged coins did next, compared with BTC</span>
       </button>
       {open && (
         <div className="mt-2">
           {q.isLoading && <p className="text-xs text-muted-foreground">Pricing the flags…</p>}
-          {t && t.entries === 0 && <p className="text-xs text-muted-foreground">Nothing written down yet. Each run records what it flags; the first numbers appear a day after.</p>}
+          <p className="mb-2 text-[11px] text-muted-foreground">
+            When the table gives a coin a badge (Candidate, a score of 4 or more, a rating of 90 or more), it is noted here. A day, three days and a week later it is checked: did the coin do better than BTC? If the badges mean something, badged coins should beat BTC more often than not, and the weakest coins should lose to it.
+          </p>
+          {t && t.entries === 0 && <p className="text-xs text-muted-foreground">Nothing noted yet. Each scan records what it badges; the first results appear a day later.</p>}
           {t && t.entries > 0 && (
             <>
               <div className="overflow-x-auto">
                 <table className="w-full max-w-2xl text-xs">
                   <thead>
                     <tr className="border-b border-border text-[10px] uppercase tracking-wider text-muted-foreground">
-                      <th className="py-1 pr-2 text-left font-medium">Flag</th>
-                      <th className="px-1.5 py-1 text-right font-medium">Logged</th>
+                      <th className="py-1 pr-2 text-left font-medium">Badge</th>
+                      <th className="px-1.5 py-1 text-right font-medium">Times given</th>
                       {FLAG_HORIZONS.map((h) => (
                         <th key={h} className="px-1.5 py-1 text-right font-medium">
                           {HORIZON_LABEL[h]}
@@ -88,7 +91,7 @@ export function ScreenerTrackCard() {
                 </table>
               </div>
               <p className="mt-1.5 text-[10px] text-muted-foreground">
-                The mean move against BTC after a coin was flagged, and how many of them beat BTC. A coin is written down the first time in a day it qualifies, over the last 30 days. Small numbers of entries prove nothing; the weakest are the control, and should lose.
+                Each cell: the average result against BTC, then how many beat BTC out of how many were checked. "+2.1% 7/10" means badged coins beat BTC by 2.1% on average and 7 of 10 did better than BTC. A coin counts once a day at most, over the last 30 days. With only a handful of entries the numbers mean little.
               </p>
             </>
           )}

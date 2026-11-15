@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Check, ChevronDown, ChevronRight, Loader2, Sparkles, Undo2 } from "lucide-react";
 import { Card } from "@/components/ui/card";
+import { Fold } from "@/components/fold";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { fmtPct, fmtPrague, useAskScreenerAi, useScreenerAi, useScreenerAiTrack, type ScreenerPage } from "@/lib/screener";
@@ -26,7 +27,7 @@ function TrackRecord({ onOpen }: { onOpen: (coin: string) => void }) {
   const d = track.data;
   if (!d) return null;
   const scored = d.calls.filter((c) => c.entry);
-  if (scored.length === 0) return <p className="mt-3 border-t border-border/50 pt-2 text-[11px] text-muted-foreground">Track record: each call is priced at 4 hours, a day, three days and a week after the read. The first scores show four hours after the first read.</p>;
+  if (scored.length === 0) return <p className="text-[11px] text-muted-foreground">Each call the AI makes is checked 4 hours, a day, three days and a week later. The first results show four hours after the first summary.</p>;
   const rows: { stance: CallStance; label: string }[] = [
     { stance: "long", label: "Long" },
     { stance: "short", label: "Short" },
@@ -34,9 +35,12 @@ function TrackRecord({ onOpen }: { onOpen: (coin: string) => void }) {
     { stance: "watch", label: "Watch, price move" },
   ];
   return (
-    <div className="mt-3 border-t border-border/50 pt-2" data-testid="screener-ai-track">
+    <div data-testid="screener-ai-track">
+      <p className="mb-1 text-[11px] text-muted-foreground">
+        Every time the AI says long, short or avoid on a coin, the price is checked later. Each cell reads: <b>how often it was right</b> · <b>the average result</b> · <b>n</b> = how many calls. Green means the calls made money on average.
+      </p>
       <div className="flex items-baseline justify-between gap-2">
-        <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Track record · last 30 days · {scored.length} calls</p>
+        <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Last 30 days · {scored.length} calls</p>
         <button type="button" className="text-[11px] text-muted-foreground hover:text-foreground" onClick={() => setShowCalls((x) => !x)} data-testid="screener-ai-track-calls">
           {showCalls ? "Hide the calls" : "Every call"}
         </button>
@@ -82,7 +86,7 @@ function TrackRecord({ onOpen }: { onOpen: (coin: string) => void }) {
           </tbody>
         </table>
       </div>
-      <p className="mt-1 text-[10px] text-muted-foreground">Share of calls that went their way, then the mean move in the call's direction. "Avoid" is scored as if it had been a short.</p>
+      <p className="mt-1 text-[10px] text-muted-foreground">Example: "Short 75% · +3.0% n28" after 1 day means 28 short calls, 75% of them fell, and shorting each would have made 3.0% on average. "Avoid" is scored as if you had shorted it; "Watch" just shows what the price did.</p>
       {showCalls && (
         <div className="mt-2 max-h-80 overflow-auto">
           <table className="w-full min-w-[620px] text-[11px]" data-testid="screener-ai-track-list">
@@ -251,7 +255,7 @@ export function ScreenerInsights({ run, onOpen }: { run: NonNullable<ScreenerPag
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <button type="button" onClick={toggleOpen} className="flex items-center gap-1.5 text-left text-sm font-semibold hover:text-sky-400" aria-expanded={open} title={open ? "Fold the read away" : "Open the read"} data-testid="screener-read-toggle">
           {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-          <Sparkles className="h-3.5 w-3.5 text-sky-400" /> The read
+          <Sparkles className="h-3.5 w-3.5 text-sky-400" /> AI summary of this scan
           {latest && <span className="text-[11px] font-normal text-muted-foreground">· {fmtPrague(latest.at)} Prague{latest.runId && latest.runId !== run.id ? " · from an earlier run" : ""}</span>}
           {!open && (tips.length > 0 || anomalies.length > 0) && (
             <span className="text-[11px] font-normal text-muted-foreground">
@@ -281,7 +285,14 @@ export function ScreenerInsights({ run, onOpen }: { run: NonNullable<ScreenerPag
 
       {!status?.enabled && <p className="mt-2 text-xs text-muted-foreground">The AI read needs ANTHROPIC_API_KEY on the server. The anomalies below need nothing.</p>}
       {status?.enabled && !latest && <p className="mt-2 text-xs text-muted-foreground">No read yet. It comes after the 08:00 and 13:30 runs, or ask for one.</p>}
-      {latest?.error && !read && <p className="mt-2 text-xs text-amber-500">The last read failed: {latest.error}</p>}
+      <p className="mt-1 text-[11px] text-muted-foreground">An AI reads the scan and writes the market in a sentence, the coins worth a look and why, and what would prove each idea wrong. Written after the 08:00 and 13:30 scans, or when you press Read now.</p>
+      {latest?.error && !read && (
+        <p className="mt-2 text-xs text-amber-500" data-testid="screener-ai-error">
+          {/authentication_error|invalid x-api-key|\b401\b/i.test(latest.error)
+            ? "The last summary failed: Anthropic refused the server's API key. Put a valid key in ANTHROPIC_API_KEY on Render (the Chat tab uses the same one)."
+            : `The last summary failed: ${latest.error.slice(0, 200)}`}
+        </p>
+      )}
 
       {read && (
         <div className="mt-2 space-y-2" data-testid="screener-ai-read">
@@ -345,13 +356,19 @@ export function ScreenerInsights({ run, onOpen }: { run: NonNullable<ScreenerPag
         </div>
       )}
 
-      {status?.enabled && <TrackRecord onOpen={onOpen} />}
+      {status?.enabled && (
+        <div className="mt-3 border-t border-border/50 pt-2">
+          <Fold id="screener.aiTrack" title="Were the AI's past calls right?" hint="how its long, short and avoid calls did afterwards" defaultOpen={false}>
+            <TrackRecord onOpen={onOpen} />
+          </Fold>
+        </div>
+      )}
 
       {anomalies.length > 0 && (
         <div className="mt-3 border-t border-border/50 pt-2" data-testid="screener-anomalies">
           <div className="flex items-baseline justify-between gap-2">
             <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
-              What stands out this run · {anomalies.length}
+              Unusual right now · {anomalies.length}
               {!showAll && notable.length === 0 && " · none notable, the first few"}
             </p>
             {anomalies.length > shown.length || showAll ? (
