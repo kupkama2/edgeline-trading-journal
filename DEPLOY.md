@@ -247,7 +247,7 @@ minutes; a failed run counts, which is the back-off.
 
 ## The chat
 
-The Chat tab (the owner's only) talks to a Claude model through the same
+The chat (a window in the bottom right corner of every page, the owner's only) talks to a Claude model through the same
 `ANTHROPIC_API_KEY` the screener's AI read uses; with no key it says so and
 stays off. The model picker offers Opus 5.5, Fable 5.2, Sonnet 5.5 and
 Haiku 5.5, narrowed to the ones the key can use. The model reads the site's
