@@ -1,4 +1,4 @@
-import { Fold } from "@/components/fold";
+import { Section, Sections } from "@/components/sections";
 import { SigilSection } from "@/components/portfolio/sigil";
 import { AstekzSection } from "@/components/portfolio/astekz";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -387,8 +387,11 @@ export default function PortfolioPage() {
         </Card>
       )}
 
+      {/* Every part of the page folds under its name and can be moved: the order is the reader's. */}
+      <Sections id="portfolio">
       {/* ------------------------------ the totals ------------------------------ */}
       {d && d.addresses.length > 0 && (
+        <Section id="totals" title="Totals" hint="value, P&L and the value chart">
         <Card className="border-card-border bg-card p-4" data-testid="portfolio-totals">
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <div>
@@ -441,12 +444,13 @@ export default function PortfolioPage() {
             </ul>
           )}
         </Card>
+        </Section>
       )}
 
       {/* ------------------------------ vaults ------------------------------ */}
       {d && vaults.length > 0 && (
+        <Section id="vaults" title="Hyperliquid vaults" hint="what is in each vault">
         <Card className="border-card-border bg-card p-4" data-testid="portfolio-vaults">
-          <h2 className="text-sm font-semibold">Hyperliquid vaults</h2>
           {narrow ? (
             <ul className="mt-1 divide-y divide-border/40 text-xs" data-testid="portfolio-vault-list">
               {vaults.map((v: VaultHolding) => (
@@ -527,13 +531,14 @@ export default function PortfolioPage() {
           </div>
           )}
         </Card>
+        </Section>
       )}
 
       {/* ------------------------------ Hyperliquid accounts ------------------------------ */}
       {d && (perps.length > 0 || spot.shown.length > 0 || spot.out > 0) && (
+        <Section id="hl" title="Hyperliquid accounts" hint="perps and spot">
         <Card className="border-card-border bg-card p-4" data-testid="portfolio-hl">
           <div className="flex flex-wrap items-baseline justify-between gap-2">
-            <h2 className="text-sm font-semibold">Hyperliquid accounts</h2>
             <span className="text-[11px] text-muted-foreground">
               {d.accounts.map((a) => `${a.label ?? short(a.address)} ${usd(a.accountValue)} margin account`).join(" · ")}
             </span>
@@ -603,23 +608,25 @@ export default function PortfolioPage() {
           {spot.shown.length > 0 && <HoldingsTable rows={spot.shown} title="Spot on Hyperliquid" onCost={(key, cost) => saveCost.mutate({ key, cost })} onPnl={onPnl} onHide={onHide} shadeOf={shadeOf} testId="portfolio-spot" narrow={narrow} />}
           {!showHidden && spot.out > 0 && <p className="mt-2 text-[11px] text-muted-foreground">{spot.out} spot {spot.out === 1 ? "balance" : "balances"} out of view: dust or hidden.</p>}
         </Card>
+        </Section>
       )}
 
       {/* ------------------------------ wallets ------------------------------ */}
       {d && (wallets.shown.length > 0 || wallets.out > 0) && (
+        <Section id="wallets" title="Wallets" hint="EVM and Solana balances">
         <Card className="border-card-border bg-card p-4" data-testid="portfolio-wallets">
           <div className="flex flex-wrap items-baseline justify-between gap-2">
-            <h2 className="text-sm font-semibold">Wallets</h2>
             {!showHidden && wallets.out > 0 && <span className="text-[11px] text-muted-foreground">{wallets.out} out of view: dust or hidden</span>}
           </div>
           <HoldingsTable rows={wallets.shown} onCost={(key, cost) => saveCost.mutate({ key, cost })} onPnl={onPnl} onHide={onHide} shadeOf={shadeOf} testId="portfolio-wallet-table" showChain narrow={narrow} />
           <p className="mt-2 text-[11px] text-muted-foreground">A wallet token's cost is not on chain in a form a read can trust — a transfer in is not a purchase — so type what you paid and its P&L appears.</p>
         </Card>
+        </Section>
       )}
 
       {/* ------------------------------ the addresses ------------------------------ */}
+      <Section id="addresses" title="Addresses followed" hint="the accounts and wallets being read">
       <Card className="border-card-border bg-card p-4" data-testid="portfolio-addresses">
-        <h2 className="text-sm font-semibold">Addresses followed</h2>
         <p className="text-[11px] text-muted-foreground">Read-only: nothing here can move funds. A Hyperliquid address brings its perps, spot and every vault it is in.</p>
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <Select value={kind} onValueChange={(v) => setKind(v as AddressKind)}>
@@ -656,14 +663,15 @@ export default function PortfolioPage() {
         )}
         {d && d.addresses.length === 0 && <p className="mt-3 text-xs text-muted-foreground">Nothing followed yet. Add a Hyperliquid address to see its vaults, perps and spot.</p>}
       </Card>
+      </Section>
 
-      {/* Two portfolios followed from outside: each folds away under its own name. */}
-      <Fold id="portfolio-sigil" title="Sigil Core" hint="a fund's holdings from its tracker's daily export">
-        <SigilSection />
-      </Fold>
-      <Fold id="portfolio-astekz" title="Astekz" hint="the public portfolio, read once a day">
-        <AstekzSection />
-      </Fold>
+        <Section id="sigil" title="Sigil Core" hint="a fund's holdings from its tracker's daily export">
+          <SigilSection />
+        </Section>
+        <Section id="astekz" title="Astekz" hint="the public portfolio, read once a day">
+          <AstekzSection />
+        </Section>
+      </Sections>
     </div>
   );
 }

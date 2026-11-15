@@ -10,6 +10,7 @@ export interface SigilState {
   changes: SigilChange[];
   assets: Record<string, SigilAsset>;
   watchlist: Record<string, unknown> | null;
+  entryUsd: number | null;
   enrich: { enabled: boolean; running: string[]; error: string | null };
   lists: { segments: string[]; ecos: string[]; kinds: string[] };
 }
@@ -69,6 +70,13 @@ export function useSigilSeed() {
 export function useSaveSigilAsset() {
   return useMutation({
     mutationFn: async (v: { symbol: string; patch: Partial<Pick<SigilAsset, "tldr" | "segment" | "eco" | "link" | "note" | "kind">> }) => (await apiRequest("PUT", `/api/sigil/assets/${encodeURIComponent(v.symbol)}`, v.patch)).json() as Promise<SigilAsset>,
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: SIGIL }),
+  });
+}
+
+export function useSaveSigilEntry() {
+  return useMutation({
+    mutationFn: async (valueUsd: number | null) => (await apiRequest("PUT", "/api/sigil/entry", { valueUsd })).json(),
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: SIGIL }),
   });
 }

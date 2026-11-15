@@ -61,7 +61,7 @@ export function AstekzSection() {
 
   if (!s)
     return (
-      <div className="space-y-3" data-testid="section-astekz">
+      <div className="space-y-3" data-testid="astekz-root">
         {head}
         {failed}
         {!d?.enabled && <p className="text-xs text-muted-foreground">The daily read is switched off on the server.</p>}
@@ -70,7 +70,7 @@ export function AstekzSection() {
 
   const progress = Math.max(0, Math.min(100, s.progressPct));
   return (
-    <div className="space-y-3" data-testid="section-astekz">
+    <div className="space-y-3" data-testid="astekz-root">
       {head}
       {failed}
       {!d!.failed && d!.stale && (

@@ -294,6 +294,11 @@ describe.skipIf(!DB)("Sigil Core on the server", () => {
       expect(await edit.json()).toMatchObject({ segment: "L1 / L2", note: "core", edited: true });
       expect((await fetch(`${base}/api/sigil/assets/BTC`, { method: "PUT", headers: owner, body: JSON.stringify({ link: "ftp://x" }) })).status).toBe(400);
 
+      expect((await (await fetch(`${base}/api/sigil`, { headers: owner })).json()).entryUsd).toBeNull();
+      expect((await fetch(`${base}/api/sigil/entry`, { method: "PUT", headers: owner, body: JSON.stringify({ valueUsd: -5 }) })).status).toBe(400);
+      await fetch(`${base}/api/sigil/entry`, { method: "PUT", headers: owner, body: JSON.stringify({ valueUsd: 40000 }) });
+      expect((await (await fetch(`${base}/api/sigil`, { headers: owner })).json()).entryUsd).toBe(40000);
+
       const push = (token?: string) => fetch(`${base}/api/sigil/push?filename=${NAME("2026-11-15")}`, { method: "POST", headers: { "Content-Type": "text/csv", ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: DAY2 });
       delete process.env.SIGIL_UPLOAD_TOKEN;
       expect((await push("anything")).status).toBe(404);
