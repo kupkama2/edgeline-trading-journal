@@ -545,6 +545,106 @@ describe.skipIf(!DB)("the journal following an account on its venue", () => {
     expect(closed).toMatchObject({ status: "closed", exitPrice: 28800 });
   });
 
+  it("splits round trips on one coin into separate trades, whether or not a pass saw each one go flat", async () => {
+    const F = "FARTCOIN";
+    const T0 = Date.now() - 100 * MIN;
+    const fill = (tid: number, oid: number, side: "B" | "A", px: string, sz: string, start: string, at: number, dir: string) =>
+      ({ coin: F, px, sz, side, time: at, startPosition: start, dir, closedPnl: "0", fee: "1", tid, oid, crossed: true });
+    const pos = (szi: string) => [{ position: { coin: F, szi, entryPx: "0.09", liquidationPx: "0.05", unrealizedPnl: "0", leverage: { type: "cross", value: 10 } } }];
+    const stopAt = (oid: number, px: string, sz: string) => [{ coin: F, oid, side: "A", limitPx: px, sz, isTrigger: true, triggerPx: px, orderType: "Stop Market", reduceOnly: true, isPositionTpsl: true, timestamp: T0 }];
+    const keepMain = hlPositions.filter((p) => p.position.coin !== F);
+    const keepOrders = hlOrders.filter((o) => o.coin !== F);
+
+    // The first trade, watched all the way: an entry, two adds, a take.
+    hlFills.push(fill(9601, 1601, "B", "0.094", "60000.3", "0", T0, "Open Long"));
+    hlPositions = [...keepMain, ...pos("60000.3")];
+    hlOrders = [...keepOrders, ...stopAt(1690, "0.085", "60000.3")];
+    await run();
+    hlFills.push(fill(9602, 1602, "B", "0.0905", "50000.7", "60000.3", T0 + 5 * MIN, "Open Long"), fill(9603, 1603, "B", "0.0885", "79999.9", "110001", T0 + 8 * MIN, "Open Long"));
+    hlPositions = [...keepMain, ...pos("190000.9")];
+    await run();
+    hlFills.push(fill(9604, 1604, "A", "0.0915", "27663.3", "190000.9", T0 + 12 * MIN, "Close Long"));
+    hlPositions = [...keepMain, ...pos("162337.6")];
+    await run();
+    const first = (await tradesOf(F, HL)).find((t: any) => t.externalId === "hl:FARTCOIN:9601");
+    expect(first).toMatchObject({ status: "open" });
+
+    // Then nothing watches for an hour and a half: flat, a round trip in three opens and one close, and a new position on.
+    hlFills.push(
+      fill(9605, 1605, "A", "0.08784", "162337.6", "162337.6", T0 + 20 * MIN, "Close Long"),
+      fill(9606, 1606, "B", "0.08803", "56837.5", "0", T0 + 62 * MIN, "Open Long"),
+      fill(9607, 1607, "B", "0.0891", "58966.9", "56837.5", T0 + 68 * MIN, "Open Long"),
+      fill(9608, 1607, "B", "0.0891", "53266.5", "115804.4", T0 + 68 * MIN, "Open Long"),
+      fill(9609, 1609, "A", "0.08867", "169070.9", "169070.9", T0 + 69 * MIN, "Close Long"),
+      fill(9610, 1610, "B", "0.08852", "105810.9", "0", T0 + 83 * MIN, "Open Long"),
+      fill(9611, 1610, "B", "0.08854", "7696.4", "105810.9", T0 + 83 * MIN, "Open Long"),
+    );
+    hlPositions = [...keepMain, ...pos("113507.3")];
+    hlOrders = [...keepOrders, ...stopAt(1691, "0.0877", "113507.3")];
+    await run();
+    await run();
+
+    const all = await tradesOf(F, HL);
+    const by = (id: string) => all.find((t: any) => t.externalId === id);
+    // The first closes where it went flat, with its own adds and take and nothing after.
+    expect(by("hl:FARTCOIN:9601")).toMatchObject({ status: "closed", exitPrice: 0.08784 });
+    expect(by("hl:FARTCOIN:9601").fills.map((f: any) => f.kind).sort()).toEqual(["add", "add", "partial"]);
+    // The round trip no pass saw is its own trade.
+    expect(by("hl:FARTCOIN:9606")).toMatchObject({ status: "closed", exitPrice: 0.08867 });
+    expect(by("hl:FARTCOIN:9606").size).toBeCloseTo(169070.9, 6);
+    // And the position on now is a third.
+    expect(by("hl:FARTCOIN:9610")).toMatchObject({ status: "open" });
+    expect(by("hl:FARTCOIN:9610").size).toBeCloseTo(113507.3, 6);
+    expect(all.filter((t: any) => t.status === "open")).toHaveLength(1);
+
+    hlPositions = keepMain;
+    hlOrders = keepOrders;
+  });
+
+  it("closes a trade it met already open where that position went flat, though its opening is older than the fills it reads", async () => {
+    const P = "PUMP";
+    const fill = (tid: number, oid: number, side: "B" | "A", px: string, sz: string, start: string, at: number, dir: string) =>
+      ({ coin: P, px, sz, side, time: at, startPosition: start, dir, closedPnl: "0", fee: "1", tid, oid, crossed: true });
+    const pos = (szi: string, entryPx: string) => [{ position: { coin: P, szi, entryPx, liquidationPx: "0.001", unrealizedPnl: "0", leverage: { type: "cross", value: 5 } } }];
+    const keepMain = hlPositions.filter((p) => p.position.coin !== P);
+
+    // Bought eight days ago, beyond the week of fills a pass reads: the tracker meets it with no opening to read.
+    hlFills.push(fill(9701, 1701, "B", "0.0924", "108225.1", "0", Date.now() - 8 * 24 * 60 * MIN, "Open Long"));
+    hlPositions = [...keepMain, ...pos("108225.1", "0.092416")];
+    await run();
+    const [met] = await tradesOf(P, HL);
+    expect(met).toMatchObject({ status: "open", entryPrice: 0.092416 });
+    expect(met.size).toBeCloseTo(108225.1, 6);
+
+    // A take while watched; then, unwatched, flat, a round trip, and a new position. All after it was met.
+    const T0 = Date.now() + 1_000;
+    const S = 1_000;
+    hlFills.push(fill(9702, 1702, "A", "0.0915", "20000", "108225.1", T0, "Close Long"));
+    hlPositions = [...keepMain, ...pos("88225.1", "0.092416")];
+    await run();
+    hlFills.push(
+      fill(9703, 1703, "A", "0.08784", "88225.1", "88225.1", T0 + 20 * S, "Close Long"),
+      fill(9704, 1704, "B", "0.08803", "56837.5", "0", T0 + 62 * S, "Open Long"),
+      fill(9705, 1705, "A", "0.08867", "56837.5", "56837.5", T0 + 69 * S, "Close Long"),
+      fill(9706, 1706, "B", "0.08852", "105810.9", "0", T0 + 83 * S, "Open Long"),
+    );
+    hlPositions = [...keepMain, ...pos("105810.9", "0.08852")];
+    // What the old read wrote into it, never having seen the flat: the later round trips as its takes and adds.
+    await store.addFill(met.id, { kind: "add", price: 0.08803, size: 56837.5, time: new Date(T0 + 62 * S).toISOString(), note: "terminal · add 9704" });
+    await store.addFill(met.id, { kind: "partial", price: 0.08867, size: 56837.5, time: new Date(T0 + 69 * S).toISOString(), note: "terminal · fill 9705" });
+    await run();
+    await run();
+
+    const all = await tradesOf(P, HL);
+    const first = all.find((t: any) => t.id === met.id);
+    expect(first).toMatchObject({ status: "closed", exitPrice: 0.08784 });
+    expect(first.fills.map((f: any) => f.kind)).toEqual(["partial"]);
+    expect(all.find((t: any) => t.externalId === "hl:PUMP:9704")).toMatchObject({ status: "closed", exitPrice: 0.08867 });
+    expect(all.find((t: any) => t.externalId === "hl:PUMP:9706")).toMatchObject({ status: "open", entryPrice: 0.08852 });
+    expect(all.filter((t: any) => t.status === "open")).toHaveLength(1);
+    hlPositions = keepMain;
+  });
+
   it("reads how past trades were entered from the venues, and fills only the blanks", async () => {
     // A synced Binance trade from before entry types: the external id names its first fill, which leads to its order.
     // The order rested for most of its size and crossed for a sliver: a limit entry.

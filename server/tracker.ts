@@ -24,7 +24,7 @@ import { entryTypeOf, type EntryType } from "@shared/entry-type";
 import type { AccountSettings, TradeWithTags } from "@shared/schema";
 import { splitHlAsset, tradesFromFills, type HlFill, type HlOpenOrder, type HlPosition, type HlTrade } from "@shared/hyperliquid";
 import { formatPricePair } from "@shared/price-pair";
-import { addNote, cutAtFlat, formatTerminalRef, parseTerminalRef, partialNote, type Brackets, type TerminalMove, type TerminalRef, type VenueSnapshot } from "@shared/terminal";
+import { addNote, cutAtVenueFlat, formatTerminalRef, parseTerminalRef, partialNote, type Brackets, type TerminalMove, type TerminalRef, type VenueSnapshot } from "@shared/terminal";
 import { USD_COMMISSION, type BinanceUserTrade } from "@shared/binance-account";
 import { setTrackedThrough, storageFor, trackedAccountsEverywhere, type DatabaseStorage } from "./storage";
 import { open } from "./secrets";
@@ -694,30 +694,46 @@ async function trackHyperliquid(s: DatabaseStorage, acct: AccountSettings): Prom
     tracked.push({ t: made, ref: refOf(made) });
   }
 
-  if (acct.trackedThrough) {
-    const since = new Date(acct.trackedThrough).getTime() - 2 * 60_000;
-    const coins = Array.from(new Set(fills.filter((f) => f.time >= since).map((f) => f.coin)));
-    for (const coin of coins) {
-      if (tracked.some((x) => x.ref.symbol === coin)) continue;
-      for (const round of tradesFromFills(fills.filter((f) => f.coin === coin), "hl").trades) {
-        if (round.exitTime == null || round.exitTime < since) continue;
-        const { journalSymbol, pricePair } = hlNames(coin);
-        const id = await catchUp(s, acct, "hyperliquid", "live", round, coin, journalSymbol, pricePair);
-        if (id != null) out.caughtUp.push(id);
-      }
-    }
-  }
+  /*
+   * Where each tracked trade sits on its coin's timeline, as read this pass:
+   * from its entry to where it went flat, or on to now while it is still on.
+   * A round trip caught up below must not overlap one of these — it would be
+   * the same trade written twice. And a trade cut this pass frees what comes
+   * after its flat: round trips there were being read as its adds and takes.
+   */
+  const spans = new Map<string, { from: number; to: number }[]>();
+  const freed = new Map<string, number>();
+  const span = (coin: string, from: number, to: number) => spans.set(coin, [...(spans.get(coin) ?? []), { from, to }]);
 
-  for (const { t, ref } of tracked) {
+  for (const { t: tIn, ref } of tracked) {
     const book = splitHlAsset(ref.symbol).dex;
     if (book && unread.has(book)) continue;
     const long = ref.positionSide === "LONG";
     const p = held.find((x) => x.coin === ref.symbol && (x.szi > 0) === long) ?? null;
-    const entryAt = new Date(t.entryTime).getTime();
+    const entryAt = new Date(tIn.entryTime).getTime();
     const openSide = long ? "B" : "A";
-    // This trade's fills: from the entry, up to where the position first went flat.
-    const own = cutAtFlat(fills.filter((f) => f.coin === ref.symbol && f.time >= entryAt - 5_000).map((f) => ({ ...f, qty: f.sz })), openSide);
+    // This trade's fills: from the entry, up to where the position first went flat, by the venue's own count.
+    const own = cutAtVenueFlat(fills.filter((f) => f.coin === ref.symbol && f.time >= entryAt - 5_000).map((f) => ({ ...f, qty: f.sz })), long);
     const coinFills = own.fills;
+    const cutAt = own.cut && coinFills.length ? coinFills[coinFills.length - 1].time : null;
+    span(ref.symbol, entryAt - 5_000, cutAt ?? Infinity);
+    /*
+     * Takes and adds on the record from after the flat belong to later round
+     * trips, read into this trade while its flat went unseen. They come off,
+     * so the trade closes where it went flat, and those round trips are
+     * written as their own below.
+     */
+    let t = tIn;
+    if (cutAt != null) {
+      const keep = new Set(coinFills.map((f) => f.tid));
+      const stale = (tIn.fills ?? []).filter((f) => {
+        const m = /^terminal · (fill|add) (\d+)$/.exec(f.note ?? "");
+        return m && !keep.has(Number(m[2])) && new Date(f.time).getTime() > cutAt;
+      });
+      for (const f of stale) await s.deleteFill(f.id);
+      if (stale.length) t = { ...tIn, fills: (tIn.fills ?? []).filter((f) => !stale.includes(f)) };
+      freed.set(ref.symbol, Math.min(freed.get(ref.symbol) ?? Infinity, cutAt));
+    }
     // Opening fills beyond the entry are adds; the ids are learned from the fills.
     const addIds = new Set(ref.addOrderIds ?? []);
     for (const f of coinFills) if (f.side === openSide && f.oid !== ref.entryOrderId && f.oid !== 0) addIds.add(f.oid);
@@ -750,6 +766,27 @@ async function trackHyperliquid(s: DatabaseStorage, acct: AccountSettings): Prom
     const brackets = bracketsOnHl(orders, ref.symbol, long);
     await applySnapshot(s, t, { ...ref, addOrderIds: Array.from(addIds) }, snap, { brackets, mark: mids[ref.symbol] ?? null });
     out.read += 1;
+  }
+
+  /*
+   * Round trips that opened and closed while nothing was watching: since the
+   * last pass, or since a tracked trade's flat freed them — on any coin, a
+   * tracked one included, as long as they do not overlap a tracked trade.
+   */
+  if (acct.trackedThrough) {
+    const since = new Date(acct.trackedThrough).getTime() - 2 * 60_000;
+    const coins = Array.from(new Set([...fills.filter((f) => f.time >= since).map((f) => f.coin), ...Array.from(freed.keys())]));
+    for (const coin of coins) {
+      const after = freed.get(coin);
+      for (const round of tradesFromFills(fills.filter((f) => f.coin === coin), "hl").trades) {
+        if (round.exitTime == null) continue;
+        if (round.exitTime < since && !(after != null && round.entryTime > after)) continue;
+        if ((spans.get(coin) ?? []).some((x) => round.entryTime <= x.to && round.exitTime! >= x.from)) continue;
+        const { journalSymbol, pricePair } = hlNames(coin);
+        const id = await catchUp(s, acct, "hyperliquid", "live", round, coin, journalSymbol, pricePair);
+        if (id != null) out.caughtUp.push(id);
+      }
+    }
   }
   await setTrackedThrough(acct.id, new Date(now).toISOString());
   return out;

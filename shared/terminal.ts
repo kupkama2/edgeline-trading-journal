@@ -684,6 +684,44 @@ export function cutAtFlat<F extends { time: number; tid: number; qty: number; si
   return { fills: sorted, cut: false };
 }
 
+/**
+ * The same cut, by the venue's own count. Hyperliquid stamps every fill with
+ * the position before it, so where the position went flat is a fact read off
+ * the fill, not a sum this side keeps from wherever it started counting.
+ *
+ * That matters for a trade the tracker met already open: it begins at the
+ * moment it was adopted, with the opening fills before it, so a running sum
+ * from there starts at zero against a position that is not, goes negative on
+ * the first take, never counts as "on", and never sees the flat. Two round
+ * trips later the trade was still open, with every fill since as adds and
+ * takes. Read this way, the first fill that leaves the position on this side
+ * starts it, and the first that takes it to flat (or through it) ends it.
+ * Fills before the trade began — the end of an earlier position — are left out.
+ */
+export function cutAtVenueFlat<F extends { time: number; tid: number; side: string; sz: number; startPosition: number }>(
+  fills: F[],
+  long: boolean,
+): { fills: F[]; cut: boolean } {
+  const sorted = [...fills].sort((a, b) => a.time - b.time || a.tid - b.tid);
+  const dir = long ? 1 : -1;
+  const out: F[] = [];
+  let wasOn = false;
+  for (const f of sorted) {
+    const after = f.startPosition + (f.side === "B" ? f.sz : -f.sz);
+    // Sizes come as decimals; the subtraction can leave dust, relative to the size.
+    const tol = Math.max(1e-9, Math.abs(f.startPosition) * 1e-10);
+    const on = after * dir > tol;
+    if (on) {
+      wasOn = true;
+      out.push(f);
+    } else if (wasOn) {
+      out.push(f);
+      return { fills: out, cut: true };
+    }
+  }
+  return { fills: out, cut: false };
+}
+
 /* ------------------------------ the idea, watched ------------------------------ */
 
 /** The original levels, from the pin when there is one, from the trade's own fields when not. */

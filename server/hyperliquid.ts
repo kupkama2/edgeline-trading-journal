@@ -391,9 +391,36 @@ export async function fetchUserFills(address: string): Promise<HlFill[]> {
   return parseUserFills(await info({ type: "userFills", user: address }, 20_000));
 }
 
-/** The wallet's fills from a moment on: what the live tracker reads every pass. */
+/** The most the venue answers `userFillsByTime` with at once; a full page means there may be more. */
+const FILLS_PAGE = 2000;
+
+/**
+ * The wallet's fills from a moment on: what the live tracker reads every pass.
+ *
+ * The venue answers with at most two thousand fills, the earliest first, so a
+ * busy week used to come back without its most recent fills — exactly the
+ * ones the tracker reads. A full page is followed by the next, from the last
+ * fill's time on (fills sharing that millisecond are told apart by trade id),
+ * up to the ten thousand the venue keeps.
+ */
 export async function fetchUserFillsSince(address: string, startTime: number): Promise<HlFill[]> {
-  return parseUserFills(await info({ type: "userFillsByTime", user: address, startTime: Math.max(0, Math.floor(startTime)) }, 20_000));
+  const out: HlFill[] = [];
+  const seen = new Set<number>();
+  let from = Math.max(0, Math.floor(startTime));
+  for (let page = 0; page < 5; page++) {
+    const raw = await info({ type: "userFillsByTime", user: address, startTime: from }, 20_000);
+    const rows = parseUserFills(raw);
+    for (const f of rows) {
+      if (seen.has(f.tid)) continue;
+      seen.add(f.tid);
+      out.push(f);
+    }
+    if (!Array.isArray(raw) || raw.length < FILLS_PAGE || rows.length === 0) break;
+    const last = Math.max(...rows.map((f) => f.time));
+    if (last <= from) break;
+    from = last;
+  }
+  return out.sort((a, b) => a.time - b.time || a.tid - b.tid);
 }
 
 /**
