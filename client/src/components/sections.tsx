@@ -26,10 +26,27 @@ const write = (key: string, v: unknown) => {
   }
 };
 
-/** The order to draw in: the kept order first, then anything it does not mention, where the page put it. */
+/**
+ * The order to draw in: the kept order, with a section the kept order has
+ * never seen put where the page has it — after whatever the page draws
+ * just before it — so something new at the top of a page arrives at the
+ * top, not under everything the reader had already arranged.
+ */
 export function orderOf(ids: string[], kept: string[]): string[] {
-  const known = kept.filter((id) => ids.includes(id));
-  return [...known, ...ids.filter((id) => !known.includes(id))];
+  const out = kept.filter((id) => ids.includes(id));
+  ids.forEach((id, i) => {
+    if (out.includes(id)) return;
+    let at = 0;
+    for (let j = i - 1; j >= 0; j--) {
+      const before = out.indexOf(ids[j]);
+      if (before >= 0) {
+        at = before + 1;
+        break;
+      }
+    }
+    out.splice(at, 0, id);
+  });
+  return out;
 }
 
 /** `id` taken out and put back before or after `target`. */

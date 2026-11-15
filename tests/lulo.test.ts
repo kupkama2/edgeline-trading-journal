@@ -70,6 +70,63 @@ describe.skipIf(!process.env.DATABASE_URL)("on the server", () => {
     }
   });
 
+  it("adds everything up, names what each part is worth, and keeps the day only when nothing is missing", async () => {
+    const { createServer } = await import("node:http");
+    const fake = createServer((req, res) => {
+      if (req.url!.includes("rates.getRates")) return void res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(RATES));
+      if (req.url!.includes("account.getAccount")) return void res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(ACCOUNT));
+      // Solana's node and the price list: an empty wallet.
+      res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ result: { value: 0 }, coins: {} }));
+    }).listen(0);
+    const f = `http://127.0.0.1:${(fake.address() as any).port}`;
+    process.env.LULO_BASE = f;
+    process.env.SOLANA_RPC = `${f}/solana`;
+    process.env.LLAMA_BASE = `${f}/llama`;
+    try {
+      const { initSchema, accounts, portfolioStore, followedValues, typedPositions, sigilStore } = await import("../server/storage");
+      await initSchema();
+      await sigilStore.clear();
+      const sub = "networth-test";
+      const user = (await accounts.byGoogleSub(sub)) ?? (await accounts.create({ googleSub: sub, email: "nw@test.invalid", name: "NW", isOwner: false }));
+      for (const a of await portfolioStore.addresses(user.id)) await portfolioStore.removeAddress(user.id, a.id);
+      for (const t of await typedPositions.list(user.id)) await typedPositions.remove(user.id, t.id);
+      await followedValues.remove("networth", String(user.id));
+      await followedValues.remove("lulo", String(user.id));
+      const { netWorth } = await import("../server/networth");
+
+      expect(await netWorth(user.id)).toMatchObject({ totalUsd: 0, parts: [], missing: [], history: [] });
+
+      await portfolioStore.addAddress(user.id, "solana", "DYWmganT7fTJkJHMi4qMBqF1xSt5mD3i7K8Y2FSUMufY", "Sol Main");
+      const angel = await typedPositions.create(user.id, "Angel: Acme", 5000);
+      await followedValues.put("typed", String(angel), "2026-11-01", 12000);
+      await typedPositions.create(user.id, "Not valued yet", 1000);
+      await sigilStore.putSnapshot("2026-11-15", "2026-11-15T10:40:12.929Z", JSON.stringify({ asOf: "2026-11-15", capturedAt: "2026-11-15T10:40:12.929Z", portfolioValueUsd: 32487.92, positionCount: 0, dustTotalUsd: 0, positions: [], source: "t" }));
+      await sigilStore.putMeta("entry", JSON.stringify({ valueUsd: 40000 }));
+
+      const { forgetPortfolio } = await import("../server/portfolio");
+      forgetPortfolio(user.id);
+      const { readLulo } = await import("../server/lulo");
+      await readLulo(user.id, { fresh: true });
+      const n = await netWorth(user.id, Date.UTC(2026, 10, 15, 12));
+      expect(n.missing).toEqual([]);
+      expect(n.parts.map((p) => [p.id.split(":")[0], p.label, p.valueUsd, p.pnlUsd, p.asOf])).toEqual([
+        ["sigil", "Sigil Core", 32487.92, expect.closeTo(-7512.08, 2), "2026-11-15"],
+        ["typed", "Angel: Acme", 12000, 7000, "2026-11-01"],
+        ["lulo", "Lulo", 5120.5, 120.5, null],
+        ["addresses", "Wallets and Hyperliquid", 0, expect.anything(), null],
+      ]);
+      expect(n.totalUsd).toBeCloseTo(32487.92 + 12000 + 5120.5, 2);
+      expect(n.history).toEqual([{ date: "2026-11-15", valueUsd: n.totalUsd }]);
+    } finally {
+      delete process.env.LULO_BASE;
+      delete process.env.SOLANA_RPC;
+      delete process.env.LLAMA_BASE;
+      await new Promise((r) => fake.close(r));
+      const { sigilStore } = await import("../server/storage");
+      await sigilStore.clear();
+    }
+  });
+
   it("keeps positions typed by hand: one value a day, the owner's only", async () => {
     const express = (await import("express")).default;
     const { initSchema, accounts } = await import("../server/storage");

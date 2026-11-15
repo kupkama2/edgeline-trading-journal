@@ -11,7 +11,6 @@ import { changeCount, ecoOf, isQuiet, isUnverified, pragueDay, segmentOf, sigilG
 import { useEnrichSigilAsset, useSaveSigilAsset, useSaveSigilEntry, useSigil, useSigilSeed, useSigilUpload, type SigilState } from "@/lib/sigil";
 import { Donut, ValueLine } from "./charts";
 import { Section, Sections } from "@/components/sections";
-import { TypedPositions } from "./typed";
 
 /** The entry the page assumes until the owner sets their own. */
 const ASSUMED_ENTRY_USD = 40_000;
@@ -396,7 +395,6 @@ export function SigilSection() {
       <div className="space-y-3" data-testid="sigil-root">
         {strip}
         <p className="text-xs text-muted-foreground">Nothing here yet. Load the seed pack to bring the history in, or upload the first export.</p>
-        <TypedPositions />
       </div>
     );
 
@@ -488,9 +486,6 @@ export function SigilSection() {
           </div>
         </div>
       </Card>
-
-      {/* A stake that comes as one number a week sits beside the fund it belongs with. */}
-      <TypedPositions />
 
       {/* What the latest upload found: the thing the page is opened for. */}
       {rundown && !report && (

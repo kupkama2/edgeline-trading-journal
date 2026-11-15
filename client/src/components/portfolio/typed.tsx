@@ -88,11 +88,11 @@ function Row({ p }: { p: TypedPosition }) {
               {last ? last.date : "never"}
               {before && last && <span className={`ml-1.5 ${tone(last.valueUsd - before.valueUsd)}`}>{pct((last.valueUsd / before.valueUsd - 1) * 100)} on {before.date.slice(5)}</span>}
             </p>
-            {/* It is typed weekly: past eight days the figure is stale and says so. */}
-            {age != null && age > 8 && (
-              <p className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase text-amber-500" data-testid={`typed-stale-${p.id}`}>
-                <AlertTriangle className="h-3 w-3" />
-                {age} days old
+            {/* Typed by hand, so it is only as fresh as the last time: the age is always in view. */}
+            {age != null && age > 0 && (
+              <p className={`text-[10px] ${age > 8 ? "inline-flex items-center gap-1 font-semibold uppercase text-amber-500" : "text-muted-foreground"}`} data-testid={`typed-stale-${p.id}`}>
+                {age > 8 && <AlertTriangle className="h-3 w-3" />}
+                {age} {age === 1 ? "day" : "days"} old
               </p>
             )}
           </div>
@@ -123,14 +123,14 @@ export function TypedPositions() {
   return (
     <Card className="border-card-border bg-card p-3 sm:p-4" data-testid="typed-positions">
       <div className="flex items-center justify-between gap-2">
-        <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Typed positions</p>
+        <p className="text-[11px] text-muted-foreground">A name, what went in, and a value you type when you have one. Counted in the total above.</p>
         {!adding && (
           <button type="button" className="inline-flex items-center gap-1 text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline" onClick={() => setAdding(true)} data-testid="typed-add">
             <Plus className="h-3 w-3" /> Add a position
           </button>
         )}
       </div>
-      {list.length === 0 && !adding && <p className="mt-1 text-xs text-muted-foreground">For a stake you only get one number for, weekly or whenever: add it, then type its value when you have it.</p>}
+      {list.length === 0 && !adding && <p className="mt-1 text-xs text-muted-foreground">Nothing here yet. Add a stake you get one number for (a fund share, an angel investment), then type its value when you have it.</p>}
       {list.length > 0 && (
         <ul className="divide-y divide-border/40">
           {list.map((p) => (

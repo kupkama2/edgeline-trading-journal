@@ -39,6 +39,7 @@ const ASTEKZ = ["/api/astekz"];
 
 /** Both portfolios are told about on one channel: an upload landing, an asset described, a day read. */
 export const invalidateFollowed = () => {
+  void queryClient.invalidateQueries({ queryKey: ["/api/networth"] });
   void queryClient.invalidateQueries({ queryKey: SIGIL });
   void queryClient.invalidateQueries({ queryKey: ASTEKZ });
 };
@@ -127,7 +128,10 @@ export function useRefreshLulo() {
 export const useTypedPositions = () => useQuery<TypedPosition[]>({ queryKey: TYPED });
 const typed = <V,>(run: (v: V) => Promise<Response>) => ({
   mutationFn: async (v: V) => (await run(v)).json() as Promise<TypedPosition[]>,
-  onSuccess: (d: TypedPosition[]) => queryClient.setQueryData(TYPED, d),
+  onSuccess: (d: TypedPosition[]) => {
+    queryClient.setQueryData(TYPED, d);
+    void queryClient.invalidateQueries({ queryKey: ["/api/networth"] });
+  },
 });
 export const useAddTyped = () => useMutation(typed((v: { name: string; entryUsd: number | null }) => apiRequest("POST", "/api/typed-positions", v)));
 export const useSaveTyped = () => useMutation(typed((v: { id: number; name: string; entryUsd: number | null }) => apiRequest("PUT", `/api/typed-positions/${v.id}`, { name: v.name, entryUsd: v.entryUsd })));

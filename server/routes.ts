@@ -58,6 +58,7 @@ import { registerPortfolioRoutes } from "./portfolio";
 import { registerSigilRoutes } from "./sigil";
 import { registerAstekzRoutes } from "./astekz";
 import { registerLuloRoutes } from "./lulo";
+import { registerNetWorthRoutes } from "./networth";
 import { registerChatRoutes } from "./chat-routes";
 import { registerCalendarRoutes } from "./calendar";
 import { formatGate, gateRecordSchema, redAnswers } from "@shared/gate";
@@ -634,6 +635,8 @@ export async function registerRoutes(
   registerAstekzRoutes(app);
   // The owner's Lulo deposit, and positions whose value they type in.
   registerLuloRoutes(app);
+  // All of it as one figure.
+  registerNetWorthRoutes(app);
   // The owner's chat: a model of their choosing, with read-only tools over the site's data.
   registerChatRoutes(app);
   // The macro and earnings calendar (server/calendar.ts).

@@ -18,7 +18,8 @@ import { followedValues, portfolioStore, typedPositions } from "./storage";
 import { blendedRate, parseLuloAccount, parseLuloRates, sumLulo, type LuloAccount, type LuloRates } from "@shared/lulo";
 import { pragueDay } from "@shared/sigil";
 
-const LULO = (process.env.LULO_BASE || "https://api.lulo.fi").replace(/\/+$/, "");
+/** Read when asked, not when loaded, so a test can stand a fake in for Lulo. */
+const lulo = () => (process.env.LULO_BASE || "https://api.lulo.fi").replace(/\/+$/, "");
 const CACHE_MS = 10 * 60_000;
 
 async function get(url: string): Promise<unknown> {
@@ -49,7 +50,7 @@ export async function readLulo(userId: number, opts: { fresh?: boolean; now?: nu
   const wallets = await Promise.all(
     addresses.map(async (a) => {
       try {
-        const account = parseLuloAccount(await get(`${LULO}/v1/account.getAccount?owner=${encodeURIComponent(a.address)}`));
+        const account = parseLuloAccount(await get(`${lulo()}/v1/account.getAccount?owner=${encodeURIComponent(a.address)}`));
         if (!account) throw new Error("Lulo's answer was not an account");
         return { address: a.address, label: a.label, account, error: null };
       } catch (err: any) {
@@ -57,7 +58,7 @@ export async function readLulo(userId: number, opts: { fresh?: boolean; now?: nu
       }
     }),
   );
-  const rates = await get(`${LULO}/v1/rates.getRates`).then(parseLuloRates, () => ({ protected: null, boosted: null }));
+  const rates = await get(`${lulo()}/v1/rates.getRates`).then(parseLuloRates, () => ({ protected: null, boosted: null }));
   const read = wallets.filter((w) => w.account);
   const total = sumLulo(read.map((w) => w.account!));
   const key = String(userId);

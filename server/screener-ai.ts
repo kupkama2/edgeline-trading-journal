@@ -277,3 +277,54 @@ export async function latestAiRead(): Promise<{ at: string; runId: number | null
   }
   return { at: r.at, runId: r.runId, model: r.model, read, error: r.error };
 }
+
+/* ----------------------------- one coin, in words ----------------------------- */
+
+export const COIN_AI_MODEL = process.env.SCREENER_COIN_AI_MODEL || "claude-sonnet-5-5";
+
+const COIN_SYSTEM = `You are given one market's row from a relative-strength screener for crypto perpetuals: how it has moved against BTC on several timeframes, momentum, positioning (open interest, funding), taker flow, the largest accounts, nearby liquidations, and the screener's own flags and anomalies. Write the read a discretionary trader wants before looking at any of the numbers.
+
+Answer in exactly this shape, plain text, no markdown, no preamble:
+line 1: the verdict in at most 14 words, starting with one of: "Long setup:", "Short setup:", "Wait:", "Avoid:".
+then up to four lines, each starting with its label:
+For: what in the data supports a trade, most important first.
+Against: what contradicts it or makes it fragile.
+Watch: the one or two things that would confirm it.
+Wrong if: the condition that would end the idea.
+
+Rules: use only the numbers given, and quote the ones you lean on. Each line at most 30 words. rs, alpha, cvd and oi values are fractions (0.165 is 16.5%); say them as percent. A null or missing value was not measured: do not treat it as zero and do not mention it. Funding far above its usual range with open interest rising means the move is leverage-driven and fragile. If the readings disagree, say Wait and say what they disagree on. This describes the data; it is not advice.`;
+
+const coinReads = new Map<string, { at: string; text: string }>();
+
+/**
+ * One coin's signals as a short read, written once per run and kept: a
+ * second look at the same coin before the next run costs nothing. Throws
+ * with the reason when it cannot be written.
+ */
+export async function summarizeCoin(run: ScreenerRun, row: ScreenerRow): Promise<{ at: string; text: string; model: string; cached: boolean }> {
+  const key = `${run.id}:${row.coin}`;
+  const hit = coinReads.get(key);
+  if (hit) return { ...hit, model: COIN_AI_MODEL, cached: true };
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error("No ANTHROPIC_API_KEY on the server.");
+  if (!client) client = new Anthropic({ apiKey });
+  const anomalies = run.anomalies.filter((a) => a.coin === row.coin).map((a) => ({ kind: a.kind, text: a.text }));
+  const res = await client.messages.create({
+    model: COIN_AI_MODEL,
+    max_tokens: 600,
+    system: COIN_SYSTEM,
+    messages: [{ role: "user", content: JSON.stringify({ runAt: run.at, mark: row.mark, volume24hUsd: Math.round(row.volume24h ?? 0), ...coinDigest(row), anomalies }) }],
+  });
+  const text = res.content
+    .filter((b) => b.type === "text")
+    .map((b) => (b as any).text as string)
+    .join("")
+    .trim()
+    .slice(0, 1500);
+  if (!text) throw new Error("The model answered with nothing.");
+  const made = { at: new Date().toISOString(), text };
+  coinReads.set(key, made);
+  // Reads of runs gone by are no use to anyone.
+  if (coinReads.size > 400) for (const k of Array.from(coinReads.keys()).slice(0, coinReads.size - 400)) coinReads.delete(k);
+  return { ...made, model: COIN_AI_MODEL, cached: false };
+}

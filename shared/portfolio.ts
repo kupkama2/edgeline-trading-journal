@@ -205,13 +205,47 @@ export function spotPrices(json: unknown): Map<string, number> {
 
 /* ------------------------------- EVM (Blockscout) ------------------------------- */
 
-export const EVM_CHAINS: { id: string; name: string; host: string; native: string }[] = [
-  { id: "eth", name: "Ethereum", host: "https://eth.blockscout.com", native: "ETH" },
-  { id: "base", name: "Base", host: "https://base.blockscout.com", native: "ETH" },
-  { id: "arbitrum", name: "Arbitrum", host: "https://arbitrum.blockscout.com", native: "ETH" },
-  { id: "optimism", name: "Optimism", host: "https://optimism.blockscout.com", native: "ETH" },
-  { id: "polygon", name: "Polygon", host: "https://polygon.blockscout.com", native: "POL" },
+export const EVM_CHAINS: { id: string; name: string; host: string; native: string; rpc: string; llama: string; nativePrice: string; tokens: string[] }[] = [
+  { id: "eth", name: "Ethereum", host: "https://eth.blockscout.com", native: "ETH", rpc: "https://ethereum-rpc.publicnode.com", llama: "ethereum", nativePrice: "coingecko:ethereum", tokens: ["0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", "0xdAC17F958D2ee523a2206206994597C13D831ec7", "0x6B175474E89094C44Da98b954EedeAC495271d0F", "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"] },
+  { id: "base", name: "Base", host: "https://base.blockscout.com", native: "ETH", rpc: "https://mainnet.base.org", llama: "base", nativePrice: "coingecko:ethereum", tokens: ["0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", "0xd9aAEc86B65D86f6A7B5B1b0c42FFA531710b6CA", "0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb", "0x4200000000000000000000000000000000000006"] },
+  { id: "arbitrum", name: "Arbitrum", host: "https://arbitrum.blockscout.com", native: "ETH", rpc: "https://arb1.arbitrum.io/rpc", llama: "arbitrum", nativePrice: "coingecko:ethereum", tokens: ["0xaf88d065e77c8cC2239327C5EDb3A432268e5831", "0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8", "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9", "0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1", "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1", "0x912CE59144191C1204E64559FE8253a0e49E6548"] },
+  { id: "optimism", name: "Optimism", host: "https://optimism.blockscout.com", native: "ETH", rpc: "https://mainnet.optimism.io", llama: "optimism", nativePrice: "coingecko:ethereum", tokens: ["0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85", "0x94b008aA00579c1307B0EF2c499aD98a8ce58e58", "0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1", "0x4200000000000000000000000000000000000006", "0x4200000000000000000000000000000000000042"] },
+  { id: "polygon", name: "Polygon", host: "https://polygon.blockscout.com", native: "POL", rpc: "https://polygon-bor-rpc.publicnode.com", llama: "polygon", nativePrice: "coingecko:polygon-ecosystem-token", tokens: ["0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359", "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174", "0xc2132D05D31c914a87C6611C10748AEb04B58e8F", "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063", "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619"] },
 ];
+
+/**
+ * The call that asks a token contract for one holder's balance: the
+ * function's selector, then the address padded to a word.
+ */
+export const balanceOfData = (holder: string): string => `0x70a08231${holder.toLowerCase().replace(/^0x/, "").padStart(64, "0")}`;
+
+/** A JSON-RPC result that is a number in hex, as a count of the token's smallest unit; null when it is not one. */
+export function parseHexAmount(json: unknown): bigint | null {
+  const r = (json as any)?.result;
+  if (typeof r !== "string" || !/^0x[0-9a-fA-F]*$/.test(r)) return null;
+  try {
+    return r === "0x" ? BigInt(0) : BigInt(r);
+  } catch {
+    return null;
+  }
+}
+
+/** A token amount in its smallest unit, as a plain number of tokens. */
+export function fromUnits(raw: bigint, decimals: number): number {
+  let scale = BigInt(1);
+  for (let i = 0; i < decimals; i++) scale *= BigInt(10);
+  return Number(raw / scale) + Number(raw % scale) / Number(scale);
+}
+
+/** DefiLlama's price answer with what else it knows of each coin: its symbol and how many decimals it counts in. */
+export function parseLlamaCoins(json: unknown): Map<string, { price: number; symbol: string | null; decimals: number | null }> {
+  const out = new Map<string, { price: number; symbol: string | null; decimals: number | null }>();
+  for (const [id, c] of Object.entries<any>((json as any)?.coins ?? {})) {
+    const p = num(c?.price);
+    if (p != null) out.set(id.toLowerCase(), { price: p, symbol: typeof c?.symbol === "string" ? c.symbol : null, decimals: Number.isInteger(c?.decimals) ? c.decimals : null });
+  }
+  return out;
+}
 
 /** `/api/v2/addresses/{a}`: `{ coin_balance, exchange_rate }` — the native coin in wei and its USD price. */
 export function parseEvmNative(json: unknown): { amount: number; price: number | null } {

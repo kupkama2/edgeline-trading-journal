@@ -2,6 +2,8 @@ import { Section, Sections } from "@/components/sections";
 import { SigilSection } from "@/components/portfolio/sigil";
 import { AstekzSection } from "@/components/portfolio/astekz";
 import { LuloSection } from "@/components/portfolio/lulo";
+import { NetWorthSection } from "@/components/portfolio/networth";
+import { TypedPositions } from "@/components/portfolio/typed";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { ColorType, createChart, LineSeries, type IChartApi, type UTCTimestamp } from "lightweight-charts";
@@ -390,6 +392,9 @@ export default function PortfolioPage() {
 
       {/* Every part of the page folds under its name and can be moved: the order is the reader's. */}
       <Sections id="portfolio">
+        <Section id="networth" title="Net worth" hint="everything on this page as one figure">
+          <NetWorthSection />
+        </Section>
       {/* ------------------------------ the totals ------------------------------ */}
       {d && d.addresses.length > 0 && (
         <Section id="totals" title="Totals" hint="value, P&L and the value chart">
@@ -668,6 +673,9 @@ export default function PortfolioPage() {
 
         <Section id="sigil" title="Sigil Core" hint="a fund's holdings from its tracker's daily export">
           <SigilSection />
+        </Section>
+        <Section id="typed" title="Other positions" hint="stakes and angel investments you value by hand">
+          <TypedPositions />
         </Section>
         <Section id="lulo" title="Lulo" hint="the deposit and what it has earned">
           <LuloSection />

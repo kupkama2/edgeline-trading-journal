@@ -25,6 +25,8 @@ import {
 const HL = "0x" + "ab".repeat(20);
 const VAULT = "0x" + "cd".repeat(20);
 const EVM = "0x" + "ef".repeat(20);
+const EVM2 = "0x2222222222222222222222222222222222222222";
+const BASE_USDC = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913";
 const SOL = "So1anaWa11etAddre55xxxxxxxxxxxxxxxxxxxxxxx".slice(0, 43).replace(/[0OIl]/g, "x");
 const MINT = "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN";
 
@@ -143,6 +145,8 @@ function startFake(): Promise<string> {
         }
         if (u.pathname.startsWith("/api/v2/addresses/")) {
           const chain = u.searchParams.get("chain");
+          // A wallet the explorer turns away on Base, as it does some servers.
+          if (chain === "base" && u.pathname.toLowerCase().includes(EVM2.toLowerCase())) return json({ message: "Forbidden" }, 403);
           if (chain === "base" && failBase) return json({ message: "boom" }, 500);
           if (chain !== "eth" && chain !== "base") return json({ message: "Not found" }, 404);
           if (u.pathname.endsWith("/token-balances")) {
@@ -150,12 +154,19 @@ function startFake(): Promise<string> {
           }
           return json({ coin_balance: chain === "eth" ? "1500000000000000000" : "0", exchange_rate: "3000" });
         }
+        if (u.pathname === "/rpc") {
+          const q = JSON.parse(body || "{}");
+          if (u.searchParams.get("chain") !== "base") return json({ error: "down" }, 500);
+          if (q.method === "eth_getBalance") return json({ result: "0x6f05b59d3b20000" }); // 0.5 ETH
+          // 2,500 USDC (six decimals) in the canonical contract, nothing in the others.
+          return json({ result: String(q.params?.[0]?.to).toLowerCase() === BASE_USDC ? "0x" + (2_500_000_000).toString(16).padStart(64, "0") : "0x" + "0".repeat(64) });
+        }
         if (u.pathname === "/solana") {
           const q = JSON.parse(body || "{}");
           if (q.method === "getBalance") return json({ result: { value: 2_000_000_000 } });
           return json({ result: { value: [{ account: { data: { parsed: { info: { mint: MINT, tokenAmount: { uiAmount: 500 } } } } } }] } });
         }
-        if (u.pathname.startsWith("/llama/prices/current/")) return json({ coins: { "coingecko:solana": { price: 150, symbol: "SOL" }, [`solana:${MINT}`]: { price: 0.8, symbol: "JUP" } } });
+        if (u.pathname.startsWith("/llama/prices/current/")) return json({ coins: { "coingecko:solana": { price: 150, symbol: "SOL" }, [`solana:${MINT}`]: { price: 0.8, symbol: "JUP" }, "coingecko:ethereum": { price: 3000, symbol: "ETH" }, [`base:${BASE_USDC}`]: { price: 1, symbol: "USDC", decimals: 6 } } });
         return json({}, 404);
       });
     });
@@ -329,5 +340,15 @@ describe("dust", () => {
     expect(isDust({ source: "solana", value: null })).toBe(true);
     expect(isDust({ source: "hl-spot", value: 5 })).toBe(false);
     expect(isDust({ source: "hl-perp", value: 1 })).toBe(false);
+  });
+
+  it("reads a chain's own node when the explorer turns the server away, and says what is missing", async () => {
+    expect((await send("POST", "/api/portfolio/addresses", { kind: "evm", address: EVM2, label: "Second" })).status).toBe(201);
+    const p = await (await send("GET", "/api/portfolio?fresh=1")).json();
+    const mine = p.positions.filter((x: any) => x.address === EVM2 && x.chain === "Base");
+    expect(mine.map((x: any) => [x.asset, x.amount, x.value]).sort()).toEqual([["ETH", 0.5, 1500], ["USDC", 2500, 2500]]);
+    const said = p.errors.filter((e: any) => e.address === EVM2);
+    expect(said).toEqual([{ address: EVM2, where: "Base", stale: true, message: expect.stringMatching(/HTTP 403; showing ETH and the main stablecoins read from the chain itself, other tokens are missing/) }]);
+    for (const a of p.addresses.filter((a: any) => a.address === EVM2)) await send("DELETE", `/api/portfolio/addresses/${a.id}`);
   });
 });
