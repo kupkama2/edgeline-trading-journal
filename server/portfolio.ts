@@ -37,6 +37,10 @@ import {
   type PortfolioRead,
   type Position,
   type VaultHolding,
+  balanceOfData,
+  fromUnits,
+  parseHexAmount,
+  parseLlamaCoins,
 } from "@shared/portfolio";
 import { parseClearinghouseState } from "@shared/hyperliquid";
 
@@ -54,12 +58,14 @@ async function getJson(url: string, init: { method?: string; body?: unknown } = 
   try {
     const res = await undiciFetch(url, {
       method: init.method ?? "GET",
-      headers: { accept: "application/json", ...(init.body ? { "content-type": "application/json" } : {}) },
+      // An explorer or a public node may turn away a request that does not say what sent it.
+      headers: { accept: "application/json", "user-agent": "Mozilla/5.0 (compatible; EdgelineJournal/1.0)", ...(init.body ? { "content-type": "application/json" } : {}) },
       body: init.body ? JSON.stringify(init.body) : undefined,
       signal: ctl.signal,
       dispatcher: egressFor(url),
     } as any);
-    if (!res.ok) throw new Error(`${new URL(url).host} → HTTP ${res.status}`);
+    // The status travels on the error itself: reading it back out of the message mistook a port like 40412 for a 404.
+    if (!res.ok) throw Object.assign(new Error(`${new URL(url).host} → HTTP ${res.status}`), { status: res.status });
     return await res.json();
   } finally {
     clearTimeout(timer);
@@ -200,7 +206,7 @@ async function readEvm(a: PortfolioAddress, costs: Map<string, number>): Promise
     EVM_CHAINS.map(async (chain) => {
       try {
         const [native, tokens] = await kept(`evm:${a.address}:${chain.id}`, chain.name, a, out, () =>
-          Promise.all([getJson(evmUrl(chain, `/api/v2/addresses/${a.address}`)).catch((e) => (String(e?.message).includes("404") ? {} : Promise.reject(e))), getJson(evmUrl(chain, `/api/v2/addresses/${a.address}/token-balances`)).catch((e) => (String(e?.message).includes("404") ? [] : Promise.reject(e)))]),
+          Promise.all([getJson(evmUrl(chain, `/api/v2/addresses/${a.address}`)).catch((e) => (e?.status === 404 ? {} : Promise.reject(e))), getJson(evmUrl(chain, `/api/v2/addresses/${a.address}/token-balances`)).catch((e) => (e?.status === 404 ? [] : Promise.reject(e)))]),
         );
         const n = parseEvmNative(native);
         const rows: { asset: string; id: string; amount: number; price: number | null }[] = [];
@@ -213,11 +219,50 @@ async function readEvm(a: PortfolioAddress, costs: Map<string, number>): Promise
           out.positions.push(own != null ? withCost(base, own, "owner") : base);
         }
       } catch (err: any) {
-        out.errors.push({ address: a.address, where: chain.name, message: String(err?.message ?? err) });
+        /*
+         * The explorer would not answer (it turns some servers away outright).
+         * The chain itself still will: the native coin and the tokens that are
+         * most of any wallet's worth are read straight from it. What the
+         * explorer alone knows — every other token the wallet holds — is
+         * missing until it answers again, and the line says so.
+         */
+        const why = String(err?.message ?? err);
+        try {
+          for (const r of await readEvmDirect(chain, a.address)) {
+            const key = positionKey("evm", a.address, chain.id, r.id);
+            const base: Position = { key, source: "evm", chain: chain.name, address: a.address, label: a.label, asset: r.asset, amount: r.amount, price: r.price, value: r.price != null ? r.amount * r.price : null, cost: null, costFrom: null, pnl: null, pnlPct: null };
+            const own = costs.get(key);
+            out.positions.push(own != null ? withCost(base, own, "owner") : base);
+          }
+          out.errors.push({ address: a.address, where: chain.name, message: `${why}; showing ${chain.native} and the main stablecoins read from the chain itself, other tokens are missing`, stale: true });
+        } catch (err2: any) {
+          out.errors.push({ address: a.address, where: chain.name, message: `${why}; and the chain's own node: ${String(err2?.message ?? err2).slice(0, 120)}` });
+        }
       }
     }),
   );
   return out;
+}
+
+/** A wallet's native coin and well-known tokens on one chain, asked of the chain's public node and priced by DefiLlama. */
+async function readEvmDirect(chain: (typeof EVM_CHAINS)[number], address: string): Promise<{ asset: string; id: string; amount: number; price: number | null }[]> {
+  const url = EVM_BASE ? `${EVM_BASE}/rpc?chain=${chain.id}` : chain.rpc;
+  const rpc = (method: string, params: unknown[]) => getJson(url, { method: "POST", body: { jsonrpc: "2.0", id: 1, method, params } });
+  const [native, ...held] = await Promise.all([rpc("eth_getBalance", [address, "latest"]), ...chain.tokens.map((t) => rpc("eth_call", [{ to: t, data: balanceOfData(address) }, "latest"]).catch(() => null))]);
+  const wei = parseHexAmount(native);
+  if (wei == null) throw new Error("no balance in the node's answer");
+  const ids = [chain.nativePrice, ...chain.tokens.map((t) => `${chain.llama}:${t}`)];
+  const coins = parseLlamaCoins(await getJson(`${LLAMA}/prices/current/${ids.join(",")}`).catch(() => null));
+  const rows: { asset: string; id: string; amount: number; price: number | null }[] = [];
+  if (wei > BigInt(0)) rows.push({ asset: chain.native, id: "native", amount: fromUnits(wei, 18), price: coins.get(chain.nativePrice)?.price ?? null });
+  chain.tokens.forEach((t, i) => {
+    const raw = parseHexAmount(held[i]);
+    const coin = coins.get(`${chain.llama}:${t}`.toLowerCase());
+    // A token is only shown when its decimals are known: without them the amount is a guess.
+    if (raw == null || raw === BigInt(0) || !coin || coin.decimals == null) return;
+    rows.push({ asset: coin.symbol ?? "token", id: t.toLowerCase(), amount: fromUnits(raw, coin.decimals), price: coin.price });
+  });
+  return rows;
 }
 
 async function readSolana(a: PortfolioAddress, costs: Map<string, number>): Promise<Part> {

@@ -432,6 +432,23 @@ CREATE TABLE IF NOT EXISTS sigil_meta (
   key TEXT PRIMARY KEY,
   body TEXT NOT NULL
 );
+-- Positions whose value the owner types in (a stake reported weekly), and a value a day for anything followed from outside.
+CREATE TABLE IF NOT EXISTS typed_positions (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  entry_usd DOUBLE PRECISION,
+  created_at TEXT NOT NULL
+);
+-- Which part of the page a typed position sits with: 'sigil' beside Sigil Core, null among the other positions.
+ALTER TABLE typed_positions ADD COLUMN IF NOT EXISTS grp TEXT;
+CREATE TABLE IF NOT EXISTS followed_values (
+  kind TEXT NOT NULL,
+  key TEXT NOT NULL,
+  day TEXT NOT NULL,
+  value DOUBLE PRECISION NOT NULL,
+  PRIMARY KEY (kind, key, day)
+);
 -- The Astekz portfolio as its public page states it, read once a day; and how the last read went.
 CREATE TABLE IF NOT EXISTS astekz_snapshots (
   day TEXT PRIMARY KEY,
@@ -1351,6 +1368,42 @@ export const sigilStore = {
   /** Everything gone: for the tests. */
   async clear(): Promise<void> {
     await sql`TRUNCATE sigil_snapshots, sigil_changes, sigil_history, sigil_assets, sigil_meta`;
+  },
+};
+
+/** A value a day, for anything followed: a typed position's ("typed", its id), the Lulo deposit's ("lulo", the account). */
+export const followedValues = {
+  async put(kind: string, key: string, day: string, value: number): Promise<void> {
+    await sql`INSERT INTO followed_values (kind, key, day, value) VALUES (${kind}, ${key}, ${day}, ${value}) ON CONFLICT (kind, key, day) DO UPDATE SET value = EXCLUDED.value`;
+  },
+  async list(kind: string, key: string, limit = 400): Promise<{ day: string; value: number }[]> {
+    const rows = await sql<{ day: string; value: number }[]>`SELECT day, value FROM followed_values WHERE kind = ${kind} AND key = ${key} ORDER BY day DESC LIMIT ${limit}`;
+    return rows.reverse().map((r) => ({ day: r.day, value: Number(r.value) }));
+  },
+  async remove(kind: string, key: string, day?: string): Promise<void> {
+    if (day) await sql`DELETE FROM followed_values WHERE kind = ${kind} AND key = ${key} AND day = ${day}`;
+    else await sql`DELETE FROM followed_values WHERE kind = ${kind} AND key = ${key}`;
+  },
+};
+
+/** Positions the owner keeps by hand: a name, what went in, and a value typed whenever one is known. */
+export const typedPositions = {
+  async list(userId: number): Promise<{ id: number; name: string; entryUsd: number | null; group: string | null; createdAt: string }[]> {
+    const rows = await sql<{ id: number; name: string; entry_usd: number | null; grp: string | null; created_at: string }[]>`SELECT id, name, entry_usd, grp, created_at FROM typed_positions WHERE user_id = ${userId} ORDER BY id`;
+    return rows.map((r) => ({ id: r.id, name: r.name, entryUsd: r.entry_usd == null ? null : Number(r.entry_usd), group: r.grp, createdAt: r.created_at }));
+  },
+  async create(userId: number, name: string, entryUsd: number | null, group: string | null = null): Promise<number> {
+    const rows = await sql<{ id: number }[]>`INSERT INTO typed_positions (user_id, name, entry_usd, grp, created_at) VALUES (${userId}, ${name}, ${entryUsd}, ${group}, ${new Date().toISOString()}) RETURNING id`;
+    return rows[0].id;
+  },
+  async update(userId: number, id: number, name: string, entryUsd: number | null): Promise<boolean> {
+    const rows = await sql`UPDATE typed_positions SET name = ${name}, entry_usd = ${entryUsd} WHERE id = ${id} AND user_id = ${userId} RETURNING id`;
+    return rows.length > 0;
+  },
+  async remove(userId: number, id: number): Promise<boolean> {
+    const rows = await sql`DELETE FROM typed_positions WHERE id = ${id} AND user_id = ${userId} RETURNING id`;
+    if (rows.length) await followedValues.remove("typed", String(id));
+    return rows.length > 0;
   },
 };
 

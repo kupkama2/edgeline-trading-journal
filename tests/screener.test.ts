@@ -613,12 +613,30 @@ describe.skipIf(!DB)("the screener's run", () => {
       return passed ? "ok" : status;
     };
     for (const path of ["/", "/status", "/settings", "/series", "/ai", "/ai/track", "/track", "/coin/SOL", "/coin/xyz:XYZ100", "/coin/xyz%3AXYZ100"]) expect([path, ask("GET", path, { demo: true })]).toEqual([path, "ok"]);
-    // The scan and the lookup read the venue; a run, the settings and a pin change things.
-    for (const path of ["/scan/SOL", "/lookup/SOL", "/coin/SOL/../../run", "/cron"]) expect([path, ask("GET", path, { demo: true })]).toEqual([path, 404]);
+    // The scan and the lookup read the venue; a coin's AI summary costs a request; a run, the settings and a pin change things.
+    for (const path of ["/scan/SOL", "/lookup/SOL", "/coin/SOL/../../run", "/cron", "/coin/SOL/summary"]) expect([path, ask("GET", path, { demo: true })]).toEqual([path, 404]);
     for (const [m, path] of [["POST", "/run"], ["PUT", "/settings"], ["POST", "/ai"], ["POST", "/pin/SOL"], ["DELETE", "/pin/SOL"], ["POST", "/news/SOL"]]) expect([path, ask(m, path, { demo: true })]).toEqual([path, 404]);
     // The owner as before; anyone else, nothing.
     expect(ask("POST", "/run", { owner: true })).toBe("ok");
     expect(ask("GET", "/", {})).toBe(404);
+  });
+
+  it("writes a coin's summary once per run, and says why when it cannot", async () => {
+    const { summarizeCoin } = await import("../server/screener-ai");
+    const { latestScreenerRun } = await import("../server/screener");
+    const run = (await latestScreenerRun())!;
+    const row = run.rows.find((r) => !r.error)!;
+    const had = process.env.ANTHROPIC_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
+    try {
+      await expect(summarizeCoin(run, row)).rejects.toThrow(/No ANTHROPIC_API_KEY/);
+      const r = await fetch(`${base}/api/screener/coin/${row.coin}/summary`);
+      expect(r.status).toBe(400);
+      expect((await fetch(`${base}/api/screener/coin/NOPE123/summary`)).status).toBe(404);
+      expect((await fetch(`${base}/api/screener/coin/${row.coin}/summary`, { headers: { "x-not-owner": "1" } })).status).toBe(404);
+    } finally {
+      if (had) process.env.ANTHROPIC_API_KEY = had;
+    }
   });
 
   it("does not exist for anyone but the owner", async () => {

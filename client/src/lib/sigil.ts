@@ -2,6 +2,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "./queryClient";
 import type { SigilAsset, SigilChange, SigilSnapshot } from "@shared/sigil";
 import type { AstekzChange, AstekzSnapshot } from "@shared/astekz";
+import type { LuloAccount, LuloRates } from "@shared/lulo";
 
 export interface SigilState {
   latest: (SigilSnapshot & { day: string }) | null;
@@ -38,6 +39,7 @@ const ASTEKZ = ["/api/astekz"];
 
 /** Both portfolios are told about on one channel: an upload landing, an asset described, a day read. */
 export const invalidateFollowed = () => {
+  void queryClient.invalidateQueries({ queryKey: ["/api/networth"] });
   void queryClient.invalidateQueries({ queryKey: SIGIL });
   void queryClient.invalidateQueries({ queryKey: ASTEKZ });
 };
@@ -94,3 +96,45 @@ export function useRefreshAstekz() {
     onSuccess: (d) => queryClient.setQueryData(ASTEKZ, d),
   });
 }
+
+export interface LuloState {
+  at: string;
+  wallets: { address: string; label: string | null; account: LuloAccount | null; error: string | null }[];
+  total: LuloAccount;
+  rates: LuloRates;
+  rate: number | null;
+  history: { date: string; valueUsd: number }[];
+  followed: number;
+}
+
+export interface TypedPosition {
+  id: number;
+  name: string;
+  entryUsd: number | null;
+  group: string | null;
+  values: { date: string; valueUsd: number }[];
+}
+
+const LULO = ["/api/lulo"];
+const TYPED = ["/api/typed-positions"];
+
+export const useLulo = () => useQuery<LuloState>({ queryKey: LULO });
+export function useRefreshLulo() {
+  return useMutation({
+    mutationFn: async () => (await apiRequest("GET", "/api/lulo?fresh=1")).json() as Promise<LuloState>,
+    onSuccess: (d) => queryClient.setQueryData(LULO, d),
+  });
+}
+
+export const useTypedPositions = () => useQuery<TypedPosition[]>({ queryKey: TYPED });
+const typed = <V,>(run: (v: V) => Promise<Response>) => ({
+  mutationFn: async (v: V) => (await run(v)).json() as Promise<TypedPosition[]>,
+  onSuccess: (d: TypedPosition[]) => {
+    queryClient.setQueryData(TYPED, d);
+    void queryClient.invalidateQueries({ queryKey: ["/api/networth"] });
+  },
+});
+export const useAddTyped = () => useMutation(typed((v: { name: string; entryUsd: number | null; group?: "sigil" | null }) => apiRequest("POST", "/api/typed-positions", v)));
+export const useSaveTyped = () => useMutation(typed((v: { id: number; name: string; entryUsd: number | null }) => apiRequest("PUT", `/api/typed-positions/${v.id}`, { name: v.name, entryUsd: v.entryUsd })));
+export const useRemoveTyped = () => useMutation(typed((id: number) => apiRequest("DELETE", `/api/typed-positions/${id}`)));
+export const useTypedValue = () => useMutation(typed((v: { id: number; valueUsd: number }) => apiRequest("PUT", `/api/typed-positions/${v.id}/value`, { valueUsd: v.valueUsd })));

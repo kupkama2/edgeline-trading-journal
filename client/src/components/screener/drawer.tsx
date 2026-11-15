@@ -11,7 +11,7 @@ import { cvdFor } from "@shared/flow";
 import { sectorOf } from "@shared/sectors";
 import { TIMEFRAMES, type Timeframe } from "@shared/screener";
 import { useTheme } from "@/components/shell";
-import { ACCEL_ARROW, fmtPct, fmtPx, fmtUsd, fmtX, hostOf, sizeFor, useScreenerCoin, useScreenerNews, type ScreenerCoin, type ScreenerNews } from "@/lib/screener";
+import { ACCEL_ARROW, fmtPct, fmtPx, fmtUsd, fmtX, hostOf, sizeFor, useScreenerCoin, useScreenerNews, type ScreenerCoin, type ScreenerNews, useScreenerCoinSummary } from "@/lib/screener";
 
 function palette(host: HTMLElement) {
   const cs = getComputedStyle(host);
@@ -363,6 +363,55 @@ function LiqPanel({ row }: { row: NonNullable<ScreenerCoin["row"]> }) {
  * volume under the ratio, the way out planned before the way in, and
  * the news on a click.
  */
+const SUMMARY_TONE: [RegExp, string][] = [
+  [/^Long setup/i, "text-emerald-400"],
+  [/^Short setup/i, "text-red-400"],
+  [/^Avoid/i, "text-amber-500"],
+];
+
+/** The coin's signals as a short read: a verdict, then what is for it, against it, what to watch and what ends it. */
+function CoinSummary({ coin }: { coin: string }) {
+  const q = useScreenerCoinSummary(coin, true);
+  const lines = (q.data?.text ?? "").split("\n").map((l) => l.trim()).filter(Boolean);
+  const said = String((q.error as any)?.message ?? "").replace(/^\d{3}:\s*/, "").replace(/^\{"message":"(.*)"\}$/, "$1");
+  return (
+    <div className="mt-3 rounded-md border border-border/70 bg-secondary/30 p-3" data-testid="screener-coin-summary">
+      <p className="mb-1 flex items-center justify-between text-[10px] uppercase tracking-wider text-muted-foreground">
+        <span>AI summary of the signals</span>
+        {q.data && <span className="normal-case tracking-normal">from the latest scan · a reading, not advice</span>}
+      </p>
+      {q.isLoading && (
+        <p className="flex items-center gap-2 text-xs text-muted-foreground">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" /> Reading the signals…
+        </p>
+      )}
+      {q.isError && (
+        <p className="text-xs text-amber-500" data-testid="screener-coin-summary-error">
+          No summary: {said || "the request failed"}{" "}
+          <button type="button" className="underline underline-offset-2" onClick={() => void q.refetch()}>
+            Try again
+          </button>
+        </p>
+      )}
+      {lines.length > 0 && (
+        <div className="space-y-1 text-xs leading-relaxed">
+          <p className={`text-sm font-semibold ${SUMMARY_TONE.find(([re]) => re.test(lines[0]))?.[1] ?? "text-foreground"}`}>{lines[0]}</p>
+          {lines.slice(1).map((l, i) => {
+            const cut = l.indexOf(":");
+            const label = cut > 0 && cut < 12 ? l.slice(0, cut) : null;
+            return (
+              <p key={i}>
+                {label && <span className="font-semibold text-muted-foreground">{label}: </span>}
+                {label ? l.slice(cut + 1).trim() : l}
+              </p>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function CoinDrawer({
   coin,
   tf,
@@ -424,6 +473,9 @@ export function CoinDrawer({
           {row?.flags[tf].candidate && <span className="rounded border border-emerald-500/60 bg-emerald-500/15 px-1 text-[10px] font-semibold uppercase text-emerald-400">Candidate</span>}
           {row?.leverageDriven && <span className="rounded border border-amber-500/50 bg-amber-500/10 px-1 text-[10px] font-semibold uppercase text-amber-500">Leverage-driven</span>}
         </div>
+
+        {/* The read first: what the numbers below add up to, before any of them. */}
+        {!viewOnly && coin && <CoinSummary coin={coin} />}
 
         {q.isLoading && (
           <p className="mt-6 flex items-center gap-2 text-xs text-muted-foreground">

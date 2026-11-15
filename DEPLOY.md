@@ -313,6 +313,13 @@ the day, or on the keep-awake pinger's. `ASTEKZ=off` switches it off.
 If the page is ever rebuilt so that its holdings are no longer in the
 widget's source, the read fails with a message saying so.
 
+**Lulo** needs nothing set: Lulo's public API is asked, with no key, about
+every Solana address followed on the Portfolio page, and the total is kept
+once a day for the chart. `LULO_BASE` overrides the address (tests).
+
+**Typed positions** (inside Sigil Core) are a name, an entry and a value
+typed by hand; nothing is fetched.
+
 ## The event calendar
 
 US macro releases of high impact (NFP, CPI, PPI, FOMC, GDP, PCE…) come from

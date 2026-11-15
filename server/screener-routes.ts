@@ -214,6 +214,26 @@ export function registerScreenerRoutes(app: Express): void {
   });
 
   /** One coin for the drawer: price and ratio on the timeframe, volume, the exit plan, the arithmetic, and the funding/OI history. */
+  /**
+   * The coin's signals in a few lines, written by a model: what the drawer
+   * opens on. The owner's only (the demo's reads do not reach it), since
+   * every first look at a coin in a run is a request that costs.
+   */
+  app.get("/api/screener/coin/:coin/summary", async (req, res) => {
+    const coin = String(req.params.coin);
+    if (!COIN.test(coin)) return res.status(400).json({ message: "No such coin" });
+    const run = await latestScreenerRun();
+    const row = run?.rows.find((r) => r.coin === coin && !r.error);
+    if (!run || !row) return res.status(404).json({ message: "That coin is not in the latest run." });
+    try {
+      const { summarizeCoin } = await import("./screener-ai");
+      res.json(await summarizeCoin(run, row));
+    } catch (err: any) {
+      const message = String(err?.message ?? err);
+      res.status(/No ANTHROPIC_API_KEY/.test(message) ? 400 : 502).json({ message: /authentication_error|invalid x-api-key|\b401\b/i.test(message) ? "Anthropic refused the server's API key." : message.slice(0, 200) });
+    }
+  });
+
   app.get("/api/screener/coin/:coin", async (req, res) => {
     const coin = String(req.params.coin);
     if (!COIN.test(coin)) return res.status(400).json({ message: "No such coin" });

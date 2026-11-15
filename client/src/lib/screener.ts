@@ -125,6 +125,17 @@ export function useScreenerCoin(coin: string | null, tf: Timeframe) {
   });
 }
 
+/** The coin's signals in a few lines, written by a model once per run. Not asked for in the demo. */
+export function useScreenerCoinSummary(coin: string | null, enabled: boolean) {
+  return useQuery<{ at: string; text: string; model: string; cached: boolean }>({
+    queryKey: ["/api/screener/coin", coin, "summary"],
+    queryFn: async () => (await apiRequest("GET", `/api/screener/coin/${encodeURIComponent(coin!)}/summary`)).json(),
+    enabled: !!coin && enabled,
+    staleTime: 10 * 60_000,
+    retry: false,
+  });
+}
+
 /** The size that puts exactly `risk` dollars on the structure stop, and its notional. */
 export function sizeFor(risk: number, mark: number | null, stop: number | null): { size: number | null; notional: number | null } {
   if (mark == null || stop == null || !(mark > stop) || !(risk > 0)) return { size: null, notional: null };
