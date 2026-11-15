@@ -369,7 +369,10 @@ export function CoinDrawer({
   onTf,
   defaultRisk,
   onClose,
+  viewOnly = false,
 }: {
+  /** The demo: the news check asks the web and is left out. */
+  viewOnly?: boolean;
   coin: string | null;
   tf: Timeframe;
   onTf: (tf: Timeframe) => void;
@@ -568,7 +571,7 @@ export function CoinDrawer({
         )}
 
         {/* ------------------------------ the news ------------------------------ */}
-        <div className="mt-4 rounded-md border border-border/70 p-3" data-testid="screener-news">
+        <div className={viewOnly ? "hidden" : "mt-4 rounded-md border border-border/70 p-3"} data-testid="screener-news">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h3 className="text-sm font-semibold">News</h3>
             <Button

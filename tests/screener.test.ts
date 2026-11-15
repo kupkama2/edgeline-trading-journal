@@ -604,6 +604,23 @@ describe.skipIf(!DB)("the screener's run", () => {
     expect(news.links.map((l: any) => l.label)).toEqual(["CoinGecko", "X: $PEPE", "Unlocks (DefiLlama)"]);
   });
 
+  it("shows a demo visitor the stored run and nothing that asks the venue, starts a run or writes", async () => {
+    const { screenerGate } = await import("../server/screener-routes");
+    const ask = (method: string, path: string, who: { owner?: boolean; demo?: boolean }) => {
+      let passed = false;
+      let status = 200;
+      screenerGate({ method, path, account: { isOwner: !!who.owner }, session: { demo: !!who.demo } } as any, { status: (s: number) => ((status = s), { json: () => {} }) } as any, () => (passed = true));
+      return passed ? "ok" : status;
+    };
+    for (const path of ["/", "/status", "/settings", "/series", "/ai", "/ai/track", "/track", "/coin/SOL", "/coin/xyz:XYZ100", "/coin/xyz%3AXYZ100"]) expect([path, ask("GET", path, { demo: true })]).toEqual([path, "ok"]);
+    // The scan and the lookup read the venue; a run, the settings and a pin change things.
+    for (const path of ["/scan/SOL", "/lookup/SOL", "/coin/SOL/../../run", "/cron"]) expect([path, ask("GET", path, { demo: true })]).toEqual([path, 404]);
+    for (const [m, path] of [["POST", "/run"], ["PUT", "/settings"], ["POST", "/ai"], ["POST", "/pin/SOL"], ["DELETE", "/pin/SOL"], ["POST", "/news/SOL"]]) expect([path, ask(m, path, { demo: true })]).toEqual([path, 404]);
+    // The owner as before; anyone else, nothing.
+    expect(ask("POST", "/run", { owner: true })).toBe("ok");
+    expect(ask("GET", "/", {})).toBe(404);
+  });
+
   it("does not exist for anyone but the owner", async () => {
     const r = await fetch(`${base}/api/screener`, { headers: { "x-not-owner": "1" } });
     expect(r.status).toBe(404);

@@ -13,6 +13,7 @@ import { CoinDrawer } from "@/components/screener/drawer";
 import { ScreenerInsights } from "@/components/screener/insights";
 import { ScreenerTrackCard } from "@/components/screener/track";
 import { Fold } from "@/components/fold";
+import { useIsDemo } from "@/components/admin-only";
 import { ASSET_CLASSES, ASSET_CLASS_LABEL, assetClassOf, sectorOf, type AssetClass } from "@shared/sectors";
 import { fmtPct, fmtPrague, usePinScreenerCoin, useSaveScreenerSettings, useScreener, useScreenerLines, useScreenerLookup, useScreenerRefresh, useScreenerStatus } from "@/lib/screener";
 import { sectorTable, TIMEFRAMES, type ScreenerRow, type Timeframe } from "@shared/screener";
@@ -45,6 +46,8 @@ const nextHourly = (now: number) => {
 };
 
 export default function ScreenerPage() {
+  // The demo shows the owner's latest scan: nothing here refreshes it, changes its settings or asks the venue.
+  const viewOnly = useIsDemo();
   const page = useScreener();
   const refresh = useScreenerRefresh();
   const save = useSaveScreenerSettings();
@@ -200,7 +203,7 @@ export default function ScreenerPage() {
   // A search that matches no row asks the server why: not listed, under the volume line, or read failed.
   const q = search.trim();
   const matches = useMemo(() => (q ? rows.filter((r) => r.coin.toLowerCase().includes(q.toLowerCase())).length : -1), [rows, q]);
-  const lookup = useScreenerLookup(q && matches === 0 && /^[A-Za-z0-9:_-]{1,24}$/.test(q) ? q : null);
+  const lookup = useScreenerLookup(!viewOnly && q && matches === 0 && /^[A-Za-z0-9:_-]{1,24}$/.test(q) ? q : null);
   // The groups on this timeframe, strongest first: a strong coin in a strong group is the better read.
   const sectors = useMemo(() => sectorTable(rows, tf, sectorOf), [rows, tf]);
   // Why a coin has no taker flow, when it is the run's doing and not the coin's.
@@ -226,7 +229,7 @@ export default function ScreenerPage() {
           <p className="text-[11px] text-muted-foreground" data-testid="screener-asof">
             {run ? (
               <>
-                Data as of <span className="font-mono text-foreground">{fmtPrague(run.at)}</span> Prague · bars to {new Date(run.barsTo).toISOString().slice(11, 16)}Z · {run.universe} coins · read in {(run.tookMs / 1000).toFixed(0)}s · runs hourly, next {new Date(nextHourly(Date.now())).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                Data as of <span className="font-mono text-foreground">{fmtPrague(run.at)}</span> Prague · bars to {new Date(run.barsTo).toISOString().slice(11, 16)}Z · {run.universe} coins · read in {(run.tookMs / 1000).toFixed(0)}s {viewOnly ? " · the latest scan, to look at" : ` · runs hourly, next ${new Date(nextHourly(Date.now())).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`}
                 {Date.now() - new Date(run.at).getTime() > 75 * 60_000 && !status?.running && (
                   <span className="ml-1 text-amber-500" data-testid="screener-stale">
                     · over an hour old: refresh, or it updates when the server next runs
@@ -257,7 +260,7 @@ export default function ScreenerPage() {
             {status?.lastError && !status.running && <span className="ml-2 text-red-400">Last run failed: {status.lastError}</span>}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className={viewOnly ? "hidden" : "flex items-center gap-2"}>
           {settings && (
             <Popover>
               <PopoverTrigger asChild>
@@ -471,15 +474,17 @@ export default function ScreenerPage() {
       </Card>
 
       {/* Below the chart and the table: the AI's read of the run, whether the badges have worked, and the one-coin scan. */}
-      {run && <ScreenerInsights run={run} onOpen={setOpen} />}
+      {run && <ScreenerInsights run={run} onOpen={setOpen} viewOnly={viewOnly} />}
 
       <ScreenerTrackCard />
 
-      <Fold id="screener.scan" title="Scan one market" hint="any coin, stock or index on every timeframe">
-        <ScreenerScanCard onOpen={setOpen} />
-      </Fold>
+      {!viewOnly && (
+        <Fold id="screener.scan" title="Scan one market" hint="any coin, stock or index on every timeframe">
+          <ScreenerScanCard onOpen={setOpen} />
+        </Fold>
+      )}
 
-      <CoinDrawer coin={open} tf={tf} onTf={setTf} defaultRisk={settings?.riskDollars ?? 250} onClose={() => setOpen(null)} />
+      <CoinDrawer viewOnly={viewOnly} coin={open} tf={tf} onTf={setTf} defaultRisk={settings?.riskDollars ?? 250} onClose={() => setOpen(null)} />
     </div>
   );
 }

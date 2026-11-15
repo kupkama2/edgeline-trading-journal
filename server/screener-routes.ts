@@ -8,7 +8,7 @@
  * The run and the series are served from memory (server/screener.ts
  * keeps them); the only query a page view makes is for the settings.
  */
-import type { Express, Request, Response } from "express";
+import type { Express, Request, Response, NextFunction } from "express";
 import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import {
@@ -26,7 +26,6 @@ import {
   unpinCoin,
 } from "./screener";
 import { screenerStore } from "./storage";
-import { adminOnly } from "./admin";
 import { blockCandles, CHART_WINDOW_MS, exitPlan, NOT_AN_ALT, ratioSeries, rebasedLine, TF_SPEC, TIMEFRAMES, type Timeframe } from "@shared/screener";
 
 const fmtUsd = (x: number | null | undefined) => {
@@ -38,9 +37,25 @@ const fmtUsd = (x: number | null | undefined) => {
 const tfParam = (v: unknown): Timeframe => (TIMEFRAMES.includes(v as Timeframe) ? (v as Timeframe) : "4h");
 const COIN = /^[A-Za-z0-9:_-]{1,24}$/;
 
+/**
+ * What a demo visitor may read of the screener: the owner's latest run and
+ * what was stored with it. Only reads that answer from the database — the
+ * table, the chart's lines, a coin's stored candles, the AI summary and the
+ * two track records. Nothing that asks the venue (the one-market scan, the
+ * search's lookup), nothing that starts a run, and nothing that writes.
+ */
+const DEMO_READS = /^\/(status|settings|series|ai|ai\/track|track|coin\/[A-Za-z0-9:_%-]{1,40})?\/?$/;
+
+/** The owner passes; a demo visitor passes for the reads above; to everyone else the screener is not there. */
+export function screenerGate(req: Request, res: Response, next: NextFunction): void {
+  if (req.account?.isOwner === true) return next();
+  if ((req as any).session?.demo === true && req.method === "GET" && DEMO_READS.test(req.path)) return next();
+  res.status(404).json({ message: "Not found" });
+}
+
 export function registerScreenerRoutes(app: Express): void {
   // The owner's tool: to anyone else none of this exists. The cron hook is registered earlier, with its own token.
-  app.use("/api/screener", adminOnly);
+  app.use("/api/screener", screenerGate);
   /** The latest run, the settings and whether a refresh may be asked for. */
   app.get("/api/screener", async (_req, res) => {
     const [run, settings] = await Promise.all([latestScreenerRun(), screenerSettings()]);
