@@ -25,7 +25,15 @@ import {
   TIMEFRAMES,
   type ScreenerCandle,
   type ScreenerRow,
+  pairedReturns,
+  betaOf,
+  alphaOver,
+  captureOf,
+  rsRatings,
+  efficiencyOf,
+  sectorTable,
 } from "../shared/screener";
+import { sectorOf } from "../shared/sectors";
 
 /**
  * The relative-strength screener: its arithmetic against numbers worked by
@@ -105,6 +113,89 @@ describe("the other readings", () => {
     const rising = Array.from({ length: 25 }, (_, i) => ({ t: i, r: 1 + i * 0.01 }));
     const falling = Array.from({ length: 25 }, (_, i) => ({ t: i, r: 1 - i * 0.01 }));
     expect(breadthOf([rising, rising, falling, rising.slice(0, 10)])).toBeCloseTo(2 / 3, 12);
+  });
+});
+
+describe("strength beyond the ratio", () => {
+  const H = 3600_000;
+  /** Hourly bars from a list of returns, from 100. */
+  const bars = (rets: number[]) => {
+    let c = 100;
+    const out = [{ t: 0, o: c, h: c, l: c, c, v: 1 }];
+    rets.forEach((r, i) => {
+      c *= 1 + r;
+      out.push({ t: (i + 1) * H, o: c, h: c, l: c, c, v: 1 });
+    });
+    return out;
+  };
+  // BTC alternates +1% and −1% for 200 hours.
+  const btcR = Array.from({ length: 200 }, (_, i) => (i % 2 === 0 ? 0.01 : -0.01));
+  const btc = bars(btcR);
+
+  it("reads beta as the slope on BTC's returns, and alpha as what is left without it", () => {
+    // Twice BTC's move every hour, plus a tenth of a percent of its own.
+    const alt = bars(btcR.map((r) => 2 * r + 0.001));
+    const pairs = pairedReturns(alt, btc);
+    expect(pairs).toHaveLength(200);
+    expect(betaOf(pairs)).toBeCloseTo(2, 6);
+    // Too few hours to say.
+    expect(betaOf(pairs.slice(0, 50))).toBeNull();
+    // Over the last hour BTC fell 1%: the coin's −1.9% less twice that is its own +0.1%.
+    expect(alphaOver(alt, btc, 1, 2)).toBeCloseTo(0.001, 9);
+    expect(alphaOver(alt, btc, 1, null)).toBeNull();
+    expect(alphaOver(alt, btc, 500, 2)).toBeNull();
+  });
+
+  it("measures what a coin makes on BTC's green hours against what it gives back on the red", () => {
+    // Makes 1.5× BTC's gain on the green hours and loses only half its loss on the red ones.
+    const strong = pairedReturns(bars(btcR.map((r) => (r > 0 ? 1.5 * r : 0.5 * r))), btc);
+    const cap = captureOf(strong);
+    expect(cap.up).toBeCloseTo(1.5, 9);
+    expect(cap.down).toBeCloseTo(0.5, 9);
+    expect(cap.spread).toBeCloseTo(1, 9);
+    // A plain high-beta coin: more on both sides, no spread. Beta is not strength.
+    const beta2 = captureOf(pairedReturns(bars(btcR.map((r) => 2 * r)), btc));
+    expect(beta2.up).toBeCloseTo(2, 9);
+    expect(beta2.spread).toBeCloseTo(0, 9);
+    // A BTC that only went up has no red hours to measure against.
+    expect(captureOf(pairedReturns(bars(btcR.map(() => 0.01)), bars(btcR.map(() => 0.01)))).down).toBeNull();
+  });
+
+  it("ranks the universe 1 to 99 over 1D, 1W and 1M, and needs ten coins to rank", () => {
+    const rows = Array.from({ length: 20 }, (_, i) => ({ coin: `C${i}`, rs: { "1D": i / 100, "1W": i / 50, "1M": i / 20 } }));
+    const r = rsRatings(rows);
+    expect(r.get("C19")).toBe(99);
+    expect(r.get("C0")).toBe(5);
+    // Strong on the week only, with no month yet: ranked on what there is.
+    const partial = rsRatings([...rows, { coin: "NEW", rs: { "1D": null, "1W": 1, "1M": null } }]);
+    expect(partial.get("NEW")).toBe(99);
+    expect(rsRatings(rows.slice(0, 9)).size).toBe(0);
+  });
+
+  it("calls a straight line efficient and a chop not, and counts momentum once in the score", () => {
+    expect(efficiencyOf(Array.from({ length: 21 }, (_, i) => 100 + i))).toBeCloseTo(1, 9);
+    expect(efficiencyOf(Array.from({ length: 21 }, (_, i) => 100 - i))).toBeCloseTo(-1, 9);
+    expect(efficiencyOf(Array.from({ length: 21 }, (_, i) => 100 + (i % 2)))).toBeCloseTo(0, 9);
+    expect(efficiencyOf([1, 2, 3])).toBeNull();
+    // Everything momentum has to say, all at once: RS up, accelerating, RSI strong, above both averages. One vote.
+    const m = { rs: 0.05, accel: "up" as const, breakout: true, rvol: 2, breakoutLevel: 1 };
+    const p = { rsi: 70, ema: 2 as const, atrPct: 0.02, offHigh: 0, priceHigh20: false, priceLow20: false, rsEth: null, rsBasket: null, alpha: 0, efficiency: 0.5 };
+    const s = signalsOf(m, p, null, null, null, null, { cvd: null, capture: null });
+    expect(s).toMatchObject({ rs: 1, accel: 1, rsi: 1, trend: 1, momentum: 1, alpha: 0, resilience: 0, cvd: 0, score: 1 });
+    // The same coin with its own strength, holding on red hours, and takers buying: four independent votes.
+    expect(signalsOf(m, { ...p, alpha: 0.02 }, null, null, null, null, { cvd: 0.05, capture: 0.4 }).score).toBe(4);
+    // One reading for and three flat is not momentum.
+    expect(signalsOf({ ...m, accel: "steady" }, { ...p, rsi: 50, ema: 1 }, null, null, null).momentum).toBe(0);
+  });
+
+  it("groups the table by sector, strongest first, and leaves out a group of two", () => {
+    const row = (coin: string, rs: number) => ({ coin, error: null, tf: { "1D": { rs } } as any });
+    const table = sectorTable([row("DOGE", 0.1), row("kPEPE", 0.04), row("WIF", -0.02), row("TAO", 0.2), row("FET", 0.1), row("ARB", -0.1), row("OP", -0.2), row("STRK", -0.3), row("NOPE", 0.5)], "1D", sectorOf);
+    expect(table.map((s) => s.sector)).toEqual(["Meme", "L2"]);
+    expect(table[0]).toMatchObject({ coins: 3, rs: 0.04, leader: "DOGE", leaderRs: 0.1 });
+    expect(table[0].breadth).toBeCloseTo(2 / 3, 9);
+    expect(sectorOf("xyz:XYZ100")).toBe("TradFi");
+    expect(sectorOf("NOPE")).toBeNull();
   });
 });
 
@@ -296,6 +387,11 @@ function startVenue(): Promise<string> {
           res.writeHead(200, { "content-type": "application/json" });
           return res.end(JSON.stringify({ leaderboardRows: [] }));
         }
+        // Binance's spot book, asked by the spot-flow pass: nothing listed here, and not one of the venue's info calls.
+        if (req.url?.startsWith("/api/v3/")) {
+          res.writeHead(200, { "content-type": "application/json" });
+          return res.end("[]");
+        }
         infoCalls++;
         const q = JSON.parse(body || "{}");
         calls.push(`${q.type}:${q.req?.coin ?? ""}:${q.req?.interval ?? ""}`);
@@ -328,6 +424,8 @@ beforeAll(async () => {
   // The liquidation map's leaderboard too: the fake answers it with an empty list. Left unset, the
   // run reaches the real host, which GitHub's runners wait on until the test times out.
   process.env.HL_STATS_BASE = process.env.HYPERLIQUID_BASE;
+  // Binance's spot book too, for the same reason: the spot-flow pass must not reach the real one.
+  process.env.BINANCE_BASE = process.env.HYPERLIQUID_BASE;
   process.env.SCREENER_CLOCK_MS = "0";
   process.env.SCREENER_WEIGHT_PER_MIN = "100000";
   const { initSchema, accounts, screenerStore } = await import("../server/storage");
@@ -530,7 +628,8 @@ describe.skipIf(!DB)("the screener's run", () => {
     expect(runDue(prague("2026-03-29T22:30:00Z"), "2026-03-29T06:05:00Z")).toBe(true);
     // Run one: the universe, BTC twice, SOL and ETH twice, DOGE once (its hourly read failed).
     // Run two: the universe, BTC, SOL and ETH once each (the hours since the last bar), DOGE twice.
-    expect(infoCalls).toBe(8 + 6 + 1);
+    // And each run asks once for the builder books (none here).
+    expect(infoCalls).toBe(8 + 6 + 1 + 2);
   });
 
   it("pins a coin found by the search under the volume line: on the chart now, in every run after, until unpinned", async () => {

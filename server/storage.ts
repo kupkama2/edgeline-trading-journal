@@ -386,6 +386,31 @@ CREATE TABLE IF NOT EXISTS screener_settings (
   body TEXT NOT NULL
 );
 ALTER TABLE screener_snapshots ADD COLUMN IF NOT EXISTS oracle DOUBLE PRECISION;
+-- The owner's chat (server/chat.ts): conversations, and each message as the model's API takes it back.
+CREATE TABLE IF NOT EXISTS chat_threads (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  model TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS chat_messages (
+  id SERIAL PRIMARY KEY,
+  thread_id INTEGER NOT NULL,
+  role TEXT NOT NULL,
+  content TEXT NOT NULL,
+  meta TEXT,
+  at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS chat_messages_thread ON chat_messages (thread_id, id);
+-- What the screener flagged, when: priced afterwards for the track record.
+CREATE TABLE IF NOT EXISTS screener_flag_log (
+  at TEXT NOT NULL,
+  coin TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  PRIMARY KEY (at, coin, kind)
+);
 ALTER TABLE screener_series ADD COLUMN IF NOT EXISTS body_gz BYTEA;
 ALTER TABLE screener_runs ADD COLUMN IF NOT EXISTS body_gz BYTEA;
 ALTER TABLE candle_cache ADD COLUMN IF NOT EXISTS body_gz BYTEA;
@@ -1076,6 +1101,28 @@ export const screenerStore = {
     const r = rows[0];
     return r ? { id: r.id, at: r.at, tookMs: r.took_ms, body: unpack(r.body_gz, r.body) ?? "", errors: r.errors, universe: r.universe, settings: r.settings } : null;
   },
+  /** The newest run at or before `target` and no older than `floor`: what "a day ago" is read from. */
+  async runNear(target: string, floor: string): Promise<{ at: string; body: string } | null> {
+    const rows = await sql<{ at: string; body: string | null; body_gz: Buffer | null }[]>`
+      SELECT at, body, body_gz FROM screener_runs WHERE at <= ${target} AND at >= ${floor} ORDER BY at DESC LIMIT 1`;
+    const r = rows[0];
+    return r ? { at: r.at, body: unpack(r.body_gz, r.body) ?? "" } : null;
+  },
+  /** Every coin's 24h volume in the snapshot at or before `target`, no older than `tolerance`. */
+  async volumesNear(target: string, tolerance: string): Promise<Map<string, number>> {
+    const rows = await sql<{ coin: string; volume: number | null }[]>`
+      SELECT DISTINCT ON (coin) coin, volume FROM screener_snapshots
+      WHERE at <= ${target} AND at >= ${tolerance} ORDER BY coin, at DESC`;
+    return new Map(rows.filter((r) => r.volume != null).map((r) => [r.coin, r.volume!]));
+  },
+  /** What the screener flagged and when: one row per coin and kind, for the track record. */
+  async logFlags(at: string, rows: { coin: string; kind: string }[]): Promise<void> {
+    if (!rows.length) return;
+    await sql`INSERT INTO screener_flag_log ${sql(rows.map((r) => ({ at, coin: r.coin, kind: r.kind })))} ON CONFLICT DO NOTHING`;
+  },
+  async flagsSince(since: string): Promise<{ at: string; coin: string; kind: string }[]> {
+    return sql<{ at: string; coin: string; kind: string }[]>`SELECT at, coin, kind FROM screener_flag_log WHERE at >= ${since} ORDER BY at`;
+  },
   async saveRun(r: { at: string; tookMs: number; body: string; errors: number; universe: number; settings: string }): Promise<number> {
     const rows = await sql<{ id: number }[]>`INSERT INTO screener_runs (at, took_ms, body, body_gz, errors, universe, settings)
       VALUES (${r.at}, ${r.tookMs}, ${""}, ${pack(r.body)}, ${r.errors}, ${r.universe}, ${r.settings}) RETURNING id`;
@@ -1144,6 +1191,7 @@ export const screenerStore = {
   },
   /** Everything but the settings, gone: a clean slate for a test. */
   async clearAll(): Promise<void> {
+    await sql`DELETE FROM screener_flag_log`;
     await sql`DELETE FROM screener_snapshots`;
     await sql`DELETE FROM screener_runs`;
     await sql`DELETE FROM screener_series`;
@@ -1151,6 +1199,7 @@ export const screenerStore = {
   /** Snapshots and runs older than their windows, gone. Series are one row per coin and replace themselves. */
   async prune(before: string, runsBefore = before): Promise<void> {
     await sql`DELETE FROM screener_snapshots WHERE at < ${before}`;
+    await sql`DELETE FROM screener_flag_log WHERE at < ${before}`;
     await sql`DELETE FROM screener_runs WHERE at < ${runsBefore}`;
   },
 };
@@ -1192,6 +1241,46 @@ export const screenerAiStore = {
     const rows = await sql<{ id: number; at: string; run_id: number | null; model: string | null; body: string | null; error: string | null }[]>`SELECT id, at, run_id, model, body, error FROM screener_ai ORDER BY id DESC LIMIT 1`;
     const r = rows[0];
     return r ? { id: r.id, at: r.at, runId: r.run_id, model: r.model, body: r.body, error: r.error } : null;
+  },
+};
+
+/**
+ * The owner's chat: conversations and their messages. A message's content is
+ * kept exactly as the model's API gave or took it (text, tool calls, tool
+ * results, the model's own thinking blocks), because the next request has to
+ * send the history back unchanged.
+ */
+export const chatStore = {
+  async threads(userId: number): Promise<{ id: number; title: string; model: string | null; updatedAt: string }[]> {
+    const rows = await sql<{ id: number; title: string; model: string | null; updated_at: string }[]>`
+      SELECT id, title, model, updated_at FROM chat_threads WHERE user_id = ${userId} ORDER BY updated_at DESC LIMIT 100`;
+    return rows.map((r) => ({ id: r.id, title: r.title, model: r.model, updatedAt: r.updated_at }));
+  },
+  async thread(userId: number, id: number): Promise<{ id: number; title: string; model: string | null } | null> {
+    const rows = await sql<{ id: number; title: string; model: string | null }[]>`SELECT id, title, model FROM chat_threads WHERE user_id = ${userId} AND id = ${id}`;
+    return rows[0] ?? null;
+  },
+  async createThread(userId: number, title: string, model: string): Promise<number> {
+    const at = new Date().toISOString();
+    const rows = await sql<{ id: number }[]>`INSERT INTO chat_threads (user_id, title, model, created_at, updated_at) VALUES (${userId}, ${title}, ${model}, ${at}, ${at}) RETURNING id`;
+    return rows[0].id;
+  },
+  async messages(threadId: number): Promise<{ role: string; content: string; meta: string | null; at: string }[]> {
+    return sql<{ role: string; content: string; meta: string | null; at: string }[]>`SELECT role, content, meta, at FROM chat_messages WHERE thread_id = ${threadId} ORDER BY id`;
+  },
+  /** A finished turn, written whole: the question, every step the model took, the answer. */
+  async append(threadId: number, model: string, rows: { role: string; content: string; meta?: string | null }[]): Promise<void> {
+    if (!rows.length) return;
+    const at = new Date().toISOString();
+    await sql.begin(async (tx: any) => {
+      await tx`INSERT INTO chat_messages ${tx(rows.map((r) => ({ thread_id: threadId, role: r.role, content: r.content, meta: r.meta ?? null, at })))}`;
+      await tx`UPDATE chat_threads SET updated_at = ${at}, model = ${model} WHERE id = ${threadId}`;
+    });
+  },
+  async deleteThread(userId: number, id: number): Promise<boolean> {
+    const rows = await sql<{ id: number }[]>`DELETE FROM chat_threads WHERE user_id = ${userId} AND id = ${id} RETURNING id`;
+    if (rows.length) await sql`DELETE FROM chat_messages WHERE thread_id = ${id}`;
+    return rows.length > 0;
   },
 };
 

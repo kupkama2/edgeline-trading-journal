@@ -37,10 +37,12 @@ const Review = lazy(() => import("@/pages/review"));
 const TerminalPage = lazy(() => import("@/pages/terminal"));
 const ScreenerPage = lazy(() => import("@/pages/screener"));
 const PortfolioPageLazy = lazy(() => import("@/pages/portfolio"));
+const ChatPageLazy = lazy(() => import("@/pages/chat"));
 // The owner's own tools: anyone else gets the not-found page, and the server refuses them anyway.
 const Terminal = adminOnly(TerminalPage, NotFound);
 const Screener = adminOnly(ScreenerPage, NotFound);
 const Portfolio = adminOnly(PortfolioPageLazy, NotFound);
+const Chat = adminOnly(ChatPageLazy, NotFound);
 
 /** A page arriving over the network is a beat, not a blank screen. */
 function PageFallback() {
@@ -92,6 +94,7 @@ function AppRouter() {
         <Route path="/terminal" component={Terminal} />
         <Route path="/screener" component={Screener} />
         <Route path="/portfolio" component={Portfolio} />
+        <Route path="/chat" component={Chat} />
         {/* The Sunday pass. Both addresses: the bare one opens the week you
             are in, the dated one a week you were sent to. */}
         <Route path="/review" component={Review} />

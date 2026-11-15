@@ -112,6 +112,12 @@ export interface ScreenerRow {
   positioning: Positioning | null;
   /** Binance's order flow and positioning for the same coin, read through the relay; null without one. */
   flow?: FlowReadings | null;
+  /** Taker flow on Binance's spot book, read by the server itself; null when the coin has no spot pair there. */
+  spot?: SpotFlow | null;
+  /** What Hyperliquid's largest accounts hold in it, net. */
+  top?: TopAccounts | null;
+  /** Strength beyond the ratio: beta to BTC, what it keeps on BTC's red hours, its rank and the rank a week ago. */
+  strength?: Strength | null;
   /** Where Hyperliquid's largest accounts would be liquidated, in bands around the mark. */
   liq?: LiqMap | null;
   /** Why the coin could not be measured, when it could not. */
@@ -136,9 +142,11 @@ export interface ScreenerSettings {
   oiJumpMin: number;
   /** Coins searched for and added by hand: read in every run whatever their volume. */
   pinned: string[];
+  /** Read the builder books too (stocks, indices, commodities, as "xyz:XYZ100"), over the same volume line. */
+  builderBooks: boolean;
 }
 
-type NumericSetting = Exclude<keyof ScreenerSettings, "pinned">;
+type NumericSetting = Exclude<keyof ScreenerSettings, "pinned" | "builderBooks">;
 export const PIN_LIMIT = 30;
 const PIN_NAME = /^[A-Za-z0-9:_-]{1,24}$/;
 
@@ -149,6 +157,7 @@ export const DEFAULT_SCREENER_SETTINGS: ScreenerSettings = {
   riskDollars: 250,
   oiJumpMin: 0.15,
   pinned: [],
+  builderBooks: true,
 };
 
 export function readScreenerSettings(raw: unknown): ScreenerSettings {
@@ -164,6 +173,7 @@ export function readScreenerSettings(raw: unknown): ScreenerSettings {
     riskDollars: n("riskDollars", 1, 1e9),
     oiJumpMin: n("oiJumpMin", 0, 10),
     pinned: Array.isArray(o.pinned) ? Array.from(new Set(o.pinned.filter((c): c is string => typeof c === "string" && PIN_NAME.test(c)))).slice(0, PIN_LIMIT) : [],
+    builderBooks: typeof o.builderBooks === "boolean" ? o.builderBooks : DEFAULT_SCREENER_SETTINGS.builderBooks,
   };
 }
 
@@ -363,10 +373,10 @@ const EMPTY_TF: TfMetrics = { rs: null, accel: null, breakout: null, rvol: null,
 export const emptyMetrics = (): Record<Timeframe, TfMetrics> =>
   Object.fromEntries(TIMEFRAMES.map((tf) => [tf, { ...EMPTY_TF }])) as Record<Timeframe, TfMetrics>;
 
-const NO_PRICE: PriceReadings = { rsi: null, ema: null, atrPct: null, offHigh: null, priceHigh20: null, priceLow20: null, rsEth: null, rsBasket: null };
+const NO_PRICE: PriceReadings = { rsi: null, ema: null, atrPct: null, offHigh: null, priceHigh20: null, priceLow20: null, rsEth: null, rsBasket: null, alpha: null, efficiency: null };
 export const emptyPrice = (): Record<Timeframe, PriceReadings> =>
   Object.fromEntries(TIMEFRAMES.map((tf) => [tf, { ...NO_PRICE }])) as Record<Timeframe, PriceReadings>;
-const NO_SIGNALS: Signals = { rs: 0, accel: 0, rsi: 0, trend: 0, oi: 0, funding: 0, cvd: 0, score: 0, divergence: null };
+const NO_SIGNALS: Signals = { rs: 0, accel: 0, rsi: 0, trend: 0, momentum: 0, alpha: 0, resilience: 0, oi: 0, funding: 0, cvd: 0, score: 0, divergence: null };
 export const emptySignals = (): Record<Timeframe, Signals> =>
   Object.fromEntries(TIMEFRAMES.map((tf) => [tf, { ...NO_SIGNALS }])) as Record<Timeframe, Signals>;
 
@@ -394,6 +404,8 @@ export function flagRows(rows: ScreenerRow[], settings: Pick<ScreenerSettings, "
     const xs = rows.map((r) => r.tf[tf].rs).filter((x): x is number => x != null).sort((a, b) => a - b);
     thresholds[tf] = { top: quantile(xs, 0.9), bottom: quantile(xs, 0.1) };
   }
+  const ratingNow = rsRatings(rows.map((r) => ({ coin: r.coin, rs: { "1D": r.tf["1D"].rs, "1W": r.tf["1W"].rs, "1M": r.tf["1M"].rs } })));
+  const ratingWas = rsRatings(rows.map((r) => ({ coin: r.coin, rs: r.strength?.rsWeekAgo ?? { "1D": null, "1W": null, "1M": null } })));
   return rows.map((r) => {
     const rsUp = (r.tf["1D"].rs ?? r.tf["4h"].rs ?? 0) > 0;
     const leverageDriven =
@@ -401,8 +413,12 @@ export function flagRows(rows: ScreenerRow[], settings: Pick<ScreenerSettings, "
     // Funding's place in the universe, 0..1, onto the positioning; the signals read crowding off it.
     const fundingPct = r.fundingAnnual != null && fundings.length >= 10 ? fundings.filter((f) => f <= r.fundingAnnual!).length / fundings.length : null;
     const positioning = r.positioning ? { ...r.positioning, fundingPct } : null;
+    // The rank, which is a place in the universe: now, and where the same arithmetic put it a week ago.
+    const strength: Strength | null = r.strength ? { ...r.strength, rating: ratingNow.get(r.coin) ?? null, ratingWas: ratingWas.get(r.coin) ?? null } : null;
     const signals = emptySignals();
-    for (const tf of TIMEFRAMES) signals[tf] = signalsOf(r.tf[tf], r.price?.[tf] ?? { ...NO_PRICE }, positioning, r.rsiPeak?.[tf] ?? null, r.rsiTrough?.[tf] ?? null, r.flow ?? null);
+    for (const tf of TIMEFRAMES) {
+      signals[tf] = signalsOf(r.tf[tf], r.price?.[tf] ?? { ...NO_PRICE }, positioning, r.rsiPeak?.[tf] ?? null, r.rsiTrough?.[tf] ?? null, r.flow ?? null, { cvd: cvdFor(r.flow, r.spot, tf)?.value ?? null, capture: strength?.capture ?? null });
+    }
     const flags = emptyFlags();
     for (const tf of TIMEFRAMES) {
       const m = r.tf[tf];
@@ -417,7 +433,7 @@ export function flagRows(rows: ScreenerRow[], settings: Pick<ScreenerSettings, "
       };
     }
     const { rsiPeak: _p, rsiTrough: _t, ...rest } = r;
-    return { ...rest, leverageDriven, flags, positioning, signals };
+    return { ...rest, leverageDriven, flags, positioning, signals, ...(strength ? { strength } : {}) };
   });
 }
 
@@ -500,7 +516,7 @@ export const NOT_AN_ALT = /^(BTC|USDC|USDT|USDE|USDH|USD1|USDD|USDS|USR|DAI|FDUS
 
 /* ------------------------------- the other readings ------------------------------- */
 
-import type { FlowReadings, LiqMap } from "./flow";
+import { cvdFor, type FlowReadings, type LiqMap, type SpotFlow, type TopAccounts } from "./flow";
 
 /**
  * Price readings on a timeframe's blocks, so the table can say whether
@@ -523,6 +539,14 @@ export interface PriceReadings {
   /** RS change against ETH and against the volume-weighted alt basket, like `rs` against BTC. */
   rsEth: number | null;
   rsBasket: number | null;
+  /**
+   * The move over the timeframe with the coin's BTC beta taken out: its own
+   * return minus beta times BTC's. A high-beta alt beats BTC on every green
+   * day; this is what is left when that is paid for.
+   */
+  alpha?: number | null;
+  /** Net move over the last 20 blocks as a share of the path travelled, signed: +1 a straight line up, near 0 chop. */
+  efficiency?: number | null;
 }
 
 /** The closes, highs and lows of the last N blocks of L bars, newest last. */
@@ -579,7 +603,7 @@ export function priceReadings(
   const L = TF_SPEC[tf].bars;
   const { c, h, l } = blocksOf(candles, L, 80);
   const last = c.length - 1;
-  const out: PriceReadings = { rsi: null, ema: null, atrPct: null, offHigh: null, priceHigh20: null, priceLow20: null, rsEth, rsBasket };
+  const out: PriceReadings = { rsi: null, ema: null, atrPct: null, offHigh: null, priceHigh20: null, priceLow20: null, rsEth, rsBasket, alpha: null, efficiency: efficiencyOf(c) };
   if (last < 0) return out;
   out.rsi = rsi(c, 14);
   const e20 = ema(c, 20);
@@ -641,17 +665,37 @@ export interface Signals {
   accel: -1 | 0 | 1;
   rsi: -1 | 0 | 1;
   trend: -1 | 0 | 1;
+  /**
+   * The four above as one vote. They are four views of the same thing — a
+   * coin that is going up — and summed apiece they made a score of four out
+   * of a rally before positioning or flow had said anything. Two or more
+   * net agreeing is +1, two or more against −1.
+   */
+  momentum: -1 | 0 | 1;
+  /** The move with BTC's beta taken out: the coin's own strength. */
+  alpha: -1 | 0 | 1;
+  /** What it does on BTC's green hours against its red ones: holds and leads +1, gives back more than it gains −1. */
+  resilience: -1 | 0 | 1;
   oi: -1 | 0 | 1;
   funding: -1 | 0 | 1;
-  /** Binance taker flow over 24 hours: net buying +1, net selling −1. */
+  /** Taker flow over the timeframe's window: net buying +1, net selling −1. */
   cvd: -1 | 0 | 1;
-  /** The sum of the above. */
+  /** momentum + alpha + resilience + oi + funding + cvd: six independent votes. */
   score: number;
   /** Price at a 20-block high while RS or RSI lags; or price at a low while they do not confirm. */
   divergence: "bearish" | "bullish" | null;
 }
 
-export function signalsOf(m: TfMetrics, p: PriceReadings, pos: Positioning | null, rsiPrevPeak: number | null, rsiPrevTrough: number | null, flow: FlowReadings | null = null): Signals {
+export function signalsOf(
+  m: TfMetrics,
+  p: PriceReadings,
+  pos: Positioning | null,
+  rsiPrevPeak: number | null,
+  rsiPrevTrough: number | null,
+  flow: FlowReadings | null = null,
+  /** The taker flow for this timeframe's window (perp, else spot) and the capture spread; without them, the 24h perp flow and no vote. */
+  more: { cvd?: number | null; capture?: number | null } = {},
+): Signals {
   const sgn = (x: number | null, band = 0): -1 | 0 | 1 => (x == null ? 0 : x > band ? 1 : x < -band ? -1 : 0);
   const rs = sgn(m.rs, 0.002);
   const accel: -1 | 0 | 1 = m.accel === "up" ? 1 : m.accel === "down" ? -1 : 0;
@@ -663,8 +707,13 @@ export function signalsOf(m: TfMetrics, p: PriceReadings, pos: Positioning | nul
   let divergence: Signals["divergence"] = null;
   if (p.priceHigh20 && (m.breakout === false || (p.rsi != null && rsiPrevPeak != null && p.rsi < rsiPrevPeak))) divergence = "bearish";
   if (p.priceLow20 && (m.rs != null && m.rs > 0 ? true : p.rsi != null && rsiPrevTrough != null && p.rsi > rsiPrevTrough)) divergence = "bullish";
-  const cvd: -1 | 0 | 1 = flow?.cvd24h == null ? 0 : flow.cvd24h > 0.02 ? 1 : flow.cvd24h < -0.02 ? -1 : 0;
-  return { rs, accel, rsi: rsiS, trend, oi, funding, cvd, score: rs + accel + rsiS + trend + oi + funding + cvd, divergence };
+  const flowNow = more.cvd !== undefined ? more.cvd : (flow?.cvd24h ?? null);
+  const cvd: -1 | 0 | 1 = flowNow == null ? 0 : flowNow > 0.02 ? 1 : flowNow < -0.02 ? -1 : 0;
+  const sum = rs + accel + rsiS + trend;
+  const momentum: -1 | 0 | 1 = sum >= 2 ? 1 : sum <= -2 ? -1 : 0;
+  const alpha = sgn(p.alpha ?? null, 0.003);
+  const resilience = sgn(more.capture ?? null, CAPTURE_BAND);
+  return { rs, accel, rsi: rsiS, trend, momentum, alpha, resilience, oi, funding, cvd, score: momentum + alpha + resilience + oi + funding + cvd, divergence };
 }
 
 /** RSI's highest and lowest over blocks 2..20 back, to compare the one now against. */
@@ -757,4 +806,218 @@ export function breadthOf(ratios: { t: number; r: number }[][]): number | null {
     if (last > avg) above++;
   }
   return n ? above / n : null;
+}
+
+/* ------------------------------- strength beyond the ratio ------------------------------- */
+
+/**
+ * The ratio against BTC says a coin beat BTC; it does not say why. An alt
+ * with a beta of two beats BTC on every green day and loses to it on every
+ * red one, and on a green week it tops the table having shown nothing.
+ * These readings take that apart, all from the hourly bars already stored:
+ *
+ *   beta         the slope of the coin's hourly returns on BTC's, 30 days
+ *   alpha        the coin's move over a timeframe minus beta × BTC's
+ *   capture      over the last 14 days of hours: the coin's summed return
+ *                on BTC's up hours over BTC's own (up capture), the same
+ *                on BTC's down hours (down capture), and up minus down —
+ *                positive is a coin that gains more on the green hours
+ *                than it gives back on the red, whatever its beta
+ *   rating       1–99: the coin's percentile in the universe by RS change,
+ *                blended over 1D, 1W and 1M, and the same a week ago
+ *   efficiency   net move over 20 blocks ÷ the path travelled, signed
+ */
+export interface Strength {
+  beta: number | null;
+  upCapture: number | null;
+  downCapture: number | null;
+  /** upCapture − downCapture. */
+  capture: number | null;
+  /** RS change on 1D, 1W and 1M as it stood seven daily bars ago: what the old rating is ranked from. */
+  rsWeekAgo: { "1D": number | null; "1W": number | null; "1M": number | null };
+  rating: number | null;
+  ratingWas: number | null;
+  /** The coin's share of all the venue's 24h volume, and the same about a week ago. */
+  volShare: number | null;
+  volShareWas: number | null;
+}
+
+/** The capture spread a coin has to clear to count as holding up, or as giving back. */
+export const CAPTURE_BAND = 0.15;
+export const CAPTURE_HOURS = 14 * 24;
+const MIN_RETURNS = 72;
+
+/** Returns of the two series over the same consecutive bars: a pair only where both have this bar and the one before. */
+export function pairedReturns(alt: ScreenerCandle[], btc: ScreenerCandle[]): { a: number; b: number }[] {
+  const btcAt = new Map<number, number>();
+  for (const x of btc) if (x.c > 0) btcAt.set(x.t, x.c);
+  const out: { a: number; b: number }[] = [];
+  for (let i = 1; i < alt.length; i++) {
+    const a0 = alt[i - 1];
+    const a1 = alt[i];
+    const b0 = btcAt.get(a0.t);
+    const b1 = btcAt.get(a1.t);
+    if (b0 == null || b1 == null || !(a0.c > 0) || !(a1.c > 0)) continue;
+    out.push({ a: a1.c / a0.c - 1, b: b1 / b0 - 1 });
+  }
+  return out;
+}
+
+/** The slope of the coin's returns on BTC's; null on fewer than three days of hours or a BTC that did not move. */
+export function betaOf(pairs: { a: number; b: number }[]): number | null {
+  if (pairs.length < MIN_RETURNS) return null;
+  const ma = pairs.reduce((s, x) => s + x.a, 0) / pairs.length;
+  const mb = pairs.reduce((s, x) => s + x.b, 0) / pairs.length;
+  let cov = 0;
+  let varB = 0;
+  for (const x of pairs) {
+    cov += (x.a - ma) * (x.b - mb);
+    varB += (x.b - mb) ** 2;
+  }
+  return varB > 0 ? cov / varB : null;
+}
+
+/** Up and down capture over the last `hours` pairs; null on a side BTC barely had. */
+export function captureOf(pairs: { a: number; b: number }[], hours = CAPTURE_HOURS): { up: number | null; down: number | null; spread: number | null } {
+  const tail = pairs.slice(-hours);
+  if (tail.length < MIN_RETURNS) return { up: null, down: null, spread: null };
+  let upA = 0;
+  let upB = 0;
+  let nUp = 0;
+  let downA = 0;
+  let downB = 0;
+  let nDown = 0;
+  for (const x of tail) {
+    if (x.b > 0) {
+      upA += x.a;
+      upB += x.b;
+      nUp++;
+    } else if (x.b < 0) {
+      downA += x.a;
+      downB += x.b;
+      nDown++;
+    }
+  }
+  const up = nUp >= 12 && upB > 0.005 ? upA / upB : null;
+  const down = nDown >= 12 && downB < -0.005 ? downA / downB : null;
+  return { up, down, spread: up != null && down != null ? up - down : null };
+}
+
+/** The coin's move over the last L bars with beta × BTC's taken out, on bars both series have. */
+export function alphaOver(alt: ScreenerCandle[], btc: ScreenerCandle[], L: number, beta: number | null): number | null {
+  if (beta == null) return null;
+  const btcAt = new Map<number, number>();
+  for (const x of btc) if (x.c > 0) btcAt.set(x.t, x.c);
+  const both = alt.filter((x) => x.c > 0 && btcAt.has(x.t));
+  const last = both.length - 1;
+  if (last - L < 0) return null;
+  const a = both[last].c / both[last - L].c - 1;
+  const b = btcAt.get(both[last].t)! / btcAt.get(both[last - L].t)! - 1;
+  return a - beta * b;
+}
+
+/** Kaufman's efficiency over the last `n` steps of a close series, signed by the direction of the net move. */
+export function efficiencyOf(closes: number[], n = 20): number | null {
+  if (closes.length < n + 1) return null;
+  const tail = closes.slice(-(n + 1));
+  let path = 0;
+  for (let i = 1; i < tail.length; i++) path += Math.abs(tail[i] - tail[i - 1]);
+  return path > 0 ? (tail[tail.length - 1] - tail[0]) / path : 0;
+}
+
+/** RS change on the daily timeframes as it stood `back` daily bars ago. */
+export function rsBack(daily: { t: number; r: number; v: number }[], back = 7): Strength["rsWeekAgo"] {
+  const then = daily.slice(0, Math.max(0, daily.length - back));
+  return { "1D": tfMetrics(then, "1D").rs, "1W": tfMetrics(then, "1W").rs, "1M": tfMetrics(then, "1M").rs };
+}
+
+export const RATING_WEIGHTS = { "1D": 0.3, "1W": 0.4, "1M": 0.3 } as const;
+
+/**
+ * The 1–99 rating: each coin's percentile in the universe by RS change on
+ * 1D, 1W and 1M, blended 30/40/30. A timeframe the coin has no number on is
+ * left out and the others reweighted; a coin with none has no rating. Ranks
+ * need company: under ten coins on a timeframe, that timeframe is not used.
+ */
+export function rsRatings(rows: { coin: string; rs: { "1D": number | null; "1W": number | null; "1M": number | null } }[]): Map<string, number> {
+  const out = new Map<string, number>();
+  const pct = {} as Record<keyof typeof RATING_WEIGHTS, Map<string, number>>;
+  for (const tf of Object.keys(RATING_WEIGHTS) as (keyof typeof RATING_WEIGHTS)[]) {
+    const have = rows.filter((r) => r.rs[tf] != null);
+    const m = new Map<string, number>();
+    if (have.length >= 10) {
+      const sorted = have.map((r) => r.rs[tf]!).sort((a, b) => a - b);
+      // The share of the universe at or below it, counting itself once: the top coin is 1, the bottom 1/n.
+      for (const r of have) {
+        let below = 0;
+        for (const v of sorted) if (v <= r.rs[tf]!) below++;
+        m.set(r.coin, below / sorted.length);
+      }
+    }
+    pct[tf] = m;
+  }
+  for (const r of rows) {
+    let w = 0;
+    let v = 0;
+    for (const tf of Object.keys(RATING_WEIGHTS) as (keyof typeof RATING_WEIGHTS)[]) {
+      const p = pct[tf].get(r.coin);
+      if (p == null) continue;
+      w += RATING_WEIGHTS[tf];
+      v += RATING_WEIGHTS[tf] * p;
+    }
+    if (w > 0) out.set(r.coin, Math.max(1, Math.min(99, Math.round((v / w) * 99))));
+  }
+  return out;
+}
+
+/** Everything in Strength a coin's own series can say; the rating and the volume share are the universe's to add. */
+export function strengthOf(alt: { "1h": ScreenerCandle[]; "1d": ScreenerCandle[] }, btc: { "1h": ScreenerCandle[]; "1d": ScreenerCandle[] }): Strength {
+  const pairs = pairedReturns(alt["1h"], btc["1h"]);
+  const cap = captureOf(pairs);
+  return {
+    beta: betaOf(pairs),
+    upCapture: cap.up,
+    downCapture: cap.down,
+    capture: cap.spread,
+    rsWeekAgo: rsBack(ratioSeries(alt["1d"], btc["1d"])),
+    rating: null,
+    ratingWas: null,
+    volShare: null,
+    volShareWas: null,
+  };
+}
+
+/* ------------------------------- sectors ------------------------------- */
+
+export interface SectorRow {
+  sector: string;
+  coins: number;
+  /** The median RS change of its coins on the timeframe. */
+  rs: number | null;
+  /** The share of its coins beating BTC on the timeframe. */
+  breadth: number | null;
+  /** Its strongest coin on the timeframe. */
+  leader: string | null;
+  leaderRs: number | null;
+}
+
+/** The universe grouped by sector on a timeframe, strongest first. A group of one or two is a coin, not a sector, and is left out. */
+export function sectorTable(rows: Pick<ScreenerRow, "coin" | "tf" | "error">[], tf: Timeframe, sectorOf: (coin: string) => string | null, minCoins = 3): SectorRow[] {
+  const groups = new Map<string, { coin: string; rs: number }[]>();
+  for (const r of rows) {
+    const rs = r.tf[tf]?.rs;
+    const sector = sectorOf(r.coin);
+    if (r.error || rs == null || !sector) continue;
+    groups.set(sector, [...(groups.get(sector) ?? []), { coin: r.coin, rs }]);
+  }
+  const out: SectorRow[] = [];
+  for (const [sector, list] of Array.from(groups)) {
+    if (list.length < minCoins) continue;
+    const sorted = list.slice().sort((a, b) => a.rs - b.rs);
+    const mid = sorted.length >> 1;
+    const median = sorted.length % 2 ? sorted[mid].rs : (sorted[mid - 1].rs + sorted[mid].rs) / 2;
+    const top = sorted[sorted.length - 1];
+    out.push({ sector, coins: list.length, rs: median, breadth: list.filter((x) => x.rs > 0).length / list.length, leader: top.coin, leaderRs: top.rs });
+  }
+  return out.sort((a, b) => (b.rs ?? 0) - (a.rs ?? 0));
 }

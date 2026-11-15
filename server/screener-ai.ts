@@ -15,7 +15,8 @@ import { notifyAll } from "./events";
 import { screenerAiStore, screenerStore } from "./storage";
 import { summarizeCalls, trackCalls, type CallStance, type PricePoint } from "@shared/ai-track";
 import type { ScreenerRun } from "./screener";
-import type { ScreenerRow, Timeframe } from "@shared/screener";
+import { sectorTable, type ScreenerRow, type Timeframe } from "@shared/screener";
+import { sectorOf } from "@shared/sectors";
 
 export const AI_MODEL = process.env.SCREENER_AI_MODEL || "claude-opus-5-5";
 export const AI_COOLDOWN_MS = 30 * 60_000;
@@ -45,19 +46,28 @@ export const aiStatus = () => ({ running: !!running, nextAllowedAt: lastStartedA
 const r2 = (x: number | null | undefined, d = 3) => (x == null || !Number.isFinite(x) ? null : Number(x.toFixed(d)));
 
 /** One coin, compactly: the numbers the read works from. */
-function coinDigest(r: ScreenerRow) {
+export function coinDigest(r: ScreenerRow) {
   const tf = (t: Timeframe) => ({
     rs: r2(r.tf[t]?.rs),
     accel: r.tf[t]?.accel ?? null,
     rsi: r2(r.price?.[t]?.rsi, 0),
     trend: r.price?.[t]?.ema ?? null,
     score: r.signals?.[t]?.score ?? null,
+    alpha: r2(r.price?.[t]?.alpha),
+    efficiency: r2(r.price?.[t]?.efficiency, 2),
     div: r.signals?.[t]?.divergence ?? null,
   });
   const f = r.flow;
   const l = r.liq;
+  const st = r.strength;
+  const sp = r.spot;
+  const top = r.top;
   return {
     coin: r.coin,
+    sector: sectorOf(r.coin),
+    strength: st ? { rating: st.rating, ratingWeekAgo: st.ratingWas, beta: r2(st.beta, 2), upCapture: r2(st.upCapture, 2), downCapture: r2(st.downCapture, 2), volumeShare: r2(st.volShare, 4), volumeShareWeekAgo: r2(st.volShareWas, 4) } : null,
+    spot: sp ? { cvd4h: r2(sp.cvd4h), cvd24h: r2(sp.cvd24h), cvd7d: r2(sp.cvd7d) } : null,
+    largestAccounts: top ? { net: r2(top.net, 2), netDayAgo: r2(top.netWas, 2), longUsd: Math.round(top.longUsd), shortUsd: Math.round(top.shortUsd) } : null,
     flags: { candidate4h: r.flags["4h"].candidate, candidate1D: r.flags["1D"].candidate, fast4h: r.flags["4h"].movingFast, weak1D: r.flags["1D"].weakest, leverageDriven: r.leverageDriven },
     "1h": tf("1h"),
     "4h": tf("4h"),
@@ -93,6 +103,8 @@ export function digestOf(run: ScreenerRun, events: { title: string; at: string; 
     breadth: r2(run.breadth, 2),
     btc: { d1: r2(run.btc?.d1), w1: r2(run.btc?.w1) },
     binanceFlow: run.flowStatus?.source === "relay" ? `read for ${run.flowStatus.coins} coins` : "not available this run",
+    spotFlow: run.spotStatus?.coins ? `read for ${run.spotStatus.coins} coins` : "not available this run",
+    sectors1D: sectorTable(rows, "1D", sectorOf).map((s) => ({ sector: s.sector, coins: s.coins, medianRs: r2(s.rs), beatingBtc: r2(s.breadth, 2), leader: s.leader })),
     eventsNext36h: events.map((e) => ({ title: e.title, at: e.at, impact: e.impact })),
     anomalies: run.anomalies.slice(0, 40).map((a) => ({ coin: a.coin, severity: a.severity, kind: a.kind, text: a.text })),
     coins: Array.from(pick.values()).slice(0, 30).map(coinDigest),
@@ -103,10 +115,11 @@ export function digestOf(run: ScreenerRun, events: { title: string; at: string; 
 
 const SYSTEM = `You are a crypto derivatives analyst reading a relative-strength screener for a discretionary trader on Hyperliquid perpetuals.
 
-You get, per coin: relative strength against BTC (rs, as a fraction: 0.05 = +5%) and its acceleration per timeframe, RSI, trend (2 = above its 20 and 50 averages, 0 = below both), an agreement score of seven readings, divergences, open interest on Hyperliquid and Binance, Hyperliquid's read of OI against price, funding on both venues (annualised fractions) and its percentile, Binance taker flow as CVD (net taker buying as a share of volume), Binance long/short ratios for all accounts and for top traders' positions, the basis between the venues, and where Hyperliquid's largest accounts would be liquidated (fraction from the mark and USD). Also the breadth of the alt tape, BTC's own move, the anomalies the screener flagged, and the US macro releases and large earnings due in the next 36 hours (UTC times).
+You get, per coin: relative strength against BTC (rs, as a fraction: 0.05 = +5%) and its acceleration per timeframe, RSI, trend (2 = above its 20 and 50 averages, 0 = below both), alpha (the move with the coin's BTC beta taken out), efficiency (net move over the path travelled: 1 a straight line, 0 chop), an agreement score of six independent votes from −6 to +6 (momentum, alpha, resilience on BTC's red hours, open interest against price, funding crowding, taker flow), divergences, a 1–99 relative-strength rating against the universe now and a week ago, beta, up and down capture (the coin's summed return on BTC's up hours and down hours over BTC's own: a strong coin has up above down), its share of the venue's volume now and a week ago, its sector and the sectors ranked, taker flow on Binance's spot book (spot buying is the stronger kind), what Hyperliquid's largest accounts hold in it net (+1 all long, −1 all short) now and a day ago, open interest on Hyperliquid and Binance, Hyperliquid's read of OI against price, funding on both venues (annualised fractions) and its percentile, Binance taker flow as CVD (net taker buying as a share of volume), Binance long/short ratios for all accounts and for top traders' positions, the basis between the venues, and where Hyperliquid's largest accounts would be liquidated (fraction from the mark and USD). Also the breadth of the alt tape, BTC's own move, the anomalies the screener flagged, and the US macro releases and large earnings due in the next 36 hours (UTC times).
 
 Your job: say where several independent readings point the same way, and where they conflict. Rules:
 - Use only the numbers given. Never mention news, events or prices you were not shown.
+- Beta is not strength: a coin that only beats BTC because BTC is up has alpha near zero and up capture no better than down capture. Prefer alpha, a rising rating and a positive capture spread over the raw ratio.
 - A good long has relative strength rising with taker buying, open interest growing with price (new longs), funding not crowded, and room before short liquidations above. A good short is the mirror. Flag traps: price up on net taker selling, OI up with top-decile funding, a crowd long while top traders are short.
 - Every tip names the readings that agree and the ones that disagree, and an invalidation in plain terms (a relative-strength break, a flow flip, a level from the liquidation bands).
 - Stances: "long" or "short" when the readings line up for that direction. "avoid" only when there is no edge either way: readings conflict, or both sides are crowded. If the evidence points down (fading relative strength, net taker selling, crowded longs), the call is "short", not "avoid". "watch" is a setup still forming: say what would trigger it.

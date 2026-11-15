@@ -175,6 +175,14 @@ async function getAny(hosts: string[], path: string): Promise<any> {
 }
 const klinePath = (m: Market) => (m === "futures" ? "/fapi/v1/klines" : "/api/v3/klines");
 
+/**
+ * A plain public read of Binance's spot book, the main host first and the
+ * market-data mirror after it — the mirror answers where the main host
+ * geo-blocks, which is what lets the screener read spot taker flow from
+ * the server itself, with no relay.
+ */
+export const spotGet = (path: string): Promise<any> => getAny(SPOT_HOSTS, path);
+
 
 async function get(base: string, path: string, timeoutMs = 12_000): Promise<any> {
   const host = new URL(base).hostname;

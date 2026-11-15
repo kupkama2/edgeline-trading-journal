@@ -115,6 +115,41 @@ export function parseFundingInfo(json: unknown): Map<string, number> {
   return out;
 }
 
+/** `/api/v3/ticker/price` with no symbol: every spot pair's last price. */
+export function parseSpotPrices(json: unknown): Map<string, number> {
+  const out = new Map<string, number>();
+  if (!Array.isArray(json)) return out;
+  for (const r of json as any[]) {
+    const p = Number(r?.price);
+    if (typeof r?.symbol === "string" && Number.isFinite(p) && p > 0) out.set(r.symbol, p);
+  }
+  return out;
+}
+
+/**
+ * The Binance spot pair that is the same coin, as matchBinance does for the
+ * perp: the USDT pair whose price agrees with Hyperliquid's mark within 15%.
+ * Hyperliquid's k-prefixed coins are a thousand of the token, so the plain
+ * spot pair is compared at a thousandth of the mark (kPEPE against PEPEUSDT),
+ * and a 1000-prefixed spot pair (1000SATS) at the mark itself.
+ */
+export function matchSpot(coin: string, hlMark: number | null, prices: Map<string, number>): { symbol: string; scale: number } | null {
+  if (coin.includes(":")) return null;
+  const k = /^k([A-Z0-9]+)$/.exec(coin);
+  const name = (k ? k[1] : coin).toUpperCase();
+  // `scale`: how many of the spot pair's units one Hyperliquid unit is.
+  const candidates = k
+    ? [{ symbol: `${name}USDT`, scale: 1000 }, { symbol: `1000${name}USDT`, scale: 1 }]
+    : [{ symbol: `${name}USDT`, scale: 1 }, { symbol: `1000${name}USDT`, scale: 0.001 }];
+  for (const c of candidates) {
+    const p = prices.get(c.symbol);
+    if (p == null) continue;
+    if (hlMark == null || !(hlMark > 0)) return c;
+    if (Math.abs((p * c.scale) / hlMark - 1) <= 0.15) return c;
+  }
+  return null;
+}
+
 /** Taker buys minus taker sells over the last `bars`, as a share of the volume traded: +0.1 is ten percent more buying than selling. */
 export function deltaRatio(bars: FlowBar[], n: number): number | null {
   const tail = bars.slice(-n);
@@ -137,9 +172,10 @@ const changeOf = (a: number | null | undefined, b: number | null | undefined) =>
 
 export interface FlowReadings {
   symbol: string;
-  /** Taker delta as a share of volume over the last 4 and 24 hours. */
+  /** Taker delta as a share of volume over the last 4 and 24 hours, and the last week. */
   cvd4h: number | null;
   cvd24h: number | null;
+  cvd7d?: number | null;
   /** Binance price change over the same 24 hours, to read the delta against. */
   px24h: number | null;
   /** Global long/short account ratio now, and its change over 24 hours. */
@@ -184,6 +220,7 @@ export function flowReadings(input: {
     symbol: input.symbol,
     cvd4h: deltaRatio(k, 4),
     cvd24h: deltaRatio(k, 24),
+    cvd7d: deltaRatio(k, 168),
     px24h: last && dayAgo ? changeOf(last.c, dayAgo.c) : null,
     lsAccounts: acc.length ? acc[acc.length - 1].ratio : null,
     lsAccounts24h: acc.length > 24 ? changeOf(acc[acc.length - 1].ratio, acc[acc.length - 25].ratio) : null,
@@ -197,6 +234,93 @@ export function flowReadings(input: {
     cvdSeries: cvdLine(k.slice(-168)),
     lsSeries: acc.slice(-168).map((a) => ({ t: a.t, ratio: a.ratio })),
   };
+}
+
+/**
+ * Taker flow on Binance's spot book for the same coin, read by the server
+ * itself off Binance's public market-data mirror: no relay, no key. Spot
+ * buying is the stronger kind — it is paid for in full — so it stands on
+ * its own beside the perp's flow, and the two are compared.
+ */
+export interface SpotFlow {
+  symbol: string;
+  cvd4h: number | null;
+  cvd24h: number | null;
+  cvd7d: number | null;
+  px24h: number | null;
+  /** The last week of spot CVD, hourly, for the drawer. */
+  cvdSeries: { t: number; cvd: number }[];
+}
+
+export function spotFlowOf(symbol: string, klines: FlowBar[]): SpotFlow {
+  const last = klines[klines.length - 1];
+  const dayAgo = klines[klines.length - 25];
+  return {
+    symbol,
+    cvd4h: deltaRatio(klines, 4),
+    cvd24h: deltaRatio(klines, 24),
+    cvd7d: deltaRatio(klines, 168),
+    px24h: last && dayAgo ? changeOf(last.c, dayAgo.c) : null,
+    cvdSeries: cvdLine(klines.slice(-168)),
+  };
+}
+
+/** The taker-flow window a timeframe is read on: a week of hourly bars is what there is, so the long timeframes share it. */
+export const CVD_WINDOW = { "1h": "4h", "4h": "4h", "12h": "24h", "1D": "24h", "1W": "7d", "1M": "7d" } as const;
+export type CvdWindow = "4h" | "24h" | "7d";
+
+export interface CvdRead {
+  value: number;
+  window: CvdWindow;
+  /** Which book it was read from: the perp through the relay when there is one, else spot. */
+  source: "perp" | "spot";
+  symbol: string;
+}
+
+/** The taker flow for a timeframe: the perp's when the relay read it, the spot book's when not; null with neither. */
+export function cvdFor(flow: FlowReadings | null | undefined, spot: SpotFlow | null | undefined, tf: keyof typeof CVD_WINDOW): CvdRead | null {
+  const window = CVD_WINDOW[tf];
+  const pick = (f: { cvd4h: number | null; cvd24h: number | null; cvd7d?: number | null } | null | undefined) => (f ? (window === "4h" ? f.cvd4h : window === "24h" ? f.cvd24h : (f.cvd7d ?? null)) : null);
+  const perp = pick(flow);
+  if (perp != null) return { value: perp, window, source: "perp", symbol: flow!.symbol };
+  const s = pick(spot);
+  if (s != null) return { value: s, window, source: "spot", symbol: spot!.symbol };
+  return null;
+}
+
+/* ------------------------------- the largest accounts ------------------------------- */
+
+/**
+ * What Hyperliquid's largest accounts hold in a coin, summed from the same
+ * positions the liquidation map reads: notional long and short, how many
+ * accounts on each side, and the net as a share of the two (+1 all long,
+ * −1 all short). `netWas` is the same a day earlier, from that day's run.
+ */
+export interface TopAccounts {
+  longUsd: number;
+  shortUsd: number;
+  longs: number;
+  shorts: number;
+  net: number | null;
+  netWas?: number | null;
+}
+
+export function topAccountsOf(mark: number, positions: { szi: number }[]): TopAccounts {
+  let longUsd = 0;
+  let shortUsd = 0;
+  let longs = 0;
+  let shorts = 0;
+  for (const p of positions) {
+    if (p.szi > 0) {
+      longUsd += p.szi * mark;
+      longs++;
+    } else if (p.szi < 0) {
+      shortUsd += -p.szi * mark;
+      shorts++;
+    }
+  }
+  const gross = longUsd + shortUsd;
+  return { longUsd, shortUsd, longs, shorts, net: gross > 0 ? (longUsd - shortUsd) / gross : null };
 }
 
 /* ------------------------------- the liquidation map ------------------------------- */
@@ -283,7 +407,10 @@ export type AnomalyKind =
   | "whales-vs-crowd"
   | "liq-magnet"
   | "venues-disagree"
-  | "rsi-divergence";
+  | "rsi-divergence"
+  | "spot-led"
+  | "perp-led"
+  | "whales-flip";
 
 export interface Anomaly {
   coin: string;
@@ -300,6 +427,8 @@ export interface AnomalyInput {
   flow: FlowReadings | null;
   liq: LiqMap | null;
   divergence: "bearish" | "bullish" | null;
+  spot?: SpotFlow | null;
+  top?: TopAccounts | null;
 }
 
 const pctl = (xs: number[], q: number) => {
@@ -356,6 +485,19 @@ export function findAnomalies(rows: AnomalyInput[]): Anomaly[] {
     }
     if (f?.oi24h != null && r.oi24hHl != null && Math.abs(f.oi24h) > 0.05 && Math.abs(r.oi24hHl) > 0.05 && Math.sign(f.oi24h) !== Math.sign(r.oi24hHl)) {
       out.push({ coin: r.coin, kind: "venues-disagree", severity: 2, text: `Open interest ${pctText(r.oi24hHl)} on Hyperliquid but ${pctText(f.oi24h)} on Binance over 24h: the venues disagree on who is positioning.` });
+    }
+    // Spot against perp: who is doing the buying. Only with both books read.
+    const s = r.spot;
+    // The price move from whichever book has it: Hyperliquid's needs a day-old snapshot, which a server that slept may not have.
+    const px = r.px24h ?? f?.px24h ?? s?.px24h ?? null;
+    if (s?.cvd24h != null && f?.cvd24h != null && px != null && px > 0.02) {
+      if (s.cvd24h > 0.03 && f.cvd24h < s.cvd24h - 0.04) out.push({ coin: r.coin, kind: "spot-led", severity: 2, text: `Price ${pctText(px)} in 24h with spot takers net buying (${pctText(s.cvd24h)} of volume) ahead of the perp (${pctText(f.cvd24h)}): the rise is being paid for on spot.` });
+      if (f.cvd24h > 0.03 && s.cvd24h < -0.03) out.push({ coin: r.coin, kind: "perp-led", severity: 2, text: `Price ${pctText(px)} in 24h on perp buying (${pctText(f.cvd24h)} of volume) while spot takers sell (${pctText(s.cvd24h)}): leverage is doing the lifting.` });
+    }
+    // The largest accounts changing sides in a day: a third of the way across, with real size behind it.
+    const t = r.top;
+    if (t?.net != null && t.netWas != null && Math.abs(t.net - t.netWas) >= 0.35 && t.longUsd + t.shortUsd >= 1_000_000) {
+      out.push({ coin: r.coin, kind: "whales-flip", severity: Math.abs(t.net - t.netWas) >= 0.6 ? 3 : 2, text: `Hyperliquid's largest accounts moved from ${pctText(t.netWas, 0)} to ${pctText(t.net, 0)} net in a day (long minus short, as a share of what they hold in it): now ${usdText(t.longUsd)} long, ${usdText(t.shortUsd)} short.` });
     }
     if (r.divergence) out.push({ coin: r.coin, kind: "rsi-divergence", severity: 1, text: r.divergence === "bearish" ? "Price at a 20-day high that RS or RSI does not confirm." : "Price at a 20-day low while RS or RSI holds up." });
   }

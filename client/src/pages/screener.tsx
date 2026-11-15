@@ -11,8 +11,10 @@ import { ScreenerTable, type Filter } from "@/components/screener/table";
 import { SpaghettiChart } from "@/components/screener/chart";
 import { CoinDrawer } from "@/components/screener/drawer";
 import { ScreenerInsights } from "@/components/screener/insights";
-import { fmtPrague, usePinScreenerCoin, useSaveScreenerSettings, useScreener, useScreenerLines, useScreenerLookup, useScreenerRefresh, useScreenerStatus } from "@/lib/screener";
-import { TIMEFRAMES, type ScreenerRow, type Timeframe } from "@shared/screener";
+import { ScreenerTrackCard } from "@/components/screener/track";
+import { sectorOf } from "@shared/sectors";
+import { fmtPct, fmtPrague, usePinScreenerCoin, useSaveScreenerSettings, useScreener, useScreenerLines, useScreenerLookup, useScreenerRefresh, useScreenerStatus } from "@/lib/screener";
+import { sectorTable, TIMEFRAMES, type ScreenerRow, type Timeframe } from "@shared/screener";
 import { parseLooseNumber } from "@shared/loose-number";
 
 const TF_KEY = "edgeline.screener.tf";
@@ -61,6 +63,7 @@ export default function ScreenerPage() {
   }, [tf]);
   const [filter, setFilter] = useState<Filter>("all");
   const [search, setSearch] = useState("");
+  const [sector, setSector] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   // The chart's set: the default for the timeframe until a row is toggled by hand.
   const [picked, setPicked] = useState<Set<string> | null>(null);
@@ -168,6 +171,11 @@ export default function ScreenerPage() {
   const q = search.trim();
   const matches = useMemo(() => (q ? rows.filter((r) => r.coin.toLowerCase().includes(q.toLowerCase())).length : -1), [rows, q]);
   const lookup = useScreenerLookup(q && matches === 0 && /^[A-Za-z0-9:_-]{1,24}$/.test(q) ? q : null);
+  // The groups on this timeframe, strongest first: a strong coin in a strong group is the better read.
+  const sectors = useMemo(() => sectorTable(rows, tf, sectorOf), [rows, tf]);
+  // Why a coin has no taker flow, when it is the run's doing and not the coin's.
+  const spot = run?.spotStatus;
+  const flowNote = !run ? null : !spot ? "Taker flow arrives with the next run" : !spot.coins && run.flowStatus?.source !== "relay" ? `Taker flow could not be read this run: ${spot.error ?? "Binance did not answer"}` : null;
   const counts = useMemo(() => {
     const c = { candidates: 0, fast: 0, weakest: 0, diverging: 0 };
     for (const r of rows) {
@@ -273,7 +281,20 @@ export default function ScreenerPage() {
                     <span className="text-[10px] text-muted-foreground">{hint}</span>
                   </label>
                 ))}
-                <p className="text-[10px] text-muted-foreground">The volume line applies on the next run.</p>
+                <label className="flex items-start gap-2">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5"
+                    checked={settings.builderBooks}
+                    onChange={(e) => save.mutate({ builderBooks: e.target.checked })}
+                    data-testid="screener-setting-builderBooks"
+                  />
+                  <span>
+                    Stocks, indices and commodities
+                    <span className="block text-[10px] text-muted-foreground">Hyperliquid's builder markets (xyz:XYZ100 and the like), over the same volume line.</span>
+                  </span>
+                </label>
+                <p className="text-[10px] text-muted-foreground">The volume line and the markets read apply on the next run.</p>
                 <div data-testid="screener-pinned">
                   <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Pinned coins</span>
                   {settings.pinned.length === 0 ? (
@@ -317,6 +338,8 @@ export default function ScreenerPage() {
 
       <ScreenerScanCard onOpen={setOpen} />
 
+      <ScreenerTrackCard />
+
       <Card className="border-card-border bg-card p-3 sm:p-4">
         <div className="flex flex-wrap items-center gap-2">
           <Segmented value={tf} onChange={setTf} options={TIMEFRAMES.map((t) => ({ id: t, label: t }))} size="sm" ariaLabel="Timeframe" testId="screener-tf" />
@@ -354,11 +377,31 @@ export default function ScreenerPage() {
             ))}
           </div>
         </div>
+        {sectors.length > 0 && (
+          <div className="mt-2 flex flex-wrap items-center gap-1.5" data-testid="screener-sectors">
+            <span className="text-[10px] uppercase tracking-wider text-muted-foreground" title={`Each group's median RS change on ${tf} and how many of its coins beat BTC, strongest first. Click one to see only its coins.`}>
+              Sectors
+            </span>
+            {sectors.map((s) => (
+              <button
+                key={s.sector}
+                type="button"
+                onClick={() => setSector(sector === s.sector ? null : s.sector)}
+                className={`rounded-full border px-2 py-0.5 text-[11px] transition-colors ${sector === s.sector ? "border-primary/60 bg-primary/10 text-foreground" : "border-border text-muted-foreground hover:border-primary/40 hover:text-foreground"}`}
+                aria-pressed={sector === s.sector}
+                title={`${s.sector}: median RS ${fmtPct(s.rs)} on ${tf}, ${Math.round((s.breadth ?? 0) * s.coins)} of ${s.coins} beating BTC, led by ${s.leader} (${fmtPct(s.leaderRs)})`}
+                data-testid={`screener-sector-${s.sector}`}
+              >
+                {s.sector} <span className={`font-mono ${(s.rs ?? 0) > 0 ? "text-emerald-400" : (s.rs ?? 0) < 0 ? "text-red-400" : ""}`}>{fmtPct(s.rs)}</span>
+              </button>
+            ))}
+          </div>
+        )}
         <p className="mt-1.5 text-[11px] text-muted-foreground">
-          RS change is the alt-over-BTC ratio's move over the timeframe; the arrow says whether the last period beat the mean of the ones before. <b>Candidate</b> = top 10% and accelerating, RVOL ≥ {settings?.rvolMin ?? 1.5}, not leverage-driven. Click a row for the coin. Its name puts it on the chart or takes it off; a double click keeps only it.
+          RS change is the alt-over-BTC ratio's move over the timeframe; the arrow says whether the last period beat the mean of the ones before. <b>Candidate</b> = top 10% and accelerating, RVOL ≥ {settings?.rvolMin ?? 1.5}, not leverage-driven. <b>Rtg</b> is the 1–99 rank over 1D, 1W and 1M; <b>Alpha</b> the move with BTC's beta taken out; <b>Hold</b> what it keeps on BTC's red hours. Click a row for the coin. Its name puts it on the chart or takes it off; a double click keeps only it.
         </p>
         <div className="mt-2">
-          <ScreenerTable rows={rows} tf={tf} filter={filter} search={search} rvolMin={settings?.rvolMin ?? 1.5} charted={charted} onToggleChart={toggle} onSolo={solo} onOpen={setOpen} />
+          <ScreenerTable rows={rows} tf={tf} filter={filter} search={search} sector={sector} flowNote={flowNote} rvolMin={settings?.rvolMin ?? 1.5} charted={charted} onToggleChart={toggle} onSolo={solo} onOpen={setOpen} />
           {q && matches === 0 && (
             <p className="px-2 pb-2 text-center text-xs" data-testid="screener-lookup">
               {lookup.isLoading ? <span className="text-muted-foreground">Looking it up…</span> : lookup.data ? <span className={lookup.data.where === "not-listed" ? "text-amber-500" : "text-foreground/90"}>{lookup.data.reason}</span> : null}

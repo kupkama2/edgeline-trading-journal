@@ -33,14 +33,19 @@
 import { hlInfo, HlHttpError } from "./hyperliquid";
 import { screenerAiStore, screenerStore } from "./storage";
 import { notifyAll } from "./events";
-import { readBinanceFlow, readLiqMap, type FlowStatus, type LiqStatus } from "./flow";
-import { findAnomalies, type Anomaly } from "@shared/flow";
+import { readBinanceFlow, readLiqMap, readSpotFlow, type FlowStatus, type LiqStatus, type SpotStatus } from "./flow";
+import { findAnomalies, type Anomaly, type TopAccounts } from "@shared/flow";
+import { parsePerpDexs } from "@shared/hyperliquid";
+import { FLAG_REPEAT_MS, flagsOf, summarizeFlags, type FlagTrack } from "@shared/flag-track";
+import type { PricePoint } from "@shared/ai-track";
 import {
   PIN_LIMIT,
   annualizeFunding,
   basketSeries,
   breadthOf,
   coinMetrics,
+  alphaOver,
+  strengthOf,
   emptyPrice,
   emptySignals,
   oiRead,
@@ -98,6 +103,8 @@ export interface ScreenerRun {
   /** How the Binance flow pass and the liquidation map went. */
   flowStatus: FlowStatus | null;
   liqStatus: LiqStatus | null;
+  /** How the spot-flow pass went: the taker flow the server reads itself. */
+  spotStatus?: SpotStatus | null;
   /** What stands out across the universe, worst first. */
   anomalies: Anomaly[];
   settings: ScreenerSettings;
@@ -128,7 +135,7 @@ export interface AssetCtx {
 }
 
 /** Read `metaAndAssetCtxs`: `[{ universe: [{ name, szDecimals, isDelisted? }] }, [{ funding, openInterest, dayNtlVlm, markPx, ... }]]`, aligned by index. */
-export function parseMetaAndAssetCtxs(json: unknown): AssetCtx[] {
+export function parseMetaAndAssetCtxs(json: unknown, dex?: string | null): AssetCtx[] {
   if (!Array.isArray(json) || json.length < 2) return [];
   const universe = Array.isArray((json[0] as any)?.universe) ? ((json[0] as any).universe as any[]) : [];
   const ctxs = Array.isArray(json[1]) ? (json[1] as any[]) : [];
@@ -140,7 +147,9 @@ export function parseMetaAndAssetCtxs(json: unknown): AssetCtx[] {
   universe.forEach((u, i) => {
     const c = ctxs[i] ?? {};
     if (typeof u?.name !== "string") return;
-    out.push({ coin: u.name, funding: n(c.funding), openInterest: n(c.openInterest), dayNtlVlm: n(c.dayNtlVlm), markPx: n(c.markPx), oraclePx: n(c.oraclePx), delisted: u.isDelisted === true });
+    // A builder book's coins are named with their book ("xyz:XYZ100"); one that comes bare is given it.
+    const coin = dex && !u.name.includes(":") ? `${dex}:${u.name}` : u.name;
+    out.push({ coin, funding: n(c.funding), openInterest: n(c.openInterest), dayNtlVlm: n(c.dayNtlVlm), markPx: n(c.markPx), oraclePx: n(c.oraclePx), delisted: u.isDelisted === true });
   });
   return out;
 }
@@ -181,6 +190,41 @@ async function ask(budget: Budget, weight: number, body: Record<string, unknown>
     }
     throw err;
   }
+}
+
+/** Builder books read per run, at most: each is one request, and a venue with fifty of them is not a reason to spend a minute's budget on the list. */
+const MAX_BOOKS = 12;
+
+/**
+ * The venue's own perps, and with the setting on, every builder book's too
+ * (stocks, indices, commodities). A book that does not answer is left out
+ * of this run and the rest go on: the builder books are an addition, and
+ * the alts are not held up for them.
+ */
+async function universeCtxs(budget: Budget, builderBooks: boolean): Promise<AssetCtx[]> {
+  const main = parseMetaAndAssetCtxs(await ask(budget, 20, { type: "metaAndAssetCtxs" }));
+  if (!builderBooks || main.length === 0) return main;
+  let books: string[] = [];
+  try {
+    books = parsePerpDexs(await ask(budget, 20, { type: "perpDexs" })).slice(0, MAX_BOOKS);
+  } catch {
+    return main;
+  }
+  const out = main.slice();
+  const have = new Set(main.map((c) => c.coin));
+  for (const dex of books) {
+    try {
+      for (const c of parseMetaAndAssetCtxs(await ask(budget, 20, { type: "metaAndAssetCtxs", dex }), dex)) {
+        // Only what is this book's own: an answer that repeats the main list adds nothing.
+        if (!c.coin.startsWith(`${dex}:`) || have.has(c.coin)) continue;
+        have.add(c.coin);
+        out.push(c);
+      }
+    } catch (err: any) {
+      console.error(`[screener] builder book ${dex}: ${String(err?.message ?? err).slice(0, 160)}`);
+    }
+  }
+  return out;
 }
 
 async function candles(budget: Budget, coin: string, interval: "1h" | "1d", startTime: number, endTime: number): Promise<ScreenerCandle[]> {
@@ -272,6 +316,7 @@ export async function latestScreenerRun(): Promise<ScreenerRun | null> {
     btc: body.btc ?? { d1: null, w1: null },
     flowStatus: body.flowStatus ?? null,
     liqStatus: body.liqStatus ?? null,
+    spotStatus: body.spotStatus ?? null,
     anomalies: Array.isArray(body.anomalies) ? body.anomalies : [],
     settings: readScreenerSettings(r.settings ? JSON.parse(r.settings) : null),
     rows,
@@ -314,7 +359,7 @@ export async function saveScreenerSettings(patch: unknown): Promise<ScreenerSett
   const p = (patch && typeof patch === "object" ? patch : {}) as Record<string, unknown>;
   const next = readScreenerSettings({ ...before, ...p });
   for (const k of Object.keys(next) as (keyof ScreenerSettings)[]) {
-    if (k === "pinned") continue;
+    if (k === "pinned" || k === "builderBooks") continue;
     // readScreenerSettings fell back to the default: an invalid value given, so the old one stays.
     if (k in p && next[k] !== Number(p[k])) (next as any)[k] = before[k];
   }
@@ -355,7 +400,17 @@ type Snap = Map<string, { openInterest: number | null; mark: number | null }>;
 function measureRow(
   c: AssetCtx,
   alt: Series | undefined,
-  ctx: { btc: Series; eth: Series | null; basket: Series; dayPartial: number; snaps: { h1: Snap; h4: Snap; d1: Snap }; pinned: boolean; error: string | null },
+  ctx: {
+    btc: Series;
+    eth: Series | null;
+    basket: Series;
+    dayPartial: number;
+    snaps: { h1: Snap; h4: Snap; d1: Snap };
+    pinned: boolean;
+    error: string | null;
+    /** All the venue's 24h volume now, and each coin's and the total about a week ago: the coin's share of the tape. */
+    volume?: { total: number; was: Map<string, number> | null; wasTotal: number | null };
+  },
 ): ScreenerRow {
   const pos = (snap: Snap) => {
     const was = snap.get(c.coin);
@@ -408,6 +463,14 @@ function measureRow(
     }
     base.rsiPeak = peaks;
     base.rsiTrough = troughs;
+    // Strength beyond the ratio: beta, what is left of each timeframe's move without it, and the capture on BTC's green and red hours.
+    const strength = strengthOf(alt, ctx.btc);
+    for (const tf of TIMEFRAMES) base.price[tf].alpha = alphaOver(alt[TF_SPEC[tf].base], ctx.btc[TF_SPEC[tf].base], TF_SPEC[tf].bars, strength.beta);
+    const v = ctx.volume;
+    if (v && v.total > 0 && c.dayNtlVlm != null) strength.volShare = c.dayNtlVlm / v.total;
+    const was = v?.was?.get(c.coin);
+    if (v && was != null && v.wasTotal != null && v.wasTotal > 0) strength.volShareWas = was / v.wasTotal;
+    base.strength = strength;
   }
   return base;
 }
@@ -458,7 +521,8 @@ export async function scanCoin(asked: string): Promise<CoinScan> {
   }
 
   const budget = new Budget(WEIGHT_PER_MIN);
-  const c = parseMetaAndAssetCtxs(await ask(budget, 20, { type: "metaAndAssetCtxs" })).find((x) => same(x.coin, asked) && !x.delisted);
+  const listed = await universeCtxs(budget, settings.builderBooks || asked.includes(":"));
+  const c = listed.find((x) => same(x.coin, asked) && !x.delisted);
   if (!c) throw Object.assign(new Error("Not on Hyperliquid's perp list. Tokens often trade under another name — Lighter is LIT."), { status: 404 });
   const now = Date.now();
   const { series } = await fetchSeries(budget, c.coin, now, await storedSeries(c.coin));
@@ -478,7 +542,7 @@ export async function scanCoin(asked: string): Promise<CoinScan> {
     screenerStore.snapshotNear(ago(4 * HOUR_MS), ago(6 * HOUR_MS)),
     screenerStore.snapshotNear(ago(DAY_MS), ago(DAY_MS + 6 * HOUR_MS)),
   ]);
-  const measured = measureRow(c, alt, { btc, eth, basket: { "1h": [], "1d": [] }, dayPartial, snaps: { h1, h4, d1 }, pinned: settings.pinned.includes(c.coin), error: null });
+  const measured = measureRow(c, alt, { btc, eth, basket: { "1h": [], "1d": [] }, dayPartial, snaps: { h1, h4, d1 }, pinned: settings.pinned.includes(c.coin), error: null, volume: await volumeCtx(listed, now) });
   // Ranked against the run's universe: "moving fast" and "weakest" are places in it, not properties of the coin.
   const others = run.rows.filter((r) => r.coin !== c.coin);
   const row = flagRows([...others, measured], settings)[others.length];
@@ -522,7 +586,7 @@ async function run(nowFn: () => number, ai = false): Promise<ScreenerRun> {
   try {
     const settings = await screenerSettings();
     const budget = new Budget(WEIGHT_PER_MIN);
-    const ctxs = parseMetaAndAssetCtxs(await ask(budget, 20, { type: "metaAndAssetCtxs" }));
+    const ctxs = await universeCtxs(budget, settings.builderBooks);
     if (ctxs.length === 0) throw new Error("metaAndAssetCtxs answered with no universe");
     // Over the volume line, or pinned by hand from the search whatever its volume.
     const pinned = new Set(settings.pinned);
@@ -575,11 +639,16 @@ async function run(nowFn: () => number, ai = false): Promise<ScreenerRun> {
     const eth = measured.get("ETH") ?? null;
     const breadth = breadthOf(Array.from(measured.values()).map((s) => ratioSeries(s["1d"], btc["1d"])));
 
+    const volume = await volumeCtx(ctxs, t0);
     const rows: ScreenerRow[] = alts.map((c) =>
-      measureRow(c, measured.get(c.coin), { btc, eth, basket, dayPartial, snaps: { h1: snap1h, h4: snap4h, d1: snap1d }, pinned: pinned.has(c.coin), error: failed.get(c.coin) ?? null }),
+      measureRow(c, measured.get(c.coin), { btc, eth, basket, dayPartial, snaps: { h1: snap1h, h4: snap4h, d1: snap1d }, pinned: pinned.has(c.coin), error: failed.get(c.coin) ?? null, volume }),
     );
     // Binance's flow through the relay, then Hyperliquid's liquidation map. Each pass's failure is its own.
     const readable = rows.filter((r) => !r.error).map((r) => ({ coin: r.coin, mark: r.mark, fundingHourly: r.fundingHourly }));
+    // Spot taker flow first: the server reads it itself, so it is there whether or not a relay is.
+    status.phase = "Binance spot flow";
+    status.progress = { done: 0, total: readable.length };
+    const spotPass = await readSpotFlow(readable, (done, total) => (status.progress = { done, total })).catch((err) => ({ status: { coins: 0, failed: 0, error: String(err?.message ?? err) } as SpotStatus, byCoin: new Map() }));
     status.phase = "Binance flow";
     status.progress = { done: 0, total: readable.length };
     const marksNow = async () => new Map(parseMetaAndAssetCtxs(await ask(budget, 20, { type: "metaAndAssetCtxs" })).map((c) => [c.coin, { mark: c.markPx, funding: c.funding }]));
@@ -592,27 +661,36 @@ async function run(nowFn: () => number, ai = false): Promise<ScreenerRun> {
     const flowPass = await readBinanceFlow(readable, (done, total) => (status.progress = { done, total }), marksNow).catch((err) => ({ status: { source: "none", account: null, outdated: false, coins: 0, failed: 0, error: String(err?.message ?? err) } as FlowStatus, byCoin: new Map() }));
     status.phase = "Liquidation map";
     status.progress = { done: 0, total: 0 };
-    const liqPass = await readLiqMap(readable, (done, total) => (status.progress = { done, total }), midsNow).catch((err) => ({ status: { accounts: 0, failed: 0, error: String(err?.message ?? err) } as LiqStatus, byCoin: new Map() }));
+    const liqPass = await readLiqMap(readable, (done, total) => (status.progress = { done, total }), midsNow).catch((err) => ({ status: { accounts: 0, failed: 0, error: String(err?.message ?? err) } as LiqStatus, byCoin: new Map(), topByCoin: new Map<string, TopAccounts>() }));
+    // Where the largest accounts stood a day ago, from that day's run: the change is the reading.
+    const topWas = liqPass.topByCoin.size ? await topAccountsNear(new Date(t0 - DAY_MS).toISOString(), new Date(t0 - DAY_MS - 12 * HOUR_MS).toISOString()) : new Map<string, number>();
     for (const r of rows) {
       r.flow = flowPass.byCoin.get(r.coin) ?? null;
+      r.spot = spotPass.byCoin.get(r.coin) ?? null;
       r.liq = liqPass.byCoin.get(r.coin) ?? null;
+      const top = liqPass.topByCoin.get(r.coin);
+      r.top = top ? { ...top, netWas: topWas.get(r.coin) ?? null } : null;
     }
     const flagged = flagRows(rows, settings);
-    const anomalies = findAnomalies(flagged.map((r) => ({ coin: r.coin, oi24hHl: r.positioning?.oi1d ?? null, px24h: r.positioning?.px1d ?? null, flow: r.flow ?? null, liq: r.liq ?? null, divergence: r.signals["1D"]?.divergence ?? null })));
+    const anomalies = findAnomalies(
+      flagged.map((r) => ({ coin: r.coin, oi24hHl: r.positioning?.oi1d ?? null, px24h: r.positioning?.px1d ?? null, flow: r.flow ?? null, liq: r.liq ?? null, divergence: r.signals["1D"]?.divergence ?? null, spot: r.spot ?? null, top: r.top ?? null })),
+    );
     const btcD = btc["1d"];
     const btcMove = { d1: btcD.length > 1 ? btcD[btcD.length - 1].c / btcD[btcD.length - 2].c - 1 : null, w1: btcD.length > 7 ? btcD[btcD.length - 1].c / btcD[btcD.length - 8].c - 1 : null };
     const tookMs = nowFn() - t0;
     const errors = flagged.filter((r) => r.error).length;
-    const id = await screenerStore.saveRun({ at, tookMs, body: JSON.stringify({ barsTo, fullReads, breadth, btc: btcMove, flowStatus: flowPass.status, liqStatus: liqPass.status, anomalies, rows: flagged }), errors, universe: flagged.length, settings: JSON.stringify(settings) });
+    const id = await screenerStore.saveRun({ at, tookMs, body: JSON.stringify({ barsTo, fullReads, breadth, btc: btcMove, flowStatus: flowPass.status, liqStatus: liqPass.status, spotStatus: spotPass.status, anomalies, rows: flagged }), errors, universe: flagged.length, settings: JSON.stringify(settings) });
     // The whole snapshot is kept — every perp, filtered or not — so OI history exists before a coin crosses the volume line. After the run, so a failed one leaves none.
     await screenerStore.saveSnapshot(
       at,
       ctxs.map((c) => ({ coin: c.coin, funding: c.funding, openInterest: c.openInterest, volume: c.dayNtlVlm, mark: c.markPx, oracle: c.oraclePx })),
     );
     snapshotAt = t0;
+    // What this run flagged, written down for the track record: a failure here costs the record a run, never the run.
+    await logFlags(at, t0, flagged).catch((err) => console.error(`[screener] flag log: ${String(err?.message ?? err).slice(0, 160)}`));
     await screenerStore.prune(new Date(t0 - KEEP_DAYS * DAY_MS).toISOString(), new Date(t0 - RUNS_KEEP_DAYS * DAY_MS).toISOString()).catch(() => {});
     console.log(`[screener] ${flagged.length} coins in ${(tookMs / 1000).toFixed(1)}s, ${fullReads} full reads, ${errors} could not be read, ${ctxs.length} perps listed`);
-    latest = { id, at, barsTo, tookMs, errors, universe: flagged.length, fullReads, breadth, btc: btcMove, flowStatus: flowPass.status, liqStatus: liqPass.status, anomalies, settings, rows: flagged };
+    latest = { id, at, barsTo, tookMs, errors, universe: flagged.length, fullReads, breadth, btc: btcMove, flowStatus: flowPass.status, liqStatus: liqPass.status, spotStatus: spotPass.status, anomalies, settings, rows: flagged };
     notifyAll("screener");
     // The AI read, after the scheduled runs only; it is slow and costs, so it never holds the run up.
     if (ai) {
@@ -665,6 +743,75 @@ const deriveDailyTail = (hours: ScreenerCandle[]): ScreenerCandle[] => {
 };
 
 const oiChange = (now: number | null, before: number | null) => (now != null && before != null && before > 0 ? now / before - 1 : null);
+
+/** The venue's whole 24h volume now, and each coin's and the total about a week ago (within a day of it). */
+async function volumeCtx(ctxs: AssetCtx[], now: number): Promise<{ total: number; was: Map<string, number> | null; wasTotal: number | null }> {
+  const total = ctxs.reduce((s, c) => s + (c.dayNtlVlm ?? 0), 0);
+  const was = await screenerStore.volumesNear(new Date(now - 7 * DAY_MS).toISOString(), new Date(now - 8 * DAY_MS).toISOString()).catch(() => new Map<string, number>());
+  if (was.size === 0) return { total, was: null, wasTotal: null };
+  let wasTotal = 0;
+  was.forEach((v) => (wasTotal += v));
+  return { total, was, wasTotal };
+}
+
+/** Each coin's net among the largest accounts in the run nearest a moment: what "a day ago" is compared against. */
+async function topAccountsNear(target: string, floor: string): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  const r = await screenerStore.runNear(target, floor).catch(() => null);
+  if (!r) return out;
+  try {
+    const body = JSON.parse(r.body);
+    for (const row of Array.isArray(body?.rows) ? body.rows : []) if (typeof row?.coin === "string" && typeof row?.top?.net === "number") out.set(row.coin, row.top.net);
+  } catch {
+    /* an unreadable run is no history */
+  }
+  return out;
+}
+
+/* ------------------------------- the track record ------------------------------- */
+
+/** A coin is written down for a kind when it qualifies and was not written down for it in the last day. */
+async function logFlags(at: string, t0: number, rows: ScreenerRow[]): Promise<void> {
+  const recent = new Set((await screenerStore.flagsSince(new Date(t0 - FLAG_REPEAT_MS).toISOString())).map((e) => `${e.kind}|${e.coin}`));
+  const fresh: { coin: string; kind: string }[] = [];
+  for (const r of rows) for (const kind of flagsOf(r)) if (!recent.has(`${kind}|${r.coin}`)) fresh.push({ coin: r.coin, kind });
+  await screenerStore.logFlags(at, fresh);
+  trackCache = null;
+}
+
+const TRACK_DAYS = 30;
+const TRACK_TTL_MS = 10 * 60_000;
+let trackCache: { at: number; value: FlagTrack } | null = null;
+
+/**
+ * How the flags of the last thirty days did against BTC. Priced from the
+ * hourly snapshots (every perp, whenever a run or the hourly tick wrote
+ * one) and the stored hourly candles' closes, together: the snapshots
+ * cover a coin that has since left the table, the candles cover the hours
+ * the server was asleep.
+ */
+export async function flagTrackRecord(nowFn: () => number = Date.now): Promise<FlagTrack> {
+  const now = nowFn();
+  if (trackCache && now - trackCache.at < TRACK_TTL_MS) return trackCache.value;
+  const since = new Date(now - TRACK_DAYS * DAY_MS).toISOString();
+  const log = await screenerStore.flagsSince(since);
+  const coins = Array.from(new Set([...log.map((e) => e.coin), "BTC"]));
+  const series = new Map<string, PricePoint[]>();
+  for (const m of await screenerStore.marksSince(since, coins)) {
+    if (!series.has(m.coin)) series.set(m.coin, []);
+    series.get(m.coin)!.push({ at: new Date(m.at).getTime(), mark: m.mark });
+  }
+  const from = new Date(since).getTime();
+  for (const coin of coins) {
+    const s = await storedSeries(coin);
+    // An hour's close is the price at the end of the hour.
+    const closes = completeBars(s["1h"], HOUR_MS, now).filter((b) => b.t + HOUR_MS >= from && b.c > 0).map((b) => ({ at: b.t + HOUR_MS, mark: b.c }));
+    if (closes.length) series.set(coin, [...(series.get(coin) ?? []), ...closes].sort((a, b) => a.at - b.at));
+  }
+  const value = summarizeFlags(log, series, now, since);
+  trackCache = { at: now, value };
+  return value;
+}
 
 /* ------------------------------- the hourly snapshot ------------------------------- */
 

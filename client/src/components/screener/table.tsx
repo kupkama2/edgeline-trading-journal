@@ -1,13 +1,15 @@
 import { useMemo, useState } from "react";
 import { AlertTriangle, ArrowDown, ArrowUp, Pin } from "lucide-react";
-import { TIMEFRAMES, type ScreenerRow, type Timeframe } from "@shared/screener";
+import { CAPTURE_BAND, TIMEFRAMES, type ScreenerRow, type Timeframe } from "@shared/screener";
+import { cvdFor } from "@shared/flow";
+import { sectorOf } from "@shared/sectors";
 import { ACCEL_ARROW, fmtPct, fmtUsd, fmtX, heat } from "@/lib/screener";
 import { useClickOrDouble } from "@/components/screener/chart";
 
 export type Filter = "all" | "candidates" | "fast" | "weakest" | "diverging";
 
 /** What a column header sorts by. */
-type SortKey = `rs:${Timeframe}` | "coin" | "rvol" | "funding" | "oi" | "volume" | "score" | "rsi" | "cvd";
+type SortKey = `rs:${Timeframe}` | "coin" | "rvol" | "funding" | "oi" | "volume" | "score" | "rsi" | "cvd" | "rating" | "alpha" | "hold";
 
 /**
  * The ranked table: one row per coin, RS change per timeframe as heat
@@ -56,6 +58,8 @@ export function ScreenerTable({
   tf,
   filter,
   search = "",
+  sector = null,
+  flowNote = null,
   rvolMin,
   charted,
   onToggleChart,
@@ -67,6 +71,10 @@ export function ScreenerTable({
   filter: Filter;
   /** Part of a coin's name; empty is everything. */
   search?: string;
+  /** Only this sector's coins; null is every coin. */
+  sector?: string | null;
+  /** Why a coin has no taker flow, when the run could not read any: said in the empty cell. */
+  flowNote?: string | null;
   rvolMin: number;
   charted: Set<string>;
   onToggleChart: (coin: string) => void;
@@ -87,6 +95,7 @@ export function ScreenerTable({
   const shown = useMemo(() => {
     const kept = rows.filter((r) => {
       if (q && !r.coin.toLowerCase().includes(q)) return false;
+      if (sector && sectorOf(r.coin) !== sector) return false;
       const f = r.flags[tf];
       if (filter === "candidates") return f.candidate;
       if (filter === "fast") return f.movingFast;
@@ -101,7 +110,10 @@ export function ScreenerTable({
       if (sort.key === "oi") return r.positioning?.oi1d ?? r.oiChange;
       if (sort.key === "score") return r.signals?.[tf]?.score ?? null;
       if (sort.key === "rsi") return r.price?.[tf]?.rsi ?? null;
-      if (sort.key === "cvd") return r.flow?.cvd24h ?? null;
+      if (sort.key === "cvd") return cvdFor(r.flow, r.spot, tf)?.value ?? null;
+      if (sort.key === "rating") return r.strength?.rating ?? null;
+      if (sort.key === "alpha") return r.price?.[tf]?.alpha ?? null;
+      if (sort.key === "hold") return r.strength?.capture ?? null;
       if (sort.key === "volume") return r.volume24h;
       return r.tf[sort.key.slice(3) as Timeframe].rs;
     };
@@ -123,21 +135,21 @@ export function ScreenerTable({
       return [...cands, ...rest];
     }
     return sorted;
-  }, [rows, tf, filter, sort, q]);
+  }, [rows, tf, filter, sort, q, sector]);
 
   if (shown.length === 0) {
     // In the table but filtered out is a different answer from not in the table.
     const elsewhere = q && filter !== "all" ? rows.filter((r) => r.coin.toLowerCase().includes(q)).length : 0;
     return (
       <p className="px-2 py-6 text-center text-xs text-muted-foreground" data-testid="screener-empty">
-        {elsewhere ? `"${search.trim()}" is in the table, but not under this filter. Choose All to see it.` : q ? `No coin matching "${search.trim()}" in the table.` : "Nothing here on this timeframe with this filter."}
+        {elsewhere ? `"${search.trim()}" is in the table, but not under this filter. Choose All to see it.` : q ? `No coin matching "${search.trim()}" in the table${sector ? ` under ${sector}` : ""}.` : "Nothing here on this timeframe with this filter."}
       </p>
     );
   }
 
   return (
     <div className="-mx-1 overflow-x-auto">
-      <table className="w-full min-w-[640px] border-separate border-spacing-0 text-xs" data-testid="screener-table">
+      <table className="w-full min-w-[820px] border-separate border-spacing-0 text-xs" data-testid="screener-table">
         <thead>
           <tr>
             <th className="sticky left-0 z-10 w-5 bg-card px-1" />
@@ -149,19 +161,28 @@ export function ScreenerTable({
                 {t}
               </Head>
             ))}
+            <Head sort={sort} setSort={setSort} k="rating" className="text-right" title="RS rating, 1–99: the coin's place in the table by RS change, blended over 1D, 1W and 1M. The arrow is the change from a week ago: a coin climbing the ranks.">
+              Rtg
+            </Head>
+            <Head sort={sort} setSort={setSort} k="alpha" className="text-right" title={`Alpha on ${tf}: the coin's move with its BTC beta taken out. A high-beta coin beats BTC on every green day; this is what is left.`}>
+              Alpha
+            </Head>
+            <Head sort={sort} setSort={setSort} k="hold" className="text-right" title="Hold: up capture minus down capture over 14 days of hours. Positive is a coin that gains more on BTC's green hours than it gives back on the red ones.">
+              Hold
+            </Head>
             <Head sort={sort} setSort={setSort} k="rvol" className="text-right" title={`Relative volume on ${tf}: the last period over the mean of the previous 20`}>
               RVOL
             </Head>
             <Head sort={sort} setSort={setSort} k="funding" className="text-right" title="Current funding, annualized">
               Fund.
             </Head>
-            <Head sort={sort} setSort={setSort} k="score" className="text-right" title={`Readings that agree on ${tf}: RS vs BTC, its acceleration, RSI, trend, open interest against price, funding crowding. Each +1, 0 or −1.`}>
+            <Head sort={sort} setSort={setSort} k="score" className="text-right" title={`Six independent votes on ${tf}: momentum (RS, its acceleration, RSI and trend as one), alpha, holding up on BTC's red hours, open interest against price, funding crowding, taker flow. Each +1, 0 or −1.`}>
               Signals
             </Head>
             <Head sort={sort} setSort={setSort} k="rsi" className="text-right" title={`RSI 14 on ${tf} candles`}>
               RSI
             </Head>
-            <Head sort={sort} setSort={setSort} k="cvd" className="text-right" title="Binance taker flow over 24 hours: net taker buying as a share of volume, read through your relay">
+            <Head sort={sort} setSort={setSort} k="cvd" className="text-right" title={`Taker flow on Binance for ${tf}'s window: net taker buying as a share of volume. The perp's when your relay read it (p), else the spot book's, read by the server (s).`}>
               CVD
             </Head>
             <Head sort={sort} setSort={setSort} k="oi" className="text-right" title="Open interest over the last 24 hours, and what it says against price">
@@ -177,6 +198,10 @@ export function ScreenerTable({
           {shown.map((r) => {
             const m = r.tf[tf];
             const f = r.flags[tf];
+            const cvd = cvdFor(r.flow, r.spot, tf);
+            const st = r.strength;
+            const rose = st?.rating != null && st.ratingWas != null ? st.rating - st.ratingWas : null;
+            const alpha = r.price?.[tf]?.alpha ?? null;
             const on = charted.has(r.coin);
             return (
               <tr
@@ -244,6 +269,23 @@ export function ScreenerTable({
                     </td>
                   );
                 })}
+                <td
+                  className={`whitespace-nowrap px-1.5 py-1 text-right font-mono ${st?.rating == null ? "text-muted-foreground" : st.rating >= 80 ? "text-emerald-400" : st.rating <= 20 ? "text-red-400" : ""}`}
+                  title={st?.rating != null ? `RS rating ${st.rating} of 99${st.ratingWas != null ? `, ${st.ratingWas} a week ago` : ""}` : "No rating: too few bars"}
+                  data-testid={`screener-rating-${r.coin}`}
+                >
+                  {st?.rating ?? "—"}
+                  {rose != null && Math.abs(rose) >= 10 && <span className={`ml-0.5 text-[9px] ${rose > 0 ? "text-emerald-400" : "text-red-400"}`}>{rose > 0 ? "▲" : "▼"}{Math.abs(rose)}</span>}
+                </td>
+                <td className={`whitespace-nowrap px-1.5 py-1 text-right font-mono ${alpha == null ? "text-muted-foreground" : alpha > 0.003 ? "text-emerald-400" : alpha < -0.003 ? "text-red-400" : ""}`} title={st?.beta != null ? `Beta to BTC ${st.beta.toFixed(2)}` : undefined}>
+                  {fmtPct(alpha)}
+                </td>
+                <td
+                  className={`whitespace-nowrap px-1.5 py-1 text-right font-mono ${st?.capture == null ? "text-muted-foreground" : st.capture > CAPTURE_BAND ? "text-emerald-400" : st.capture < -CAPTURE_BAND ? "text-red-400" : ""}`}
+                  title={st?.upCapture != null && st.downCapture != null ? `On BTC's green hours it made ${st.upCapture.toFixed(2)}× BTC's gain; on the red hours it lost ${st.downCapture.toFixed(2)}× BTC's loss` : undefined}
+                >
+                  {st?.capture == null ? "—" : `${st.capture > 0 ? "+" : "−"}${Math.abs(st.capture).toFixed(2)}`}
+                </td>
                 <td className={`whitespace-nowrap px-1.5 py-1 text-right font-mono ${m.rvol != null && m.rvol >= rvolMin ? "text-emerald-400" : ""}`}>{fmtX(m.rvol)}</td>
                 <td className={`whitespace-nowrap px-1.5 py-1 text-right font-mono ${r.fundingAnnual != null && r.fundingAnnual > 0.3 ? "text-amber-500" : ""}`}>{fmtPct(r.fundingAnnual, 0)}</td>
                 <td className="whitespace-nowrap px-1.5 py-1 text-right" title={signalTitle(r, tf)} data-testid={`screener-score-${r.coin}`}>
@@ -251,10 +293,16 @@ export function ScreenerTable({
                 </td>
                 <td className={`whitespace-nowrap px-1.5 py-1 text-right font-mono ${rsiTone(r.price?.[tf]?.rsi)}`}>{r.price?.[tf]?.rsi != null ? r.price[tf].rsi!.toFixed(0) : "—"}</td>
                 <td
-                  className={`whitespace-nowrap px-1.5 py-1 text-right font-mono ${r.flow?.cvd24h == null ? "text-muted-foreground" : r.flow.cvd24h > 0.02 ? "text-emerald-400" : r.flow.cvd24h < -0.02 ? "text-red-400" : ""}`}
-                  title={r.flow ? `Binance ${r.flow.symbol}: taker delta ${fmtPct(r.flow.cvd24h)} of volume over 24h, price ${fmtPct(r.flow.px24h)}; accounts long/short ${r.flow.lsAccounts?.toFixed(2) ?? "—"}` : "No Binance flow for this coin"}
+                  className={`whitespace-nowrap px-1.5 py-1 text-right font-mono ${cvd == null ? "text-muted-foreground" : cvd.value > 0.02 ? "text-emerald-400" : cvd.value < -0.02 ? "text-red-400" : ""}`}
+                  title={
+                    cvd
+                      ? `Binance ${cvd.source === "perp" ? "perp" : "spot"} ${cvd.symbol}: net taker buying ${fmtPct(cvd.value)} of volume over ${cvd.window}${r.spot && r.flow ? `; spot 24h ${fmtPct(r.spot.cvd24h)}, perp 24h ${fmtPct(r.flow.cvd24h)}` : ""}`
+                      : (flowNote ?? "No Binance spot pair or perp for this coin")
+                  }
+                  data-testid={`screener-cvd-${r.coin}`}
                 >
-                  {fmtPct(r.flow?.cvd24h)}
+                  {fmtPct(cvd?.value)}
+                  {cvd && <span className="ml-0.5 text-[9px] text-muted-foreground">{cvd.source === "perp" ? "p" : "s"}</span>}
                 </td>
                 <td className="whitespace-nowrap px-1.5 py-1 text-right font-mono" title={r.positioning?.read ? OI_READ[r.positioning.read] : undefined}>
                   {fmtPct(r.positioning?.oi1d ?? r.oiChange)}
@@ -292,21 +340,32 @@ const OI_TONE = { "new-longs": "text-emerald-400", "short-covering": "text-sky-4
 
 const rsiTone = (x: number | null | undefined) => (x == null ? "" : x >= 70 ? "text-amber-500" : x <= 30 ? "text-sky-400" : "");
 
+/** The six votes the score sums. Momentum is RS, its acceleration, RSI and trend taken as one. */
 export const SIGNAL_NAMES = [
+  ["momentum", "Momentum (RS, accel, RSI, trend)"],
+  ["alpha", "Alpha (beta taken out)"],
+  ["resilience", "Holds on BTC's red hours"],
+  ["oi", "Open interest vs price"],
+  ["funding", "Funding crowding"],
+  ["cvd", "Taker flow (CVD)"],
+] as const;
+
+/** What momentum is made of: shown, not summed apiece. */
+export const MOMENTUM_PARTS = [
   ["rs", "RS vs BTC"],
   ["accel", "RS acceleration"],
   ["rsi", "RSI"],
   ["trend", "Trend (20/50 average)"],
-  ["oi", "Open interest vs price"],
-  ["funding", "Funding crowding"],
-  ["cvd", "Binance taker flow (CVD 24h)"],
 ] as const;
+
+/** A run stored before the score was rebuilt has the old seven readings and none of the new votes: read as it was. */
+const votesOf = (s: NonNullable<ScreenerRow["signals"][Timeframe]>) => SIGNAL_NAMES.map(([k]) => (s[k] ?? 0) as number);
 
 function signalTitle(r: ScreenerRow, tf: Timeframe): string {
   const s = r.signals?.[tf];
   if (!s) return "";
   const sign = (v: number) => (v > 0 ? "+" : v < 0 ? "−" : "·");
-  return SIGNAL_NAMES.map(([k, name]) => `${sign(s[k])} ${name}`).join("\n") + (s.divergence ? `\n${s.divergence === "bearish" ? "Bearish" : "Bullish"} divergence` : "");
+  return SIGNAL_NAMES.map(([k, name]) => `${sign(s[k] ?? 0)} ${name}`).join("\n") + (s.divergence ? `\n${s.divergence === "bearish" ? "Bearish" : "Bullish"} divergence` : "");
 }
 
 /** Six dots, one per reading, and their sum. */
@@ -315,8 +374,8 @@ export function SignalDots({ s }: { s?: ScreenerRow["signals"][Timeframe] }) {
   return (
     <span className="inline-flex items-center gap-1">
       <span className="inline-flex gap-px">
-        {SIGNAL_NAMES.map(([k]) => (
-          <span key={k} className={`inline-block h-1.5 w-1.5 rounded-full ${s[k] > 0 ? "bg-emerald-400" : s[k] < 0 ? "bg-red-400" : "bg-muted-foreground/30"}`} />
+        {votesOf(s).map((v, i) => (
+          <span key={SIGNAL_NAMES[i][0]} className={`inline-block h-1.5 w-1.5 rounded-full ${v > 0 ? "bg-emerald-400" : v < 0 ? "bg-red-400" : "bg-muted-foreground/30"}`} />
         ))}
       </span>
       <span className={`w-6 text-right font-mono text-[11px] font-semibold ${s.score >= 3 ? "text-emerald-400" : s.score <= -3 ? "text-red-400" : "text-foreground/80"}`}>
