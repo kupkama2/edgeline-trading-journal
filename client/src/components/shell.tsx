@@ -337,6 +337,19 @@ export function Shell({ children }: { children: React.ReactNode }) {
         </div>
       </header>
 
+      {session.data?.demo && (
+        <div className="border-b border-sky-500/30 bg-sky-500/10 px-4 py-1.5 text-center text-[11px] text-sky-300" data-testid="demo-banner">
+          You are looking at a demo journal: sample trades on real prices. Nothing you change is saved.{" "}
+          <button
+            type="button"
+            className="font-semibold underline underline-offset-2 hover:text-sky-200"
+            onClick={() => void fetch("/api/logout", { method: "POST", credentials: "include" }).then(() => window.location.assign("/"))}
+            data-testid="demo-leave"
+          >
+            Sign in for your own
+          </button>
+        </div>
+      )}
       <main className="mx-auto max-w-6xl px-4 py-6 sm:px-6 sm:py-8">{children}</main>
       {/* The owner's chat: a window in the corner of every page. */}
       {session.data?.admin && <ChatDock />}
