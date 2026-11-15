@@ -59,6 +59,12 @@ export function registerScreenerRoutes(app: Express): void {
     res.json(await aiTrackRecord());
   });
 
+  /** How the screener's own flags did against BTC a day, three days and a week on. */
+  app.get("/api/screener/track", async (_req, res) => {
+    const { flagTrackRecord } = await import("./screener");
+    res.json(await flagTrackRecord());
+  });
+
   /** Ask for a read of the latest run now: at most every half hour, and answered at once — the page hears "screener" when it lands. */
   app.post("/api/screener/ai", async (_req, res) => {
     const { analyzeRun, aiStatus, AI_COOLDOWN_MS } = await import("./screener-ai");
@@ -98,7 +104,7 @@ export function registerScreenerRoutes(app: Express): void {
 
   app.get("/api/screener/settings", async (_req, res) => res.json(await screenerSettings()));
   app.put("/api/screener/settings", async (req, res) => {
-    const body = z.object({ minVolume: z.number().optional(), rvolMin: z.number().optional(), stopLookback: z.number().optional(), riskDollars: z.number().optional(), oiJumpMin: z.number().optional() }).strict().safeParse(req.body);
+    const body = z.object({ minVolume: z.number().optional(), rvolMin: z.number().optional(), stopLookback: z.number().optional(), riskDollars: z.number().optional(), oiJumpMin: z.number().optional(), builderBooks: z.boolean().optional() }).strict().safeParse(req.body);
     if (!body.success) return res.status(400).json({ message: "Invalid settings", issues: body.error.issues });
     res.json(await saveScreenerSettings(body.data));
   });

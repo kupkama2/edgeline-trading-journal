@@ -3,6 +3,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "./queryClient";
 import type { ExitPlan, ScreenerCandle, ScreenerRow, ScreenerSettings, Timeframe } from "@shared/screener";
 import type { Anomaly } from "@shared/flow";
+import type { FlagTrack } from "@shared/flag-track";
 
 /** What the page reads: the latest run, the settings, and whether a refresh may be asked for. */
 export interface ScreenerPage {
@@ -18,6 +19,7 @@ export interface ScreenerPage {
     btc?: { d1: number | null; w1: number | null };
     flowStatus?: { source: "relay" | "none"; account: string | null; outdated: boolean; coins: number; failed: number; mismatched?: string[]; error: string | null } | null;
     liqStatus?: { accounts: number; failed: number; error: string | null } | null;
+    spotStatus?: { coins: number; failed: number; error: string | null } | null;
     anomalies?: Anomaly[];
     settings: ScreenerSettings;
     rows: ScreenerRow[];
@@ -38,6 +40,11 @@ export function useScreenerStatus(running: boolean) {
     enabled: running,
     refetchInterval: running ? 4_000 : false,
   });
+}
+
+/** How the screener's flags did against BTC afterwards; asked for only when the card is open. */
+export function useScreenerTrack(enabled: boolean) {
+  return useQuery<FlagTrack>({ queryKey: ["/api/screener/track"], enabled, staleTime: 5 * 60_000 });
 }
 
 export const invalidateScreener = () => {

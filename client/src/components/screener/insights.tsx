@@ -273,8 +273,9 @@ export function ScreenerInsights({ run, onOpen }: { run: NonNullable<ScreenerPag
         {flow?.source === "relay"
           ? `Binance flow through your relay (${flow.account}): ${flow.coins} coins${flow.failed ? `, ${flow.failed} failed` : ""}${flow.mismatched?.length ? `; ${flow.mismatched.join(", ")} left out — the Binance namesake is a different token` : ""}.`
           : flow
-            ? `Binance flow off: ${flow.error ?? "no relay"}`
+            ? `Binance perp flow off: ${flow.error ?? "no relay"}`
             : "Binance flow arrives with the next run."}{" "}
+        {run.spotStatus ? (run.spotStatus.coins ? `Spot taker flow read by the server for ${run.spotStatus.coins} coins${run.spotStatus.failed ? `, ${run.spotStatus.failed} failed` : ""}.` : `Spot taker flow off: ${run.spotStatus.error ?? "no coin matched a Binance spot pair"}.`) : ""}{" "}
         {liq ? (liq.error ? `Liquidation map off: ${liq.error}.` : `Liquidation map from ${liq.accounts} of Hyperliquid's largest accounts.`) : ""}
       </p>
 

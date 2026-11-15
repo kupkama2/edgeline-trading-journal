@@ -20,6 +20,7 @@ import { fetch as undiciFetch } from "undici";
 import { egressFor } from "./egress";
 import { hlInfo } from "./hyperliquid";
 import { publicRelayFor, relayPublic } from "./relay";
+import { spotGet } from "./binance";
 import { accounts as accountStore } from "./storage";
 import { parseClearinghouseState } from "@shared/hyperliquid";
 import {
@@ -33,11 +34,19 @@ import {
   parseOiHist,
   parsePremiumIndex,
   parseRatio,
+  parseSpotPrices,
+  matchSpot,
+  spotFlowOf,
+  topAccountsOf,
   type FlowReadings,
   type LiqMap,
+  type SpotFlow,
+  type TopAccounts,
 } from "@shared/flow";
 
 const FLOW_PER_MIN = Number(process.env.FLOW_PER_MIN ?? "150");
+/** Spot klines cost 2 of the 6000 weight a minute the spot API allows per IP: 240 a minute is a twelfth of it. */
+const SPOT_PER_MIN = Number(process.env.SPOT_FLOW_PER_MIN ?? "240");
 const LIQ_ACCOUNTS = Number(process.env.LIQ_ACCOUNTS ?? "300");
 const LIQ_PER_MIN = Number(process.env.LIQ_PER_MIN ?? "200");
 const LIQ_GIVE_UP_AFTER = 12;
@@ -58,6 +67,13 @@ export interface FlowStatus {
 
 export interface LiqStatus {
   accounts: number;
+  failed: number;
+  error: string | null;
+}
+
+export interface SpotStatus {
+  /** Coins with a Binance spot pair that is the same coin, and read. */
+  coins: number;
   failed: number;
   error: string | null;
 }
@@ -143,6 +159,53 @@ export async function readBinanceFlow(
   return { status, byCoin };
 }
 
+/* ------------------------------- Binance spot flow ------------------------------- */
+
+/**
+ * Taker flow on Binance's spot book, read by the server: every pair's price
+ * in one read to find the coins that are the same coin, then a week of
+ * hourly klines each. No relay and no key — it is public market data, and
+ * the mirror serves it where the main host will not. A host that has
+ * rate-limited this server is not asked (server/binance.ts keeps that), and
+ * three failures in a row end the pass: whatever is wrong is not one coin's.
+ */
+export async function readSpotFlow(
+  coins: { coin: string; mark: number | null }[],
+  onProgress?: (done: number, total: number) => void,
+): Promise<{ status: SpotStatus; byCoin: Map<string, SpotFlow> }> {
+  const byCoin = new Map<string, SpotFlow>();
+  const status: SpotStatus = { coins: 0, failed: 0, error: null };
+  let prices: Map<string, number>;
+  try {
+    prices = parseSpotPrices(await spotGet("/api/v3/ticker/price"));
+    if (prices.size === 0) throw new Error("Binance spot answered with no prices");
+  } catch (err: any) {
+    status.error = String(err?.message ?? err).slice(0, 200);
+    return { status, byCoin };
+  }
+  const listed = coins.map((c) => ({ ...c, match: matchSpot(c.coin, c.mark, prices) })).filter((c) => c.match);
+  const wait = pacer(SPOT_PER_MIN);
+  let done = 0;
+  let failedInARow = 0;
+  for (const c of listed) {
+    await wait();
+    try {
+      const klines = parseFlowKlines(await spotGet(`/api/v3/klines?symbol=${encodeURIComponent(c.match!.symbol)}&interval=1h&limit=168`));
+      if (klines.length >= 2) {
+        byCoin.set(c.coin, spotFlowOf(c.match!.symbol, klines));
+        status.coins++;
+      }
+      failedInARow = 0;
+    } catch (err: any) {
+      status.failed++;
+      if (!status.error) status.error = `${c.coin}: ${String(err?.message ?? err).slice(0, 160)}`;
+      if (++failedInARow >= 3) break;
+    }
+    onProgress?.(++done, listed.length);
+  }
+  return { status, byCoin };
+}
+
 /* ------------------------------- the liquidation map ------------------------------- */
 
 export async function readLiqMap(
@@ -150,8 +213,9 @@ export async function readLiqMap(
   onProgress?: (done: number, total: number) => void,
   /** The mids as they are once the accounts are read: the bands are a percent wide, and the marks handed in are from the start of the run. */
   midsNow?: () => Promise<Map<string, number>>,
-): Promise<{ status: LiqStatus; byCoin: Map<string, LiqMap> }> {
+): Promise<{ status: LiqStatus; byCoin: Map<string, LiqMap>; topByCoin: Map<string, TopAccounts> }> {
   const byCoin = new Map<string, LiqMap>();
+  const topByCoin = new Map<string, TopAccounts>();
   const status: LiqStatus = { accounts: 0, failed: 0, error: null };
   let addresses: string[] = [];
   try {
@@ -167,7 +231,7 @@ export async function readLiqMap(
     }
   } catch (err: any) {
     status.error = String(err?.message ?? err).slice(0, 200);
-    return { status, byCoin };
+    return { status, byCoin, topByCoin };
   }
   const wanted = new Map(coins.filter((c) => c.mark != null && c.mark > 0).map((c) => [c.coin, c.mark!]));
   const positions = new Map<string, { szi: number; liquidationPx: number | null }[]>();
@@ -199,6 +263,11 @@ export async function readLiqMap(
   }
   // Only with something to place: an empty leaderboard asks nothing more of the venue.
   const mids = midsNow && positions.size ? await midsNow().catch(() => null) : null;
-  for (const [coin, list] of Array.from(positions)) byCoin.set(coin, liqMapOf(mids?.get(coin) ?? wanted.get(coin)!, list, holders.get(coin)?.size ?? 0));
-  return { status, byCoin };
+  for (const [coin, list] of Array.from(positions)) {
+    const mark = mids?.get(coin) ?? wanted.get(coin)!;
+    byCoin.set(coin, liqMapOf(mark, list, holders.get(coin)?.size ?? 0));
+    // The same positions, summed by side: what the largest accounts hold in the coin, net.
+    topByCoin.set(coin, topAccountsOf(mark, list));
+  }
+  return { status, byCoin, topByCoin };
 }

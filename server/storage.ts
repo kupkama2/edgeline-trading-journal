@@ -386,6 +386,13 @@ CREATE TABLE IF NOT EXISTS screener_settings (
   body TEXT NOT NULL
 );
 ALTER TABLE screener_snapshots ADD COLUMN IF NOT EXISTS oracle DOUBLE PRECISION;
+-- What the screener flagged, when: priced afterwards for the track record.
+CREATE TABLE IF NOT EXISTS screener_flag_log (
+  at TEXT NOT NULL,
+  coin TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  PRIMARY KEY (at, coin, kind)
+);
 ALTER TABLE screener_series ADD COLUMN IF NOT EXISTS body_gz BYTEA;
 ALTER TABLE screener_runs ADD COLUMN IF NOT EXISTS body_gz BYTEA;
 ALTER TABLE candle_cache ADD COLUMN IF NOT EXISTS body_gz BYTEA;
@@ -1076,6 +1083,28 @@ export const screenerStore = {
     const r = rows[0];
     return r ? { id: r.id, at: r.at, tookMs: r.took_ms, body: unpack(r.body_gz, r.body) ?? "", errors: r.errors, universe: r.universe, settings: r.settings } : null;
   },
+  /** The newest run at or before `target` and no older than `floor`: what "a day ago" is read from. */
+  async runNear(target: string, floor: string): Promise<{ at: string; body: string } | null> {
+    const rows = await sql<{ at: string; body: string | null; body_gz: Buffer | null }[]>`
+      SELECT at, body, body_gz FROM screener_runs WHERE at <= ${target} AND at >= ${floor} ORDER BY at DESC LIMIT 1`;
+    const r = rows[0];
+    return r ? { at: r.at, body: unpack(r.body_gz, r.body) ?? "" } : null;
+  },
+  /** Every coin's 24h volume in the snapshot at or before `target`, no older than `tolerance`. */
+  async volumesNear(target: string, tolerance: string): Promise<Map<string, number>> {
+    const rows = await sql<{ coin: string; volume: number | null }[]>`
+      SELECT DISTINCT ON (coin) coin, volume FROM screener_snapshots
+      WHERE at <= ${target} AND at >= ${tolerance} ORDER BY coin, at DESC`;
+    return new Map(rows.filter((r) => r.volume != null).map((r) => [r.coin, r.volume!]));
+  },
+  /** What the screener flagged and when: one row per coin and kind, for the track record. */
+  async logFlags(at: string, rows: { coin: string; kind: string }[]): Promise<void> {
+    if (!rows.length) return;
+    await sql`INSERT INTO screener_flag_log ${sql(rows.map((r) => ({ at, coin: r.coin, kind: r.kind })))} ON CONFLICT DO NOTHING`;
+  },
+  async flagsSince(since: string): Promise<{ at: string; coin: string; kind: string }[]> {
+    return sql<{ at: string; coin: string; kind: string }[]>`SELECT at, coin, kind FROM screener_flag_log WHERE at >= ${since} ORDER BY at`;
+  },
   async saveRun(r: { at: string; tookMs: number; body: string; errors: number; universe: number; settings: string }): Promise<number> {
     const rows = await sql<{ id: number }[]>`INSERT INTO screener_runs (at, took_ms, body, body_gz, errors, universe, settings)
       VALUES (${r.at}, ${r.tookMs}, ${""}, ${pack(r.body)}, ${r.errors}, ${r.universe}, ${r.settings}) RETURNING id`;
@@ -1144,6 +1173,7 @@ export const screenerStore = {
   },
   /** Everything but the settings, gone: a clean slate for a test. */
   async clearAll(): Promise<void> {
+    await sql`DELETE FROM screener_flag_log`;
     await sql`DELETE FROM screener_snapshots`;
     await sql`DELETE FROM screener_runs`;
     await sql`DELETE FROM screener_series`;
@@ -1151,6 +1181,7 @@ export const screenerStore = {
   /** Snapshots and runs older than their windows, gone. Series are one row per coin and replace themselves. */
   async prune(before: string, runsBefore = before): Promise<void> {
     await sql`DELETE FROM screener_snapshots WHERE at < ${before}`;
+    await sql`DELETE FROM screener_flag_log WHERE at < ${before}`;
     await sql`DELETE FROM screener_runs WHERE at < ${runsBefore}`;
   },
 };

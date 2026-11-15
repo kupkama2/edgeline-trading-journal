@@ -96,7 +96,7 @@ function ScanBody({ s, onOpen }: { s: ScreenerScan; onOpen: (coin: string) => vo
   const rowsOf: { label: string; title?: string; cell: (tf: Timeframe) => React.ReactNode }[] = [
     {
       label: "Signals",
-      title: "RS, acceleration, RSI, trend, OI, funding, flow: green for, red against, and their sum",
+      title: "Six votes: momentum, alpha, holding on BTC's red hours, OI, funding, flow. Green for, red against, and their sum",
       cell: (tf) => {
         const sg = r.signals?.[tf];
         if (!sg) return <span className="text-muted-foreground">—</span>;
@@ -137,6 +137,8 @@ function ScanBody({ s, onOpen }: { s: ScreenerScan; onOpen: (coin: string) => vo
         return <span className={e === 2 ? "text-emerald-400" : e === 0 ? "text-red-400" : ""}>{e == null ? "—" : EMA_SAY[e]}</span>;
       },
     },
+    { label: "Alpha", title: "The move with the coin's BTC beta taken out", cell: (tf) => <span className={`font-mono ${sgnTone(r.price?.[tf]?.alpha)}`}>{fmtPct(r.price?.[tf]?.alpha)}</span> },
+    { label: "Efficiency", title: "Net move over 20 periods ÷ the path travelled: 1 a straight line, 0 chop", cell: (tf) => <span className={`font-mono ${sgnTone(r.price?.[tf]?.efficiency)}`}>{r.price?.[tf]?.efficiency == null ? "—" : r.price[tf].efficiency!.toFixed(2)}</span> },
     { label: "Off high", title: "How far under the 20-period high", cell: (tf) => <span className="font-mono">{r.price?.[tf]?.offHigh == null ? "—" : fmtPct(-r.price[tf].offHigh!)}</span> },
     { label: "ATR", title: "14-period average true range, as a share of price", cell: (tf) => <span className="font-mono">{r.price?.[tf]?.atrPct == null ? "—" : `${(r.price[tf].atrPct! * 100).toFixed(1)}%`}</span> },
     { label: "RS vs ETH", cell: (tf) => <span className={`font-mono ${sgnTone(r.price?.[tf]?.rsEth)}`}>{fmtPct(r.price?.[tf]?.rsEth)}</span> },
@@ -183,6 +185,13 @@ function ScanBody({ s, onOpen }: { s: ScreenerScan; onOpen: (coin: string) => vo
         {r.oiChange != null && <span className={sgnTone(r.oiChange)}>OI {fmtPct(r.oiChange)}</span>}
         {r.positioning?.read && <span className="text-muted-foreground">{OI_READ[r.positioning.read]}</span>}
         {r.leverageDriven && <span className="font-semibold text-amber-500">leverage-driven</span>}
+        {r.strength?.rating != null && <span title="RS rating, 1–99, against the run's coins">rating {r.strength.rating}</span>}
+        {r.strength?.beta != null && <span className="text-muted-foreground">beta {r.strength.beta.toFixed(2)}</span>}
+        {r.strength?.upCapture != null && r.strength.downCapture != null && (
+          <span className={sgnTone(r.strength.capture)} title="Its summed return on BTC's up hours over BTC's own, and on the down hours">
+            capture {r.strength.upCapture.toFixed(2)}× up · {r.strength.downCapture.toFixed(2)}× down
+          </span>
+        )}
       </div>
       <p className="mt-0.5 text-[10px] text-muted-foreground" data-testid="screener-scan-source">
         {s.source === "run" ? `From the run at ${fmtPrague(s.at)}` : `Read from the venue at ${fmtPrague(s.at)}, ranked against the run's ${s.universe - 1} coins`} · measured to {fmtPrague(new Date(s.barsTo).toISOString())}

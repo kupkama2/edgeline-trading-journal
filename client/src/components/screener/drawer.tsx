@@ -6,7 +6,9 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sh
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Segmented } from "@/components/trade-shared";
-import { OI_READ, SIGNAL_NAMES, SignalDots } from "@/components/screener/table";
+import { MOMENTUM_PARTS, OI_READ, SIGNAL_NAMES, SignalDots } from "@/components/screener/table";
+import { cvdFor } from "@shared/flow";
+import { sectorOf } from "@shared/sectors";
 import { TIMEFRAMES, type Timeframe } from "@shared/screener";
 import { useTheme } from "@/components/shell";
 import { ACCEL_ARROW, fmtPct, fmtPx, fmtUsd, fmtX, hostOf, sizeFor, useScreenerCoin, useScreenerNews, type ScreenerCoin, type ScreenerNews } from "@/lib/screener";
@@ -126,11 +128,22 @@ function RatioChart({ data, invalidation }: { data: ScreenerCoin["ratio"]; inval
 }
 
 /** One reading in words, for the panel. */
-function readingText(k: (typeof SIGNAL_NAMES)[number][0], row: NonNullable<ScreenerCoin["row"]>, tf: Timeframe): string {
+function readingText(k: (typeof SIGNAL_NAMES)[number][0] | (typeof MOMENTUM_PARTS)[number][0], row: NonNullable<ScreenerCoin["row"]>, tf: Timeframe): string {
   const m = row.tf[tf];
   const p = row.price?.[tf];
   const pos = row.positioning;
+  const st = row.strength;
   switch (k) {
+    case "momentum": {
+      const s = row.signals?.[tf];
+      if (!s) return "—";
+      const n = (s.rs ?? 0) + (s.accel ?? 0) + (s.rsi ?? 0) + (s.trend ?? 0);
+      return `${n > 0 ? "+" : n < 0 ? "−" : ""}${Math.abs(n)} of 4`;
+    }
+    case "alpha":
+      return p?.alpha != null ? `${fmtPct(p.alpha)}${st?.beta != null ? ` · beta ${st.beta.toFixed(2)}` : ""}` : "—";
+    case "resilience":
+      return st?.upCapture != null && st.downCapture != null ? `up ${st.upCapture.toFixed(2)}× · down ${st.downCapture.toFixed(2)}×` : "—";
     case "rs":
       return fmtPct(m.rs);
     case "accel":
@@ -143,9 +156,12 @@ function readingText(k: (typeof SIGNAL_NAMES)[number][0], row: NonNullable<Scree
       return pos?.read ? pos.read.replace("-", " ") : pos?.oi1d != null ? `${fmtPct(pos.oi1d)} flat` : "no history yet";
     case "funding":
       return pos?.fundingPct != null ? `${fmtPct(row.fundingAnnual, 0)} · ${Math.round(pos.fundingPct * 100)}th pct` : fmtPct(row.fundingAnnual, 0);
-    case "cvd":
-      return row.flow?.cvd24h != null ? `${fmtPct(row.flow.cvd24h)} of volume` : "no Binance flow";
+    case "cvd": {
+      const c = cvdFor(row.flow, row.spot, tf);
+      return c ? `${fmtPct(c.value)} of volume · ${c.source} ${c.window}` : "no taker flow read";
+    }
   }
+  return "—";
 }
 
 /** A small line, for the CVD and the account ratio. */
@@ -198,6 +214,7 @@ function LiqBars({ liq }: { liq: Liq }) {
 /** Binance's flow for the coin and the two venues side by side. */
 function FlowPanel({ row }: { row: NonNullable<ScreenerCoin["row"]> }) {
   const f = row.flow;
+  const sp = row.spot;
   const Item = ({ k, v, warn }: { k: string; v: string; warn?: boolean }) => (
     <li className="flex justify-between gap-2">
       <span className="text-muted-foreground">{k}</span>
@@ -207,13 +224,26 @@ function FlowPanel({ row }: { row: NonNullable<ScreenerCoin["row"]> }) {
   return (
     <div className="mt-4 rounded-md border border-border/70 p-3" data-testid="screener-flow">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h3 className="text-sm font-semibold">Binance flow{f ? ` · ${f.symbol}` : ""}</h3>
-        <span className="text-[10px] text-muted-foreground">through your relay</span>
+        <h3 className="text-sm font-semibold">Binance flow{f ? ` · ${f.symbol}` : sp ? ` · ${sp.symbol}` : ""}</h3>
+        <span className="text-[10px] text-muted-foreground">{f ? "perp through your relay · spot by the server" : "spot, read by the server"}</span>
       </div>
+      {sp && (
+        <div className="mt-2" data-testid="screener-spot-flow">
+          <ul className="grid grid-cols-1 gap-x-4 gap-y-1 text-xs sm:grid-cols-2">
+            <Item k="Spot taker delta 4h · 24h · 7d" v={`${fmtPct(sp.cvd4h)} · ${fmtPct(sp.cvd24h)} · ${fmtPct(sp.cvd7d)}`} />
+            <Item k="Price 24h (spot)" v={fmtPct(sp.px24h)} />
+            {f && <Item k="Spot minus perp, 24h" v={sp.cvd24h != null && f.cvd24h != null ? fmtPct(sp.cvd24h - f.cvd24h) : "—"} warn={sp.cvd24h != null && f.cvd24h != null && Math.abs(sp.cvd24h - f.cvd24h) >= 0.05} />}
+          </ul>
+          <div className="mt-2">
+            <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Spot CVD, last week</p>
+            <MiniLine points={sp.cvdSeries.map((x) => x.cvd)} testId="screener-spot-cvd-line" />
+          </div>
+        </div>
+      )}
       {f ? (
         <>
           <ul className="mt-2 grid grid-cols-1 gap-x-4 gap-y-1 text-xs sm:grid-cols-2">
-            <Item k="Taker delta 4h · 24h" v={`${fmtPct(f.cvd4h)} · ${fmtPct(f.cvd24h)}`} />
+            <Item k="Perp taker delta 4h · 24h · 7d" v={`${fmtPct(f.cvd4h)} · ${fmtPct(f.cvd24h)} · ${fmtPct(f.cvd7d)}`} />
             <Item k="Price 24h (Binance)" v={fmtPct(f.px24h)} />
             <Item k="Accounts long/short · 24h" v={`${f.lsAccounts?.toFixed(2) ?? "—"} · ${fmtPct(f.lsAccounts24h)}`} />
             <Item k="Top traders' positions L/S · 24h" v={`${f.lsTop?.toFixed(2) ?? "—"} · ${fmtPct(f.lsTop24h)}`} />
@@ -223,7 +253,7 @@ function FlowPanel({ row }: { row: NonNullable<ScreenerCoin["row"]> }) {
           </ul>
           <div className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div>
-              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">CVD, last week</p>
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Perp CVD, last week</p>
               <MiniLine points={f.cvdSeries.map((x) => x.cvd)} testId="screener-cvd-line" />
             </div>
             <div>
@@ -233,8 +263,55 @@ function FlowPanel({ row }: { row: NonNullable<ScreenerCoin["row"]> }) {
           </div>
         </>
       ) : (
-        <p className="mt-1 text-[11px] text-muted-foreground">No Binance flow for this coin: it is not a Binance USDT perp, or the relay was not running at the last run.</p>
+        <p className="mt-1 text-[11px] text-muted-foreground">
+          {sp
+            ? "The perp's flow, long/short ratios and open interest come through the relay, which was not connected at the last run (or the coin is not a Binance USDT perp)."
+            : "No Binance flow for this coin: it has no Binance spot pair or USDT perp that is the same coin, or the last run could not reach Binance."}
+        </p>
       )}
+    </div>
+  );
+}
+
+/** Strength beyond the ratio: the rank, the beta, what the coin does on BTC's green and red hours, how clean the move is. */
+function StrengthPanel({ row, tf }: { row: NonNullable<ScreenerCoin["row"]>; tf: Timeframe }) {
+  const st = row.strength;
+  const p = row.price?.[tf];
+  const top = row.top;
+  if (!st && !top) return null;
+  const usd = (x: number) => (x >= 1e6 ? `$${(x / 1e6).toFixed(1)}M` : `$${Math.round(x / 1e3)}K`);
+  const sector = sectorOf(row.coin);
+  const Item = ({ k, v, tone, title }: { k: string; v: string; tone?: string; title?: string }) => (
+    <li className="flex items-baseline justify-between gap-2" title={title}>
+      <span className="text-muted-foreground">{k}</span>
+      <span className={`font-mono ${tone ?? ""}`}>{v}</span>
+    </li>
+  );
+  const sgn = (x: number | null | undefined, band = 0) => (x == null ? "" : x > band ? "text-emerald-400" : x < -band ? "text-red-400" : "");
+  return (
+    <div className="mt-4 rounded-md border border-border/70 p-3" data-testid="screener-strength">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h3 className="text-sm font-semibold">Strength, beyond the ratio</h3>
+        {sector && <span className="rounded border border-border px-1 text-[10px] text-muted-foreground">{sector}</span>}
+      </div>
+      <ul className="mt-2 grid grid-cols-1 gap-x-4 gap-y-1 text-xs sm:grid-cols-2">
+        {st && (
+          <>
+            <Item k="RS rating · a week ago" v={`${st.rating ?? "—"} · ${st.ratingWas ?? "—"}`} tone={st.rating != null && st.ratingWas != null ? sgn(st.rating - st.ratingWas, 9) : ""} title="1–99: its place in the table by RS change over 1D, 1W and 1M" />
+            <Item k={`Alpha · ${tf}`} v={fmtPct(p?.alpha)} tone={sgn(p?.alpha, 0.003)} title="The move with beta × BTC's move taken out" />
+            <Item k="Beta to BTC" v={st.beta != null ? st.beta.toFixed(2) : "—"} title="The slope of its hourly returns on BTC's, 30 days" />
+            <Item k="Up · down capture" v={st.upCapture != null && st.downCapture != null ? `${st.upCapture.toFixed(2)}× · ${st.downCapture.toFixed(2)}×` : "—"} tone={sgn(st.capture, 0.15)} title="Its summed return on BTC's up hours over BTC's own, and the same on the down hours, 14 days. Up above down is a coin that holds." />
+            <Item k={`Trend efficiency · ${tf}`} v={p?.efficiency != null ? p.efficiency.toFixed(2) : "—"} tone={sgn(p?.efficiency, 0.3)} title="Net move over the last 20 periods ÷ the path travelled: 1 a straight line, 0 chop" />
+            <Item k="Share of venue volume · a week ago" v={st.volShare != null ? `${(st.volShare * 100).toFixed(2)}% · ${st.volShareWas != null ? `${(st.volShareWas * 100).toFixed(2)}%` : "—"}` : "—"} tone={st.volShare != null && st.volShareWas != null && st.volShareWas > 0 ? sgn(st.volShare / st.volShareWas - 1, 0.25) : ""} />
+          </>
+        )}
+        {top && (
+          <>
+            <Item k="Largest accounts, net · a day ago" v={`${fmtPct(top.net, 0)} · ${fmtPct(top.netWas, 0)}`} tone={sgn(top.net, 0.1)} title="Long minus short as a share of what Hyperliquid's largest accounts hold in it: +100% all long" />
+            <Item k="Their longs · shorts" v={`${usd(top.longUsd)} (${top.longs}) · ${usd(top.shortUsd)} (${top.shorts})`} />
+          </>
+        )}
+      </ul>
     </div>
   );
 }
@@ -406,8 +483,17 @@ export function CoinDrawer({
               {SIGNAL_NAMES.map(([k, name]) => {
                 const v = row.signals?.[tf]?.[k] ?? 0;
                 return (
-                  <li key={k} className="flex items-baseline justify-between gap-2">
+                  <li key={k} className="flex items-baseline justify-between gap-2" data-testid={`screener-vote-${k}`}>
                     <span className="text-muted-foreground">{name}</span>
+                    <span className={`font-mono ${v > 0 ? "text-emerald-400" : v < 0 ? "text-red-400" : "text-muted-foreground"}`}>{readingText(k, row, tf)}</span>
+                  </li>
+                );
+              })}
+              {MOMENTUM_PARTS.map(([k, name]) => {
+                const v = row.signals?.[tf]?.[k] ?? 0;
+                return (
+                  <li key={k} className="flex items-baseline justify-between gap-2 pl-3 text-[11px]">
+                    <span className="text-muted-foreground">· {name}</span>
                     <span className={`font-mono ${v > 0 ? "text-emerald-400" : v < 0 ? "text-red-400" : "text-muted-foreground"}`}>{readingText(k, row, tf)}</span>
                   </li>
                 );
@@ -442,6 +528,7 @@ export function CoinDrawer({
           </div>
         )}
 
+        {row && <StrengthPanel row={row} tf={tf} />}
         {row && <FlowPanel row={row} />}
         {row && <LiqPanel row={row} />}
 

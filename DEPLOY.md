@@ -228,9 +228,19 @@ minutes; a failed run counts, which is the back-off.
   public market-data reads; an older copy is reported on the Screener as
   "older copy — download the new relay". About four reads per coin at most
   150 a minute, inside Binance's 1000 per five minutes.
+- **Spot taker flow** (CVD on Binance's spot book) is read by the server
+  itself, with no relay: every pair's price in one read, then a week of
+  hourly klines per coin that has a spot pair — about a hundred light reads
+  an hour, off Binance's public market-data mirror where the main host
+  refuses. The CVD column shows the perp's flow when the relay read it and
+  the spot book's when not, so it is never blank for want of a relay.
+  `SPOT_FLOW_PER_MIN` paces it (240 by default).
 - **The liquidation map** reads Hyperliquid's public leaderboard and the
   positions of its 300 largest accounts each run (set `LIQ_ACCOUNTS` to
-  change it).
+  change it). The same positions give each coin's net among those accounts.
+- **Stocks, indices and commodities** on Hyperliquid's builder books are
+  read too, over the same volume line; a switch in the Screener's settings
+  turns them off.
 - **The AI read** comes with the runs after 08:00 and 13:30 Prague,
   or on "Read now" at most every 30 minutes (data over an hour old is refreshed first), when `ANTHROPIC_API_KEY` is
   set. `SCREENER_AI_MODEL` picks the model.

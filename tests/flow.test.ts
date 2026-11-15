@@ -13,7 +13,13 @@ import {
   parseLeaderboard,
   parsePremiumIndex,
   parseRatio,
+  cvdFor,
+  matchSpot,
+  parseSpotPrices,
+  spotFlowOf,
+  topAccountsOf,
 } from "../shared/flow";
+import { flagsOf, summarizeFlags } from "../shared/flag-track";
 import { parseAiRead } from "../server/screener-ai";
 
 /**
@@ -126,6 +132,81 @@ describe("the flow arithmetic", () => {
     expect(a.filter((x) => x.coin.startsWith("Q"))).toEqual([]);
   });
 
+  it("finds the spot pair that is the same coin, and reads the flow for a timeframe from the perp first, the spot book after", () => {
+    const prices = parseSpotPrices([{ symbol: "SOLUSDT", price: "150" }, { symbol: "PEPEUSDT", price: "0.00001" }, { symbol: "1000SATSUSDT", price: "0.0004" }, { symbol: "HYPEUSDT", price: "3" }, { symbol: "BAD", price: "x" }]);
+    expect(matchSpot("SOL", 151, prices)).toEqual({ symbol: "SOLUSDT", scale: 1 });
+    // kPEPE is a thousand PEPE: the plain pair at a thousandth of the mark.
+    expect(matchSpot("kPEPE", 0.0101, prices)).toEqual({ symbol: "PEPEUSDT", scale: 1000 });
+    // Binance quotes SATS by the thousand; Hyperliquid's kSATS is the same unit.
+    expect(matchSpot("kSATS", 0.0004, prices)).toEqual({ symbol: "1000SATSUSDT", scale: 1 });
+    // A namesake at a tenth of the price is another token; a builder-book market has no spot pair at all.
+    expect(matchSpot("HYPE", 30, prices)).toBeNull();
+    expect(matchSpot("xyz:SOL", 150, prices)).toBeNull();
+
+    const bars = Array.from({ length: 168 }, (_, i) => ({ t: i * HOUR, c: 100 + i, v: 100, buy: i >= 164 ? 80 : 50 }));
+    const spot = spotFlowOf("SOLUSDT", bars);
+    // The last four hours were 80 of 100 bought: +60% of volume; diluted over a day and a week.
+    expect(spot.cvd4h).toBeCloseTo(0.6, 9);
+    expect(spot.cvd24h).toBeCloseTo((4 * 60) / 2400, 9);
+    expect(spot.cvd7d).toBeCloseTo((4 * 60) / 16800, 9);
+    expect(cvdFor(null, spot, "4h")).toMatchObject({ value: 0.6, window: "4h", source: "spot", symbol: "SOLUSDT" });
+    expect(cvdFor(null, spot, "1W")).toMatchObject({ window: "7d", source: "spot" });
+    const perp = { symbol: "SOLUSDT", cvd4h: -0.1, cvd24h: -0.05, cvd7d: null } as any;
+    expect(cvdFor(perp, spot, "1D")).toMatchObject({ value: -0.05, source: "perp" });
+    // The perp has no week (a run stored before it was read): the spot book's is used.
+    expect(cvdFor(perp, spot, "1M")).toMatchObject({ source: "spot" });
+    expect(cvdFor(null, null, "1D")).toBeNull();
+  });
+
+  it("sums the largest accounts by side, and flags them changing sides, spot leading and perps leading", () => {
+    const top = topAccountsOf(10, [{ szi: 300 }, { szi: 100 }, { szi: -100 }, { szi: 0 }]);
+    expect(top).toMatchObject({ longUsd: 4000, shortUsd: 1000, longs: 2, shorts: 1 });
+    expect(top.net).toBeCloseTo(0.6, 9);
+    expect(topAccountsOf(10, []).net).toBeNull();
+    const base = { oi24hHl: null, liq: null, divergence: null };
+    const flow = (cvd24h: number) => ({ cvd24h, px24h: 0.05 }) as any;
+    const kinds = (rows: any[]) => findAnomalies(rows).map((a) => `${a.coin}:${a.kind}`);
+    expect(
+      kinds([
+        // Spot buys, the perp does not: paid for.
+        { ...base, coin: "A", px24h: 0.05, flow: flow(-0.01), spot: { cvd24h: 0.08 } },
+        // The perp buys while spot sells: leverage.
+        { ...base, coin: "B", px24h: 0.05, flow: flow(0.06), spot: { cvd24h: -0.05 } },
+        // The largest accounts from 40% net long to 20% net short in a day, with $3M in it.
+        { ...base, coin: "C", px24h: 0, flow: null, top: { longUsd: 1_200_000, shortUsd: 1_800_000, longs: 3, shorts: 4, net: -0.2, netWas: 0.4 } },
+        // The same turn on a hundred thousand dollars is nobody.
+        { ...base, coin: "D", px24h: 0, flow: null, top: { longUsd: 40_000, shortUsd: 60_000, longs: 1, shorts: 1, net: -0.2, netWas: 0.4 } },
+      ]),
+    ).toEqual(expect.arrayContaining(["A:spot-led", "B:perp-led", "C:whales-flip"]));
+    expect(kinds([{ ...base, coin: "D", px24h: 0, flow: null, top: { longUsd: 40_000, shortUsd: 60_000, longs: 1, shorts: 1, net: -0.2, netWas: 0.4 } }])).toEqual([]);
+  });
+
+  it("writes down what a run flags, and prices each flag against BTC a day, three days and a week on", () => {
+    const row = (coin: string, o: any = {}) => ({ coin, error: null, flags: { "4h": { candidate: !!o.c4, weakest: false }, "1D": { candidate: !!o.c1, weakest: !!o.weak } }, signals: { "1D": { score: o.score ?? 0 } }, strength: { rating: o.rating ?? 50 } });
+    expect(flagsOf(row("A", { c4: true, score: 4, rating: 95 }))).toEqual(["candidate-4h", "score-1D", "rating"]);
+    expect(flagsOf(row("B", { weak: true, score: 3, rating: 89 }))).toEqual(["weakest-1D"]);
+    expect(flagsOf({ ...row("C", { c1: true }), error: "boom" })).toEqual([]);
+
+    const DAY = 24 * HOUR;
+    const t0 = 10 * DAY;
+    // Hourly prices: BTC flat at 100; UP rises 1% a day; DOWN falls 1% a day.
+    const hours = (f: (d: number) => number) => Array.from({ length: 9 * 24 + 1 }, (_, i) => ({ at: t0 + i * HOUR, mark: f(i / 24) }));
+    const series = new Map([["BTC", hours(() => 100)], ["UP", hours((d) => 10 * (1 + 0.01 * d))], ["DOWN", hours((d) => 10 * (1 - 0.01 * d))]]);
+    const at = new Date(t0).toISOString();
+    const track = summarizeFlags([{ at, coin: "UP", kind: "candidate-1D" }, { at, coin: "DOWN", kind: "candidate-1D" }, { at, coin: "DOWN", kind: "weakest-1D" }], series, t0 + 4 * DAY, at);
+    const cand = track.kinds.find((k) => k.id === "candidate-1D")!;
+    expect(cand.logged).toBe(2);
+    // A day on: one beat BTC by 1%, one lost 1%. Three days on: ±3%. A week is still ahead.
+    expect(cand.cells["24h"]).toMatchObject({ n: 2, beat: 1 });
+    expect(cand.cells["24h"].avgRs).toBeCloseTo(0, 9);
+    expect(cand.cells["3d"].n).toBe(2);
+    expect(cand.cells["1w"].n).toBe(0);
+    const weak = track.kinds.find((k) => k.id === "weakest-1D")!;
+    expect(weak.cells["3d"]).toMatchObject({ n: 1, beat: 0 });
+    expect(weak.cells["3d"].avgRs).toBeCloseTo(-0.03, 9);
+    expect(track.entries).toBe(3);
+  });
+
   it("reads the AI's JSON however it is wrapped, and drops what is not in the shape", () => {
     const r = parseAiRead('Here you go:\n```json\n{"regime":"Alts lead.","tips":[{"coin":"SOL","stance":"moon","horizon":"days","thesis":"t","agree":["a",3],"disagree":[],"invalidation":"i","confidence":"high"},{"stance":"long"}],"anomalies":[{"coin":"X","note":"n"}]}\n```');
     expect(r).toMatchObject({ regime: "Alts lead.", tips: [{ coin: "SOL", stance: "watch", agree: ["a"], confidence: "high" }], anomalies: [{ coin: "X", note: "n" }] });
@@ -142,6 +223,7 @@ let base = "";
 let relay: WebSocket | null = null;
 const relayAsked: { path: string; params: any; public: boolean }[] = [];
 let claudeAsked: any = null;
+const spotAsked: string[] = [];
 const WHALE_A = "0x" + "1".repeat(40);
 const WHALE_B = "0x" + "2".repeat(40);
 
@@ -163,6 +245,11 @@ function startFake(): Promise<string> {
         const u = new URL(req.url ?? "/", "http://x");
         if (u.pathname === "/info") {
           const q = JSON.parse(body || "{}");
+          // One builder book, with one market on it over the volume line.
+          if (q.type === "perpDexs") return json([null, { name: "xyz", full_name: "XYZ" }]);
+          if (q.type === "metaAndAssetCtxs" && q.dex === "xyz") {
+            return json([{ universe: [{ name: "xyz:XYZ100", szDecimals: 2 }] }, [{ funding: "0.00001", openInterest: "500", dayNtlVlm: "30000000", markPx: "28000", oraclePx: "28000" }]]);
+          }
           if (q.type === "metaAndAssetCtxs") {
             const names = ["BTC", "SOL", "ETH", "kPEPE", "HYPE"];
             const hour = Math.floor(Date.now() / HOUR);
@@ -185,6 +272,28 @@ function startFake(): Promise<string> {
             return json({ assetPositions: [] });
           }
           return json([]);
+        }
+        // Binance's spot book, read by the server itself: SOL bought by takers, PEPE listed per token, nothing else.
+        if (u.pathname === "/api/v3/ticker/price") {
+          const hour = Math.floor(Date.now() / HOUR);
+          return json([
+            { symbol: "SOLUSDT", price: String(closeOf("SOL", hour, "1h")) },
+            { symbol: "PEPEUSDT", price: String(closeOf("kPEPE", hour, "1h") / 1000) },
+            // A namesake at a tenth of the price: another token.
+            { symbol: "HYPEUSDT", price: String(closeOf("HYPE", hour, "1h") / 10) },
+          ]);
+        }
+        if (u.pathname === "/api/v3/klines") {
+          spotAsked.push(u.searchParams.get("symbol") ?? "");
+          const limit = Number(u.searchParams.get("limit"));
+          const hourNow = Math.floor(Date.now() / HOUR) * HOUR;
+          return json(
+            Array.from({ length: limit }, (_, i) => {
+              const t = hourNow - (limit - 1 - i) * HOUR;
+              // 60 of every 100 traded on spot were taker buys.
+              return [t, "150", "150", "150", String(150 * (1 + i * 0.002)), "100", t + HOUR - 1, "0", 10, "60", "0", "0"];
+            }),
+          );
         }
         if (u.pathname === "/Mainnet/leaderboard") return json({ leaderboardRows: [{ ethAddress: WHALE_A, accountValue: "9000000" }, { ethAddress: WHALE_B, accountValue: "5000000" }] });
         if (u.pathname === "/v1/messages") {
@@ -253,6 +362,8 @@ beforeAll(async () => {
   const f = await startFake();
   process.env.HYPERLIQUID_BASE = f;
   process.env.HL_STATS_BASE = f;
+  process.env.BINANCE_BASE = f;
+  process.env.SPOT_FLOW_PER_MIN = "100000";
   process.env.ANTHROPIC_BASE_URL = f;
   process.env.ANTHROPIC_API_KEY = "test-key";
   process.env.SCREENER_CLOCK_MS = "0";
@@ -298,6 +409,24 @@ describe.skipIf(!DB)("a run with the flow, the map and the read", () => {
     expect(run.flowStatus).toMatchObject({ source: "none", outdated: true });
     expect(run.flowStatus!.error).toMatch(/older copy/);
     expect(relayAsked).toEqual([]);
+    // With no usable relay, the taker flow is still there: read off the spot book by the server.
+    expect(run.spotStatus).toMatchObject({ coins: 2, failed: 0, error: null });
+    expect(spotAsked.sort()).toEqual(["PEPEUSDT", "SOLUSDT"]);
+    const sol = run.rows.find((r) => r.coin === "SOL")!;
+    expect(sol.flow).toBeNull();
+    // 60 of every 100 were taker buys: (120 − 100) / 100, on every window.
+    expect(sol.spot).toMatchObject({ symbol: "SOLUSDT" });
+    expect(sol.spot!.cvd24h).toBeCloseTo(0.2, 9);
+    expect(sol.spot!.cvd7d).toBeCloseTo(0.2, 9);
+    expect(sol.signals["1D"].cvd).toBe(1);
+    expect(sol.signals["1W"].cvd).toBe(1);
+    // kPEPE is a thousand PEPE: matched to the plain spot pair at a thousandth of the mark. HYPE's namesake is another token.
+    expect(run.rows.find((r) => r.coin === "kPEPE")!.spot!.symbol).toBe("PEPEUSDT");
+    expect(run.rows.find((r) => r.coin === "HYPE")!.spot).toBeNull();
+    // The builder book's market is in the table under its own name, with no Binance flow to read.
+    const xyz = run.rows.find((r) => r.coin === "xyz:XYZ100")!;
+    expect(xyz).toMatchObject({ error: null, spot: null, flow: null });
+    expect(xyz.tf["1D"].rs).not.toBeNull();
     relay.close();
     await new Promise((r) => setTimeout(r, 200));
   });
@@ -319,7 +448,9 @@ describe.skipIf(!DB)("a run with the flow, the map and the read", () => {
     expect(sol.flow!.lsAccounts).toBe(2.4);
     expect(sol.flow!.lsTop).toBe(0.8);
     expect(sol.flow!.basis).toBeCloseTo(0.004, 6);
+    // The perp's flow wins the vote when the relay read it; the spot book's is kept beside it.
     expect(sol.signals["1D"].cvd).toBe(-1);
+    expect(sol.spot!.cvd24h).toBeCloseTo(0.2, 9);
     // HYPE's Binance namesake trades at a tenth of the price: another token, so no flow, and the status says so.
     expect(run.rows.find((r) => r.coin === "HYPE")!.flow).toBeNull();
     expect(run.flowStatus!.mismatched).toEqual(["HYPE"]);
@@ -329,9 +460,30 @@ describe.skipIf(!DB)("a run with the flow, the map and the read", () => {
     expect(sol.liq!.nearestShort!.at).toBeCloseTo(0.02, 9);
     expect(sol.liq!.nearestLong!.at).toBeCloseTo(-0.07, 9);
     expect(sol.liq!.accounts).toBe(2);
+    // The same accounts, summed by side: 20,000 short against 8,000 long is (8 − 20) / 28 net.
+    expect(sol.top).toMatchObject({ longs: 1, shorts: 1 });
+    expect(sol.top!.net).toBeCloseTo(-12 / 28, 9);
+    expect(sol.top!.netWas).toBeNull();
 
     const solA = run.anomalies.filter((a) => a.coin === "SOL").map((a) => a.kind);
-    expect(solA).toEqual(expect.arrayContaining(["cvd-divergence", "funding-gap", "whales-vs-crowd", "basis"]));
+    expect(solA).toEqual(expect.arrayContaining(["cvd-divergence", "funding-gap", "whales-vs-crowd", "basis", "spot-led"]));
+
+    // Strength beyond the ratio: every measured coin has a beta, and the universe ranks it.
+    expect(sol.strength!.beta).not.toBeNull();
+    // Five coins are not a universe to rank: no rating under ten.
+    expect(sol.strength!.rating).toBeNull();
+    expect(sol.strength!.volShare).toBeGreaterThan(0);
+    expect(sol.signals["1D"]).toMatchObject({ momentum: expect.any(Number), alpha: expect.any(Number), resilience: expect.any(Number) });
+    const s = sol.signals["1D"];
+    expect(s.score).toBe(s.momentum + s.alpha + s.resilience + s.oi + s.funding + s.cvd);
+
+    // What the run flagged is written down once, and the track record answers (nothing a day old to price yet).
+    const track = await (await fetch(`${base}/api/screener/track`)).json();
+    expect(track.kinds.map((k: any) => k.id)).toEqual(["candidate-4h", "candidate-1D", "score-1D", "rating", "weakest-1D"]);
+    const before = track.entries;
+    await runScreener({ force: true });
+    const { flagTrackRecord } = await import("../server/screener");
+    expect((await flagTrackRecord(() => Date.now() + 11 * 60_000)).entries).toBe(before);
   });
 
   it("reads the run with Claude when asked, and stores the answer for the page", async () => {
@@ -347,6 +499,7 @@ describe.skipIf(!DB)("a run with the flow, the map and the read", () => {
     // What Claude was given: the coin with its Binance flow and the anomalies, nothing else.
     const digest = JSON.parse(claudeAsked.messages[0].content.replace(/^Screener run:\n/, ""));
     expect(digest.coins.find((c: any) => c.coin === "SOL").binance.cvd24h).toBeCloseTo(-0.2, 3);
+    expect(digest.coins.find((c: any) => c.coin === "SOL")).toMatchObject({ sector: "Majors", spot: { cvd24h: 0.2 }, strength: { beta: expect.any(Number) }, largestAccounts: { net: -0.43 } });
     expect(digest.anomalies.length).toBeGreaterThan(0);
     expect(claudeAsked.thinking).toEqual({ type: "adaptive" });
     // Asked again at once: refused, the half-hour has not passed.
