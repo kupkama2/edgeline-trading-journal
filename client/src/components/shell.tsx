@@ -11,7 +11,8 @@ import {
   LineChart,
   NotebookPen,
   Palette,
-  Settings2, BookOpen, Radar, Wallet, MessagesSquare } from "lucide-react";
+  Settings2, BookOpen, Radar, Wallet } from "lucide-react";
+import { ChatDock } from "@/components/chat-dock";
 import { useQuery } from "@tanstack/react-query";
 import type { SessionResponse } from "@/components/login-gate";
 import { XpChip, XpToaster } from "@/components/xp";
@@ -139,7 +140,6 @@ const NAV = [
 const ADMIN_NAV = [
   { href: "/screener", label: "Screener", icon: Radar },
   { href: "/portfolio", label: "Portfolio", icon: Wallet },
-  { href: "/chat", label: "Chat", icon: MessagesSquare },
 ];
 
 function ThemePicker() {
@@ -338,6 +338,8 @@ export function Shell({ children }: { children: React.ReactNode }) {
       </header>
 
       <main className="mx-auto max-w-6xl px-4 py-6 sm:px-6 sm:py-8">{children}</main>
+      {/* The owner's chat: a window in the corner of every page. */}
+      {session.data?.admin && <ChatDock />}
       <XpToaster />
     </div>
   );

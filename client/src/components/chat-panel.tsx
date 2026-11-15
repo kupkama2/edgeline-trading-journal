@@ -1,12 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, Check, Loader2, MessageSquarePlus, NotebookPen, Square, Trash2, Wrench, X } from "lucide-react";
+import { ArrowUp, Check, ChevronDown, Loader2, MessageSquarePlus, NotebookPen, Square, Trash2, X } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { PriceChart } from "@/components/screener/drawer";
 import { useScreenerCoin } from "@/lib/screener";
-import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Markdown } from "@/components/markdown";
-import { usePublicMode } from "@/lib/public-mode";
 import { queryClient } from "@/lib/queryClient";
 import { chartOf, streamChat, TOOL_LABEL, useChatHome, useChatThread, useDeleteChatThread, useSaveChatNotes, type ChatBubble, type ChatChart, type ChatEffort, type ChatThread } from "@/lib/chat";
 
@@ -137,13 +135,14 @@ function ToolChips({ tools }: { tools: { name: string; done: boolean; ok: boolea
 }
 
 /**
- * The owner's chat: a Claude model of their choosing, which reads the
- * screener, the open positions and the journal through the server's own
- * tools and answers from them. It reads; it cannot place or change a trade.
+ * The owner's chat, as the inside of the window in the corner: a Claude
+ * model of their choosing, which reads the screener, the open positions and
+ * the journal through the server's own tools and answers from them. It
+ * reads; it cannot place or change a trade. It stays mounted while the
+ * window is folded, so an answer being written carries on.
  */
-export default function ChatPage() {
+export default function ChatPanel({ onFold, onBusy }: { onFold: () => void; onBusy?: (busy: boolean) => void }) {
   const home = useChatHome();
-  const { isPublic } = usePublicMode();
   const [threadId, setThreadId] = useState<number | null>(null);
   const thread = useChatThread(threadId);
   const del = useDeleteChatThread();
@@ -164,8 +163,9 @@ export default function ChatPage() {
   useEffect(() => {
     end.current?.scrollIntoView({ block: "end" });
   }, [bubbles.length, live?.text, live?.tools.length, live?.error]);
-  // Leaving the page stops the answer: nobody is there to read it.
   useEffect(() => () => stop.current?.abort(), []);
+  // The button in the corner shows when an answer is being written behind a folded window.
+  useEffect(() => onBusy?.(answering), [answering, onBusy]);
 
   const send = async (text: string) => {
     const question = text.trim();
@@ -233,27 +233,17 @@ export default function ChatPage() {
     setLive(null);
   };
 
-  if (isPublic) {
-    return (
-      <div className="space-y-4" data-testid="page-chat">
-        <h1 className="text-xl font-bold tracking-tight">Chat</h1>
-        <p className="text-sm text-muted-foreground">Hidden in public mode: the answers quote your positions and results.</p>
-      </div>
-    );
-  }
-
   const select = "h-8 rounded-md border border-border bg-background px-2 text-xs text-foreground focus:outline-none focus-visible:ring-1 focus-visible:ring-ring";
   const empty = bubbles.length === 0 && !live;
 
   return (
-    <div className="mx-auto flex max-w-3xl flex-col gap-3" data-testid="page-chat">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <h1 className="text-xl font-bold tracking-tight">Chat</h1>
-          <p className="text-[11px] text-muted-foreground">Reads your screener, positions, journal and charts, and can search the web. It cannot place or change a trade.</p>
-        </div>
-        <div className="flex flex-wrap items-center gap-1.5">
-          <select className={`${select} max-w-[11rem]`} value={threadId ?? ""} onChange={(e) => (e.target.value ? (stop.current?.abort(), setLive(null), setThreadId(Number(e.target.value))) : fresh())} aria-label="Conversation" data-testid="chat-thread">
+    <div className="flex h-full min-h-0 flex-col" data-testid="chat-panel">
+      <div className="flex items-center justify-between gap-1 border-b border-border/60 px-2 py-1.5">
+        <span className="pl-1 text-sm font-semibold" title="Reads your screener, positions, journal and charts, and can search the web. It cannot place or change a trade. Billed to the server's Anthropic key per message.">
+          Chat
+        </span>
+        <div className="flex min-w-0 items-center gap-0.5">
+          <select className={`${select} min-w-0 max-w-[9.5rem]`} value={threadId ?? ""} onChange={(e) => (e.target.value ? (stop.current?.abort(), setLive(null), setThreadId(Number(e.target.value))) : fresh())} aria-label="Conversation" data-testid="chat-thread">
             <option value="">New conversation</option>
             {(home.data?.threads ?? []).map((t) => (
               <option key={t.id} value={t.id}>
@@ -281,17 +271,20 @@ export default function ChatPage() {
               <Trash2 className="h-4 w-4" />
             </Button>
           )}
+          <Button size="sm" variant="ghost" className="h-8 px-2" onClick={onFold} title="Fold the chat away" aria-label="Fold the chat away" data-testid="chat-fold">
+            <ChevronDown className="h-4 w-4" />
+          </Button>
         </div>
       </div>
 
       {home.data && !home.data.enabled && (
-        <Card className="border-amber-500/40 bg-card p-3 text-xs text-amber-500" data-testid="chat-disabled">
-          The chat needs ANTHROPIC_API_KEY set on the server (the same key the screener's AI read uses).
-        </Card>
+        <p className="border-b border-amber-500/40 px-3 py-2 text-xs text-amber-500" data-testid="chat-disabled">
+          The chat needs ANTHROPIC_API_KEY set on the server (the same key the screener's AI summary uses).
+        </p>
       )}
 
-      <Card className="flex min-h-[50vh] flex-col border-card-border bg-card p-3 sm:p-4">
-        <div className="flex-1 space-y-4" data-testid="chat-messages">
+      <div className="flex min-h-0 flex-1 flex-col">
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-3" data-testid="chat-messages">
           {empty && (
             <div className="space-y-2 py-6">
               <p className="text-sm text-muted-foreground">Ask about the screener, your positions or your trading. For example:</p>
@@ -335,7 +328,7 @@ export default function ChatPage() {
         </div>
 
         <form
-          className="mt-3 border-t border-border/60 pt-3"
+          className="border-t border-border/60 p-2"
           onSubmit={(e) => {
             e.preventDefault();
             void send(draft);
@@ -394,7 +387,6 @@ export default function ChatPage() {
                   </option>
                 ))}
               </select>
-              <span className="hidden text-[10px] text-muted-foreground sm:inline">{models.find((m) => m.id === chosen)?.note}</span>
             </div>
             {answering ? (
               <Button type="button" size="sm" variant="outline" className="h-8" onClick={() => stop.current?.abort()} data-testid="chat-stop">
@@ -407,10 +399,7 @@ export default function ChatPage() {
             )}
           </div>
         </form>
-      </Card>
-      <p className="flex items-center gap-1 text-[10px] text-muted-foreground">
-        <Wrench className="h-3 w-3" /> Answers come from the site's own data at the moment you ask. Billed to the server's Anthropic key per message; longer conversations and the larger models cost more.
-      </p>
+      </div>
     </div>
   );
 }
