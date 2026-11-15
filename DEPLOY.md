@@ -252,7 +252,8 @@ hundred invented trades on real Hyperliquid prices (so the charts line up),
 three open ones, notes, mistakes, and everything the Journal, Calendar,
 Review and Stats pages make of them. The sign-in screen has a "Look around
 the demo" button to the same place. It is an ordinary account that is never
-the owner's, so the screener, chat, portfolio and terminal are not in it,
+the owner's, so the chat, portfolio and terminal are not in it; the screener
+is, to look at only (your latest scan: no refresh, settings or scan),
 and every request that would change anything is refused: all visitors share
 the one journal. It rebuilds itself every three days so the dates stay
 recent. Set `DEMO=off` to turn it off.

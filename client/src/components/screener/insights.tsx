@@ -182,7 +182,7 @@ function keep(key: string, value: unknown): void {
  * the anomalies the run itself flagged, which need no AI. A coin's name
  * opens it.
  */
-export function ScreenerInsights({ run, onOpen }: { run: NonNullable<ScreenerPage["run"]>; onOpen: (coin: string) => void }) {
+export function ScreenerInsights({ run, onOpen, viewOnly = false }: { run: NonNullable<ScreenerPage["run"]>; onOpen: (coin: string) => void; /** The demo: nothing to press, and no word on how the server is set up. */ viewOnly?: boolean }) {
   const ai = useScreenerAi();
   const track = useScreenerAiTrack();
   const ask = useAskScreenerAi();
@@ -263,7 +263,7 @@ export function ScreenerInsights({ run, onOpen }: { run: NonNullable<ScreenerPag
             </span>
           )}
         </button>
-        {status?.enabled && (
+        {status?.enabled && !viewOnly && (
           <Button size="sm" variant="outline" className="h-7 px-2 text-[11px]" disabled={status.running || ask.isPending || wait > 0} onClick={onAsk} title={wait > 0 ? `Again in ${Math.ceil(wait / 60_000)} min` : "Read the latest run now"} data-testid="screener-ai-ask">
             {status.running || ask.isPending ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Sparkles className="mr-1 h-3 w-3" />}
             {status.running ? "Reading…" : wait > 0 ? `Again in ${Math.ceil(wait / 60_000)} min` : "Read now"}
@@ -273,7 +273,7 @@ export function ScreenerInsights({ run, onOpen }: { run: NonNullable<ScreenerPag
 
       {open && (
       <>
-      <p className="mt-1 text-[11px] text-muted-foreground" data-testid="screener-flow-status">
+      <p className={viewOnly ? "hidden" : "mt-1 text-[11px] text-muted-foreground"} data-testid="screener-flow-status">
         {flow?.source === "relay"
           ? `Binance flow through your relay (${flow.account}): ${flow.coins} coins${flow.failed ? `, ${flow.failed} failed` : ""}${flow.mismatched?.length ? `; ${flow.mismatched.join(", ")} left out — the Binance namesake is a different token` : ""}.`
           : flow
@@ -283,10 +283,10 @@ export function ScreenerInsights({ run, onOpen }: { run: NonNullable<ScreenerPag
         {liq ? (liq.error ? `Liquidation map off: ${liq.error}.` : `Liquidation map from ${liq.accounts} of Hyperliquid's largest accounts.`) : ""}
       </p>
 
-      {!status?.enabled && <p className="mt-2 text-xs text-muted-foreground">The AI read needs ANTHROPIC_API_KEY on the server. The anomalies below need nothing.</p>}
+      {!status?.enabled && !viewOnly && <p className="mt-2 text-xs text-muted-foreground">The AI read needs ANTHROPIC_API_KEY on the server. The anomalies below need nothing.</p>}
       {status?.enabled && !latest && <p className="mt-2 text-xs text-muted-foreground">No read yet. It comes after the 08:00 and 13:30 runs, or ask for one.</p>}
       <p className="mt-1 text-[11px] text-muted-foreground">An AI reads the scan and writes the market in a sentence, the coins worth a look and why, and what would prove each idea wrong. Written after the 08:00 and 13:30 scans, or when you press Read now.</p>
-      {latest?.error && !read && (
+      {latest?.error && !read && !viewOnly && (
         <p className="mt-2 text-xs text-amber-500" data-testid="screener-ai-error">
           {/authentication_error|invalid x-api-key|\b401\b/i.test(latest.error)
             ? "The last summary failed: Anthropic refused the server's API key. Put a valid key in ANTHROPIC_API_KEY on Render (the Chat tab uses the same one)."

@@ -276,7 +276,8 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
   // The owner's tabs are drawn only for the owner; the server refuses everyone else regardless.
   const session = useQuery<SessionResponse>({ queryKey: ["/api/session"] });
-  const nav = session.data?.admin ? [...NAV.slice(0, 4), ...ADMIN_NAV, ...NAV.slice(4)] : NAV;
+  // A demo visitor gets the screener too, to look at.
+  const nav = session.data?.admin ? [...NAV.slice(0, 4), ...ADMIN_NAV, ...NAV.slice(4)] : session.data?.demo ? [...NAV.slice(0, 4), ADMIN_NAV[0], ...NAV.slice(4)] : NAV;
   // Seven names and the clocks do not fit in the header's width; five do on a wide screen.
   const roomy = nav.length <= NAV.length;
 

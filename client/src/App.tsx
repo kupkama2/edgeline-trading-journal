@@ -15,7 +15,7 @@ import { PublicModeProvider } from "@/lib/public-mode";
 import { ChapterProvider } from "@/lib/chapters";
 import { LoginGate } from "@/components/login-gate";
 import NotFound from "@/pages/not-found";
-import { adminOnly } from "@/components/admin-only";
+import { adminOnly, adminOrDemo } from "@/components/admin-only";
 import Journal from "@/pages/journal";
 import TradeView from "@/pages/trade-view";
 
@@ -39,7 +39,8 @@ const ScreenerPage = lazy(() => import("@/pages/screener"));
 const PortfolioPageLazy = lazy(() => import("@/pages/portfolio"));
 // The owner's own tools: anyone else gets the not-found page, and the server refuses them anyway.
 const Terminal = adminOnly(TerminalPage, NotFound);
-const Screener = adminOnly(ScreenerPage, NotFound);
+// The screener is the owner's, and shown, view-only, to a demo visitor.
+const Screener = adminOrDemo(ScreenerPage, NotFound);
 const Portfolio = adminOnly(PortfolioPageLazy, NotFound);
 
 /** A page arriving over the network is a beat, not a blank screen. */
