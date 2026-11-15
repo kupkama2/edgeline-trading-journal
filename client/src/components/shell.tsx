@@ -1,3 +1,4 @@
+import { EdgeScoreChip } from "@/components/edge-score";
 import { useEffect, useState, createContext, useContext } from "react";
 import { NyOpenChip } from "@/components/ny-open";
 import { EventsChip } from "@/components/events-chip";
@@ -330,6 +331,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
             <NyOpenChip />
             <ChapterChip />
             <PublicChip />
+            <EdgeScoreChip />
             <XpChip />
             <LayoutSwitch />
             <ThemePicker />

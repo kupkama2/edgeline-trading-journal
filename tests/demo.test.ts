@@ -155,3 +155,12 @@ describe.skipIf(!DB)("the demo account", () => {
     expect(demoEnabled()).toBe(true);
   });
 });
+
+describe("the demo's door", () => {
+  it("drops a visitor on a page it knows, and on the journal for anything else", async () => {
+    const { landing } = await import("../server/demo");
+    expect(landing("stats")).toBe("/#/stats");
+    expect(landing("screener")).toBe("/#/screener");
+    for (const to of [undefined, "", "settings", "//evil.example", "https://evil.example", ["stats"], "stats/../x"]) expect(landing(to)).toBe("/");
+  });
+});

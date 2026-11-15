@@ -125,6 +125,11 @@ export function LoginGate({ children }: { children: React.ReactNode }) {
               </a>
             </Button>
             <p className="mt-2 text-center text-[10px] text-muted-foreground">A sample journal with a few months of trades. No account needed; nothing is saved.</p>
+            <p className="mt-1 text-center text-[10px]">
+              <a href="/tour" className="text-muted-foreground underline underline-offset-2 hover:text-foreground" data-testid="link-login-tour">
+                Or take the two-minute tour
+              </a>
+            </p>
           </>
         )}
       </Card>
