@@ -67,7 +67,7 @@ export function ReviewRow({
   const [showChart, setShowChart] = useState(chartOpen);
   const [resolving, setResolving] = useState(false);
   const [, navigate] = useLocation();
-  const done = isReviewed(t);
+
   const win = (m.actualPnL ?? 0) >= 0;
   const miss = isMiss(t);
   const { data: shots = [] } = useTradeImages(miss ? t.id : null);
@@ -77,14 +77,46 @@ export function ReviewRow({
       ? Math.abs(t.initialTarget - t.entryPrice) / Math.abs(t.entryPrice - t.initialStop)
       : null;
 
-  const write = (patch: Record<string, unknown>) =>
-    update.mutateAsync({ id: t.id, trade: patch as any }).catch((err: any) =>
-      toast({
-        title: "That didn't save",
-        description: String(err?.message ?? err).slice(0, 160),
-        variant: "destructive",
-      }),
-    );
+  /*
+   * What has been pressed and not yet come back from the server.
+   *
+   * The buttons used to lock while any save on the row was on its way, so a
+   * second press in that moment — "gone over", then "traded well" — fell on
+   * a disabled button and was lost without a word. Now every press counts:
+   * it shows at once from this, the saves go up one after another in the
+   * order pressed (useUpdateTrade), and the entry is dropped when the trade
+   * comes back saying the same.
+   */
+  const [ahead, setAhead] = useState<Partial<Pick<TradeWithTags, "wellTraded" | "tradedPoorly" | "tilt" | "reviewedAt">>>({});
+  const [saving, setSaving] = useState(0);
+  const now = { ...t, ...ahead };
+  // A note alone counts as gone over; a press to take the stamp back has to be seen at once too.
+  const done = "reviewedAt" in ahead ? Boolean(ahead.reviewedAt) : isReviewed(t);
+  useEffect(() => {
+    setAhead((a) => {
+      const left = Object.fromEntries(Object.entries(a).filter(([k, v]) => (k === "reviewedAt" ? Boolean(v) !== Boolean(t.reviewedAt) : (t as any)[k] !== v)));
+      return Object.keys(left).length === Object.keys(a).length ? a : left;
+    });
+  }, [t.wellTraded, t.tradedPoorly, t.tilt, t.reviewedAt]);
+
+  const write = (patch: Record<string, unknown>) => {
+    setSaving((n) => n + 1);
+    return update
+      .mutateAsync({ id: t.id, trade: patch as any })
+      .catch((err: any) => {
+        // What was shown ahead of the save did not happen: back to what the trade says.
+        setAhead({});
+        toast({
+          title: "That didn't save",
+          description: String(err?.message ?? err).slice(0, 160),
+          variant: "destructive",
+        });
+      })
+      .finally(() => setSaving((n) => n - 1));
+  };
+
+  /** The note as typed, when it differs from what is saved: every press on the row takes it along, so none of them can leave it behind. */
+  const unsavedNote = () => (note.trim() !== (t.notes ?? "").trim() ? { notes: note.trim() || null } : {});
 
   /**
    * Traded well and tilt are one answer, not two checkboxes.
@@ -96,8 +128,10 @@ export function ReviewRow({
    * back a judgement they made too fast.
    */
   const verdict = (field: "wellTraded" | "tradedPoorly" | "tilt") => {
-    const on = t[field] === true;
-    void write(exclusiveVerdict({ [field]: !on } as any));
+    const on = now[field] === true;
+    const patch = exclusiveVerdict({ [field]: !on } as any) as Record<string, boolean>;
+    setAhead((a) => ({ ...a, ...patch }));
+    void write({ ...patch, ...unsavedNote() });
   };
 
   /**
@@ -154,10 +188,9 @@ export function ReviewRow({
   /** The note is the work; the stamp only records that the work happened. */
   async function mark() {
     const changed = note.trim() !== "" && note.trim() !== (t.notes ?? "").trim();
-    await write({
-      notes: note.trim() || null,
-      reviewedAt: done ? null : new Date().toISOString(),
-    });
+    const reviewedAt = done ? null : new Date().toISOString();
+    setAhead((a) => ({ ...a, reviewedAt }));
+    await write({ notes: note.trim() || null, reviewedAt });
     // The server reads a closed trade's changed note on its own; say so.
     if (changed && t.status === "closed") setRead("reading the note — the grades follow in a moment");
   }
@@ -284,14 +317,13 @@ export function ReviewRow({
         <Button
           type="button"
           size="sm"
-          variant={t.wellTraded ? "default" : "outline"}
-          className={`h-7 text-[11px] ${t.wellTraded ? "" : "text-muted-foreground"}`}
-          disabled={update.isPending}
+          variant={now.wellTraded ? "default" : "outline"}
+          className={`h-7 text-[11px] ${now.wellTraded ? "" : "text-muted-foreground"}`}
           onClick={() => verdict("wellTraded")}
-          aria-pressed={Boolean(t.wellTraded)}
+          aria-pressed={Boolean(now.wellTraded)}
           data-testid={`button-review-well-${t.id}`}
         >
-          <Star className={`mr-1 h-3 w-3 ${t.wellTraded ? "fill-current" : ""}`} />
+          <Star className={`mr-1 h-3 w-3 ${now.wellTraded ? "fill-current" : ""}`} />
           Traded well
         </Button>
         <Button
@@ -299,24 +331,22 @@ export function ReviewRow({
           size="sm"
           variant="outline"
           className={`h-7 text-[11px] ${
-            t.tradedPoorly ? "border-orange-500/60 bg-orange-500/10 text-orange-400" : "text-muted-foreground"
+            now.tradedPoorly ? "border-orange-500/60 bg-orange-500/10 text-orange-400" : "text-muted-foreground"
           }`}
-          disabled={update.isPending}
           onClick={() => verdict("tradedPoorly")}
-          aria-pressed={Boolean(t.tradedPoorly)}
+          aria-pressed={Boolean(now.tradedPoorly)}
           data-testid={`button-review-poorly-${t.id}`}
         >
-          <ThumbsDown className={`mr-1 h-3 w-3 ${t.tradedPoorly ? "fill-current" : ""}`} />
+          <ThumbsDown className={`mr-1 h-3 w-3 ${now.tradedPoorly ? "fill-current" : ""}`} />
           Traded poorly
         </Button>
         <Button
           type="button"
           size="sm"
-          variant={t.tilt ? "destructive" : "outline"}
-          className={`h-7 text-[11px] ${t.tilt ? "" : "text-muted-foreground"}`}
-          disabled={update.isPending}
+          variant={now.tilt ? "destructive" : "outline"}
+          className={`h-7 text-[11px] ${now.tilt ? "" : "text-muted-foreground"}`}
           onClick={() => verdict("tilt")}
-          aria-pressed={Boolean(t.tilt)}
+          aria-pressed={Boolean(now.tilt)}
           data-testid={`button-review-tilt-${t.id}`}
         >
           <Skull className="mr-1 h-3 w-3" />
@@ -380,16 +410,15 @@ export function ReviewRow({
           size="sm"
           variant={done ? "outline" : "default"}
           className="h-9 shrink-0 text-[11px]"
-          disabled={update.isPending}
           onClick={() => void mark()}
           data-testid={`button-review-${t.id}`}
         >
-          {update.isPending ? (
+          {saving > 0 ? (
             <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
           ) : (
             <Check className="mr-1.5 h-3.5 w-3.5" />
           )}
-          {done ? (t.reviewedAt ? "Gone over" : "Gone over · the note counts") : "Mark gone over"}
+          {done ? (now.reviewedAt ? "Gone over" : "Gone over · the note counts") : "Mark gone over"}
         </Button>
       </div>
 

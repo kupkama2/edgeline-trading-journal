@@ -1,3 +1,4 @@
+import { inTradeOrder } from "./in-order";
 import { useMemo } from "react";
 import type { PositionRow } from "@shared/positions-read";
 import { useMutation, useQuery } from "@tanstack/react-query";
@@ -325,19 +326,26 @@ export function useSetTradeGate() {
   });
 }
 
+/**
+ * Saves to one trade, one after another, in the order they were asked for.
+ *
+ * Two presses a moment apart — the note's "gone over" and then a verdict —
+ * are two requests, and sent side by side they can reach the server in
+ * either order. Each trade has a line: a save waits for the one before it
+ * on the same trade, whichever part of the page asked. Other trades do not
+ * wait for it (lib/in-order.ts).
+ */
 export function useUpdateTrade() {
   return useMutation({
-    mutationFn: async (v: {
-      id: number;
-      trade: UpdateTrade;
-      mistakeTagIds?: number[];
-    }) =>
-      (
-        await apiRequest("PATCH", `/api/trades/${v.id}`, {
-          trade: v.trade,
-          mistakeTagIds: v.mistakeTagIds,
-        })
-      ).json(),
+    mutationFn: (v: { id: number; trade: UpdateTrade; mistakeTagIds?: number[] }) =>
+      inTradeOrder(v.id, async () =>
+        (
+          await apiRequest("PATCH", `/api/trades/${v.id}`, {
+            trade: v.trade,
+            mistakeTagIds: v.mistakeTagIds,
+          })
+        ).json(),
+      ),
     onSuccess: afterSave,
   });
 }
