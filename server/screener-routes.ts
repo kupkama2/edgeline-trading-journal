@@ -104,7 +104,7 @@ export function registerScreenerRoutes(app: Express): void {
 
   app.get("/api/screener/settings", async (_req, res) => res.json(await screenerSettings()));
   app.put("/api/screener/settings", async (req, res) => {
-    const body = z.object({ minVolume: z.number().optional(), rvolMin: z.number().optional(), stopLookback: z.number().optional(), riskDollars: z.number().optional(), oiJumpMin: z.number().optional(), builderBooks: z.boolean().optional() }).strict().safeParse(req.body);
+    const body = z.object({ minVolume: z.number().optional(), rvolMin: z.number().optional(), stopLookback: z.number().optional(), riskDollars: z.number().optional(), oiJumpMin: z.number().optional(), builderBooks: z.boolean().optional(), minVolumeBooks: z.number().optional() }).strict().safeParse(req.body);
     if (!body.success) return res.status(400).json({ message: "Invalid settings", issues: body.error.issues });
     res.json(await saveScreenerSettings(body.data));
   });
@@ -142,7 +142,9 @@ export function registerScreenerRoutes(app: Express): void {
     if (NOT_AN_ALT.test(asked)) return res.json({ asked, coin: asked.toUpperCase(), where: "excluded", reason: "BTC and the dollar-pegged coins are not alts; the screener measures the rest against BTC." });
     const listed = snap?.coins.find((c) => same(c.coin, asked)) ?? null;
     if (listed) {
-      const under = (listed.volume ?? 0) < settings.minVolume;
+      // A builder book's market has its own, lower line.
+      const line = listed.coin.includes(":") ? settings.minVolumeBooks : settings.minVolume;
+      const under = (listed.volume ?? 0) < line;
       const pinned = settings.pinned.includes(listed.coin);
       return res.json({
         asked,
@@ -155,7 +157,7 @@ export function registerScreenerRoutes(app: Express): void {
         reason: pinned
           ? `Pinned: it can go on the chart now, and every run reads it from the next one on, whatever its volume.`
           : under
-            ? `Listed on Hyperliquid, but its 24h volume at the last run was ${fmtUsd(listed.volume)}, under the ${fmtUsd(settings.minVolume)} line. Add it to the chart to compare it anyway; it is read in every run from then on.`
+            ? `Listed on Hyperliquid, but its 24h volume at the last run was ${fmtUsd(listed.volume)}, under the ${fmtUsd(line)} line. Add it to the chart to compare it anyway; it is read in every run from then on.`
             : `Listed on Hyperliquid with ${fmtUsd(listed.volume)} of 24h volume, but not in the last run — it was listed after the run started, or was delisted. Add it to the chart, or refresh.`,
       });
     }

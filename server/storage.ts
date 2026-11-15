@@ -404,6 +404,11 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS chat_messages_thread ON chat_messages (thread_id, id);
+-- What the owner wants the chat to know about them: their style, their rules. Sent with every question.
+CREATE TABLE IF NOT EXISTS chat_notes (
+  user_id INTEGER PRIMARY KEY,
+  body TEXT NOT NULL
+);
 -- What the screener flagged, when: priced afterwards for the track record.
 CREATE TABLE IF NOT EXISTS screener_flag_log (
   at TEXT NOT NULL,
@@ -1276,6 +1281,13 @@ export const chatStore = {
       await tx`INSERT INTO chat_messages ${tx(rows.map((r) => ({ thread_id: threadId, role: r.role, content: r.content, meta: r.meta ?? null, at })))}`;
       await tx`UPDATE chat_threads SET updated_at = ${at}, model = ${model} WHERE id = ${threadId}`;
     });
+  },
+  async notes(userId: number): Promise<string> {
+    const rows = await sql<{ body: string }[]>`SELECT body FROM chat_notes WHERE user_id = ${userId}`;
+    return rows[0]?.body ?? "";
+  },
+  async saveNotes(userId: number, body: string): Promise<void> {
+    await sql`INSERT INTO chat_notes (user_id, body) VALUES (${userId}, ${body}) ON CONFLICT (user_id) DO UPDATE SET body = EXCLUDED.body`;
   },
   async deleteThread(userId: number, id: number): Promise<boolean> {
     const rows = await sql<{ id: number }[]>`DELETE FROM chat_threads WHERE user_id = ${userId} AND id = ${id} RETURNING id`;

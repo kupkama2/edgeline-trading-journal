@@ -253,7 +253,10 @@ stays off. The model picker offers Opus 5.5, Fable 5.2, Sonnet 5.5 and
 Haiku 5.5, narrowed to the ones the key can use. The model reads the site's
 data through read-only tools (the screener's latest run, any coin, the
 flags' track record, open positions, trades, statistics, the calendar); it
-cannot place or change a trade. Each message is billed to the key: a
+cannot place or change a trade. It can also search the web (Anthropic's own
+search tool, billed per search on the same key, five at most per answer),
+read any market's candles and draw a chart with levels in its answer. What
+you write under the notebook button is sent with every question. Each message is billed to the key: a
 question that reads the screener is roughly ten to twenty thousand tokens
 in, most of it cached on the turns that follow. Conversations are stored in
 the database (`chat_threads`, `chat_messages`) and deleted from the page.

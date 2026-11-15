@@ -1,5 +1,6 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest, apiUrl, queryClient } from "./queryClient";
+import { TIMEFRAMES, type Timeframe } from "@shared/screener";
 
 export interface ChatModel {
   id: string;
@@ -15,12 +16,28 @@ export interface ChatHome {
   defaultModel: string | undefined;
   efforts: ChatEffort[];
   threads: { id: number; title: string; model: string | null; updatedAt: string }[];
+  /** What the owner has told the model about themselves; sent with every question. */
+  notes: string;
+}
+
+export interface ChatChart {
+  coin: string;
+  timeframe: Timeframe;
+  levels: { price: number; label: string; kind?: "entry" | "stop" | "target" | "level" }[];
+}
+
+/** A show_chart call's input as the page draws it; null when it is not one. */
+export function chartOf(name: string, input: any): ChatChart | null {
+  if (name !== "show_chart" || !input || typeof input.coin !== "string") return null;
+  const levels = Array.isArray(input.levels) ? input.levels.filter((l: any) => typeof l?.price === "number" && l.price > 0 && typeof l?.label === "string").slice(0, 8) : [];
+  return { coin: input.coin, timeframe: (TIMEFRAMES as string[]).includes(input.timeframe) ? input.timeframe : "4h", levels };
 }
 
 export interface ChatBubble {
   role: "user" | "assistant";
   text: string;
   tools: string[];
+  charts?: ChatChart[];
   at: string;
   model?: string;
   usage?: { input: number; output: number; cached: number };
@@ -49,6 +66,13 @@ export function useChatHome() {
 
 export function useChatThread(id: number | null) {
   return useQuery<ChatThread>({ queryKey: ["/api/chat/threads", String(id)], enabled: id != null });
+}
+
+export function useSaveChatNotes() {
+  return useMutation({
+    mutationFn: async (notes: string) => (await apiRequest("PUT", "/api/chat/notes", { notes })).json() as Promise<{ notes: string }>,
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["/api/chat"], exact: true }),
+  });
 }
 
 export function useDeleteChatThread() {
@@ -115,4 +139,7 @@ export const TOOL_LABEL: Record<string, string> = {
   trade_detail: "Reading a trade",
   trading_stats: "Working out the statistics",
   upcoming_events: "Checking the calendar",
+  price_candles: "Reading the candles",
+  show_chart: "Drawing a chart",
+  web_search: "Searching the web",
 };

@@ -28,8 +28,8 @@ import { aggregate, closedTrades, computeMetrics } from "@shared/metrics";
 import { parseTerminalRef, rAt } from "@shared/terminal";
 import { splitHlAsset } from "@shared/hyperliquid";
 import { cvdFor } from "@shared/flow";
-import { sectorTable, TIMEFRAMES, type ScreenerRow, type Timeframe } from "@shared/screener";
-import { sectorOf } from "@shared/sectors";
+import { blockCandles, sectorTable, TIMEFRAMES, type ScreenerRow, type Timeframe } from "@shared/screener";
+import { ASSET_CLASSES, assetClassOf, sectorOf } from "@shared/sectors";
 import type { TradeWithTags } from "@shared/schema";
 
 import Beta = Anthropic.Beta;
@@ -165,6 +165,7 @@ function rowBrief(x: ScreenerRow, tf: Timeframe) {
   const c = cvdFor(x.flow, x.spot, tf);
   return {
     coin: x.coin,
+    kind: assetClassOf(x.coin),
     sector: sectorOf(x.coin),
     rs: r(x.tf[tf]?.rs),
     accel: x.tf[tf]?.accel ?? null,
@@ -210,6 +211,7 @@ export const CHAT_TOOLS = [
       sort: z.enum(["rating", "score", "rs", "alpha", "hold", "flow", "volume"]).optional(),
       order: z.enum(["strongest", "weakest"]).optional(),
       filter: z.enum(["all", "candidates", "moving_fast", "weakest", "diverging"]).optional(),
+      universe: z.enum(ASSET_CLASSES).optional(),
       sector: z.string().max(24).optional(),
       limit: z.number().int().min(1).max(40).optional(),
     }),
@@ -218,7 +220,8 @@ export const CHAT_TOOLS = [
       sort: { type: "string", enum: ["rating", "score", "rs", "alpha", "hold", "flow", "volume"], description: "What to rank by. Default rating." },
       order: { type: "string", enum: ["strongest", "weakest"], description: "Top of the ranking or the bottom. Default strongest." },
       filter: { type: "string", enum: ["all", "candidates", "moving_fast", "weakest", "diverging"], description: "Only coins carrying this flag on the timeframe. Default all." },
-      sector: { type: "string", description: "Only this sector's coins, by the name the sectors list uses (e.g. Meme, AI, L1, TradFi)." },
+      universe: { type: "string", enum: ASSET_CLASSES, description: "Only this kind of market: crypto, or the stocks (equity), indices, commodities, currencies (fx) and companies not yet listed (pre-ipo) that trade on Hyperliquid's builder books. Default: every kind. Crypto is ranked against crypto and the rest against each other." },
+      sector: { type: "string", description: "Only this sector's coins, by the name the sectors list uses (e.g. Meme, AI, L1)." },
       limit: { type: "integer", minimum: 1, maximum: 40, description: "How many coins. Default 15." },
     }),
     run: async (_userId, input) => {
@@ -231,6 +234,7 @@ export const CHAT_TOOLS = [
         key === "rating" ? (x.strength?.rating ?? null) : key === "score" ? (x.signals?.[tf]?.score ?? null) : key === "rs" ? x.tf[tf]?.rs : key === "alpha" ? (x.price?.[tf]?.alpha ?? null) : key === "hold" ? (x.strength?.capture ?? null) : key === "flow" ? (cvdFor(x.flow, x.spot, tf)?.value ?? null) : x.volume24h;
       const rows = run.rows.filter((x) => {
         if (x.error || val(x) == null) return false;
+        if (input.universe && assetClassOf(x.coin) !== input.universe) return false;
         if (input.sector && (sectorOf(x.coin) ?? "").toLowerCase() !== input.sector.toLowerCase()) return false;
         const f = x.flags[tf];
         if (input.filter === "candidates") return f?.candidate;
@@ -245,6 +249,7 @@ export const CHAT_TOOLS = [
         ageMinutes: Math.round((Date.now() - new Date(run.at).getTime()) / 60_000),
         barsTo: new Date(run.barsTo).toISOString(),
         universe: run.universe,
+        marketsByKind: ASSET_CLASSES.map((c) => [c, run.rows.filter((x) => assetClassOf(x.coin) === c).length] as const).filter(([, n]) => n > 0).map(([kind, markets]) => ({ kind, markets })),
         breadth: r(run.breadth, 2),
         btc: { day: r(run.btc?.d1), week: r(run.btc?.w1) },
         takerFlow: { spot: run.spotStatus?.coins ? `read for ${run.spotStatus.coins} coins` : "not read this run", perp: run.flowStatus?.source === "relay" ? `read for ${run.flowStatus.coins} coins` : "not read this run (no relay connected)" },
@@ -451,6 +456,53 @@ export const CHAT_TOOLS = [
     },
   }),
   tool({
+    name: "price_candles",
+    description: "A market's own price candles on a timeframe, oldest first, as [time, open, high, low, close, volume]: what the chart shows, as numbers. Use it to read structure yourself — swing highs and lows, a range, where a level sits, how a move unfolded — before naming a level or a stop. Works for anything Hyperliquid lists.",
+    schema: z.object({ coin: z.string().regex(/^[A-Za-z0-9:_-]{1,24}$/), timeframe: tfEnum.optional(), bars: z.number().int().min(10).max(150).optional() }),
+    input_schema: obj(
+      {
+        coin: { type: "string", description: "Hyperliquid's name for the market, e.g. SOL, kPEPE, xyz:XYZ100." },
+        timeframe: { type: "string", enum: TIMEFRAMES, description: "Default 4h." },
+        bars: { type: "integer", minimum: 10, maximum: 150, description: "How many candles back from now. Default 60." },
+      },
+      ["coin"],
+    ),
+    run: async (_userId, input) => {
+      const tf = input.timeframe ?? "4h";
+      const candles = await candlesFor(input.coin, tf);
+      const cut = candles.slice(-(input.bars ?? 60));
+      const p = (x: number) => Number(x.toPrecision(6));
+      return { coin: input.coin, timeframe: tf, columns: ["time", "open", "high", "low", "close", "volume"], candles: cut.map((c) => [new Date(c.t).toISOString().slice(0, 16), p(c.o), p(c.h), p(c.l), p(c.c), Math.round(c.v)]) };
+    },
+  }),
+  tool({
+    name: "show_chart",
+    description: "Draw a price chart in your answer, for the trader to look at: candles on a timeframe, with any levels you want marked on it (an entry, a stop, targets, a level that matters). The chart appears in the conversation where you call this. Use it when a picture carries the point — a setup with its levels, a position against its stop — and say in words what it shows. It does not return the candles; use price_candles to read them.",
+    schema: z.object({
+      coin: z.string().regex(/^[A-Za-z0-9:_-]{1,24}$/),
+      timeframe: tfEnum.optional(),
+      levels: z.array(z.object({ price: z.number().positive(), label: z.string().max(24), kind: z.enum(["entry", "stop", "target", "level"]).optional() })).max(8).optional(),
+    }),
+    input_schema: obj(
+      {
+        coin: { type: "string", description: "Hyperliquid's name for the market." },
+        timeframe: { type: "string", enum: TIMEFRAMES, description: "Default 4h." },
+        levels: {
+          type: "array",
+          maxItems: 8,
+          description: "Horizontal lines to mark, each with a short label.",
+          items: obj({ price: { type: "number" }, label: { type: "string" }, kind: { type: "string", enum: ["entry", "stop", "target", "level"] } }, ["price", "label"]),
+        },
+      },
+      ["coin"],
+    ),
+    run: async (_userId, input) => {
+      const candles = await candlesFor(input.coin, input.timeframe ?? "4h");
+      const last = candles[candles.length - 1];
+      return { shown: true, coin: input.coin, timeframe: input.timeframe ?? "4h", candles: candles.length, lastClose: last?.c ?? null, levels: input.levels?.length ?? 0 };
+    },
+  }),
+  tool({
     name: "upcoming_events",
     description: "The US macro releases of high impact (CPI, NFP, FOMC, PPI…) and large earnings on the calendar in the next hours. Use it before suggesting a setup or when asked what is coming: a release inside a trade's horizon can run stops either way.",
     schema: z.object({ hours: z.number().int().min(1).max(168).optional() }),
@@ -466,6 +518,27 @@ export const CHAT_TOOLS = [
 
 /** The tools as the API takes them. Inputs stream as they are written, so each is checked against its schema here before it runs. */
 const API_TOOLS: Beta.BetaToolUnion[] = CHAT_TOOLS.map((t) => ({ name: t.name, description: t.description, input_schema: t.input_schema as Beta.BetaTool.InputSchema, eager_input_streaming: true }));
+
+/**
+ * Web search, run by Anthropic's own servers: the model searches, reads the
+ * results and cites them, all inside the one request. For what the site
+ * cannot know — news on a coin, why something moved, an unlock, a listing.
+ * The newer tool filters its own results and is not offered on Haiku, which
+ * gets the plain one.
+ */
+const webSearchFor = (model: string): Beta.BetaToolUnion =>
+  /haiku/.test(model) ? { type: "web_search_20250305", name: "web_search", max_uses: 5 } : { type: "web_search_20260209", name: "web_search", max_uses: 5 };
+const toolsFor = (model: string): Beta.BetaToolUnion[] => [...API_TOOLS, webSearchFor(model)];
+
+/** A market's candles on a timeframe, read from the venue first when the screener has not stored them. */
+async function candlesFor(coin: string, tf: Timeframe) {
+  const { scanCoin, storedSeries, measuredSeries } = await import("./screener");
+  const { TF_SPEC } = await import("@shared/screener");
+  // The scan stores the series for a market outside the run, and gives the venue's own spelling of the name.
+  const scan = await scanCoin(coin);
+  const series = measuredSeries(await storedSeries(scan.coin), Date.now());
+  return blockCandles(series[TF_SPEC[tf].base], tf);
+}
 
 /** A tool result too large to be worth the reading it costs is refused, and the model asked to narrow it. */
 const RESULT_LIMIT = 150_000;
@@ -504,6 +577,21 @@ Reading the screener:
 - Open interest against price: up with price is new longs, down with price up is short covering, up with price down is new shorts.
 - Top-decile funding with rising open interest is a crowded, leverage-driven move, and weighs against a long.
 - A strong coin in a strong sector is a better read than a strong coin alone.
+
+The web, and charts:
+- web_search is for what the site cannot know: news on a coin, why something moved, an unlock, a listing, a macro story. Search when the question needs it or when a move has no explanation in the data; do not search for prices or anything the tools give you. Say what came from the web and link the source.
+- price_candles gives you a market's candles as numbers: read them before you name a level. show_chart draws a chart in your answer with levels marked; use it for a setup or a position, not for decoration.
+- The screener covers more than crypto: stocks, indices, commodities and companies not yet listed (pre-IPO) trade on Hyperliquid's builder books, named with their book ("xyz:XYZ100"). They are ranked against each other, not against the alts, and have no Binance flow. A pre-IPO market is thin and prices a private company off little information: say so when one comes up.
+
+How this trader should be read (a working model of discretionary perp trading, not rules to recite):
+- Risk first. A trade is defined by where it is wrong. 1R is the money lost if the stop is hit; size is risk divided by the distance to the stop. A setup without an invalidation is not a setup.
+- Expectancy is win rate times average winner minus loss rate times average loser, in R. A low win rate with large winners is a good system; a high win rate with small winners and full-size losers is not. Look at both before judging.
+- Structure: a trend is higher highs and higher lows (or the mirror); a stop belongs beyond the swing that defines the idea, not at a round distance. A level that was resistance and holds as support is stronger than one never tested.
+- Entries: a limit at a level gets a better price and a tighter stop, and misses the trades that run. A market order chases. This trader tracks which of the two they used; their own numbers say which pays.
+- Management: moving a stop to breakeven early, taking profit before the target and adding to a position each change the trade's expectancy. The journal measures each against leaving the plan alone ("set and forget"). Use those figures; do not assume active management helps.
+- Leverage and funding: funding is what longs pay shorts (or the reverse) to hold. High positive funding with open interest rising is a crowded long; the liquidation bands show where forced selling would land. A squeeze needs a crowd on the wrong side.
+- Relative strength: in a falling market the coins that fall least lead the bounce; in a rising one, strength that is only beta gives it back. Strength with spot buying behind it lasts longer than strength on leverage.
+- Psychology shows in the record: size creeping up after losses, trades taken minutes after a stop-out, stops moved away from price, winners cut and losers held. When the trades show one of these, name it plainly.
 
 Suggesting a setup:
 - Only from what the tools show, and only where several independent readings agree. Name the ones that agree and the ones that do not.
@@ -594,6 +682,10 @@ export async function runChat(opts: {
   const question: Beta.BetaMessageParam = { role: "user", content: [{ type: "text", text: nowLine() }, { type: "text", text }] };
   messages.push(question);
   const fresh: Beta.BetaMessageParam[] = [question];
+  // What the trader wrote about themselves, after the fixed prompt: it changes only when they edit it.
+  const notes = (await chatStore.notes(userId)).trim();
+  const system: Beta.BetaTextBlockParam[] = [{ type: "text", text: CHAT_SYSTEM }, ...(notes ? [{ type: "text" as const, text: `What the trader has told you about themselves and how they trade. Treat it as their standing instructions:\n\n${notes}` }] : [])];
+  const tools = toolsFor(opts.model);
   const usage = { input: 0, output: 0, cached: 0 };
   let served = opts.model;
   let note: string | undefined;
@@ -605,11 +697,11 @@ export async function runChat(opts: {
       const params = (fallback: boolean): Beta.MessageCreateParamsStreaming => ({
         model: opts.model,
         max_tokens: MAX_TOKENS,
-        system: [{ type: "text", text: CHAT_SYSTEM }],
+        system,
         // The reasoning is always on for these models; a summary of it is asked for so the wait has something to show.
         thinking: { type: "adaptive", display: "summarized" },
         output_config: { effort: opts.effort },
-        tools: API_TOOLS,
+        tools,
         messages,
         // The prompt, the tools and the conversation so far are the same bytes next turn: cached up to the last message.
         cache_control: { type: "ephemeral" },
@@ -623,6 +715,12 @@ export async function runChat(opts: {
           emit({ t: "text", d });
         });
         stream.on("thinking", (d) => emit({ t: "thinking", d }));
+        // A search runs on Anthropic's side, inside the request: the page is told when one starts and when its results are in.
+        stream.on("streamEvent", (e) => {
+          if (e.type !== "content_block_start") return;
+          if (e.content_block.type === "server_tool_use") emit({ t: "tool", name: e.content_block.name, input: null });
+          else if (e.content_block.type === "web_search_tool_result") emit({ t: "tool_done", name: "web_search", ok: !("error_code" in (e.content_block.content as object)) });
+        });
         return stream.finalMessage();
       };
       let message: Beta.BetaMessage;
@@ -656,6 +754,8 @@ export async function runChat(opts: {
       const reply: Beta.BetaMessageParam = { role: "assistant", content: message.content };
       messages.push(reply);
       fresh.push(reply);
+      // A long run of searches paused on Anthropic's side: sent back as it is, and it carries on.
+      if (message.stop_reason === "pause_turn" && round + 1 < MAX_ROUNDS) continue;
       if (message.stop_reason !== "tool_use" || calls.length === 0) {
         if (message.stop_reason === "max_tokens") note = "The answer ran out of room and was cut short.";
         break;
@@ -700,11 +800,26 @@ export async function runChat(opts: {
 
 /* ------------------------------- a conversation, for the page ------------------------------- */
 
+export interface ChatChart {
+  coin: string;
+  timeframe: Timeframe;
+  levels: { price: number; label: string; kind?: "entry" | "stop" | "target" | "level" }[];
+}
+
+/** A show_chart call's input as the page draws it; null when it is not one. */
+export function chartOf(name: string, input: any): ChatChart | null {
+  if (name !== "show_chart" || !input || typeof input.coin !== "string") return null;
+  const levels = Array.isArray(input.levels) ? input.levels.filter((l: any) => typeof l?.price === "number" && l.price > 0 && typeof l?.label === "string").slice(0, 8) : [];
+  return { coin: input.coin, timeframe: (TIMEFRAMES as string[]).includes(input.timeframe) ? input.timeframe : "4h", levels };
+}
+
 export interface ChatBubble {
   role: "user" | "assistant";
   text: string;
   /** The tools called on the way to this answer, in order. */
   tools: string[];
+  /** The charts the answer drew, in order. */
+  charts?: ChatChart[];
   at: string;
   model?: string;
   usage?: { input: number; output: number; cached: number };
@@ -735,7 +850,12 @@ export function bubblesOf(rows: { role: string; content: string; meta: string | 
       .map((b) => String(b.text))
       .join("");
     if (text) last.text += (last.text ? "\n\n" : "") + text;
-    for (const b of blocks) if (b?.type === "tool_use") last.tools.push(String(b.name));
+    for (const b of blocks) {
+      if (b?.type !== "tool_use" && b?.type !== "server_tool_use") continue;
+      last.tools.push(String(b.name));
+      const chart = chartOf(String(b.name), b.input);
+      if (chart) (last.charts ??= []).push(chart);
+    }
     if (row.meta) {
       try {
         const meta = JSON.parse(row.meta);

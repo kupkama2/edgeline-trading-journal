@@ -150,6 +150,29 @@ afterAll(async () => {
   if (fake) await new Promise((r) => fake.close(r));
 });
 
+describe("what the page draws from a stored conversation", () => {
+  it("reads a chart the model drew, and a web search, out of the stored turn", async () => {
+    const { bubblesOf, chartOf } = await import("../server/chat");
+    const row = (role: string, content: unknown, meta: unknown = null) => ({ role, content: JSON.stringify(content), meta: meta ? JSON.stringify(meta) : null, at: "2026-11-15T10:00:00Z" });
+    const bubbles = bubblesOf([
+      row("user", [{ type: "text", text: "Now: …" }, { type: "text", text: "Show me SOL" }]),
+      row("assistant", [
+        { type: "thinking", thinking: "", signature: "s" },
+        { type: "server_tool_use", id: "srv_1", name: "web_search", input: { query: "solana news" } },
+        { type: "web_search_tool_result", tool_use_id: "srv_1", content: [] },
+        { type: "tool_use", id: "t1", name: "show_chart", input: { coin: "SOL", timeframe: "1D", levels: [{ price: 150, label: "entry", kind: "entry" }, { price: -1, label: "bad" }, { label: "no price" }] } },
+      ]),
+      row("user", [{ type: "tool_result", tool_use_id: "t1", content: "{}" }]),
+      row("assistant", [{ type: "text", text: "Here it is." }], { model: "claude-opus-5-5", usage: { input: 1, output: 2, cached: 0 } }),
+    ]);
+    expect(bubbles).toHaveLength(2);
+    expect(bubbles[1]).toMatchObject({ role: "assistant", text: "Here it is.", tools: ["web_search", "show_chart"], charts: [{ coin: "SOL", timeframe: "1D", levels: [{ price: 150, label: "entry", kind: "entry" }] }] });
+    // A timeframe the page does not know falls back to the default; anything but show_chart is no chart.
+    expect(chartOf("show_chart", { coin: "ETH", timeframe: "3m" })).toEqual({ coin: "ETH", timeframe: "4h", levels: [] });
+    expect(chartOf("trades", { coin: "ETH" })).toBeNull();
+  });
+});
+
 describe.skipIf(!DB)("the owner's chat", () => {
   it("does not exist for anyone but the owner", async () => {
     expect((await fetch(`${base}/api/chat`, { headers: { "x-not-owner": "1" } })).status).toBe(404);
@@ -196,8 +219,13 @@ describe.skipIf(!DB)("the owner's chat", () => {
     // A declined request is re-run on another model inside the same call.
     expect(first.fallbacks).toBe("default");
     expect(first.beta).toContain("server-side-fallback-2026-07-01");
-    expect(first.tools.map((t: any) => t.name)).toEqual(["screener_overview", "screener_coin", "screener_track_record", "open_positions", "trades", "trade_detail", "trading_stats", "upcoming_events"]);
-    expect(first.tools.every((t: any) => t.eager_input_streaming === true && t.input_schema.additionalProperties === false)).toBe(true);
+    expect(first.tools.map((t: any) => t.name)).toEqual(["screener_overview", "screener_coin", "screener_track_record", "open_positions", "trades", "trade_detail", "trading_stats", "price_candles", "show_chart", "upcoming_events", "web_search"]);
+    const own = first.tools.filter((t: any) => t.name !== "web_search");
+    expect(own.every((t: any) => t.eager_input_streaming === true && t.input_schema.additionalProperties === false)).toBe(true);
+    // The web search is Anthropic's own tool, run on its side: declared, with a cap on searches per answer.
+    expect(first.tools[first.tools.length - 1]).toEqual({ type: "web_search_20260209", name: "web_search", max_uses: 5 });
+    // No notes written yet: the prompt alone.
+    expect(first.system).toHaveLength(1);
     expect(first.messages).toHaveLength(1);
     expect(first.messages[0].content[0].text).toMatch(/^Now: .*Europe\/Prague \(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z\)\.$/);
     expect(first.messages[0].content[1].text).toBe("How am I doing?");
@@ -230,12 +258,19 @@ describe.skipIf(!DB)("the owner's chat", () => {
     const threadId = (await (await fetch(`${base}/api/chat`)).json()).threads[0].id;
     const before = asked.length;
     script = ["answer"];
-    // Haiku has no fallback to send.
+    // What the trader says about themselves goes after the fixed prompt, from the next question on.
+    expect((await fetch(`${base}/api/chat/notes`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ notes: "  I risk 1% a trade and never hold through CPI. " }) })).status).toBe(200);
+    expect((await (await fetch(`${base}/api/chat`)).json()).notes).toBe("I risk 1% a trade and never hold through CPI.");
+    // Haiku has no fallback to send, and takes the plain web search.
     const { events } = await chat({ threadId, model: "claude-haiku-5-5", message: "And the losers?" });
     expect(events.map((e) => e.t)).toEqual(["text", "text", "done"]);
     const sent = asked[before];
     expect(sent.model).toBe("claude-haiku-5-5");
     expect(sent.fallbacks).toBeUndefined();
+    expect(sent.tools[sent.tools.length - 1].type).toBe("web_search_20250305");
+    expect(sent.system).toHaveLength(2);
+    expect(sent.system[0]).toEqual(asked[0].system[0]);
+    expect(sent.system[1].text).toMatch(/never hold through CPI\.$/);
     expect(sent.output_config).toEqual({ effort: "medium" });
     // The whole first turn, byte for byte as it was sent and answered, then the new question.
     expect(sent.messages).toHaveLength(5);
