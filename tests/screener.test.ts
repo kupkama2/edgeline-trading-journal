@@ -33,7 +33,7 @@ import {
   efficiencyOf,
   sectorTable,
 } from "../shared/screener";
-import { sectorOf } from "../shared/sectors";
+import { assetClassOf, sectorOf } from "../shared/sectors";
 
 /**
  * The relative-strength screener: its arithmetic against numbers worked by
@@ -194,8 +194,36 @@ describe("strength beyond the ratio", () => {
     expect(table.map((s) => s.sector)).toEqual(["Meme", "L2"]);
     expect(table[0]).toMatchObject({ coins: 3, rs: 0.04, leader: "DOGE", leaderRs: 0.1 });
     expect(table[0].breadth).toBeCloseTo(2 / 3, 9);
-    expect(sectorOf("xyz:XYZ100")).toBe("TradFi");
     expect(sectorOf("NOPE")).toBeNull();
+  });
+
+  it("tells the kinds of market apart by name, and ranks crypto against crypto and the rest against each other", () => {
+    expect(assetClassOf("SOL")).toBe("crypto");
+    expect(assetClassOf("xyz:XYZ100")).toBe("index");
+    expect(assetClassOf("xyz:GOLD")).toBe("commodity");
+    expect(assetClassOf("flx:OIL-USD")).toBe("commodity");
+    expect(assetClassOf("xyz:TSLA")).toBe("equity");
+    expect(assetClassOf("vntl:ANTHROPIC")).toBe("pre-ipo");
+    expect(assetClassOf("xyz:EURUSD")).toBe("fx");
+    // A large coin quoted on a builder book is still crypto; a short stock ticker that is also a coin's name is the stock.
+    expect(assetClassOf("hyna:BTC")).toBe("crypto");
+    expect(assetClassOf("xyz:S")).toBe("equity");
+    expect(sectorOf("vntl:OPENAI")).toBe("Pre-IPO");
+    expect(sectorOf("xyz:XYZ100")).toBe("Indices");
+
+    // Twelve alts moving in whole percents, twelve stocks moving in tenths: each ranked in its own group.
+    const row = (coin: string, rs: number): ScreenerRow =>
+      ({ coin, mark: 1, volume24h: 1, fundingAnnual: 0.1, fundingHourly: 0, openInterest: 1, oiChange: 0, leverageDriven: false, tf: Object.fromEntries(TIMEFRAMES.map((tf) => [tf, { rs, accel: "up", breakout: false, rvol: 2, breakoutLevel: 1 }])), flags: {}, price: {}, signals: {}, positioning: null, error: null, bars: { "1h": 0, "1d": 0 }, strength: { beta: 1, upCapture: 1, downCapture: 1, capture: 0, rsWeekAgo: { "1D": null, "1W": null, "1M": null }, rating: null, ratingWas: null, volShare: null, volShareWas: null } }) as any;
+    const rows = [...Array.from({ length: 12 }, (_, i) => row(`A${i}`, 0.01 * (i + 1))), ...Array.from({ length: 12 }, (_, i) => row(`xyz:S${i}`, 0.001 * (i + 1)))];
+    const flagged = flagRows(rows, DEFAULT_SCREENER_SETTINGS);
+    const by = (coin: string) => flagged.find((r) => r.coin === coin)!;
+    // The strongest stock is top of its own table, though every alt moved more.
+    expect(by("xyz:S11").strength!.rating).toBe(99);
+    expect(by("xyz:S11").flags["1D"].movingFast).toBe(true);
+    expect(by("A11").strength!.rating).toBe(99);
+    expect(by("A0").flags["1D"].movingFast).toBe(false);
+    // The order of the rows is kept.
+    expect(flagged.map((r) => r.coin)).toEqual(rows.map((r) => r.coin));
   });
 });
 

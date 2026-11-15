@@ -38,6 +38,7 @@ import { findAnomalies, type Anomaly, type TopAccounts } from "@shared/flow";
 import { parsePerpDexs } from "@shared/hyperliquid";
 import { FLAG_REPEAT_MS, flagsOf, summarizeFlags, type FlagTrack } from "@shared/flag-track";
 import type { PricePoint } from "@shared/ai-track";
+import { assetClassOf } from "@shared/sectors";
 import {
   PIN_LIMIT,
   annualizeFunding,
@@ -193,7 +194,7 @@ async function ask(budget: Budget, weight: number, body: Record<string, unknown>
 }
 
 /** Builder books read per run, at most: each is one request, and a venue with fifty of them is not a reason to spend a minute's budget on the list. */
-const MAX_BOOKS = 12;
+const MAX_BOOKS = 30;
 
 /**
  * The venue's own perps, and with the setting on, every builder book's too
@@ -590,7 +591,9 @@ async function run(nowFn: () => number, ai = false): Promise<ScreenerRun> {
     if (ctxs.length === 0) throw new Error("metaAndAssetCtxs answered with no universe");
     // Over the volume line, or pinned by hand from the search whatever its volume.
     const pinned = new Set(settings.pinned);
-    const alts = ctxs.filter((c) => !c.delisted && !NOT_AN_ALT.test(c.coin) && ((c.dayNtlVlm ?? 0) >= settings.minVolume || pinned.has(c.coin)));
+    // Each kind of market over its own volume line: the builder books' markets are thinner than the venue's own.
+    const lineFor = (coin: string) => (coin.includes(":") ? settings.minVolumeBooks : settings.minVolume);
+    const alts = ctxs.filter((c) => !c.delisted && !NOT_AN_ALT.test(c.coin) && ((c.dayNtlVlm ?? 0) >= lineFor(c.coin) || pinned.has(c.coin)));
     status.progress = { done: 0, total: alts.length + 1 };
     status.phase = "Hyperliquid candles";
     const previous = await screenerStore.previousSnapshot(at);
@@ -632,12 +635,14 @@ async function run(nowFn: () => number, ai = false): Promise<ScreenerRun> {
       status.progress.done++;
     }
     const weightOf = new Map(alts.map((c) => [c.coin, c.dayNtlVlm ?? 0]));
+    // The alt basket and the breadth of the tape are the crypto market's: a stock index is not an alt.
+    const cryptoOnly = Array.from(measured).filter(([coin]) => assetClassOf(coin) === "crypto");
     const basket: Series = { "1h": [], "1d": [] };
     for (const base of ["1h", "1d"] as const) {
-      basket[base] = basketSeries(Array.from(measured, ([coin, s]) => ({ candles: s[base], weight: weightOf.get(coin) ?? 0 })));
+      basket[base] = basketSeries(cryptoOnly.map(([coin, s]) => ({ candles: s[base], weight: weightOf.get(coin) ?? 0 })));
     }
     const eth = measured.get("ETH") ?? null;
-    const breadth = breadthOf(Array.from(measured.values()).map((s) => ratioSeries(s["1d"], btc["1d"])));
+    const breadth = breadthOf(cryptoOnly.map(([, s]) => ratioSeries(s["1d"], btc["1d"])));
 
     const volume = await volumeCtx(ctxs, t0);
     const rows: ScreenerRow[] = alts.map((c) =>

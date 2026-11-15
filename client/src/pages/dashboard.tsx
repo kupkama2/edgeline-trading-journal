@@ -1,3 +1,4 @@
+import { Fold } from "@/components/fold";
 import { maskAmount } from "@shared/redact";
 import { managementCurve } from "@shared/management";
 import { GateStatsCard } from "@/components/gate-card";
@@ -98,6 +99,7 @@ function ChartCard({
   action?: React.ReactNode;
 }) {
   return (
+    <Fold id={`stats.${title}`} title={title}>
     <Card
       id={anchorId}
       className={`scroll-mt-20 border-card-border bg-card p-4 transition-shadow sm:p-5 ${className}`}
@@ -115,6 +117,7 @@ function ChartCard({
       </div>
       {children}
     </Card>
+    </Fold>
   );
 }
 
@@ -444,10 +447,15 @@ export default function Dashboard({ embedded = false }: { embedded?: boolean } =
       <WeeklyInsightsCard trades={all} tags={tags} />
 
       {/* Both books, so the split is the card's to make. */}
-      <TiltCostCard trades={dayTrades} />
-      <GateStatsCard trades={all} />
+      <Fold id="stats.What tilt costs" title="What tilt costs">
+        <TiltCostCard trades={dayTrades} />
+      </Fold>
+      <Fold id="stats.The gate" title="The gate">
+        <GateStatsCard trades={all} />
+      </Fold>
 
       {/* stat strip */}
+      <Fold id="stats.strip" title="Headline numbers">
       <Card className="border-card-border bg-card p-4" data-testid="card-stat-strip">
         <div className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-4 lg:grid-cols-8">
           {statStrip.map((s) => (
@@ -471,6 +479,7 @@ export default function Dashboard({ embedded = false }: { embedded?: boolean } =
           ))}
         </div>
       </Card>
+      </Fold>
 
       {/* equity curves */}
       <ChartCard
@@ -560,7 +569,9 @@ export default function Dashboard({ embedded = false }: { embedded?: boolean } =
         )}
       </ChartCard>
 
-      <DemonFinderPanel trades={all} tags={tags} />
+      <Fold id="stats.Demon finder" title="Demon finder">
+        <DemonFinderPanel trades={all} tags={tags} />
+      </Fold>
 
       <div className="grid gap-4 lg:grid-cols-2">
         {/* mistake cost leaderboard */}

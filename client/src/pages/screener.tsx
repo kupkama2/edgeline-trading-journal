@@ -12,12 +12,15 @@ import { SpaghettiChart } from "@/components/screener/chart";
 import { CoinDrawer } from "@/components/screener/drawer";
 import { ScreenerInsights } from "@/components/screener/insights";
 import { ScreenerTrackCard } from "@/components/screener/track";
-import { sectorOf } from "@shared/sectors";
+import { Fold } from "@/components/fold";
+import { ASSET_CLASSES, ASSET_CLASS_LABEL, assetClassOf, sectorOf, type AssetClass } from "@shared/sectors";
 import { fmtPct, fmtPrague, usePinScreenerCoin, useSaveScreenerSettings, useScreener, useScreenerLines, useScreenerLookup, useScreenerRefresh, useScreenerStatus } from "@/lib/screener";
 import { sectorTable, TIMEFRAMES, type ScreenerRow, type Timeframe } from "@shared/screener";
 import { parseLooseNumber } from "@shared/loose-number";
 
 const TF_KEY = "edgeline.screener.tf";
+const UNIVERSE_KEY = "edgeline.screener.universe";
+type Universe = "all" | AssetClass;
 
 /** The top eight and bottom three by RS change on the timeframe: the chart's default set. */
 function defaultSet(rows: ScreenerRow[], tf: Timeframe): string[] {
@@ -64,11 +67,38 @@ export default function ScreenerPage() {
   const [filter, setFilter] = useState<Filter>("all");
   const [search, setSearch] = useState("");
   const [sector, setSector] = useState<string | null>(null);
+  // Which kind of market is on the page: everything, or crypto, stocks, indices, commodities, companies not yet listed.
+  const [universe, setUniverseState] = useState<Universe>(() => {
+    try {
+      const v = localStorage.getItem(UNIVERSE_KEY);
+      return v === "all" || (ASSET_CLASSES as readonly string[]).includes(v ?? "") ? (v as Universe) : "all";
+    } catch {
+      return "all";
+    }
+  });
+  const setUniverse = (u: Universe) => {
+    setUniverseState(u);
+    setSector(null);
+    setPicked(null);
+    try {
+      localStorage.setItem(UNIVERSE_KEY, u);
+    } catch {
+      /* fine */
+    }
+  };
   const [open, setOpen] = useState<string | null>(null);
   // The chart's set: the default for the timeframe until a row is toggled by hand.
   const [picked, setPicked] = useState<Set<string> | null>(null);
   const [pickedFor, setPickedFor] = useState<Timeframe>(tf);
-  const rows = page.data?.run?.rows ?? [];
+  const allRows = page.data?.run?.rows ?? [];
+  const classCounts = useMemo(() => {
+    const c = {} as Record<AssetClass, number>;
+    for (const r of allRows) c[assetClassOf(r.coin)] = (c[assetClassOf(r.coin)] ?? 0) + 1;
+    return c;
+  }, [allRows]);
+  // A kind with nothing in this run shows everything rather than an empty page.
+  const shownUniverse: Universe = universe !== "all" && !classCounts[universe] ? "all" : universe;
+  const rows = useMemo(() => (shownUniverse === "all" ? allRows : allRows.filter((r) => assetClassOf(r.coin) === shownUniverse)), [allRows, shownUniverse]);
   const charted = useMemo(() => {
     if (picked && pickedFor === tf) return picked;
     return new Set(defaultSet(rows, tf));
@@ -240,6 +270,7 @@ export default function ScreenerPage() {
                 {(
                   [
                     ["minVolume", "Min 24h volume, $", "Coins under this are not read."],
+                    ["minVolumeBooks", "Min 24h volume for stocks and the rest, $", "Their own line: these markets are thinner, pre-IPO ones most of all."],
                     ["rvolMin", "RVOL for volume-confirmed", "Last period over the mean of the previous 20."],
                     ["stopLookback", "Stop lookback, candles", "The structure stop is the lowest low of the last N."],
                     ["riskDollars", "Default risk, $", "What the exit planner sizes for."],
@@ -290,8 +321,8 @@ export default function ScreenerPage() {
                     data-testid="screener-setting-builderBooks"
                   />
                   <span>
-                    Stocks, indices and commodities
-                    <span className="block text-[10px] text-muted-foreground">Hyperliquid's builder markets (xyz:XYZ100 and the like), over the same volume line.</span>
+                    Stocks, indices, commodities, pre-IPO
+                    <span className="block text-[10px] text-muted-foreground">Hyperliquid's builder markets (xyz:XYZ100 and the like), over their own volume line.</span>
                   </span>
                 </label>
                 <p className="text-[10px] text-muted-foreground">The volume line and the markets read apply on the next run.</p>
@@ -322,9 +353,30 @@ export default function ScreenerPage() {
         </div>
       </div>
 
+      {Object.keys(classCounts).length > 1 && (
+        <div className="flex flex-wrap items-center gap-1.5" data-testid="screener-universe">
+          <span className="text-[10px] uppercase tracking-wider text-muted-foreground" title="Which markets the chart and the table show. Crypto is ranked against crypto, and the other markets against each other.">
+            Universe
+          </span>
+          {(["all", ...ASSET_CLASSES.filter((c) => classCounts[c])] as Universe[]).map((u) => (
+            <button
+              key={u}
+              type="button"
+              onClick={() => setUniverse(u)}
+              className={`rounded-full border px-2.5 py-0.5 text-xs transition-colors ${shownUniverse === u ? "border-primary/60 bg-primary/10 text-foreground" : "border-border text-muted-foreground hover:border-primary/40 hover:text-foreground"}`}
+              aria-pressed={shownUniverse === u}
+              data-testid={`screener-universe-${u}`}
+            >
+              {u === "all" ? "All" : ASSET_CLASS_LABEL[u]} <span className="font-mono text-[10px] text-muted-foreground">{u === "all" ? allRows.length : classCounts[u]}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      <Fold id="screener.chart" title="Chart" hint="relative strength against BTC">
       <Card className="border-card-border bg-card p-3 sm:p-4">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
-          <h2 className="text-sm font-semibold">Relative strength vs BTC · {tf}</h2>
+          <h2 className="text-sm font-semibold">Relative strength vs BTC · {tf}{shownUniverse !== "all" ? ` · ${ASSET_CLASS_LABEL[shownUniverse]}` : ""}</h2>
           <Button size="sm" variant="outline" className="h-7 px-2.5 text-[11px]" onClick={resetChart} title="Back to the top 8 and bottom 3, zoomed to fit" data-testid="screener-chart-reset">
             <RefreshCw className="mr-1 h-3 w-3" /> Reset
           </Button>
@@ -333,12 +385,7 @@ export default function ScreenerPage() {
           <SpaghettiChart lines={lines.data?.lines ?? {}} order={drawn} colors={loaded} resetKey={resetCount} loading={lines.isLoading} onHide={toggle} onSolo={solo} />
         </div>
       </Card>
-
-      {run && <ScreenerInsights run={run} onOpen={setOpen} />}
-
-      <ScreenerScanCard onOpen={setOpen} />
-
-      <ScreenerTrackCard />
+      </Fold>
 
       <Card className="border-card-border bg-card p-3 sm:p-4">
         <div className="flex flex-wrap items-center gap-2">
@@ -422,6 +469,15 @@ export default function ScreenerPage() {
           )}
         </div>
       </Card>
+
+      {/* Below the chart and the table: the AI's read of the run, whether the badges have worked, and the one-coin scan. */}
+      {run && <ScreenerInsights run={run} onOpen={setOpen} />}
+
+      <ScreenerTrackCard />
+
+      <Fold id="screener.scan" title="Scan one market" hint="any coin, stock or index on every timeframe">
+        <ScreenerScanCard onOpen={setOpen} />
+      </Fold>
 
       <CoinDrawer coin={open} tf={tf} onTf={setTf} defaultRisk={settings?.riskDollars ?? 250} onClose={() => setOpen(null)} />
     </div>

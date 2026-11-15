@@ -45,11 +45,19 @@ const baseOptions = (colors: ReturnType<typeof palette>) => ({
 });
 
 /** The price, as candles, with the structure stop drawn on it. The chart is made once; data and the line are swapped in place. */
-function PriceChart({ data, stop }: { data: ScreenerCoin["price"]; stop: number | null }) {
+export interface ChartLevel {
+  price: number;
+  label: string;
+  kind?: "entry" | "stop" | "target" | "level";
+}
+const LEVEL_COLOR = { entry: "#38bdf8", stop: "#ef4444", target: "#10b981", level: "#f59e0b" } as const;
+
+export function PriceChart({ data, stop, levels }: { data: ScreenerCoin["price"]; stop: number | null; levels?: ChartLevel[] }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const lineRef = useRef<IPriceLine | null>(null);
+  const levelRefs = useRef<IPriceLine[]>([]);
   useChartTheme(hostRef, chartRef);
   useEffect(() => {
     const host = hostRef.current;
@@ -76,6 +84,15 @@ function PriceChart({ data, stop }: { data: ScreenerCoin["price"]; stop: number 
     if (lineRef.current) series.removePriceLine(lineRef.current);
     lineRef.current = stop != null ? series.createPriceLine({ price: stop, color: "#ef4444", lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: "stop" }) : null;
   }, [stop, data]);
+  // Levels marked on the chart by whoever drew it: an entry, a stop, targets.
+  const levelKey = JSON.stringify(levels ?? []);
+  useEffect(() => {
+    const series = seriesRef.current;
+    if (!series) return;
+    for (const l of levelRefs.current) series.removePriceLine(l);
+    levelRefs.current = (levels ?? []).map((l) => series.createPriceLine({ price: l.price, color: LEVEL_COLOR[l.kind ?? "level"], lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: l.label }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [levelKey, data]);
   return <div ref={hostRef} className="h-48 w-full sm:h-56" data-testid="screener-price-chart" />;
 }
 

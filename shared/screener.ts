@@ -142,8 +142,10 @@ export interface ScreenerSettings {
   oiJumpMin: number;
   /** Coins searched for and added by hand: read in every run whatever their volume. */
   pinned: string[];
-  /** Read the builder books too (stocks, indices, commodities, as "xyz:XYZ100"), over the same volume line. */
+  /** Read the builder books too (stocks, indices, commodities, companies not yet listed, as "xyz:XYZ100"). */
   builderBooks: boolean;
+  /** Their own volume line, USD: these markets are thinner than the crypto ones, and a pre-IPO market thinner still. */
+  minVolumeBooks: number;
 }
 
 type NumericSetting = Exclude<keyof ScreenerSettings, "pinned" | "builderBooks">;
@@ -158,6 +160,7 @@ export const DEFAULT_SCREENER_SETTINGS: ScreenerSettings = {
   oiJumpMin: 0.15,
   pinned: [],
   builderBooks: true,
+  minVolumeBooks: 250_000,
 };
 
 export function readScreenerSettings(raw: unknown): ScreenerSettings {
@@ -172,6 +175,7 @@ export function readScreenerSettings(raw: unknown): ScreenerSettings {
     stopLookback: Math.round(n("stopLookback", 2, 200)),
     riskDollars: n("riskDollars", 1, 1e9),
     oiJumpMin: n("oiJumpMin", 0, 10),
+    minVolumeBooks: n("minVolumeBooks", 0, 1e12),
     pinned: Array.isArray(o.pinned) ? Array.from(new Set(o.pinned.filter((c): c is string => typeof c === "string" && PIN_NAME.test(c)))).slice(0, PIN_LIMIT) : [],
     builderBooks: typeof o.builderBooks === "boolean" ? o.builderBooks : DEFAULT_SCREENER_SETTINGS.builderBooks,
   };
@@ -397,6 +401,21 @@ export function quantile(sortedAsc: number[], q: number): number | null {
  * since the funding decile is a property of the universe.
  */
 export function flagRows(rows: ScreenerRow[], settings: Pick<ScreenerSettings, "rvolMin" | "oiJumpMin">): ScreenerRow[] {
+  /*
+   * Crypto is ranked against crypto, and the other markets against each
+   * other. A stock index moves a tenth as much as an alt: ranked together,
+   * no index would ever be "moving fast" and every one would sit in the
+   * middle of the ratings, while the funding decile would be the alts'.
+   */
+  const crypto = rows.filter((r) => assetClassOf(r.coin) === "crypto");
+  if (crypto.length === rows.length || crypto.length === 0) return flagGroup(rows, settings);
+  const done = new Map<string, ScreenerRow>();
+  for (const r of flagGroup(crypto, settings)) done.set(r.coin, r);
+  for (const r of flagGroup(rows.filter((r) => assetClassOf(r.coin) !== "crypto"), settings)) done.set(r.coin, r);
+  return rows.map((r) => done.get(r.coin)!);
+}
+
+function flagGroup(rows: ScreenerRow[], settings: Pick<ScreenerSettings, "rvolMin" | "oiJumpMin">): ScreenerRow[] {
   const fundings = rows.map((r) => r.fundingAnnual).filter((x): x is number => x != null).sort((a, b) => a - b);
   const fundingTop = quantile(fundings, 0.9);
   const thresholds = {} as Record<Timeframe, { top: number | null; bottom: number | null }>;
@@ -517,6 +536,7 @@ export const NOT_AN_ALT = /^(BTC|USDC|USDT|USDE|USDH|USD1|USDD|USDS|USR|DAI|FDUS
 /* ------------------------------- the other readings ------------------------------- */
 
 import { cvdFor, type FlowReadings, type LiqMap, type SpotFlow, type TopAccounts } from "./flow";
+import { assetClassOf } from "./sectors";
 
 /**
  * Price readings on a timeframe's blocks, so the table can say whether

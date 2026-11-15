@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, Check, Loader2, MessageSquarePlus, Square, Trash2, Wrench, X } from "lucide-react";
+import { ArrowUp, Check, Loader2, MessageSquarePlus, NotebookPen, Square, Trash2, Wrench, X } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { PriceChart } from "@/components/screener/drawer";
+import { useScreenerCoin } from "@/lib/screener";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Markdown } from "@/components/markdown";
 import { usePublicMode } from "@/lib/public-mode";
 import { queryClient } from "@/lib/queryClient";
-import { streamChat, TOOL_LABEL, useChatHome, useChatThread, useDeleteChatThread, type ChatBubble, type ChatEffort, type ChatThread } from "@/lib/chat";
+import { chartOf, streamChat, TOOL_LABEL, useChatHome, useChatThread, useDeleteChatThread, useSaveChatNotes, type ChatBubble, type ChatChart, type ChatEffort, type ChatThread } from "@/lib/chat";
 
 const MODEL_KEY = "edgeline.chat.model";
 const EFFORT_KEY = "edgeline.chat.effort";
@@ -41,7 +44,61 @@ interface Live {
   text: string;
   thinking: string;
   tools: { name: string; done: boolean; ok: boolean }[];
+  charts: ChatChart[];
   error: string | null;
+}
+
+/** A chart the model drew: the market's candles on the timeframe, with the levels it marked. */
+function ChartCard({ c }: { c: ChatChart }) {
+  const q = useScreenerCoin(c.coin, c.timeframe);
+  return (
+    <div className="rounded-md border border-border/60 p-2" data-testid="chat-chart">
+      <p className="mb-1 flex flex-wrap items-baseline gap-x-2 text-[11px] text-muted-foreground">
+        <span className="font-mono font-semibold text-foreground">{c.coin}</span> {c.timeframe}
+        {c.levels.map((l, i) => (
+          <span key={i} className="font-mono">
+            {l.label} {l.price}
+          </span>
+        ))}
+      </p>
+      {q.isLoading ? <p className="py-8 text-center text-xs text-muted-foreground">Loading the candles…</p> : q.data?.price.length ? <PriceChart data={q.data.price.slice(-200)} stop={null} levels={c.levels} /> : <p className="py-6 text-center text-xs text-muted-foreground">No candles for {c.coin}.</p>}
+    </div>
+  );
+}
+
+/** What the model should know about the trader, in their own words: kept on the server and sent with every question. */
+function NotesButton({ notes }: { notes: string }) {
+  const save = useSaveChatNotes();
+  const [text, setText] = useState(notes);
+  useEffect(() => setText(notes), [notes]);
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button size="sm" variant="ghost" className={`h-8 px-2 ${notes ? "text-sky-400" : ""}`} title="What it should know about you" data-testid="chat-notes">
+          <NotebookPen className="h-4 w-4" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-80 space-y-2 text-xs">
+        <p className="font-semibold">What it should know about you</p>
+        <p className="text-[11px] text-muted-foreground">Your style, your rules, what you trade and what you avoid, how you want answers. It is sent with every question.</p>
+        <textarea
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          rows={8}
+          maxLength={8000}
+          placeholder={"e.g. I trade 4h breakouts on alts with relative strength, risk 1% a trade, never hold through CPI, and I cut winners too early."}
+          className="w-full resize-y rounded-md border border-border bg-background px-2 py-1.5 text-xs focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          data-testid="chat-notes-input"
+        />
+        <div className="flex items-center justify-end gap-2">
+          {save.isSuccess && text.trim() === notes && <span className="text-[11px] text-emerald-400">Saved</span>}
+          <Button size="sm" className="h-7 text-[11px]" disabled={save.isPending || text.trim() === notes} onClick={() => save.mutate(text)} data-testid="chat-notes-save">
+            Save
+          </Button>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
 }
 
 function Bubble({ b, modelLabel }: { b: ChatBubble; modelLabel: (id?: string) => string }) {
@@ -55,6 +112,7 @@ function Bubble({ b, modelLabel }: { b: ChatBubble; modelLabel: (id?: string) =>
   return (
     <div className="space-y-1.5" data-testid="chat-assistant">
       {b.tools.length > 0 && <ToolChips tools={b.tools.map((name) => ({ name, done: true, ok: true }))} />}
+      {b.charts?.map((c, i) => <ChartCard key={i} c={c} />)}
       <Markdown text={b.text} />
       {b.usage && (
         <p className="text-[10px] text-muted-foreground" title="Tokens read (of which served from the cache) and written, across every step of this answer">
@@ -113,12 +171,13 @@ export default function ChatPage() {
     const question = text.trim();
     if (!question || answering || !chosen) return;
     setDraft("");
-    setLive({ question, text: "", thinking: "", tools: [], error: null });
+    setLive({ question, text: "", thinking: "", tools: [], charts: [], error: null });
     const ctl = new AbortController();
     stop.current = ctl;
     let made: number | null = null;
     let answer = "";
     const used: string[] = [];
+    const drawn: ChatChart[] = [];
     let failed: string | null = null;
     let finished: ChatBubble | null = null;
     try {
@@ -130,7 +189,9 @@ export default function ChatPage() {
         } else if (e.t === "thinking") setLive((l) => (l ? { ...l, thinking: (l.thinking + e.d).slice(-400) } : l));
         else if (e.t === "tool") {
           used.push(e.name);
-          setLive((l) => (l ? { ...l, tools: [...l.tools, { name: e.name, done: false, ok: true }] } : l));
+          const chart = chartOf(e.name, e.input);
+          if (chart) drawn.push(chart);
+          setLive((l) => (l ? { ...l, tools: [...l.tools, { name: e.name, done: false, ok: true }], charts: chart ? [...l.charts, chart] : l.charts } : l));
         } else if (e.t === "tool_done")
           setLive((l) => {
             if (!l) return l;
@@ -139,7 +200,7 @@ export default function ChatPage() {
             return i < 0 ? l : { ...l, tools: l.tools.map((t, j) => (j === i ? { ...t, done: true, ok: e.ok } : t)) };
           });
         else if (e.t === "error") failed = e.message;
-        else if (e.t === "done") finished = { role: "assistant", text: answer.trim() + (e.note ? `\n\n_${e.note}_` : ""), tools: used, at: new Date().toISOString(), model: e.model, usage: e.usage };
+        else if (e.t === "done") finished = { role: "assistant", text: answer.trim() + (e.note ? `\n\n_${e.note}_` : ""), tools: used, charts: drawn, at: new Date().toISOString(), model: e.model, usage: e.usage };
       }, ctl.signal);
     } catch (err: any) {
       if (!ctl.signal.aborted) failed = String(err?.message ?? err);
@@ -163,7 +224,7 @@ export default function ChatPage() {
     }
     // Stopped or failed: nothing was stored, so the question goes back in the box.
     setDraft(question);
-    setLive(failed ? { question, text: answer, thinking: "", tools: [], error: failed } : null);
+    setLive(failed ? { question, text: answer, thinking: "", tools: [], charts: [], error: failed } : null);
   };
 
   const fresh = () => {
@@ -189,7 +250,7 @@ export default function ChatPage() {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h1 className="text-xl font-bold tracking-tight">Chat</h1>
-          <p className="text-[11px] text-muted-foreground">Reads your screener, positions and journal to answer. It cannot place or change a trade.</p>
+          <p className="text-[11px] text-muted-foreground">Reads your screener, positions, journal and charts, and can search the web. It cannot place or change a trade.</p>
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
           <select className={`${select} max-w-[11rem]`} value={threadId ?? ""} onChange={(e) => (e.target.value ? (stop.current?.abort(), setLive(null), setThreadId(Number(e.target.value))) : fresh())} aria-label="Conversation" data-testid="chat-thread">
@@ -200,6 +261,7 @@ export default function ChatPage() {
               </option>
             ))}
           </select>
+          {home.data && <NotesButton notes={home.data.notes ?? ""} />}
           <Button size="sm" variant="ghost" className="h-8 px-2" onClick={fresh} title="Start a new conversation" data-testid="chat-new">
             <MessageSquarePlus className="h-4 w-4" />
           </Button>
@@ -251,6 +313,9 @@ export default function ChatPage() {
               <Bubble b={{ role: "user", text: live.question, tools: [], at: "" }} modelLabel={modelLabel} />
               <div className="space-y-1.5" data-testid="chat-live">
                 {live.tools.length > 0 && <ToolChips tools={live.tools} />}
+                {live.charts.map((c, i) => (
+                  <ChartCard key={i} c={c} />
+                ))}
                 {live.text && <Markdown text={live.text} />}
                 {!live.error && !live.text && (
                   <p className="flex items-start gap-1.5 text-xs text-muted-foreground">

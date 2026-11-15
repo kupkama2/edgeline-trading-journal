@@ -16,7 +16,7 @@ export const FLAG_KINDS = [
   { id: "candidate-1D", label: "Candidate · 1D" },
   { id: "score-1D", label: "Score ≥ 4 · 1D" },
   { id: "rating", label: "Rating ≥ 90" },
-  { id: "weakest-1D", label: "Weakest · 1D (control)" },
+  { id: "weakest-1D", label: "Weakest · 1D (should lose)" },
 ] as const;
 export type FlagKind = (typeof FLAG_KINDS)[number]["id"];
 

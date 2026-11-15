@@ -48,7 +48,7 @@ export function ScreenerScanCard({ onOpen }: { onOpen: (coin: string) => void })
   return (
     <Card className="border-card-border bg-card p-3 sm:p-4" data-testid="screener-scan">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold">Scan a coin</h2>
+        <h2 className="text-sm font-semibold">Scan one market</h2>
         <form
           className="flex items-center gap-1.5"
           onSubmit={(e) => {

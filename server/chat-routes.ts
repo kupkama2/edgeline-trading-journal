@@ -19,7 +19,15 @@ export function registerChatRoutes(app: Express): void {
   /** What the page needs to draw itself: whether a key is set, the models to choose from, and the conversations so far. */
   app.get("/api/chat", async (req: Request, res: Response) => {
     const [models, threads] = await Promise.all([availableModels(), chatStore.threads(req.userId!)]);
-    res.json({ enabled: chatEnabled(), models, defaultModel: models.some((m) => m.id === DEFAULT_CHAT_MODEL) ? DEFAULT_CHAT_MODEL : models[0]?.id, efforts: CHAT_EFFORTS, threads });
+    res.json({ enabled: chatEnabled(), models, defaultModel: models.some((m) => m.id === DEFAULT_CHAT_MODEL) ? DEFAULT_CHAT_MODEL : models[0]?.id, efforts: CHAT_EFFORTS, threads, notes: await chatStore.notes(req.userId!) });
+  });
+
+  /** What the owner wants the model to know about them: sent with every question from then on. */
+  app.put("/api/chat/notes", async (req: Request, res: Response) => {
+    const body = z.object({ notes: z.string().max(8000) }).strict().safeParse(req.body);
+    if (!body.success) return res.status(400).json({ message: "Notes of at most 8,000 characters." });
+    await chatStore.saveNotes(req.userId!, body.data.notes.trim());
+    res.json({ notes: body.data.notes.trim() });
   });
 
   app.get("/api/chat/threads/:id", async (req: Request, res: Response) => {

@@ -1,3 +1,4 @@
+import { Fold } from "@/components/fold";
 import { useMemo, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -296,6 +297,7 @@ export default function Analysis({ embedded = false }: { embedded?: boolean } = 
       </div>
 
       {/* ---------------------------- the curve ---------------------------- */}
+      <Fold id="stats.Streaks and drawdown" title="Streaks and drawdown">
       <Card className="border-card-border bg-card p-4">
         <h2 className="mb-3 text-sm font-semibold tracking-tight">Streaks and drawdown</h2>
         {dd.equityR.length >= 2 && (
@@ -373,6 +375,7 @@ export default function Analysis({ embedded = false }: { embedded?: boolean } = 
           </div>
         )}
       </Card>
+      </Fold>
 
       {/* --------------------------- R distribution -------------------------- */}
       {dist && (
@@ -434,26 +437,37 @@ export default function Analysis({ embedded = false }: { embedded?: boolean } = 
       {/* --------------------- Where the management edge is -------------------- */}
       {/* Sits directly above the travel chart on purpose: that one shows how far
           each trade went, this one says what your decisions did with it. */}
-      <EdgeCard trades={scoped} />
+      <Fold id="stats.Where the management edge is" title="Where the management edge is">
+        <EdgeCard trades={scoped} />
+      </Fold>
 
       {/* The same trades, sliced the other way. The card above files them by
           what the plan was going to do; this one by how they finished and
           whether you touched them, which is the slice you actually think in
           after a week. They can disagree, and where they do is the finding. */}
-      <CohortCard trades={scoped} />
+      <Fold id="stats.By how they finished" title="By how they finished">
+        <CohortCard trades={scoped} />
+      </Fold>
 
       {/* The third slice of the same trades: not what you did after the entry,
           but how much you had on when you did it. */}
-      <SizeCard trades={scoped} />
+      <Fold id="stats.By size" title="By size">
+        <SizeCard trades={scoped} />
+      </Fold>
 
       {/* How the trade was entered: whether waiting for a limit beats taking the market. */}
-      <EntryTypeCard trades={scoped} />
+      <Fold id="stats.Limit vs market entries" title="Limit vs market entries">
+        <EntryTypeCard trades={scoped} />
+      </Fold>
 
       {/* Not how you managed the exit, but whether one plain target would
           have beaten it — and which. */}
-      <FixedTargetCard trades={scoped} />
+      <Fold id="stats.A fixed target instead" title="A fixed target instead">
+        <FixedTargetCard trades={scoped} />
+      </Fold>
 
       {/* ------------------------ MAE / MFE excursion ------------------------ */}
+      <Fold id="stats.How far each trade travelled" title="How far each trade travelled">
       <Card className="border-card-border bg-card p-4">
         <div className="mb-3">
           <h2 className="text-sm font-semibold tracking-tight">How far each trade travelled</h2>
@@ -608,8 +622,10 @@ export default function Analysis({ embedded = false }: { embedded?: boolean } = 
           </>
         )}
       </Card>
+      </Fold>
 
       {/* -------------------------- the breakdowns -------------------------- */}
+      <Fold id="stats.Breakdowns" title="Breakdowns">
       <Card className="border-card-border bg-card p-4">
         <div className="mb-3 flex flex-wrap items-center gap-1.5">
           {TABS.map((t) => (
@@ -653,8 +669,10 @@ export default function Analysis({ embedded = false }: { embedded?: boolean } = 
           </p>
         )}
       </Card>
+      </Fold>
 
       {/* --------------------------- monte carlo --------------------------- */}
+      <Fold id="stats.If this edge keeps running" title="If this edge keeps running">
       <Card className="border-card-border bg-card p-4">
         <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
           <div>
@@ -772,6 +790,7 @@ export default function Analysis({ embedded = false }: { embedded?: boolean } = 
           </div>
         )}
       </Card>
+      </Fold>
 
       {/* -------------------------- missed trades -------------------------- */}
       {missed.count > 0 && (
