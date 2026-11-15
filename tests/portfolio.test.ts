@@ -170,7 +170,13 @@ function startFake(): Promise<string> {
         return json({}, 404);
       });
     });
-    fake.listen(0, "127.0.0.1", () => resolve(`http://127.0.0.1:${(fake.address() as any).port}`));
+    // A port with "404" in its number where one is free: a failure there used to be read as "no such address".
+    const tryPort = (ports: number[]) => {
+      const port = ports.shift() ?? 0;
+      fake.once("error", () => tryPort(ports));
+      fake.listen(port, "127.0.0.1", () => resolve(`http://127.0.0.1:${(fake.address() as any).port}`));
+    };
+    tryPort([40412, 40440, 44041, 34049]);
   });
 }
 

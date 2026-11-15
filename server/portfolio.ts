@@ -64,7 +64,8 @@ async function getJson(url: string, init: { method?: string; body?: unknown } = 
       signal: ctl.signal,
       dispatcher: egressFor(url),
     } as any);
-    if (!res.ok) throw new Error(`${new URL(url).host} → HTTP ${res.status}`);
+    // The status travels on the error itself: reading it back out of the message mistook a port like 40412 for a 404.
+    if (!res.ok) throw Object.assign(new Error(`${new URL(url).host} → HTTP ${res.status}`), { status: res.status });
     return await res.json();
   } finally {
     clearTimeout(timer);
@@ -205,7 +206,7 @@ async function readEvm(a: PortfolioAddress, costs: Map<string, number>): Promise
     EVM_CHAINS.map(async (chain) => {
       try {
         const [native, tokens] = await kept(`evm:${a.address}:${chain.id}`, chain.name, a, out, () =>
-          Promise.all([getJson(evmUrl(chain, `/api/v2/addresses/${a.address}`)).catch((e) => (String(e?.message).includes("404") ? {} : Promise.reject(e))), getJson(evmUrl(chain, `/api/v2/addresses/${a.address}/token-balances`)).catch((e) => (String(e?.message).includes("404") ? [] : Promise.reject(e)))]),
+          Promise.all([getJson(evmUrl(chain, `/api/v2/addresses/${a.address}`)).catch((e) => (e?.status === 404 ? {} : Promise.reject(e))), getJson(evmUrl(chain, `/api/v2/addresses/${a.address}/token-balances`)).catch((e) => (e?.status === 404 ? [] : Promise.reject(e)))]),
         );
         const n = parseEvmNative(native);
         const rows: { asset: string; id: string; amount: number; price: number | null }[] = [];
