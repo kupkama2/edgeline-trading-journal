@@ -13,7 +13,7 @@
  */
 import type { Response } from "express";
 
-export type ChangeKind = "trades" | "settings" | "screener";
+export type ChangeKind = "trades" | "settings" | "screener" | "sigil";
 
 const listeners = new Map<number, Set<Response>>();
 const pending = new Map<string, NodeJS.Timeout>();

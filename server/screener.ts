@@ -980,6 +980,8 @@ export function startScreenerClock(everyMs = Number(process.env.SCREENER_CLOCK_M
     await import("./calendar").then((m) => m.calendarTick()).catch((err) => console.error(`[calendar] ${String(err?.message ?? err)}`));
     // The owner's portfolio value, an hour at most apart, so its chart fills in with the page closed.
     await ownerPortfolioTick().catch((err) => console.error(`[portfolio] ${String(err?.message ?? err)}`));
+    // The Astekz portfolio, read from its public page once a day.
+    await import("./astekz").then((m) => m.astekzTick()).catch((err) => console.error(`[astekz] ${String(err?.message ?? err)}`));
     try {
       if (status.running) return;
       await scheduledRun();

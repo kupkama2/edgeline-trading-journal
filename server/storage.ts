@@ -409,6 +409,40 @@ CREATE TABLE IF NOT EXISTS chat_notes (
   user_id INTEGER PRIMARY KEY,
   body TEXT NOT NULL
 );
+-- Sigil Core: a fund's holdings, one snapshot a day from the tracker's export, and what changed since the one before.
+CREATE TABLE IF NOT EXISTS sigil_snapshots (
+  day TEXT PRIMARY KEY,
+  captured_at TEXT NOT NULL,
+  body TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sigil_changes (
+  day TEXT PRIMARY KEY,
+  body TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sigil_history (
+  day TEXT PRIMARY KEY,
+  value DOUBLE PRECISION NOT NULL,
+  count INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sigil_assets (
+  symbol TEXT PRIMARY KEY,
+  body TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sigil_meta (
+  key TEXT PRIMARY KEY,
+  body TEXT NOT NULL
+);
+-- The Astekz portfolio as its public page states it, read once a day; and how the last read went.
+CREATE TABLE IF NOT EXISTS astekz_snapshots (
+  day TEXT PRIMARY KEY,
+  at TEXT NOT NULL,
+  body TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS astekz_status (
+  id INTEGER PRIMARY KEY,
+  tried_at TEXT NOT NULL,
+  error TEXT
+);
 -- What the screener flagged, when: priced afterwards for the track record.
 CREATE TABLE IF NOT EXISTS screener_flag_log (
   at TEXT NOT NULL,
@@ -1255,6 +1289,92 @@ export const screenerAiStore = {
  * results, the model's own thinking blocks), because the next request has to
  * send the history back unchanged.
  */
+/** Sigil Core's days: every snapshot, the change record of each, the value history and what is known of each asset. One fund, the owner's. */
+export const sigilStore = {
+  async snapshot(day: string): Promise<string | null> {
+    const rows = await sql<{ body: string }[]>`SELECT body FROM sigil_snapshots WHERE day = ${day}`;
+    return rows[0]?.body ?? null;
+  },
+  async latest(): Promise<{ day: string; body: string } | null> {
+    const rows = await sql<{ day: string; body: string }[]>`SELECT day, body FROM sigil_snapshots ORDER BY day DESC LIMIT 1`;
+    return rows[0] ?? null;
+  },
+  /** The newest snapshot of a day before this one: what a day is compared with. */
+  async before(day: string): Promise<{ day: string; body: string } | null> {
+    const rows = await sql<{ day: string; body: string }[]>`SELECT day, body FROM sigil_snapshots WHERE day < ${day} ORDER BY day DESC LIMIT 1`;
+    return rows[0] ?? null;
+  },
+  /** A day's snapshot, change record and history point, all or none; the history keeps its newest `keep` days. */
+  async saveDay(d: { day: string; capturedAt: string; snapshot: string; change: string; value: number; count: number; keep: number }): Promise<void> {
+    await sql.begin(async (tx: any) => {
+      await tx`INSERT INTO sigil_snapshots (day, captured_at, body) VALUES (${d.day}, ${d.capturedAt}, ${d.snapshot}) ON CONFLICT (day) DO UPDATE SET captured_at = EXCLUDED.captured_at, body = EXCLUDED.body`;
+      await tx`INSERT INTO sigil_changes (day, body) VALUES (${d.day}, ${d.change}) ON CONFLICT (day) DO UPDATE SET body = EXCLUDED.body`;
+      await tx`INSERT INTO sigil_history (day, value, count) VALUES (${d.day}, ${d.value}, ${d.count}) ON CONFLICT (day) DO UPDATE SET value = EXCLUDED.value, count = EXCLUDED.count`;
+      await tx`DELETE FROM sigil_history WHERE day NOT IN (SELECT day FROM sigil_history ORDER BY day DESC LIMIT ${d.keep})`;
+    });
+  },
+  async putSnapshot(day: string, capturedAt: string, body: string): Promise<void> {
+    await sql`INSERT INTO sigil_snapshots (day, captured_at, body) VALUES (${day}, ${capturedAt}, ${body}) ON CONFLICT (day) DO UPDATE SET captured_at = EXCLUDED.captured_at, body = EXCLUDED.body`;
+  },
+  async putChange(day: string, body: string): Promise<void> {
+    await sql`INSERT INTO sigil_changes (day, body) VALUES (${day}, ${body}) ON CONFLICT (day) DO UPDATE SET body = EXCLUDED.body`;
+  },
+  async change(day: string): Promise<string | null> {
+    const rows = await sql<{ body: string }[]>`SELECT body FROM sigil_changes WHERE day = ${day}`;
+    return rows[0]?.body ?? null;
+  },
+  async changes(): Promise<string[]> {
+    const rows = await sql<{ body: string }[]>`SELECT body FROM sigil_changes ORDER BY day DESC`;
+    return rows.map((r) => r.body);
+  },
+  async putHistory(day: string, value: number, count: number): Promise<void> {
+    await sql`INSERT INTO sigil_history (day, value, count) VALUES (${day}, ${value}, ${count}) ON CONFLICT (day) DO UPDATE SET value = EXCLUDED.value, count = EXCLUDED.count`;
+  },
+  async history(): Promise<{ date: string; valueUsd: number; positionCount: number }[]> {
+    const rows = await sql<{ day: string; value: number; count: number }[]>`SELECT day, value, count FROM sigil_history ORDER BY day`;
+    return rows.map((r) => ({ date: r.day, valueUsd: Number(r.value), positionCount: Number(r.count) }));
+  },
+  async assets(): Promise<Record<string, string>> {
+    const rows = await sql<{ symbol: string; body: string }[]>`SELECT symbol, body FROM sigil_assets`;
+    return Object.fromEntries(rows.map((r) => [r.symbol, r.body]));
+  },
+  async putAsset(symbol: string, body: string): Promise<void> {
+    await sql`INSERT INTO sigil_assets (symbol, body) VALUES (${symbol}, ${body}) ON CONFLICT (symbol) DO UPDATE SET body = EXCLUDED.body`;
+  },
+  async meta(key: string): Promise<string | null> {
+    const rows = await sql<{ body: string }[]>`SELECT body FROM sigil_meta WHERE key = ${key}`;
+    return rows[0]?.body ?? null;
+  },
+  async putMeta(key: string, body: string): Promise<void> {
+    await sql`INSERT INTO sigil_meta (key, body) VALUES (${key}, ${body}) ON CONFLICT (key) DO UPDATE SET body = EXCLUDED.body`;
+  },
+  /** Everything gone: for the tests. */
+  async clear(): Promise<void> {
+    await sql`TRUNCATE sigil_snapshots, sigil_changes, sigil_history, sigil_assets, sigil_meta`;
+  },
+};
+
+/** The Astekz portfolio's days, one good read each, and how the latest attempt went. */
+export const astekzStore = {
+  async save(day: string, at: string, body: string): Promise<void> {
+    await sql`INSERT INTO astekz_snapshots (day, at, body) VALUES (${day}, ${at}, ${body}) ON CONFLICT (day) DO UPDATE SET at = EXCLUDED.at, body = EXCLUDED.body`;
+  },
+  async all(limit = 400): Promise<{ day: string; at: string; body: string }[]> {
+    const rows = await sql<{ day: string; at: string; body: string }[]>`SELECT day, at, body FROM astekz_snapshots ORDER BY day DESC LIMIT ${limit}`;
+    return rows.reverse();
+  },
+  async tried(at: string, error: string | null): Promise<void> {
+    await sql`INSERT INTO astekz_status (id, tried_at, error) VALUES (1, ${at}, ${error}) ON CONFLICT (id) DO UPDATE SET tried_at = EXCLUDED.tried_at, error = EXCLUDED.error`;
+  },
+  async status(): Promise<{ triedAt: string; error: string | null } | null> {
+    const rows = await sql<{ tried_at: string; error: string | null }[]>`SELECT tried_at, error FROM astekz_status WHERE id = 1`;
+    return rows[0] ? { triedAt: rows[0].tried_at, error: rows[0].error } : null;
+  },
+  async clear(): Promise<void> {
+    await sql`TRUNCATE astekz_snapshots, astekz_status`;
+  },
+};
+
 export const chatStore = {
   async threads(userId: number): Promise<{ id: number; title: string; model: string | null; updatedAt: string }[]> {
     const rows = await sql<{ id: number; title: string; model: string | null; updated_at: string }[]>`
