@@ -245,6 +245,19 @@ minutes; a failed run counts, which is the back-off.
   or on "Read now" at most every 30 minutes (data over an hour old is refreshed first), when `ANTHROPIC_API_KEY` is
   set. `SCREENER_AI_MODEL` picks the model.
 
+## The chat
+
+The Chat tab (the owner's only) talks to a Claude model through the same
+`ANTHROPIC_API_KEY` the screener's AI read uses; with no key it says so and
+stays off. The model picker offers Opus 5.5, Fable 5.2, Sonnet 5.5 and
+Haiku 5.5, narrowed to the ones the key can use. The model reads the site's
+data through read-only tools (the screener's latest run, any coin, the
+flags' track record, open positions, trades, statistics, the calendar); it
+cannot place or change a trade. Each message is billed to the key: a
+question that reads the screener is roughly ten to twenty thousand tokens
+in, most of it cached on the turns that follow. Conversations are stored in
+the database (`chat_threads`, `chat_messages`) and deleted from the page.
+
 ## The event calendar
 
 US macro releases of high impact (NFP, CPI, PPI, FOMC, GDP, PCE…) come from

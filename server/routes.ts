@@ -55,6 +55,7 @@ import { trackUser } from "./tracker";
 import { notify, subscribe } from "./events";
 import { registerScreenerRoutes } from "./screener-routes";
 import { registerPortfolioRoutes } from "./portfolio";
+import { registerChatRoutes } from "./chat-routes";
 import { registerCalendarRoutes } from "./calendar";
 import { formatGate, gateRecordSchema, redAnswers } from "@shared/gate";
 import { attachRelay, relayStatus } from "./relay";
@@ -625,6 +626,8 @@ export async function registerRoutes(
   registerScreenerRoutes(app);
   // The owner's portfolio: vaults, Hyperliquid accounts, wallets (server/portfolio.ts).
   registerPortfolioRoutes(app);
+  // The owner's chat: a model of their choosing, with read-only tools over the site's data.
+  registerChatRoutes(app);
   // The macro and earnings calendar (server/calendar.ts).
   registerCalendarRoutes(app);
 

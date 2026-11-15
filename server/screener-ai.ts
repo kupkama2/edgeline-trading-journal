@@ -46,7 +46,7 @@ export const aiStatus = () => ({ running: !!running, nextAllowedAt: lastStartedA
 const r2 = (x: number | null | undefined, d = 3) => (x == null || !Number.isFinite(x) ? null : Number(x.toFixed(d)));
 
 /** One coin, compactly: the numbers the read works from. */
-function coinDigest(r: ScreenerRow) {
+export function coinDigest(r: ScreenerRow) {
   const tf = (t: Timeframe) => ({
     rs: r2(r.tf[t]?.rs),
     accel: r.tf[t]?.accel ?? null,

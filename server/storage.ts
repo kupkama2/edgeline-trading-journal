@@ -386,6 +386,24 @@ CREATE TABLE IF NOT EXISTS screener_settings (
   body TEXT NOT NULL
 );
 ALTER TABLE screener_snapshots ADD COLUMN IF NOT EXISTS oracle DOUBLE PRECISION;
+-- The owner's chat (server/chat.ts): conversations, and each message as the model's API takes it back.
+CREATE TABLE IF NOT EXISTS chat_threads (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  model TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS chat_messages (
+  id SERIAL PRIMARY KEY,
+  thread_id INTEGER NOT NULL,
+  role TEXT NOT NULL,
+  content TEXT NOT NULL,
+  meta TEXT,
+  at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS chat_messages_thread ON chat_messages (thread_id, id);
 -- What the screener flagged, when: priced afterwards for the track record.
 CREATE TABLE IF NOT EXISTS screener_flag_log (
   at TEXT NOT NULL,
@@ -1223,6 +1241,46 @@ export const screenerAiStore = {
     const rows = await sql<{ id: number; at: string; run_id: number | null; model: string | null; body: string | null; error: string | null }[]>`SELECT id, at, run_id, model, body, error FROM screener_ai ORDER BY id DESC LIMIT 1`;
     const r = rows[0];
     return r ? { id: r.id, at: r.at, runId: r.run_id, model: r.model, body: r.body, error: r.error } : null;
+  },
+};
+
+/**
+ * The owner's chat: conversations and their messages. A message's content is
+ * kept exactly as the model's API gave or took it (text, tool calls, tool
+ * results, the model's own thinking blocks), because the next request has to
+ * send the history back unchanged.
+ */
+export const chatStore = {
+  async threads(userId: number): Promise<{ id: number; title: string; model: string | null; updatedAt: string }[]> {
+    const rows = await sql<{ id: number; title: string; model: string | null; updated_at: string }[]>`
+      SELECT id, title, model, updated_at FROM chat_threads WHERE user_id = ${userId} ORDER BY updated_at DESC LIMIT 100`;
+    return rows.map((r) => ({ id: r.id, title: r.title, model: r.model, updatedAt: r.updated_at }));
+  },
+  async thread(userId: number, id: number): Promise<{ id: number; title: string; model: string | null } | null> {
+    const rows = await sql<{ id: number; title: string; model: string | null }[]>`SELECT id, title, model FROM chat_threads WHERE user_id = ${userId} AND id = ${id}`;
+    return rows[0] ?? null;
+  },
+  async createThread(userId: number, title: string, model: string): Promise<number> {
+    const at = new Date().toISOString();
+    const rows = await sql<{ id: number }[]>`INSERT INTO chat_threads (user_id, title, model, created_at, updated_at) VALUES (${userId}, ${title}, ${model}, ${at}, ${at}) RETURNING id`;
+    return rows[0].id;
+  },
+  async messages(threadId: number): Promise<{ role: string; content: string; meta: string | null; at: string }[]> {
+    return sql<{ role: string; content: string; meta: string | null; at: string }[]>`SELECT role, content, meta, at FROM chat_messages WHERE thread_id = ${threadId} ORDER BY id`;
+  },
+  /** A finished turn, written whole: the question, every step the model took, the answer. */
+  async append(threadId: number, model: string, rows: { role: string; content: string; meta?: string | null }[]): Promise<void> {
+    if (!rows.length) return;
+    const at = new Date().toISOString();
+    await sql.begin(async (tx: any) => {
+      await tx`INSERT INTO chat_messages ${tx(rows.map((r) => ({ thread_id: threadId, role: r.role, content: r.content, meta: r.meta ?? null, at })))}`;
+      await tx`UPDATE chat_threads SET updated_at = ${at}, model = ${model} WHERE id = ${threadId}`;
+    });
+  },
+  async deleteThread(userId: number, id: number): Promise<boolean> {
+    const rows = await sql<{ id: number }[]>`DELETE FROM chat_threads WHERE user_id = ${userId} AND id = ${id} RETURNING id`;
+    if (rows.length) await sql`DELETE FROM chat_messages WHERE thread_id = ${id}`;
+    return rows.length > 0;
   },
 };
 
