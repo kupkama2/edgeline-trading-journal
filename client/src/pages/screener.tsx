@@ -20,7 +20,8 @@ import { sectorTable, TIMEFRAMES, type ScreenerRow, type Timeframe } from "@shar
 import { parseLooseNumber } from "@shared/loose-number";
 
 const TF_KEY = "edgeline.screener.tf";
-const UNIVERSE_KEY = "edgeline.screener.universe";
+// A new name for the key: crypto is now what the page opens on, whatever an earlier visit left behind.
+const UNIVERSE_KEY = "edgeline.screener.universe.v2";
 type Universe = "all" | AssetClass;
 
 /** The top eight and bottom three by RS change on the timeframe: the chart's default set. */
@@ -74,9 +75,9 @@ export default function ScreenerPage() {
   const [universe, setUniverseState] = useState<Universe>(() => {
     try {
       const v = localStorage.getItem(UNIVERSE_KEY);
-      return v === "all" || (ASSET_CLASSES as readonly string[]).includes(v ?? "") ? (v as Universe) : "all";
+      return v === "all" || (ASSET_CLASSES as readonly string[]).includes(v ?? "") ? (v as Universe) : "crypto";
     } catch {
-      return "all";
+      return "crypto";
     }
   });
   const setUniverse = (u: Universe) => {

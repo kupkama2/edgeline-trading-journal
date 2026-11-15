@@ -36,7 +36,7 @@ function Head({ k, sort, setSort, children, className = "", title }: { k: SortKe
   const on = sort.key === k;
   return (
     <th
-      className={`select-none whitespace-nowrap px-1.5 py-1.5 text-[10px] font-semibold uppercase tracking-wider ${on ? "text-foreground" : "text-muted-foreground"} ${className}`}
+      className={`select-none whitespace-nowrap px-1 py-1.5 text-[10px] font-semibold uppercase tracking-wider ${on ? "text-foreground" : "text-muted-foreground"} ${className}`}
       aria-sort={on ? (sort.desc ? "descending" : "ascending") : "none"}
     >
       <button
@@ -191,7 +191,7 @@ export function ScreenerTable({
             <Head sort={sort} setSort={setSort} k="volume" className="text-right hidden sm:table-cell" title="24h notional volume">
               Vol 24h
             </Head>
-            <th className="px-1.5 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Flags</th>
+            <th className="px-1 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Flags</th>
           </tr>
         </thead>
         <tbody>
@@ -231,7 +231,7 @@ export function ScreenerTable({
                   </button>
                 </td>
                 <td
-                  className={`sticky left-5 z-10 whitespace-nowrap px-1.5 py-1 font-semibold ${f.candidate ? CANDIDATE_CELL : "bg-card"}`}
+                  className={`sticky left-5 z-10 whitespace-nowrap px-1 py-1 font-semibold ${f.candidate ? CANDIDATE_CELL : "bg-card"}`}
                   onClick={(e) => e.stopPropagation()}
                 >
                   <button
@@ -259,7 +259,7 @@ export function ScreenerTable({
                   return (
                     <td
                       key={t}
-                      className={`whitespace-nowrap px-1.5 py-1 text-right font-mono ${t === tf ? "font-semibold" : ""}`}
+                      className={`whitespace-nowrap px-1 py-1 text-right font-mono ${t === tf ? "font-semibold" : ""}`}
                       style={{ background: heat(x.rs) }}
                       title={x.accel ? `Acceleration: ${ACCEL_ARROW[x.accel]} · ${x.breakout ? "new 20-period high" : "no breakout"}` : undefined}
                     >
@@ -270,30 +270,30 @@ export function ScreenerTable({
                   );
                 })}
                 <td
-                  className={`whitespace-nowrap px-1.5 py-1 text-right font-mono ${st?.rating == null ? "text-muted-foreground" : st.rating >= 80 ? "text-emerald-400" : st.rating <= 20 ? "text-red-400" : ""}`}
+                  className={`whitespace-nowrap px-1 py-1 text-right font-mono ${st?.rating == null ? "text-muted-foreground" : st.rating >= 80 ? "text-emerald-400" : st.rating <= 20 ? "text-red-400" : ""}`}
                   title={st?.rating != null ? `RS rating ${st.rating} of 99${st.ratingWas != null ? `, ${st.ratingWas} a week ago` : ""}` : "No rating: too few bars"}
                   data-testid={`screener-rating-${r.coin}`}
                 >
                   {st?.rating ?? "—"}
                   {rose != null && Math.abs(rose) >= 10 && <span className={`ml-0.5 text-[9px] ${rose > 0 ? "text-emerald-400" : "text-red-400"}`}>{rose > 0 ? "▲" : "▼"}{Math.abs(rose)}</span>}
                 </td>
-                <td className={`whitespace-nowrap px-1.5 py-1 text-right font-mono ${alpha == null ? "text-muted-foreground" : alpha > 0.003 ? "text-emerald-400" : alpha < -0.003 ? "text-red-400" : ""}`} title={st?.beta != null ? `Beta to BTC ${st.beta.toFixed(2)}` : undefined}>
+                <td className={`whitespace-nowrap px-1 py-1 text-right font-mono ${alpha == null ? "text-muted-foreground" : alpha > 0.003 ? "text-emerald-400" : alpha < -0.003 ? "text-red-400" : ""}`} title={st?.beta != null ? `Beta to BTC ${st.beta.toFixed(2)}` : undefined}>
                   {fmtPct(alpha)}
                 </td>
                 <td
-                  className={`whitespace-nowrap px-1.5 py-1 text-right font-mono ${st?.capture == null ? "text-muted-foreground" : st.capture > CAPTURE_BAND ? "text-emerald-400" : st.capture < -CAPTURE_BAND ? "text-red-400" : ""}`}
+                  className={`whitespace-nowrap px-1 py-1 text-right font-mono ${st?.capture == null ? "text-muted-foreground" : st.capture > CAPTURE_BAND ? "text-emerald-400" : st.capture < -CAPTURE_BAND ? "text-red-400" : ""}`}
                   title={st?.upCapture != null && st.downCapture != null ? `On BTC's green hours it made ${st.upCapture.toFixed(2)}× BTC's gain; on the red hours it lost ${st.downCapture.toFixed(2)}× BTC's loss` : undefined}
                 >
                   {st?.capture == null ? "—" : `${st.capture > 0 ? "+" : "−"}${Math.abs(st.capture).toFixed(2)}`}
                 </td>
-                <td className={`whitespace-nowrap px-1.5 py-1 text-right font-mono ${m.rvol != null && m.rvol >= rvolMin ? "text-emerald-400" : ""}`}>{fmtX(m.rvol)}</td>
-                <td className={`whitespace-nowrap px-1.5 py-1 text-right font-mono ${r.fundingAnnual != null && r.fundingAnnual > 0.3 ? "text-amber-500" : ""}`}>{fmtPct(r.fundingAnnual, 0)}</td>
-                <td className="whitespace-nowrap px-1.5 py-1 text-right" title={signalTitle(r, tf)} data-testid={`screener-score-${r.coin}`}>
+                <td className={`whitespace-nowrap px-1 py-1 text-right font-mono ${m.rvol != null && m.rvol >= rvolMin ? "text-emerald-400" : ""}`}>{fmtX(m.rvol)}</td>
+                <td className={`whitespace-nowrap px-1 py-1 text-right font-mono ${r.fundingAnnual != null && r.fundingAnnual > 0.3 ? "text-amber-500" : ""}`}>{fmtPct(r.fundingAnnual, 0)}</td>
+                <td className="whitespace-nowrap px-1 py-1 text-right" title={signalTitle(r, tf)} data-testid={`screener-score-${r.coin}`}>
                   <SignalDots s={r.signals?.[tf]} />
                 </td>
-                <td className={`whitespace-nowrap px-1.5 py-1 text-right font-mono ${rsiTone(r.price?.[tf]?.rsi)}`}>{r.price?.[tf]?.rsi != null ? r.price[tf].rsi!.toFixed(0) : "—"}</td>
+                <td className={`whitespace-nowrap px-1 py-1 text-right font-mono ${rsiTone(r.price?.[tf]?.rsi)}`}>{r.price?.[tf]?.rsi != null ? r.price[tf].rsi!.toFixed(0) : "—"}</td>
                 <td
-                  className={`whitespace-nowrap px-1.5 py-1 text-right font-mono ${cvd == null ? "text-muted-foreground" : cvd.value > 0.02 ? "text-emerald-400" : cvd.value < -0.02 ? "text-red-400" : ""}`}
+                  className={`whitespace-nowrap px-1 py-1 text-right font-mono ${cvd == null ? "text-muted-foreground" : cvd.value > 0.02 ? "text-emerald-400" : cvd.value < -0.02 ? "text-red-400" : ""}`}
                   title={
                     cvd
                       ? `Binance ${cvd.source === "perp" ? "perp" : "spot"} ${cvd.symbol}: net taker buying ${fmtPct(cvd.value)} of volume over ${cvd.window}${r.spot && r.flow ? `; spot 24h ${fmtPct(r.spot.cvd24h)}, perp 24h ${fmtPct(r.flow.cvd24h)}` : ""}`
@@ -304,20 +304,20 @@ export function ScreenerTable({
                   {fmtPct(cvd?.value)}
                   {cvd && <span className="ml-0.5 text-[9px] text-muted-foreground">{cvd.source === "perp" ? "p" : "s"}</span>}
                 </td>
-                <td className="whitespace-nowrap px-1.5 py-1 text-right font-mono" title={r.positioning?.read ? OI_READ[r.positioning.read] : undefined}>
+                <td className="whitespace-nowrap px-1 py-1 text-right font-mono" title={r.positioning?.read ? OI_READ[r.positioning.read] : undefined}>
                   {fmtPct(r.positioning?.oi1d ?? r.oiChange)}
                   {r.positioning?.read && <span className={`ml-1 text-[9px] ${OI_TONE[r.positioning.read]}`}>{OI_SHORT[r.positioning.read]}</span>}
                 </td>
-                <td className="hidden whitespace-nowrap px-1.5 py-1 text-right font-mono sm:table-cell">{fmtUsd(r.volume24h)}</td>
-                <td className="whitespace-nowrap px-1.5 py-1">
-                  <span className="inline-flex flex-wrap gap-1">
-                    {f.candidate && <Flag tone="emerald" testId={`screener-candidate-${r.coin}`}>Candidate</Flag>}
-                    {f.movingFast && !f.candidate && <Flag tone="sky">Fast</Flag>}
-                    {f.volumeConfirmed && <Flag tone="muted">Vol</Flag>}
-                    {r.leverageDriven && <Flag tone="amber">Lev</Flag>}
-                    {f.weakest && <Flag tone="red">Weak</Flag>}
-                    {r.signals?.[tf]?.divergence === "bearish" && <Flag tone="red">Bear div</Flag>}
-                    {r.signals?.[tf]?.divergence === "bullish" && <Flag tone="emerald">Bull div</Flag>}
+                <td className="hidden whitespace-nowrap px-1 py-1 text-right font-mono sm:table-cell">{fmtUsd(r.volume24h)}</td>
+                <td className="whitespace-nowrap px-1 py-1">
+                  <span className="inline-flex gap-1">
+                    {f.candidate && <Flag tone="emerald" testId={`screener-candidate-${r.coin}`} title="Candidate: top 10% and accelerating, with volume, not leverage-driven">Cand</Flag>}
+                    {f.movingFast && !f.candidate && <Flag tone="sky" title="Moving fast: top 10% by RS and accelerating">Fast</Flag>}
+                    {f.volumeConfirmed && <Flag tone="muted" title="Volume-confirmed">Vol</Flag>}
+                    {r.leverageDriven && <Flag tone="amber" title="Leverage-driven: top-decile funding with open interest jumping">Lev</Flag>}
+                    {f.weakest && <Flag tone="red" title="Weakest: bottom 10% by RS">Weak</Flag>}
+                    {r.signals?.[tf]?.divergence === "bearish" && <Flag tone="red" title="Bearish divergence: price at a high that RS or RSI does not confirm">Bear</Flag>}
+                    {r.signals?.[tf]?.divergence === "bullish" && <Flag tone="emerald" title="Bullish divergence: price at a low while RS or RSI holds up">Bull</Flag>}
                   </span>
                 </td>
               </tr>
@@ -385,7 +385,7 @@ export function SignalDots({ s }: { s?: ScreenerRow["signals"][Timeframe] }) {
   );
 }
 
-function Flag({ tone, children, testId }: { tone: "emerald" | "sky" | "amber" | "red" | "muted"; children: React.ReactNode; testId?: string }) {
+function Flag({ tone, children, testId, title }: { tone: "emerald" | "sky" | "amber" | "red" | "muted"; children: React.ReactNode; testId?: string; title?: string }) {
   const cls = {
     emerald: "border-emerald-500/60 bg-emerald-500/15 text-emerald-400",
     sky: "border-sky-500/50 bg-sky-500/10 text-sky-400",
@@ -394,7 +394,7 @@ function Flag({ tone, children, testId }: { tone: "emerald" | "sky" | "amber" | 
     muted: "border-border text-muted-foreground",
   }[tone];
   return (
-    <span className={`rounded border px-1 py-px text-[9px] font-semibold uppercase tracking-wide ${cls}`} data-testid={testId}>
+    <span className={`whitespace-nowrap rounded border px-1 py-px text-[9px] font-semibold uppercase tracking-wide ${cls}`} data-testid={testId} title={title}>
       {children}
     </span>
   );
