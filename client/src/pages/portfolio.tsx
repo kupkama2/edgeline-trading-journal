@@ -671,7 +671,7 @@ export default function PortfolioPage() {
       </Card>
       </Section>
 
-        <Section id="sigil" title="Sigil Core" hint="a fund's holdings from its tracker's daily export">
+        <Section id="sigil" title="Sigil" hint="Core from the uploaded export, Stable from your own updates">
           <SigilSection />
         </Section>
         <Section id="typed" title="Other positions" hint="stakes and angel investments you value by hand">

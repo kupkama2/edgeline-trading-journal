@@ -440,6 +440,8 @@ CREATE TABLE IF NOT EXISTS typed_positions (
   entry_usd DOUBLE PRECISION,
   created_at TEXT NOT NULL
 );
+-- Which part of the page a typed position sits with: 'sigil' beside Sigil Core, null among the other positions.
+ALTER TABLE typed_positions ADD COLUMN IF NOT EXISTS grp TEXT;
 CREATE TABLE IF NOT EXISTS followed_values (
   kind TEXT NOT NULL,
   key TEXT NOT NULL,
@@ -1386,12 +1388,12 @@ export const followedValues = {
 
 /** Positions the owner keeps by hand: a name, what went in, and a value typed whenever one is known. */
 export const typedPositions = {
-  async list(userId: number): Promise<{ id: number; name: string; entryUsd: number | null; createdAt: string }[]> {
-    const rows = await sql<{ id: number; name: string; entry_usd: number | null; created_at: string }[]>`SELECT id, name, entry_usd, created_at FROM typed_positions WHERE user_id = ${userId} ORDER BY id`;
-    return rows.map((r) => ({ id: r.id, name: r.name, entryUsd: r.entry_usd == null ? null : Number(r.entry_usd), createdAt: r.created_at }));
+  async list(userId: number): Promise<{ id: number; name: string; entryUsd: number | null; group: string | null; createdAt: string }[]> {
+    const rows = await sql<{ id: number; name: string; entry_usd: number | null; grp: string | null; created_at: string }[]>`SELECT id, name, entry_usd, grp, created_at FROM typed_positions WHERE user_id = ${userId} ORDER BY id`;
+    return rows.map((r) => ({ id: r.id, name: r.name, entryUsd: r.entry_usd == null ? null : Number(r.entry_usd), group: r.grp, createdAt: r.created_at }));
   },
-  async create(userId: number, name: string, entryUsd: number | null): Promise<number> {
-    const rows = await sql<{ id: number }[]>`INSERT INTO typed_positions (user_id, name, entry_usd, created_at) VALUES (${userId}, ${name}, ${entryUsd}, ${new Date().toISOString()}) RETURNING id`;
+  async create(userId: number, name: string, entryUsd: number | null, group: string | null = null): Promise<number> {
+    const rows = await sql<{ id: number }[]>`INSERT INTO typed_positions (user_id, name, entry_usd, grp, created_at) VALUES (${userId}, ${name}, ${entryUsd}, ${group}, ${new Date().toISOString()}) RETURNING id`;
     return rows[0].id;
   },
   async update(userId: number, id: number, name: string, entryUsd: number | null): Promise<boolean> {

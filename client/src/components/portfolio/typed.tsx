@@ -113,24 +113,25 @@ function Row({ p }: { p: TypedPosition }) {
  * or whenever. Each has a name and what went in; the value is typed when
  * it is known, and typing again on the same day corrects it.
  */
-export function TypedPositions() {
-  const { data: list = [] } = useTypedPositions();
+export function TypedPositions({ group = null, blurb, suggest = "", testId = "typed-positions" }: { group?: "sigil" | null; blurb?: string; suggest?: string; testId?: string }) {
+  const { data: all = [] } = useTypedPositions();
+  const list = all.filter((p) => (p.group ?? null) === group);
   const add = useAddTyped();
   const { toast } = useToast();
   const [adding, setAdding] = useState(false);
-  const [name, setName] = useState("");
+  const [name, setName] = useState(suggest);
   const [entry, setEntry] = useState("");
   return (
-    <Card className="border-card-border bg-card p-3 sm:p-4" data-testid="typed-positions">
+    <Card className="border-card-border bg-card p-3 sm:p-4" data-testid={testId}>
       <div className="flex items-center justify-between gap-2">
-        <p className="text-[11px] text-muted-foreground">A name, what went in, and a value you type when you have one. Counted in the total above.</p>
+        <p className="min-w-0 text-[11px] text-muted-foreground">{blurb ?? "A name, what went in, and a value you type when you have one. Counted in the total above."}</p>
         {!adding && (
           <button type="button" className="inline-flex items-center gap-1 text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline" onClick={() => setAdding(true)} data-testid="typed-add">
-            <Plus className="h-3 w-3" /> Add a position
+            <Plus className="h-3 w-3" /> {group === "sigil" && list.length === 0 ? `Add ${suggest || "a position"}` : "Add a position"}
           </button>
         )}
       </div>
-      {list.length === 0 && !adding && <p className="mt-1 text-xs text-muted-foreground">Nothing here yet. Add a stake you get one number for (a fund share, an angel investment), then type its value when you have it.</p>}
+      {list.length === 0 && !adding && group == null && <p className="mt-1 text-xs text-muted-foreground">Nothing here yet. Add a stake you get one number for (a fund share, an angel investment), then type its value when you have it.</p>}
       {list.length > 0 && (
         <ul className="divide-y divide-border/40">
           {list.map((p) => (
@@ -144,7 +145,7 @@ export function TypedPositions() {
           onSubmit={(e) => {
             e.preventDefault();
             if (!name.trim()) return;
-            add.mutate({ name: name.trim(), entryUsd: amount(entry) }, { onSuccess: () => (setAdding(false), setName(""), setEntry("")), onError: (err) => toast({ title: "Not added", description: said(err), variant: "destructive" }) });
+            add.mutate({ name: name.trim(), entryUsd: amount(entry), group }, { onSuccess: () => (setAdding(false), setName(suggest), setEntry("")), onError: (err) => toast({ title: "Not added", description: said(err), variant: "destructive" }) });
           }}
         >
           <Input autoFocus className="h-8 w-44 text-xs" placeholder="Name" value={name} onChange={(e) => setName(e.target.value)} data-testid="typed-new-name" />

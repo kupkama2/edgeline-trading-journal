@@ -154,7 +154,12 @@ describe.skipIf(!process.env.DATABASE_URL)("on the server", () => {
       expect((await call("GET", "", undefined, { "x-guest": "1" })).status).toBe(404);
       expect((await call("POST", "", { name: "", entryUsd: 1 })).status).toBe(400);
       const made = (await call("POST", "", { name: "Sigil Core II", entryUsd: 10000 })).json;
-      expect(made).toEqual([{ id: expect.any(Number), name: "Sigil Core II", entryUsd: 10000, values: [] }]);
+      expect(made).toEqual([{ id: expect.any(Number), name: "Sigil Core II", entryUsd: 10000, group: null, values: [] }]);
+      // One that sits beside Sigil Core; any other group is refused.
+      const stable = (await call("POST", "", { name: "Sigil Stable", entryUsd: 5000, group: "sigil" })).json;
+      expect(stable[1]).toMatchObject({ name: "Sigil Stable", group: "sigil" });
+      expect((await call("POST", "", { name: "x", entryUsd: 1, group: "other" })).status).toBe(400);
+      await call("DELETE", `/${stable[1].id}`);
       const id = made[0].id;
       expect((await call("PUT", `/${id}/value`, { valueUsd: -1 })).status).toBe(400);
       expect((await call("PUT", `/${id}/value`, { valueUsd: 9000, date: "2099-01-01" })).status).toBe(400);

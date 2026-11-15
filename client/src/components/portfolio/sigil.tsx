@@ -8,9 +8,10 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { useToast } from "@/hooks/use-toast";
 import { fmtAmount } from "@shared/metrics";
 import { changeCount, ecoOf, isQuiet, isUnverified, pragueDay, segmentOf, sigilGroups, sigilMovers, sigilReport, sigilStreaks, type SigilAsset, type SigilChange, type SigilPosition } from "@shared/sigil";
-import { useEnrichSigilAsset, useSaveSigilAsset, useSaveSigilEntry, useSigil, useSigilSeed, useSigilUpload, type SigilState } from "@/lib/sigil";
+import { useEnrichSigilAsset, useSaveSigilAsset, useSaveSigilEntry, useTypedPositions, useSigil, useSigilSeed, useSigilUpload, type SigilState } from "@/lib/sigil";
 import { Donut, ValueLine } from "./charts";
 import { Section, Sections } from "@/components/sections";
+import { TypedPositions } from "./typed";
 
 /** The entry the page assumes until the owner sets their own. */
 const ASSUMED_ENTRY_USD = 40_000;
@@ -297,6 +298,7 @@ export function SigilSection() {
   const [editingEntry, setEditingEntry] = useState(false);
   const [entryDraft, setEntryDraft] = useState("");
   const saveEntry = useSaveSigilEntry();
+  const { data: typedAll = [] } = useTypedPositions();
   const d = page.data;
 
   const take = async (file: File | undefined | null) => {
@@ -395,6 +397,7 @@ export function SigilSection() {
       <div className="space-y-3" data-testid="sigil-root">
         {strip}
         <p className="text-xs text-muted-foreground">Nothing here yet. Load the seed pack to bring the history in, or upload the first export.</p>
+        <TypedPositions group="sigil" suggest="Sigil Stable" testId="sigil-stable" blurb="Sigil Stable: your own figure, typed whenever you update it." />
       </div>
     );
 
@@ -403,6 +406,10 @@ export function SigilSection() {
   const entry = d!.entryUsd ?? ASSUMED_ENTRY_USD;
   const sinceEntry = latest.portfolioValueUsd - entry;
   const sinceEntryPct = (latest.portfolioValueUsd / entry - 1) * 100;
+  // Sigil Stable, where it has been given a value: counted with Core for the combined line.
+  const stable = typedAll.filter((p) => p.group === "sigil" && p.values.length > 0);
+  const stableValue = stable.reduce((t, p) => t + p.values[p.values.length - 1].valueUsd, 0);
+  const combinedEntry = stable.every((p) => p.entryUsd != null) ? entry + stable.reduce((t, p) => t + p.entryUsd!, 0) : null;
   const newest = d!.changes[0];
   const rundown = newest && newest.date === latest.day ? sigilReport(newest, { previousValueUsd: prev?.valueUsd ?? null, movers: derived.movers }) : null;
   const delta = prev ? latest.portfolioValueUsd - prev.valueUsd : null;
@@ -486,6 +493,20 @@ export function SigilSection() {
           </div>
         </div>
       </Card>
+
+      {/* Sigil Stable: the owner's own figure, typed when they update it, beside the fund read from the file. */}
+      <TypedPositions group="sigil" suggest="Sigil Stable" testId="sigil-stable" blurb="Sigil Stable: your own figure, typed whenever you update it. Sigil Core above comes from the uploaded file." />
+      {stable.length > 0 && (
+        <p className="px-1 font-mono text-[11px] text-muted-foreground" data-testid="sigil-combined">
+          Core and Stable together: <span className="text-foreground">{fmtAmount(latest.portfolioValueUsd + stableValue, 0)}</span>
+          {combinedEntry != null && (
+            <span className={`ml-2 ${tone(latest.portfolioValueUsd + stableValue - combinedEntry)}`}>
+              {latest.portfolioValueUsd + stableValue - combinedEntry >= 0 ? "+" : "−"}
+              {fmtAmount(Math.abs(latest.portfolioValueUsd + stableValue - combinedEntry), 0)} ({pct(((latest.portfolioValueUsd + stableValue) / combinedEntry - 1) * 100, 1)}) since entry
+            </span>
+          )}
+        </p>
+      )}
 
       {/* What the latest upload found: the thing the page is opened for. */}
       {rundown && !report && (

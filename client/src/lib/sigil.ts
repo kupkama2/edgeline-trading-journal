@@ -111,6 +111,7 @@ export interface TypedPosition {
   id: number;
   name: string;
   entryUsd: number | null;
+  group: string | null;
   values: { date: string; valueUsd: number }[];
 }
 
@@ -133,7 +134,7 @@ const typed = <V,>(run: (v: V) => Promise<Response>) => ({
     void queryClient.invalidateQueries({ queryKey: ["/api/networth"] });
   },
 });
-export const useAddTyped = () => useMutation(typed((v: { name: string; entryUsd: number | null }) => apiRequest("POST", "/api/typed-positions", v)));
+export const useAddTyped = () => useMutation(typed((v: { name: string; entryUsd: number | null; group?: "sigil" | null }) => apiRequest("POST", "/api/typed-positions", v)));
 export const useSaveTyped = () => useMutation(typed((v: { id: number; name: string; entryUsd: number | null }) => apiRequest("PUT", `/api/typed-positions/${v.id}`, { name: v.name, entryUsd: v.entryUsd })));
 export const useRemoveTyped = () => useMutation(typed((id: number) => apiRequest("DELETE", `/api/typed-positions/${id}`)));
 export const useTypedValue = () => useMutation(typed((v: { id: number; valueUsd: number }) => apiRequest("PUT", `/api/typed-positions/${v.id}/value`, { valueUsd: v.valueUsd })));

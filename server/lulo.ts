@@ -82,16 +82,19 @@ export interface TypedPosition {
   id: number;
   name: string;
   entryUsd: number | null;
+  /** Where on the page it sits: "sigil" beside Sigil Core, null among the other positions. */
+  group: string | null;
   values: { date: string; valueUsd: number }[];
 }
 
 export async function typedState(userId: number): Promise<TypedPosition[]> {
   const list = await typedPositions.list(userId);
-  return Promise.all(list.map(async (p) => ({ id: p.id, name: p.name, entryUsd: p.entryUsd, values: (await followedValues.list("typed", String(p.id))).map((v) => ({ date: v.day, valueUsd: v.value })) })));
+  return Promise.all(list.map(async (p) => ({ id: p.id, name: p.name, entryUsd: p.entryUsd, group: p.group, values: (await followedValues.list("typed", String(p.id))).map((v) => ({ date: v.day, valueUsd: v.value })) })));
 }
 
 const money = z.number().positive().max(1e12);
 const positionSchema = z.object({ name: z.string().trim().min(1).max(60), entryUsd: money.nullable() });
+const createSchema = positionSchema.extend({ group: z.enum(["sigil"]).nullable().optional() });
 const valueSchema = z.object({ valueUsd: money, date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() });
 
 export function registerLuloRoutes(app: Express): void {
@@ -108,9 +111,9 @@ export function registerLuloRoutes(app: Express): void {
   });
 
   app.post("/api/typed-positions", async (req: Request, res: Response) => {
-    const body = positionSchema.safeParse(req.body);
+    const body = createSchema.safeParse(req.body);
     if (!body.success) return res.status(400).json({ message: "A position needs a name; the entry, when given, is an amount above zero." });
-    await typedPositions.create(uid(req), body.data.name, body.data.entryUsd);
+    await typedPositions.create(uid(req), body.data.name, body.data.entryUsd, body.data.group ?? null);
     res.status(201).json(await typedState(uid(req)));
   });
 
