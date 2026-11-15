@@ -16,6 +16,8 @@
  * DEMO=off turns the whole thing off: the door answers 404.
  */
 import type { Express, NextFunction, Request, Response } from "express";
+import fs from "node:fs";
+import path from "node:path";
 import { accounts, storageFor } from "./storage";
 import { hlInfo } from "./hyperliquid";
 import { parseScreenerCandles, type ScreenerCandle } from "@shared/screener";
@@ -97,6 +99,13 @@ export function demoReadOnly(req: Request, res: Response, next: NextFunction): v
   res.status(403).json({ message: "This is the demo: you can look at everything, but nothing is saved. Sign in for a journal of your own." });
 }
 
+/** Where the built client keeps the tour, and where the source does when the server runs from it. */
+const TOUR_FILES = [...(typeof __dirname === "string" ? [path.resolve(__dirname, "public", "tour.html")] : []), path.resolve(process.cwd(), "dist", "public", "tour.html"), path.resolve(process.cwd(), "client", "public", "tour.html")];
+
+/** The pages a visitor may be dropped on: /demo?to=stats opens the demo there. Anything else is the journal. */
+export const DEMO_LANDINGS = ["stats", "calendar", "review", "screener"] as const;
+export const landing = (to: unknown): string => (typeof to === "string" && (DEMO_LANDINGS as readonly string[]).includes(to) ? `/#/${to}` : "/");
+
 /** The door: /demo and /api/auth/demo sign a visitor into the demo journal. Registered before the sign-in wall. */
 export function registerDemoDoor(app: Express): void {
   const enter = async (req: Request, res: Response) => {
@@ -108,7 +117,7 @@ export function registerDemoDoor(app: Express): void {
         if (err) return res.redirect("/");
         req.session.userId = id;
         req.session.demo = true;
-        req.session.save(() => res.redirect("/"));
+        req.session.save(() => res.redirect(landing(req.query.to)));
       });
     } catch (err: any) {
       console.error(`[demo] ${String(err?.message ?? err).slice(0, 200)}`);
@@ -117,4 +126,11 @@ export function registerDemoDoor(app: Express): void {
   };
   app.get("/demo", enter);
   app.get("/api/auth/demo", enter);
+  // The tour: a page that walks a visitor through the demo. Its file ships with the client; the address is this one.
+  app.get("/tour", (_req, res) => {
+    const file = demoEnabled() ? TOUR_FILES.find((f) => fs.existsSync(f)) : undefined;
+    if (!file) return res.status(404).send("Not found");
+    res.setHeader("Cache-Control", "no-cache");
+    res.sendFile(file);
+  });
 }
