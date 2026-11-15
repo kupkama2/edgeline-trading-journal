@@ -378,6 +378,8 @@ export interface SigilState {
   changes: SigilChange[];
   assets: Record<string, SigilAsset>;
   watchlist: Record<string, unknown> | null;
+  /** What the owner put in: the figure the value is measured against. Null until they say. */
+  entryUsd: number | null;
   enrich: ReturnType<typeof sigilEnrichStatus>;
   lists: { segments: readonly string[]; ecos: readonly string[]; kinds: readonly string[] };
 }
@@ -397,6 +399,7 @@ export async function sigilState(): Promise<SigilState> {
     changes: (await sigilStore.changes()).map((b) => parse<SigilChange>(b)).filter((c): c is SigilChange => !!c),
     assets: await sigilAssets(),
     watchlist: parse<Record<string, unknown>>(await sigilStore.meta("watchlist")),
+    entryUsd: parse<{ valueUsd: number }>(await sigilStore.meta("entry"))?.valueUsd ?? null,
     enrich: sigilEnrichStatus(),
     lists: { segments: SIGIL_SEGMENTS, ecos: SIGIL_ECOS, kinds: SIGIL_KINDS },
   };
@@ -481,6 +484,15 @@ export function registerSigilRoutes(app: Express): void {
     } catch (err) {
       refuse(res, err);
     }
+  });
+
+  /** What the owner put into the fund, to measure its value against; null takes it away. */
+  app.put("/api/sigil/entry", async (req: Request, res: Response) => {
+    const body = z.object({ valueUsd: z.number().positive().max(1e12).nullable() }).safeParse(req.body);
+    if (!body.success) return res.status(400).json({ message: "The entry is an amount in dollars, above zero." });
+    await sigilStore.putMeta("entry", JSON.stringify(body.data.valueUsd == null ? {} : { valueUsd: body.data.valueUsd }));
+    notifyAll("sigil");
+    res.json({ entryUsd: body.data.valueUsd });
   });
 
   app.put("/api/sigil/assets/:symbol", async (req: Request, res: Response) => {

@@ -8,8 +8,12 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { useToast } from "@/hooks/use-toast";
 import { fmtAmount } from "@shared/metrics";
 import { changeCount, ecoOf, isQuiet, isUnverified, pragueDay, segmentOf, sigilGroups, sigilMovers, sigilReport, sigilStreaks, type SigilAsset, type SigilChange, type SigilPosition } from "@shared/sigil";
-import { useEnrichSigilAsset, useSaveSigilAsset, useSigil, useSigilSeed, useSigilUpload, type SigilState } from "@/lib/sigil";
+import { useEnrichSigilAsset, useSaveSigilAsset, useSaveSigilEntry, useSigil, useSigilSeed, useSigilUpload, type SigilState } from "@/lib/sigil";
 import { Donut, ValueLine } from "./charts";
+import { Section, Sections } from "@/components/sections";
+
+/** The entry the page assumes until the owner sets their own. */
+const ASSUMED_ENTRY_USD = 40_000;
 
 /** A percent with its sign; a move too small to show at this precision is a plain zero, not "−0.0%". */
 const pct = (n: number | null | undefined, d = 1) => {
@@ -290,6 +294,9 @@ export function SigilSection() {
   const [error, setError] = useState<string | null>(null);
   const [segment, setSegment] = useState<string | null>(null);
   const [eco, setEco] = useState<string | null>(null);
+  const [editingEntry, setEditingEntry] = useState(false);
+  const [entryDraft, setEntryDraft] = useState("");
+  const saveEntry = useSaveSigilEntry();
   const d = page.data;
 
   const take = async (file: File | undefined | null) => {
@@ -385,13 +392,19 @@ export function SigilSection() {
   if (page.isLoading) return <p className="py-6 text-center text-xs text-muted-foreground">Reading…</p>;
   if (!latest || !derived)
     return (
-      <div className="space-y-3" data-testid="section-sigil">
+      <div className="space-y-3" data-testid="sigil-root">
         {strip}
         <p className="text-xs text-muted-foreground">Nothing here yet. Load the seed pack to bring the history in, or upload the first export.</p>
       </div>
     );
 
   const prev = d!.previous;
+  // Until the owner says otherwise the entry is taken as forty thousand, and shown as assumed.
+  const entry = d!.entryUsd ?? ASSUMED_ENTRY_USD;
+  const sinceEntry = latest.portfolioValueUsd - entry;
+  const sinceEntryPct = (latest.portfolioValueUsd / entry - 1) * 100;
+  const newest = d!.changes[0];
+  const rundown = newest && newest.date === latest.day ? sigilReport(newest, { previousValueUsd: prev?.valueUsd ?? null, movers: derived.movers }) : null;
   const delta = prev ? latest.portfolioValueUsd - prev.valueUsd : null;
   const deltaPct = prev && prev.valueUsd > 0 ? (latest.portfolioValueUsd / prev.valueUsd - 1) * 100 : null;
   const age = dayGap(pragueDay(new Date().toISOString()), latest.day);
@@ -412,7 +425,7 @@ export function SigilSection() {
   );
 
   return (
-    <div className="space-y-3" data-testid="section-sigil">
+    <div className="space-y-3" data-testid="sigil-root">
       {strip}
 
       <Card className="border-card-border bg-card p-3 sm:p-4" data-testid="sigil-stats">
@@ -421,6 +434,35 @@ export function SigilSection() {
             <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Portfolio value</p>
             <p className="font-mono text-2xl font-bold" data-testid="sigil-value">
               {fmtAmount(latest.portfolioValueUsd, 0)}
+            </p>
+          </div>
+          <div>
+            <p className="flex items-center gap-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+              Since entry
+              <button type="button" className="rounded p-0.5 hover:bg-secondary hover:text-foreground" title="Change the entry amount" onClick={() => (setEntryDraft(String(entry)), setEditingEntry(true))} data-testid="sigil-entry-edit">
+                <Pencil className="h-2.5 w-2.5" />
+              </button>
+            </p>
+            {editingEntry ? (
+              <form
+                className="flex items-center gap-1"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const v = Number(entryDraft.replace(/[^0-9.]/g, ""));
+                  if (v > 0) saveEntry.mutate(v);
+                  setEditingEntry(false);
+                }}
+              >
+                <Input autoFocus inputMode="decimal" className="h-7 w-28 font-mono text-xs" value={entryDraft} onChange={(e) => setEntryDraft(e.target.value)} onBlur={() => setEditingEntry(false)} data-testid="sigil-entry-input" />
+              </form>
+            ) : (
+              <p className={`font-mono text-lg font-bold leading-tight ${tone(sinceEntry)}`} data-testid="sigil-since-entry">
+                {`${sinceEntry >= 0 ? "+" : "−"}${fmtAmount(Math.abs(sinceEntry), 0)} (${pct(sinceEntryPct, 1)})`}
+              </p>
+            )}
+            <p className="font-mono text-[10px] text-muted-foreground">
+              in at {fmtAmount(entry, 0)}
+              {d!.entryUsd == null && " · assumed, set yours with the pencil"}
             </p>
           </div>
           <div>
@@ -443,11 +485,31 @@ export function SigilSection() {
             )}
           </div>
         </div>
-        <div className="mt-3">
-          <ValueLine points={d!.history.map((h) => ({ label: h.date, value: h.valueUsd }))} format={(v) => fmtAmount(v, 0)} testId="sigil-history" />
-        </div>
       </Card>
 
+      {/* What the latest upload found: the thing the page is opened for. */}
+      {rundown && !report && (
+        <Card className="border-card-border bg-card p-3 sm:p-4" data-testid="sigil-rundown">
+          <p className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Latest rundown</p>
+          <ReportLines lines={rundown} />
+          {d!.changes[0]?.aiRead && (
+            <p className="mt-1.5 rounded border border-border/60 bg-secondary/40 px-2 py-1 text-[11px]">
+              <span className="font-semibold">AI reading, not a fact: </span>
+              {d!.changes[0].aiRead}
+            </p>
+          )}
+        </Card>
+      )}
+
+      {/* Everything past the headline is there to dig into: folded until asked for, and in whatever order suits. */}
+      <Sections id="sigil">
+      <Section id="history" title="Value history" hint="the value day by day" defaultOpen={false}>
+        <Card className="border-card-border bg-card p-3 sm:p-4">
+          <ValueLine points={d!.history.map((h) => ({ label: h.date, value: h.valueUsd }))} format={(v) => fmtAmount(v, 0)} testId="sigil-history" />
+        </Card>
+      </Section>
+
+      <Section id="streaks" title="Positioning streaks" hint={live.length ? `${live.length} running` : "none running"} defaultOpen={false}>
       <Card className="border-card-border bg-card p-3 sm:p-4" data-testid="sigil-streaks">
         <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Positioning streaks</p>
         <p className="mb-1 text-[11px] text-muted-foreground">Names sized the same way on two or more updates in a row, by amount held.</p>
@@ -459,7 +521,9 @@ export function SigilSection() {
           </div>
         )}
       </Card>
+      </Section>
 
+      <Section id="movers" title="Movers and allocation" hint="the day's biggest moves, and value by segment and ecosystem" defaultOpen={false}>
       <div className="grid gap-3 lg:grid-cols-2">
         <Card className="border-card-border bg-card p-3 sm:p-4" data-testid="sigil-movers">
           <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Movers, 24h</p>
@@ -498,9 +562,11 @@ export function SigilSection() {
           <Donut title="By ecosystem" slices={derived.byEco.map((g) => ({ key: g.key, value: g.valueUsd }))} picked={eco} onPick={setEco} format={(v) => fmtAmount(v, 0)} testId="sigil-donut-eco" />
         </Card>
       </div>
+      </Section>
 
+      <Section id="holdings" title="Holdings" hint={`${latest.positionCount} positions${derived.uncategorized ? `, ${derived.uncategorized} uncategorized` : ""}`} defaultOpen={false}>
       {(derived.uncategorized > 0 || d!.enrich.error) && (
-        <p className="flex flex-wrap items-center gap-2 text-[11px] text-amber-500" data-testid="sigil-uncategorized">
+        <p className="mb-2 flex flex-wrap items-center gap-2 text-[11px] text-amber-500" data-testid="sigil-uncategorized">
           {derived.uncategorized > 0 && (
             <button type="button" className="underline underline-offset-2" onClick={() => (setSegment("Uncategorized"), setEco(null))}>
               {derived.uncategorized} holding{derived.uncategorized === 1 ? " is" : "s are"} uncategorized
@@ -517,9 +583,10 @@ export function SigilSection() {
       )}
 
       <Holdings positions={latest.positions} assets={assets} lists={d!.lists} enrich={d!.enrich} segment={segment} eco={eco} setSegment={setSegment} setEco={setEco} />
+      </Section>
 
+      <Section id="changes" title="Change log" hint={`${d!.changes.length} days`} defaultOpen={false}>
       <div data-testid="sigil-changes">
-        <p className="mb-1.5 px-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Change log</p>
         {/* A window onto the days, so the section under this one is not a long scroll away. */}
         <div className="max-h-[34rem] space-y-1.5 overflow-y-auto pr-1">
           {d!.changes.slice(0, 120).map((c, i) => (
@@ -527,6 +594,8 @@ export function SigilSection() {
           ))}
         </div>
       </div>
+      </Section>
+      </Sections>
     </div>
   );
 }
