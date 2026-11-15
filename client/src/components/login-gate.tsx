@@ -12,6 +12,10 @@ export interface SessionResponse {
   terminal?: boolean;
   /** The journal's owner: the terminal, the screener and the portfolio are theirs alone. */
   admin?: boolean;
+  /** This visit is the demo journal: sample data, nothing saved. */
+  demo?: boolean;
+  /** Whether the server has a demo to offer. */
+  demoOffered?: boolean;
 }
 
 /** Google's mark, inlined — a CDN request just to draw a logo is a tracker. */
@@ -113,6 +117,16 @@ export function LoginGate({ children }: { children: React.ReactNode }) {
             Continue with Google
           </a>
         </Button>
+        {session.data?.demoOffered && (
+          <>
+            <Button asChild variant="outline" className="mt-2 h-10 w-full text-xs font-semibold">
+              <a href="/demo" data-testid="button-login-demo">
+                Look around the demo
+              </a>
+            </Button>
+            <p className="mt-2 text-center text-[10px] text-muted-foreground">A sample journal with a few months of trades. No account needed; nothing is saved.</p>
+          </>
+        )}
       </Card>
     </div>
   );

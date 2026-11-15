@@ -245,6 +245,18 @@ minutes; a failed run counts, which is the back-off.
   or on "Read now" at most every 30 minutes (data over an hour old is refreshed first), when `ANTHROPIC_API_KEY` is
   set. `SCREENER_AI_MODEL` picks the model.
 
+## The demo
+
+`https://<your-host>/demo` opens a sample journal with no sign-in: about a
+hundred invented trades on real Hyperliquid prices (so the charts line up),
+three open ones, notes, mistakes, and everything the Journal, Calendar,
+Review and Stats pages make of them. The sign-in screen has a "Look around
+the demo" button to the same place. It is an ordinary account that is never
+the owner's, so the screener, chat, portfolio and terminal are not in it,
+and every request that would change anything is refused: all visitors share
+the one journal. It rebuilds itself every three days so the dates stay
+recent. Set `DEMO=off` to turn it off.
+
 ## The chat
 
 The chat (a window in the bottom right corner of every page, the owner's only) talks to a Claude model through the same

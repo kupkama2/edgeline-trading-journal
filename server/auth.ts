@@ -6,6 +6,7 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { ProxyAgent, fetch as undiciFetch } from "undici";
 import { accounts, invitations, storageFor } from "./storage";
 import type { SessionUser, User } from "@shared/schema";
+import { demoEnabled, demoReadOnly, isDemoEmail, registerDemoDoor } from "./demo";
 
 /**
  * Sign in with Google.
@@ -332,9 +333,19 @@ export function setupAuth(app: Express) {
     }
   });
 
+  // The demo's door, before the wall: a visitor with no account is let into the sample journal, read-only.
+  registerDemoDoor(app);
+
   app.get("/api/session", async (req: Request, res: Response) => {
     const user = req.session?.userId ? await accounts.byId(req.session.userId) : undefined;
-    res.json({ user: user ? toSessionUser(user) : null, provider: "google", terminal: Boolean(user?.isOwner) && terminalAllowed(user?.email), admin: Boolean(user?.isOwner) });
+    res.json({
+      user: user ? toSessionUser(user) : null,
+      provider: "google",
+      terminal: Boolean(user?.isOwner) && terminalAllowed(user?.email),
+      admin: Boolean(user?.isOwner),
+      demo: Boolean(user && req.session?.demo),
+      demoOffered: demoEnabled(),
+    });
   });
 
   app.post("/api/logout", (req: Request, res: Response) => {
@@ -345,6 +356,8 @@ export function setupAuth(app: Express) {
   });
 
   app.use("/api", requireUser);
+  // A demo visitor reads; nothing they send is written.
+  app.use("/api", demoReadOnly);
 }
 
 /** Attach the account, or refuse. Everything under /api runs behind this. */
@@ -356,7 +369,10 @@ async function requireUser(req: Request, res: Response, next: NextFunction) {
   if (!user) return res.status(401).json({ message: "Not signed in" });
   // Access can be taken away mid-session. The cookie lasts 30 days, so without
   // this a revoked person keeps the journal open for a month.
-  if (authEnabled && !(await mayEnter(user.email))) {
+  // The demo account is on no allowlist: it is entered through its own door, on a session marked as the demo.
+  const demo = req.session?.demo === true && isDemoEmail(user.email);
+  if (isDemoEmail(user.email) && !demo) return res.status(401).json({ message: "Not signed in" });
+  if (authEnabled && !demo && !(await mayEnter(user.email))) {
     req.session?.destroy(() => {});
     return res.status(401).json({ message: "Access removed" });
   }
