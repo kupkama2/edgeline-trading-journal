@@ -313,6 +313,14 @@ the day, or on the keep-awake pinger's. `ASTEKZ=off` switches it off.
 If the page is ever rebuilt so that its holdings are no longer in the
 widget's source, the read fails with a message saying so.
 
+**Wallets** are read on Ethereum, Base, Arbitrum, Optimism, Polygon and
+Robinhood Chain (each chain's Blockscout explorer), and on Solana under
+both token programs. A token the first price source does not list is
+priced from its deepest DEX pool on DexScreener, and only when that pool
+holds at least $10,000: a wallet collects worthless tokens unasked, and a
+quote with no money behind it is not a value. `DEXSCREENER_BASE` overrides
+the address (tests).
+
 **Lulo** needs nothing set: Lulo's public API is asked, with no key, about
 every Solana address followed on the Portfolio page, and the total is kept
 once a day for the chart. `LULO_BASE` overrides the address (tests).

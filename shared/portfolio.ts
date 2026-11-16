@@ -205,12 +205,14 @@ export function spotPrices(json: unknown): Map<string, number> {
 
 /* ------------------------------- EVM (Blockscout) ------------------------------- */
 
-export const EVM_CHAINS: { id: string; name: string; host: string; native: string; rpc: string; llama: string; nativePrice: string; tokens: string[] }[] = [
-  { id: "eth", name: "Ethereum", host: "https://eth.blockscout.com", native: "ETH", rpc: "https://ethereum-rpc.publicnode.com", llama: "ethereum", nativePrice: "coingecko:ethereum", tokens: ["0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", "0xdAC17F958D2ee523a2206206994597C13D831ec7", "0x6B175474E89094C44Da98b954EedeAC495271d0F", "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"] },
-  { id: "base", name: "Base", host: "https://base.blockscout.com", native: "ETH", rpc: "https://mainnet.base.org", llama: "base", nativePrice: "coingecko:ethereum", tokens: ["0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", "0xd9aAEc86B65D86f6A7B5B1b0c42FFA531710b6CA", "0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb", "0x4200000000000000000000000000000000000006"] },
-  { id: "arbitrum", name: "Arbitrum", host: "https://arbitrum.blockscout.com", native: "ETH", rpc: "https://arb1.arbitrum.io/rpc", llama: "arbitrum", nativePrice: "coingecko:ethereum", tokens: ["0xaf88d065e77c8cC2239327C5EDb3A432268e5831", "0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8", "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9", "0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1", "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1", "0x912CE59144191C1204E64559FE8253a0e49E6548"] },
-  { id: "optimism", name: "Optimism", host: "https://optimism.blockscout.com", native: "ETH", rpc: "https://mainnet.optimism.io", llama: "optimism", nativePrice: "coingecko:ethereum", tokens: ["0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85", "0x94b008aA00579c1307B0EF2c499aD98a8ce58e58", "0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1", "0x4200000000000000000000000000000000000006", "0x4200000000000000000000000000000000000042"] },
-  { id: "polygon", name: "Polygon", host: "https://polygon.blockscout.com", native: "POL", rpc: "https://polygon-bor-rpc.publicnode.com", llama: "polygon", nativePrice: "coingecko:polygon-ecosystem-token", tokens: ["0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359", "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174", "0xc2132D05D31c914a87C6611C10748AEb04B58e8F", "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063", "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619"] },
+export const EVM_CHAINS: { id: string; name: string; host: string; native: string; rpc: string; llama: string; nativePrice: string; tokens: string[]; dex: string }[] = [
+  { id: "eth", name: "Ethereum", host: "https://eth.blockscout.com", native: "ETH", rpc: "https://ethereum-rpc.publicnode.com", llama: "ethereum", nativePrice: "coingecko:ethereum", tokens: ["0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", "0xdAC17F958D2ee523a2206206994597C13D831ec7", "0x6B175474E89094C44Da98b954EedeAC495271d0F", "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"], dex: "ethereum" },
+  { id: "base", name: "Base", host: "https://base.blockscout.com", native: "ETH", rpc: "https://mainnet.base.org", llama: "base", nativePrice: "coingecko:ethereum", tokens: ["0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", "0xd9aAEc86B65D86f6A7B5B1b0c42FFA531710b6CA", "0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb", "0x4200000000000000000000000000000000000006"], dex: "base" },
+  { id: "arbitrum", name: "Arbitrum", host: "https://arbitrum.blockscout.com", native: "ETH", rpc: "https://arb1.arbitrum.io/rpc", llama: "arbitrum", nativePrice: "coingecko:ethereum", tokens: ["0xaf88d065e77c8cC2239327C5EDb3A432268e5831", "0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8", "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9", "0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1", "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1", "0x912CE59144191C1204E64559FE8253a0e49E6548"], dex: "arbitrum" },
+  { id: "optimism", name: "Optimism", host: "https://optimism.blockscout.com", native: "ETH", rpc: "https://mainnet.optimism.io", llama: "optimism", nativePrice: "coingecko:ethereum", tokens: ["0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85", "0x94b008aA00579c1307B0EF2c499aD98a8ce58e58", "0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1", "0x4200000000000000000000000000000000000006", "0x4200000000000000000000000000000000000042"], dex: "optimism" },
+  { id: "polygon", name: "Polygon", host: "https://polygon.blockscout.com", native: "POL", rpc: "https://polygon-bor-rpc.publicnode.com", llama: "polygon", nativePrice: "coingecko:polygon-ecosystem-token", tokens: ["0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359", "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174", "0xc2132D05D31c914a87C6611C10748AEb04B58e8F", "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063", "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619"], dex: "polygon" },
+  // No token list: when its explorer will not answer, only the native coin can be read from the node.
+  { id: "robinhood", name: "Robinhood Chain", host: "https://robinhoodchain.blockscout.com", native: "ETH", rpc: "https://rpc.mainnet.chain.robinhood.com", llama: "robinhood", nativePrice: "coingecko:ethereum", tokens: [], dex: "robinhood" },
 ];
 
 /**
@@ -235,6 +237,35 @@ export function fromUnits(raw: bigint, decimals: number): number {
   let scale = BigInt(1);
   for (let i = 0; i < decimals; i++) scale *= BigInt(10);
   return Number(raw / scale) + Number(raw % scale) / Number(scale);
+}
+
+/**
+ * Under this much liquidity in its deepest pool, a DEX price is not taken:
+ * a token nobody can sell at the quoted price is not worth the quote. A
+ * wallet collects such tokens unasked, and one of them at a made-up price
+ * would be the largest holding on the page.
+ */
+export const DEX_MIN_LIQUIDITY_USD = 10_000;
+
+/**
+ * DexScreener's `/tokens/v1/{chain}/{addresses}`: the pools each token
+ * trades in. A token's price is the one in its deepest pool, and only when
+ * that pool holds real money. Keyed by the address as given and in lower
+ * case, since an EVM address is written both ways.
+ */
+export function parseDexPrices(json: unknown, minLiquidityUsd = DEX_MIN_LIQUIDITY_USD): Map<string, { price: number; symbol: string | null; liquidityUsd: number }> {
+  const best = new Map<string, { price: number; symbol: string | null; liquidityUsd: number }>();
+  for (const p of Array.isArray(json) ? (json as any[]) : []) {
+    const address = typeof p?.baseToken?.address === "string" ? p.baseToken.address : null;
+    const price = num(p?.priceUsd);
+    const liquidityUsd = num(p?.liquidity?.usd) ?? 0;
+    if (!address || price == null || !(price > 0) || liquidityUsd < minLiquidityUsd) continue;
+    const had = best.get(address);
+    if (!had || liquidityUsd > had.liquidityUsd) best.set(address, { price, symbol: typeof p.baseToken.symbol === "string" ? p.baseToken.symbol : null, liquidityUsd });
+  }
+  const out = new Map(best);
+  best.forEach((v, k) => out.set(k.toLowerCase(), v));
+  return out;
 }
 
 /** DefiLlama's price answer with what else it knows of each coin: its symbol and how many decimals it counts in. */

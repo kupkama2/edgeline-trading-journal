@@ -41,11 +41,14 @@ import {
   fromUnits,
   parseHexAmount,
   parseLlamaCoins,
+  parseDexPrices,
 } from "@shared/portfolio";
 import { parseClearinghouseState } from "@shared/hyperliquid";
 
 const SOLANA_RPC = (process.env.SOLANA_RPC || "https://api.mainnet-beta.solana.com").replace(/\/+$/, "");
 const LLAMA = (process.env.LLAMA_BASE || "https://coins.llama.fi").replace(/\/+$/, "");
+/** A second opinion on price, for tokens the first source does not list: the pools they trade in. */
+const DEX = (process.env.DEXSCREENER_BASE || "https://api.dexscreener.com").replace(/\/+$/, "");
 /** In tests every chain is one fake host, told apart by a ?chain= parameter. */
 const EVM_BASE = process.env.PORTFOLIO_EVM_BASE?.replace(/\/+$/, "") || null;
 
@@ -212,6 +215,12 @@ async function readEvm(a: PortfolioAddress, costs: Map<string, number>): Promise
         const rows: { asset: string; id: string; amount: number; price: number | null }[] = [];
         if (n.amount > 0) rows.push({ asset: chain.native, id: "native", amount: n.amount, price: n.price });
         for (const t of parseEvmTokens(tokens)) rows.push({ asset: t.symbol, id: t.contract, amount: t.amount, price: t.price });
+        // What the explorer could not price, asked of the pools: a token it lists with no rate is often simply new.
+        const unpriced = rows.filter((r) => r.price == null && r.id !== "native");
+        if (unpriced.length) {
+          const found = await dexPrices(chain.dex, unpriced.map((r) => r.id));
+          for (const r of unpriced) r.price = found.get(r.id.toLowerCase())?.price ?? null;
+        }
         for (const r of rows) {
           const key = positionKey("evm", a.address, chain.id, r.id);
           const base: Position = { key, source: "evm", chain: chain.name, address: a.address, label: a.label, asset: r.asset, amount: r.amount, price: r.price, value: r.price != null ? r.amount * r.price : null, cost: null, costFrom: null, pnl: null, pnlPct: null };
@@ -244,6 +253,22 @@ async function readEvm(a: PortfolioAddress, costs: Map<string, number>): Promise
   return out;
 }
 
+/**
+ * Prices for tokens the first source had none for, from the pools they
+ * trade in (thirty addresses a request). A token with no pool deep enough
+ * stays without a price, and a request that fails leaves things as they
+ * were: this only ever adds.
+ */
+async function dexPrices(chain: string, addresses: string[]): Promise<Map<string, { price: number; symbol: string | null }>> {
+  const out = new Map<string, { price: number; symbol: string | null }>();
+  for (let i = 0; i < addresses.length && i < 150; i += 30) {
+    const batch = addresses.slice(i, i + 30);
+    const raw = await getJson(`${DEX}/tokens/v1/${chain}/${batch.join(",")}`).catch(() => null);
+    parseDexPrices(raw).forEach((v, k) => out.set(k, v));
+  }
+  return out;
+}
+
 /** A wallet's native coin and well-known tokens on one chain, asked of the chain's public node and priced by DefiLlama. */
 async function readEvmDirect(chain: (typeof EVM_CHAINS)[number], address: string): Promise<{ asset: string; id: string; amount: number; price: number | null }[]> {
   const url = EVM_BASE ? `${EVM_BASE}/rpc?chain=${chain.id}` : chain.rpc;
@@ -269,14 +294,13 @@ async function readSolana(a: PortfolioAddress, costs: Map<string, number>): Prom
   const out: Part = { positions: [], vaults: [], accounts: [], errors: [] };
   try {
     const rpc = (method: string, params: unknown[]) => getJson(SOLANA_RPC, { method: "POST", body: { jsonrpc: "2.0", id: 1, method, params } });
-    const [bal, spl] = await kept(`solana:${a.address}`, "Solana", a, out, () =>
-      Promise.all([
-        rpc("getBalance", [a.address]),
-        rpc("getTokenAccountsByOwner", [a.address, { programId: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" }, { encoding: "jsonParsed" }]),
-      ]),
+    // Tokens live under two programs, the original and Token-2022; a wallet's holdings are the two lists together.
+    const accounts = (programId: string) => rpc("getTokenAccountsByOwner", [a.address, { programId }, { encoding: "jsonParsed" }]);
+    const [bal, spl, spl22] = await kept(`solana:${a.address}`, "Solana", a, out, () =>
+      Promise.all([rpc("getBalance", [a.address]), accounts("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"), accounts("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb").catch(() => null)]),
     );
     const sol = parseSolBalance(bal);
-    const tokens = parseSplBalances(spl);
+    const tokens = [...parseSplBalances(spl), ...parseSplBalances(spl22)];
     const ids = ["coingecko:solana", ...tokens.map((t) => `solana:${t.mint}`)];
     const prices = new Map<string, { price: number; symbol: string | null }>();
     for (let i = 0; i < ids.length; i += 80) {
@@ -289,6 +313,9 @@ async function readSolana(a: PortfolioAddress, costs: Map<string, number>): Prom
       });
       parseLlamaPrices(raw).forEach((v, k) => prices.set(k, v));
     }
+    // Mints the first source has no price for, asked of the pools they trade in.
+    const missing = tokens.filter((t) => !prices.has(`solana:${t.mint}`)).map((t) => t.mint);
+    if (missing.length) (await dexPrices("solana", missing)).forEach((v, k) => prices.set(`solana:${k}`, v));
     const rows = [
       ...(sol > 0 ? [{ id: "native", asset: "SOL", amount: sol, price: prices.get("coingecko:solana")?.price ?? null }] : []),
       ...tokens.map((t) => {

@@ -29,6 +29,7 @@ const EVM2 = "0x2222222222222222222222222222222222222222";
 const BASE_USDC = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913";
 const SOL = "So1anaWa11etAddre55xxxxxxxxxxxxxxxxxxxxxxx".slice(0, 43).replace(/[0OIl]/g, "x");
 const MINT = "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN";
+const MINT22 = "Xsv9hRk1z5ystj9MhnA7Lq4vjSsLwzL2nxrwmwtD3re";
 
 const vaultDetails = {
   name: "Growi HF",
@@ -105,6 +106,8 @@ let fake: Server;
 let app: Server;
 let base = "";
 let failBase = false;
+/** Whether the Solana wallet holds a token under the newer program: on for the one test that looks for it, so the totals elsewhere stay as they were. */
+let with22 = false;
 /** Hyperliquid refusing every wallet read with a rate limit, and how often it was asked. */
 let limitHl = false;
 let limitedAsks = 0;
@@ -154,6 +157,13 @@ function startFake(): Promise<string> {
           }
           return json({ coin_balance: chain === "eth" ? "1500000000000000000" : "0", exchange_rate: "3000" });
         }
+        if (u.pathname.startsWith("/dex/tokens/v1/")) {
+          const chain = u.pathname.split("/")[4];
+          // A deep pool for the Token-2022 mint; for the unpriced Ethereum token, a pool with thirty dollars in it and a price to match.
+          if (chain === "solana") return json([{ baseToken: { address: MINT22, symbol: "T22" }, priceUsd: "1.9", liquidity: { usd: 800 } }, { baseToken: { address: MINT22, symbol: "T22" }, priceUsd: "2", liquidity: { usd: 50000 } }]);
+          if (chain === "ethereum") return json([{ baseToken: { address: "0xBBB", symbol: "SCAM" }, priceUsd: "9", liquidity: { usd: 30 } }]);
+          return json([]);
+        }
         if (u.pathname === "/rpc") {
           const q = JSON.parse(body || "{}");
           if (u.searchParams.get("chain") !== "base") return json({ error: "down" }, 500);
@@ -164,6 +174,8 @@ function startFake(): Promise<string> {
         if (u.pathname === "/solana") {
           const q = JSON.parse(body || "{}");
           if (q.method === "getBalance") return json({ result: { value: 2_000_000_000 } });
+          // The newer token program holds one more token, which the first price source does not list.
+          if (q.params?.[1]?.programId === "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb") return json({ result: { value: !with22 ? [] : [{ account: { data: { parsed: { info: { mint: MINT22, tokenAmount: { uiAmount: 3 } } } } } }] } });
           return json({ result: { value: [{ account: { data: { parsed: { info: { mint: MINT, tokenAmount: { uiAmount: 500 } } } } } }] } });
         }
         if (u.pathname.startsWith("/llama/prices/current/")) return json({ coins: { "coingecko:solana": { price: 150, symbol: "SOL" }, [`solana:${MINT}`]: { price: 0.8, symbol: "JUP" }, "coingecko:ethereum": { price: 3000, symbol: "ETH" }, [`base:${BASE_USDC}`]: { price: 1, symbol: "USDC", decimals: 6 } } });
@@ -187,6 +199,7 @@ beforeAll(async () => {
   process.env.PORTFOLIO_EVM_BASE = f;
   process.env.SOLANA_RPC = `${f}/solana`;
   process.env.LLAMA_BASE = `${f}/llama`;
+  process.env.DEXSCREENER_BASE = `${f}/dex`;
   const { initSchema, accounts } = await import("../server/storage");
   const { registerRoutes } = await import("../server/routes");
   await initSchema();
@@ -356,5 +369,33 @@ describe("dust", () => {
     const said = p.errors.filter((e: any) => e.address === EVM2);
     expect(said).toEqual([{ address: EVM2, where: "Base", stale: true, message: expect.stringMatching(/HTTP 403; showing ETH and the main stablecoins read from the chain itself, other tokens are missing/) }]);
     for (const a of p.addresses.filter((a: any) => a.address === EVM2)) await send("DELETE", `/api/portfolio/addresses/${a.id}`);
+  });
+
+  it("reads both Solana token programs, and takes a pool's price only when the pool is deep", async () => {
+    const { parseDexPrices, EVM_CHAINS, DEX_MIN_LIQUIDITY_USD } = await import("../shared/portfolio");
+    expect(EVM_CHAINS.map((c) => c.id)).toContain("robinhood");
+    const pools = [
+      { baseToken: { address: "0xAa07", symbol: "ORBIO" }, priceUsd: "0.0196", liquidity: { usd: 509384 } },
+      { baseToken: { address: "0xAa07", symbol: "ORBIO" }, priceUsd: "0.0204", liquidity: { usd: 24306 } },
+      // Quoted at nine cents with thirty dollars behind it: six thousand of them are not worth five hundred dollars.
+      { baseToken: { address: "0x2Cdd", symbol: "VRAX" }, priceUsd: "0.08677", liquidity: { usd: 30 } },
+      { baseToken: { address: "0xdead", symbol: "X" }, priceUsd: "0", liquidity: { usd: 1e6 } },
+    ];
+    const got = parseDexPrices(pools);
+    expect(got.get("0xaa07")).toEqual({ price: 0.0196, symbol: "ORBIO", liquidityUsd: 509384 });
+    expect(got.get("0xAa07")?.price).toBe(0.0196);
+    expect(got.has("0x2cdd")).toBe(false);
+    expect(got.has("0xdead")).toBe(false);
+    expect(DEX_MIN_LIQUIDITY_USD).toBe(10_000);
+    expect(parseDexPrices({ pairs: null }).size).toBe(0);
+    if (!DB) return;
+    with22 = true;
+    await send("POST", "/api/portfolio/addresses", { kind: "solana", address: MINT, label: "Phantom" });
+    const p = await (await send("GET", "/api/portfolio?fresh=1")).json();
+    with22 = false;
+    const t22 = p.positions.find((x: any) => x.source === "solana" && x.key.endsWith(MINT22));
+    expect(t22).toMatchObject({ amount: 3, price: 2, value: 6, asset: "T22" });
+    // The Ethereum token with a shallow pool is still without a price.
+    expect(p.positions.find((x: any) => x.asset === "SCAM")).toMatchObject({ price: null, value: null });
   });
 });
