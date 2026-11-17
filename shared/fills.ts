@@ -86,6 +86,24 @@ export function positionLedger(t: TradeWithFills): PositionLedger {
  * average across the whole position — see `residualFromAverage` for the
  * conversion, and for why the difference is worth being strict about.
  */
+/**
+ * What an open trade has already banked, and how much of it is still on.
+ *
+ * Null until something has been taken off: a trade with no partials has
+ * nothing booked and all of it left, and saying so on every row is noise.
+ * "Left" is against everything that went on, the entry and every add, so a
+ * trade scaled into and then trimmed reads as the share of the whole that
+ * remains, never above a hundred.
+ */
+export function bookedSoFar(t: TradeWithFills): { booked: number; leftPct: number; partials: number } | null {
+  const led = positionLedger(t);
+  if (led.partials === 0) return null;
+  const added = (t.fills ?? []).filter((f) => f.kind === "add").reduce((s, f) => s + baseQty(f.size, t.sizeUnit, f.price), 0);
+  const total = led.initialQty + added;
+  if (!(total > 0)) return null;
+  return { booked: led.realizedPnL, leftPct: Math.max(0, Math.min(100, (led.openQty / total) * 100)), partials: led.partials };
+}
+
 export function totalPnLWithFills(t: TradeWithFills): number | null {
   if (t.exitPrice == null) return null;
   const sign = t.direction === "long" ? 1 : -1;

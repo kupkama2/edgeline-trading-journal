@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  bookedSoFar,
   collapseFills,
   fillOutsideTrade,
   positionLedger,
@@ -430,5 +431,30 @@ describe("average exit price versus a full fill ledger", () => {
     );
     expect(added.actualR).toBeCloseTo(9);
     expect(computeMetrics(trade({ ...base, exitPrice: 160 } as any)).actualR).toBeCloseTo(6);
+  });
+});
+
+describe("bookedSoFar", () => {
+  it("says nothing until something has been taken off", () => {
+    expect(bookedSoFar(trade({ size: 4, fills: [] }))).toBeNull();
+    expect(bookedSoFar(trade({ size: 2, fills: [fill("add", 110, 2, "2026-08-03T10:00:00Z")] }))).toBeNull();
+  });
+
+  it("banked so far, and the share of the position still on", () => {
+    // Long 4 @100, two takes: 1 @110 and 1 @120 → $10 + $20 banked, 2 of 4 left.
+    const b = bookedSoFar(trade({ size: 4, fills: [fill("partial", 110, 1, "2026-08-03T10:00:00Z"), fill("partial", 120, 1, "2026-08-03T11:00:00Z")] }));
+    expect(b).toEqual({ booked: 30, leftPct: 50, partials: 2 });
+  });
+
+  it("counts adds in what went on, so a scaled-in trade never reads above a hundred", () => {
+    // Long 2 @100, add 2 @110 (avg 105 on 4), take 1 @115 → $10 banked, 3 of 4 left.
+    const b = bookedSoFar(trade({ size: 2, fills: [fill("add", 110, 2, "2026-08-03T10:00:00Z"), fill("partial", 115, 1, "2026-08-03T11:00:00Z")] }));
+    expect(b).toEqual({ booked: 10, leftPct: 75, partials: 1 });
+  });
+
+  it("a losing take is booked as a loss", () => {
+    const b = bookedSoFar(trade({ size: 4, direction: "short", fills: [fill("partial", 102, 1, "2026-08-03T10:00:00Z")] }));
+    expect(b?.booked).toBe(-2);
+    expect(b?.leftPct).toBe(75);
   });
 });
