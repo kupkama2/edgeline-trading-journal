@@ -1,7 +1,27 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { gateLeft, gateUnanswered, type GateQuestion, type GateRecord } from "@shared/gate";
+import { Input } from "@/components/ui/input";
+import { gateLeft, gateUnanswered, signalFrom, type GateQuestion, type GateRecord } from "@shared/gate";
+
+/* Who the last few signals came from, kept in this browser so a name is typed once. */
+const SOURCES_KEY = "edgeline.gate.signal-sources";
+function recentSources(): string[] {
+  try {
+    const raw = JSON.parse(localStorage.getItem(SOURCES_KEY) ?? "[]");
+    return Array.isArray(raw) ? raw.filter((x) => typeof x === "string").slice(0, 6) : [];
+  } catch {
+    return [];
+  }
+}
+function rememberSource(name: string): void {
+  try {
+    const rest = recentSources().filter((x) => x.toLowerCase() !== name.toLowerCase());
+    localStorage.setItem(SOURCES_KEY, JSON.stringify([name, ...rest].slice(0, 6)));
+  } catch {
+    /* nothing to remember with */
+  }
+}
 
 /**
  * The pre-trade gate, as a card: the questions, Yes/No under each, the
@@ -15,6 +35,7 @@ export function GateQuestions({
   where,
   onDone,
   onSkip,
+  onSignal,
   title = "Pre-trade gate",
   blurb,
   testId = "gate",
@@ -27,6 +48,11 @@ export function GateQuestions({
   onDone: (record: GateRecord) => void;
   /** Offered only where a trade can go on without the gate; the record says it was skipped. */
   onSkip?: (record: GateRecord) => void;
+  /**
+   * Offered where a trade is being logged: it was someone else's call, so
+   * the questions do not apply. One tap, a name, and the record says whose.
+   */
+  onSignal?: (record: GateRecord) => void;
   title?: string;
   blurb?: string;
   testId?: string;
@@ -41,6 +67,15 @@ export function GateQuestions({
   compact?: boolean;
 }) {
   const [answers, setAnswers] = useState<Record<string, "yes" | "no">>({});
+  const [signalOpen, setSignalOpen] = useState(false);
+  const [from, setFrom] = useState("");
+  const [sources] = useState(recentSources);
+  const sendSignal = (raw: string) => {
+    const name = signalFrom(raw);
+    if (!name || !onSignal) return;
+    rememberSource(name);
+    onSignal({ at: new Date().toISOString(), answers: {}, where, signal: { from: name } });
+  };
   const left = afterTheFact ? gateUnanswered(questions, answers) : gateLeft(questions, answers);
   const reds = questions.filter((q) => answers[q.id] != null && answers[q.id] !== q.good).length;
   const anyRed = reds > 0;
@@ -56,6 +91,42 @@ export function GateQuestions({
     <div data-testid={testId}>
       <h3 className={compact ? "text-sm font-semibold tracking-tight" : "text-lg font-bold tracking-tight"}>{title}</h3>
       {said && <p className="mt-0.5 text-[11px] text-muted-foreground">{said}</p>}
+      {onSignal && (
+        <div className="mt-2 rounded-lg border border-sky-500/40 bg-sky-500/5 px-2.5 py-2" data-testid={`${testId}-signal`}>
+          {!signalOpen ? (
+            <button type="button" onClick={() => setSignalOpen(true)} className="flex w-full items-center justify-between gap-2 text-left text-[12px] font-medium text-sky-400" data-testid={`${testId}-signal-open`}>
+              <span>This was from a signal</span>
+              <span className="text-[10px] font-normal text-muted-foreground">skips the questions, names the source</span>
+            </button>
+          ) : (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                sendSignal(from);
+              }}
+            >
+              <label className="text-[11px] text-muted-foreground" htmlFor={`${testId}-signal-from`}>
+                Who was the signal from?
+              </label>
+              <div className="mt-1 flex gap-1.5">
+                <Input id={`${testId}-signal-from`} autoFocus value={from} onChange={(e) => setFrom(e.target.value)} maxLength={60} placeholder="a name or a channel" className="h-8 min-w-0 flex-1 text-xs" data-testid={`${testId}-signal-from`} />
+                <Button type="submit" size="sm" className="h-8 px-3 text-[11px]" disabled={!signalFrom(from)} data-testid={`${testId}-signal-save`}>
+                  Continue
+                </Button>
+              </div>
+              {sources.length > 0 && (
+                <div className="mt-1.5 flex flex-wrap gap-1">
+                  {sources.map((name) => (
+                    <button key={name} type="button" onClick={() => sendSignal(name)} className="rounded-full border border-border px-2 py-0.5 text-[10px] text-foreground/90 hover:border-sky-500/50" data-testid={`${testId}-signal-recent`}>
+                      {name}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </form>
+          )}
+        </div>
+      )}
       <div className={`mt-2 divide-y divide-border/60 rounded-lg border ${anyRed ? "border-red-500/60" : left === 0 ? "border-emerald-500/60" : "border-border"}`}>
         {questions.map((q) => {
           const a = answers[q.id];

@@ -56,17 +56,18 @@ export function GateRecordCard({ trade }: { trade: TradeWithTags }) {
   const where = { "entry-card": "on the entry card", terminal: "in the terminal", tracked: "after the fact, on the journal" }[g.where];
   // Folded by default: the verdict is the line that matters; the answers are there on a click.
   return (
-    <Card className={`border-card-border bg-card px-4 py-3 ${reds.length ? "border-red-500/40" : "border-emerald-500/40"}`} data-testid="card-gate-record">
+    <Card className={`border-card-border bg-card px-4 py-3 ${g.signal ? "border-sky-500/40" : reds.length ? "border-red-500/40" : "border-emerald-500/40"}`} data-testid="card-gate-record">
       <details>
         <summary className="flex cursor-pointer select-none flex-wrap items-baseline justify-between gap-2 [&::-webkit-details-marker]:hidden">
           <span className="text-sm font-semibold tracking-tight">
-            The gate <span className="ml-1 text-[11px] font-normal text-muted-foreground">asked {where}, {new Date(g.at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span>
+            The gate <span className="ml-1 text-[11px] font-normal text-muted-foreground">{g.signal ? "marked" : "asked"} {where}, {new Date(g.at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span>
           </span>
-          <span className={`font-mono text-[10px] uppercase tracking-wider ${reds.length ? "text-red-400" : "text-emerald-400"}`} data-testid="text-gate-verdict">
-            {g.skipped ? "skipped · counts as red" : reds.length ? `${reds.length} red` : "green"}
+          <span className={`font-mono text-[10px] uppercase tracking-wider ${g.signal ? "text-sky-400" : reds.length ? "text-red-400" : "text-emerald-400"}`} data-testid="text-gate-verdict">
+            {g.signal ? `signal · ${g.signal.from}` : g.skipped ? "skipped · counts as red" : reds.length ? `${reds.length} red` : "green"}
           </span>
         </summary>
-      {!g.skipped && (
+      {g.signal && <p className="mt-2 text-[12px] text-muted-foreground">Taken from a signal by {g.signal.from}. The questions were not asked.</p>}
+      {!g.skipped && !g.signal && (
         <ul className="mt-2 divide-y divide-border/50 text-[12px]">
           {prefs.gate.questions.map((q) => {
             const a = g.answers[q.id];
@@ -112,6 +113,7 @@ export function TradeGateCard({ trade }: { trade: TradeWithTags }) {
         compact
         onDone={write}
         onSkip={write}
+        onSignal={write}
         title="Pre-trade questions"
         blurb="Already on, so a red answer goes on the record, not in the way."
         testId="trade-gate-q"
@@ -176,6 +178,7 @@ export function TrackedGateBanner({ trades }: { trades: TradeWithTags[] }) {
     try {
       await update.mutateAsync({ id: first.id, gate: record });
       const reds = redAnswers(prefs.gate.questions, record);
+      if (record.signal) return void toast({ title: `${first.symbol}: from a signal`, description: `Marked as ${record.signal.from}'s call.` });
       toast({
         title: reds.length ? `${first.symbol}: entered with ${reds.length === 1 ? "a red answer" : "red answers"}` : `${first.symbol}: every answer green`,
         description: reds.length ? `${reds.length} red ${reds.length === 1 ? "answer" : "answers"} on the record.` : "Every answer green, on the record.",
@@ -201,6 +204,7 @@ export function TrackedGateBanner({ trades }: { trades: TradeWithTags[] }) {
         compact
         onDone={write}
         onSkip={write}
+        onSignal={write}
         title="Pre-trade questions"
         blurb="Already on, so a red answer goes on the record, not in the way."
         testId="tracked-gate-q"
@@ -218,7 +222,7 @@ export function GateStatsCard({ trades }: { trades: TradeWithTags[] }) {
     [trades, prefs.gate.questions],
   );
   const fmtR = (r: number | null) => (r == null ? "—" : `${r >= 0 ? "+" : ""}${r.toFixed(2)}R`);
-  if (report.passed.n + report.failed.n === 0) return null;
+  if (report.passed.n + report.failed.n + report.signals.n === 0) return null;
   return (
     <Card className="border-card-border bg-card p-4 sm:p-5" data-testid="card-gate-stats">
       <h2 className="text-sm font-semibold">The pre-trade gate</h2>
@@ -240,6 +244,21 @@ export function GateStatsCard({ trades }: { trades: TradeWithTags[] }) {
           <p className="text-[10px] text-muted-foreground">closed without a gate</p>
         </div>
       </div>
+      {report.signals.n > 0 && (
+        <div className="mt-3 rounded-md bg-secondary/40 p-2.5" data-testid="gate-signals">
+          <p className="text-[10px] uppercase tracking-wider text-muted-foreground">From a signal</p>
+          <p className="font-mono text-lg text-sky-400" data-testid="text-gate-signals">{fmtR(report.signals.avgR)}</p>
+          <p className="text-[10px] text-muted-foreground">{report.signals.n} {report.signals.n === 1 ? "trade" : "trades"} · average R · not counted as green or red</p>
+          <ul className="mt-1.5 space-y-0.5 text-[11px]">
+            {report.signals.from.slice(0, 6).map((x) => (
+              <li key={x.name} className="flex items-baseline justify-between gap-3">
+                <span className="truncate text-foreground/90">{x.name}</span>
+                <span className="shrink-0 font-mono text-muted-foreground">{x.n}× · {fmtR(x.avgR)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       {report.red.length > 0 && (
         <ul className="mt-3 space-y-1 text-[11px]" data-testid="list-gate-red">
           {report.red.slice(0, 4).map((r) => (

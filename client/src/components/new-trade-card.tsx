@@ -1039,7 +1039,7 @@ export function NewTradeCard({
         compact && !expanded ? "p-3" : "p-4 sm:p-5"
       } ${expanded ? "" : "cursor-pointer transition-colors hover:border-primary/40"}`}
     >
-      {gateUp && <GateOverlay questions={prefs.gate.questions} where="entry-card" onDone={setGate} testId="entry-gate" />}
+      {gateUp && <GateOverlay questions={prefs.gate.questions} where="entry-card" onDone={setGate} onSignal={setGate} testId="entry-gate" />}
       <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1.5">
         <button
           type="button"

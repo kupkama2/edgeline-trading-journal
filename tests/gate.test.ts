@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createServer, type Server } from "node:http";
-import { DEFAULT_GATE_QUESTIONS, formatGate, gateLeft, gatePassed, gateReport, gateUnanswered, parseGate, readGate, redAnswers } from "../shared/gate";
+import { DEFAULT_GATE_QUESTIONS, formatGate, gateLeft, gatePassed, gateReport, gateUnanswered, parseGate, readGate, redAnswers, signalFrom } from "../shared/gate";
 
 /** The pre-trade gate: its rules, and the answers on the record. */
 const Q = DEFAULT_GATE_QUESTIONS;
@@ -60,6 +60,34 @@ describe("the gate's rules", () => {
     expect(r.unanswered).toBe(1);
     expect(r.red[0]).toMatchObject({ id: "calm", n: 2 });
     expect(r.red[1]).toMatchObject({ id: "stop", n: 1 });
+  });
+
+  it("a trade taken from a signal is neither green nor red, and is counted under whose call it was", () => {
+    const signal = (from: string) => formatGate({ at: "x", answers: {}, where: "entry-card", signal: { from } });
+    const rec = parseGate(signal("Severin"));
+    expect(rec?.signal).toEqual({ from: "Severin" });
+    expect(redAnswers(Q, rec)).toEqual([]);
+    expect(gatePassed(Q, rec)).toBe(false);
+    // A name is required, and kept to a name's length.
+    expect(parseGate(JSON.stringify({ at: "x", answers: {}, where: "entry-card", signal: { from: "  " } }))).toBeNull();
+    expect(signalFrom("  the   desk \n chat ")).toBe("the desk chat");
+    expect(signalFrom("x".repeat(200))).toHaveLength(60);
+    const r = gateReport(Q, [
+      { status: "closed", r: 2, gate: signal("Severin") },
+      { status: "closed", r: -1, gate: signal("severin") },
+      { status: "closed", r: 3, gate: signal("Desk chat") },
+      { status: "closed", r: 1, gate: formatGate({ at: "x", answers: { ...green }, where: "entry-card" }) },
+      { status: "open", r: null, gate: signal("Severin") },
+    ]);
+    expect(r.passed).toEqual({ n: 1, avgR: 1 });
+    expect(r.failed.n).toBe(0);
+    expect(r.unanswered).toBe(0);
+    expect(r.signals.n).toBe(3);
+    expect(r.signals.avgR).toBeCloseTo(4 / 3, 6);
+    expect(r.signals.from).toEqual([
+      { name: "Severin", n: 2, avgR: 0.5 },
+      { name: "Desk chat", n: 1, avgR: 3 },
+    ]);
   });
 });
 
@@ -131,6 +159,16 @@ describe.skipIf(!DB)("the gate on the record", () => {
     // Strict: one red answer and the trade is marked traded poorly; a skip is red on every question.
     expect(row.tradedPoorly).toBe(true);
     expect((await send("GET", `/api/trades/${bare.id}`).then((x) => x.json())).tradedPoorly).toBe(true);
+    // From a signal: written with its source, and not held against the trade.
+    const sig = await send("POST", "/api/trades", {
+      trade: { symbol: "SOL", direction: "long", size: 1, sizeUnit: "base", entryPrice: 100, initialStop: 90, initialTarget: 120, entryTime: new Date().toISOString(), status: "open" },
+    }).then((x) => x.json());
+    const sigGate = await send("POST", `/api/trades/${sig.id}/gate`, { gate: { at: new Date().toISOString(), answers: {}, where: "tracked", signal: { from: "Severin" } } });
+    expect(sigGate.status).toBe(200);
+    const sigRow = await send("GET", `/api/trades/${sig.id}`).then((x) => x.json());
+    expect(parseGate(sigRow.gate)?.signal).toEqual({ from: "Severin" });
+    expect(sigRow.tradedPoorly).toBe(false);
+    expect((await send("POST", `/api/trades/${sig.id}/gate`, { gate: { at: "x", answers: {}, where: "tracked", signal: { from: "" } } })).status).toBe(400);
     // Green all the way through leaves the mark alone.
     const clean = await send("POST", "/api/trades", {
       trade: { symbol: "ETH", direction: "long", size: 1, sizeUnit: "base", entryPrice: 100, initialStop: 90, initialTarget: 120, entryTime: new Date().toISOString(), status: "open" },
