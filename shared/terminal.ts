@@ -702,6 +702,8 @@ export function cutAtFlat<F extends { time: number; tid: number; qty: number; si
 export function cutAtVenueFlat<F extends { time: number; tid: number; side: string; sz: number; startPosition: number }>(
   fills: F[],
   long: boolean,
+  /** The trade's opening is not on record (met as a position): a fill that starts on this side is already this trade. */
+  midPosition = false,
 ): { fills: F[]; cut: boolean } {
   // In the order they happened: a stop going off is many fills on one stamp, and their ids are no order.
   const sorted = inVenueOrder(fills);
@@ -712,6 +714,8 @@ export function cutAtVenueFlat<F extends { time: number; tid: number; side: stri
     const after = f.startPosition + (f.side === "B" ? f.sz : -f.sz);
     // Sizes come as decimals; the subtraction can leave dust, relative to the size.
     const tol = Math.max(1e-9, Math.abs(f.startPosition) * 1e-10);
+    // Already on this side before the fill: a trade met mid-position, whose opening is not on record.
+    if (midPosition && f.startPosition * dir > tol) wasOn = true;
     const on = after * dir > tol;
     if (on) {
       wasOn = true;
