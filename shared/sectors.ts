@@ -30,7 +30,7 @@ export const ASSET_CLASS_LABEL: Record<AssetClass, string> = { crypto: "Crypto",
 const INDEX = /^(XYZ100|US100|NAS100|NDX|NQ|US500|SPX500|SPX|SP500|ES|US30|DJI|DOW|YM|US2000|RUT|RTY|DAX|GER40|DE40|UK100|FTSE|JP225|NIKKEI|N225|HK50|HSI|EU50|STOXX50|FRA40|CAC40|AUS200|CHINA50|A50|KOSPI|KR200|IN50|NIFTY|VIX|DXY|USDX|MAG7|SEMIS|SEMI|SOX|EWJ|EWY|EEM|QQQ|SPY|IWM|DIA|TLT|ARKK|SMH|XLE|XLF|XLK|GLDMINERS|GDX|URA|BOTZ|ROBO)$/;
 const COMMODITY = /^(GOLD|XAU|XAUUSD|GLD|SILVER|XAG|XAGUSD|SLV|PLATINUM|XPT|PALLADIUM|XPD|COPPER|HG|XCU|ALUMINUM|ALUMINIUM|NICKEL|ZINC|LITHIUM|URANIUM|IRON|IRONORE|STEEL|OIL|WTI|WTIOIL|USOIL|CL|BRENT|BRENTOIL|UKOIL|NATGAS|NG|GAS|GASOLINE|RBOB|HEATOIL|COAL|CORN|WHEAT|SOYBEAN|SOY|SUGAR|COFFEE|COCOA|COTTON|RICE|OATS|LUMBER|CATTLE|HOGS|OJ|PALMOIL|RUBBER|CARBON)$/;
 const FX = /^(EUR|EURUSD|GBP|GBPUSD|JPY|USDJPY|CHF|USDCHF|AUD|AUDUSD|NZD|NZDUSD|CAD|USDCAD|CNH|USDCNH|CNY|MXN|USDMXN|BRL|USDBRL|TRY|USDTRY|ZAR|USDZAR|INR|USDINR|KRW|USDKRW|SGD|USDSGD|HKD|SEK|NOK|PLN|CZK|HUF|ILS|EURGBP|EURJPY|GBPJPY|EURCHF)$/;
-const PRE_IPO = /^(ANTHROPIC|OPENAI|SPACEX|XAI|STRIPE|DATABRICKS|ANDURIL|SCALE|SCALEAI|PERPLEXITY|FIGURE|FIGUREAI|NEURALINK|STARLINK|CANVA|REVOLUT|KRAKEN|POLYMARKET|KALSHI|RAMP|DISCORD|EPIC|EPICGAMES|SHEIN|BYTEDANCE|TIKTOK|CEREBRAS|MISTRAL|SSI|WAYMO|ANYSPHERE|CURSOR|COGNITION|HARVEY|GLEAN|RIPPLING|DEEL|PLAID|CHIME|KLARNA|VERCEL|REPLIT|LOVABLE|PHANTOM|METAMASK|CONSENSYS|TETHER|PUMPFUN|OPENSEA|LEDGER|ZAMA|RAMPLABS|SIERRA|ELEVENLABS|SUNO|RUNWAY|PIKA|GROQ|LAMBDA|COREWEAVE|CRUSOE|TOGETHER|FIREWORKS|THINKINGMACHINES|PHYSICALINTELLIGENCE|SKILD|APPTRONIK|SHIELDAI|SARONIC|HELION|COMMONWEALTH|BOOM|RELATIVITY|VARDA|IMPULSE|ZIPLINE)$/;
+const PRE_IPO = /^(ANTHROPIC|ANTH|ANT|OPENAI|OAI|SPCX|UNITREE|SPACEX|XAI|STRIPE|DATABRICKS|ANDURIL|SCALE|SCALEAI|PERPLEXITY|FIGURE|FIGUREAI|NEURALINK|STARLINK|CANVA|REVOLUT|KRAKEN|POLYMARKET|KALSHI|RAMP|DISCORD|EPIC|EPICGAMES|SHEIN|BYTEDANCE|TIKTOK|CEREBRAS|MISTRAL|SSI|WAYMO|ANYSPHERE|CURSOR|COGNITION|HARVEY|GLEAN|RIPPLING|DEEL|PLAID|CHIME|KLARNA|VERCEL|REPLIT|LOVABLE|PHANTOM|METAMASK|CONSENSYS|TETHER|PUMPFUN|OPENSEA|LEDGER|ZAMA|RAMPLABS|SIERRA|ELEVENLABS|SUNO|RUNWAY|PIKA|GROQ|LAMBDA|COREWEAVE|CRUSOE|TOGETHER|FIREWORKS|THINKINGMACHINES|PHYSICALINTELLIGENCE|SKILD|APPTRONIK|SHIELDAI|SARONIC|HELION|COMMONWEALTH|BOOM|RELATIVITY|VARDA|IMPULSE|ZIPLINE)$/;
 
 const CRYPTO_ON_BOOKS = /^(BTC|ETH|SOL|XRP|BNB|DOGE|HYPE|SUI|ADA|AVAX|LINK|PEPE|KPEPE|FARTCOIN|PUMP|ENA|AAVE|UNI|LTC|BCH|TON|TRX|NEAR|APT|ARB|OP|TAO|WLD|ZEC|XMR|BONK|KBONK|WIF|TRUMP)$/;
 
@@ -90,3 +90,49 @@ export function sectorOf(coin: string): string | null {
   if (cls !== "crypto") return ASSET_CLASS_LABEL[cls];
   return BY_COIN.get(plain(coin.includes(":") ? bare(coin) : coin)) ?? null;
 }
+
+/**
+ * What a market's strength is measured against.
+ *
+ * A coin is strong or weak against BTC: that is the trade. A metal, an oil
+ * or a currency against BTC is a real comparison too, the choice between
+ * the two as a place to be. A stock against BTC is not: it says how BTC
+ * did, and nothing about the stock. A stock is strong when it beats the
+ * stock market, so stocks, companies not yet listed and the other indices
+ * are measured against the broad index the venue lists.
+ */
+export type BenchmarkKind = "btc" | "index";
+export const benchmarkKindOf = (coin: string): BenchmarkKind => {
+  const cls = assetClassOf(coin);
+  return cls === "equity" || cls === "pre-ipo" || cls === "index" ? "index" : "btc";
+};
+
+const BROAD = /^(SP500|SPX500|US500|SPX|SPY|ES)$/;
+const GROWTH = /^(XYZ100|US100|NAS100|NDX|QQQ|NQ)$/;
+
+/**
+ * The index stocks are measured against, and the one that index itself is
+ * measured against: the S&P 500 where the venue lists one, with the
+ * Nasdaq-100 as its own yardstick (and the other way round when only one of
+ * the two is there). The most traded listing of each wins. Null when the
+ * venue lists neither, and then everything falls back to BTC.
+ */
+export function pickIndexBenchmarks(markets: { coin: string; volume: number | null }[]): { main: string | null; other: string | null } {
+  const best = (re: RegExp) =>
+    markets
+      .filter((m) => m.coin.includes(":") && re.test(bare(m.coin)))
+      .sort((a, b) => (b.volume ?? 0) - (a.volume ?? 0))[0]?.coin ?? null;
+  const broad = best(BROAD);
+  const growth = best(GROWTH);
+  return broad ? { main: broad, other: growth } : { main: growth, other: null };
+}
+
+/** A benchmark's name as a reader says it: "BTC", "S&P 500", "Nasdaq-100". */
+export function benchmarkLabel(coin: string | null | undefined): string {
+  if (!coin || !coin.includes(":")) return coin || "BTC";
+  const name = bare(coin);
+  return BROAD.test(name) ? "S&P 500" : GROWTH.test(name) ? "Nasdaq-100" : name;
+}
+
+/** The metals among the commodities: what a "metals" read is of. */
+export const isMetal = (coin: string): boolean => coin.includes(":") && /^(GOLD|XAU|XAUUSD|GLD|SILVER|XAG|XAGUSD|SLV|PLATINUM|XPT|PALLADIUM|XPD|COPPER|HG|XCU)$/.test(bare(coin));

@@ -38,7 +38,7 @@ import { findAnomalies, type Anomaly, type TopAccounts } from "@shared/flow";
 import { parsePerpDexs } from "@shared/hyperliquid";
 import { FLAG_REPEAT_MS, flagsOf, summarizeFlags, type FlagTrack } from "@shared/flag-track";
 import type { PricePoint } from "@shared/ai-track";
-import { assetClassOf } from "@shared/sectors";
+import { assetClassOf, benchmarkKindOf, pickIndexBenchmarks } from "@shared/sectors";
 import {
   PIN_LIMIT,
   annualizeFunding,
@@ -393,6 +393,16 @@ export async function pinCoin(asked: string): Promise<{ coin: string; settings: 
 type Snap = Map<string, { openInterest: number | null; mark: number | null }>;
 
 /**
+ * The market a coin is measured against: BTC, or for a stock, a company not
+ * yet listed or an index, the venue's broad stock index (and for that index
+ * itself, the other one). "BTC" when the venue lists no such index.
+ */
+export function benchmarkCoin(coin: string, picks: { main: string | null; other: string | null }): string {
+  if (benchmarkKindOf(coin) === "btc") return "BTC";
+  return (coin === picks.main ? picks.other : picks.main) ?? "BTC";
+}
+
+/**
  * One coin measured on every timeframe, before the universe-wide flags:
  * the venue's numbers, the positioning from the hourly snapshots, and each
  * timeframe's RS, price readings and RSI extremes. The hourly run and a
@@ -403,6 +413,8 @@ function measureRow(
   alt: Series | undefined,
   ctx: {
     btc: Series;
+    /** What this market is measured against, when it is not BTC: the venue's stock index, for a stock. */
+    bench?: { coin: string; series: Series } | null;
     eth: Series | null;
     basket: Series;
     dayPartial: number;
@@ -427,8 +439,11 @@ function measureRow(
     premium: c.markPx != null && c.oraclePx ? c.markPx / c.oraclePx - 1 : null,
     fundingPct: null,
   };
+  // The yardstick: BTC, unless this market has one of its own.
+  const yard = ctx.bench?.series ?? ctx.btc;
   const base: ScreenerRow = {
     coin: c.coin,
+    ...(ctx.bench ? { benchmark: ctx.bench.coin } : {}),
     ...(ctx.pinned ? { pinned: true } : {}),
     mark: c.markPx,
     volume24h: c.dayNtlVlm,
@@ -450,13 +465,14 @@ function measureRow(
   };
   if (alt) {
     base.bars = { "1h": alt["1h"].length, "1d": alt["1d"].length };
-    base.tf = coinMetrics(alt, ctx.btc, ctx.dayPartial);
+    base.tf = coinMetrics(alt, yard, ctx.dayPartial);
     const peaks = {} as Record<Timeframe, number | null>;
     const troughs = {} as Record<Timeframe, number | null>;
     for (const tf of TIMEFRAMES) {
       const b = TF_SPEC[tf].base;
-      const vsEth = ctx.eth && c.coin !== "ETH" ? tfMetrics(ratioSeries(alt[b], ctx.eth[b]), tf).rs : null;
-      const vsBasket = ctx.basket[b].length ? tfMetrics(ratioSeries(alt[b], ctx.basket[b]), tf).rs : null;
+      // Against ETH and the alt basket is a crypto reading: a stock has neither.
+      const vsEth = !ctx.bench && ctx.eth && c.coin !== "ETH" ? tfMetrics(ratioSeries(alt[b], ctx.eth[b]), tf).rs : null;
+      const vsBasket = !ctx.bench && ctx.basket[b].length ? tfMetrics(ratioSeries(alt[b], ctx.basket[b]), tf).rs : null;
       base.price[tf] = priceReadings(alt[b], tf, vsEth, vsBasket);
       const ex = rsiExtremes(alt[b], tf);
       peaks[tf] = ex.peak;
@@ -465,8 +481,8 @@ function measureRow(
     base.rsiPeak = peaks;
     base.rsiTrough = troughs;
     // Strength beyond the ratio: beta, what is left of each timeframe's move without it, and the capture on BTC's green and red hours.
-    const strength = strengthOf(alt, ctx.btc);
-    for (const tf of TIMEFRAMES) base.price[tf].alpha = alphaOver(alt[TF_SPEC[tf].base], ctx.btc[TF_SPEC[tf].base], TF_SPEC[tf].bars, strength.beta);
+    const strength = strengthOf(alt, yard);
+    for (const tf of TIMEFRAMES) base.price[tf].alpha = alphaOver(alt[TF_SPEC[tf].base], yard[TF_SPEC[tf].base], TF_SPEC[tf].bars, strength.beta);
     const v = ctx.volume;
     if (v && v.total > 0 && c.dayNtlVlm != null) strength.volShare = c.dayNtlVlm / v.total;
     const was = v?.was?.get(c.coin);
@@ -543,7 +559,11 @@ export async function scanCoin(asked: string): Promise<CoinScan> {
     screenerStore.snapshotNear(ago(4 * HOUR_MS), ago(6 * HOUR_MS)),
     screenerStore.snapshotNear(ago(DAY_MS), ago(DAY_MS + 6 * HOUR_MS)),
   ]);
-  const measured = measureRow(c, alt, { btc, eth, basket: { "1h": [], "1d": [] }, dayPartial, snaps: { h1, h4, d1 }, pinned: settings.pinned.includes(c.coin), error: null, volume: await volumeCtx(listed, now) });
+  // The same yardstick the run used for its kind: the index the run read, from its stored series.
+  const benchName = benchmarkCoin(c.coin, pickIndexBenchmarks(run.rows.filter((r) => !r.error).map((r) => ({ coin: r.coin, volume: r.volume24h }))));
+  const benchStored = benchName === "BTC" ? null : measuredSeries(await storedSeries(benchName), to);
+  const bench = benchStored && benchStored["1h"].length ? { coin: benchName, series: benchStored } : null;
+  const measured = measureRow(c, alt, { btc, bench, eth, basket: { "1h": [], "1d": [] }, dayPartial, snaps: { h1, h4, d1 }, pinned: settings.pinned.includes(c.coin), error: null, volume: await volumeCtx(listed, now) });
   // Ranked against the run's universe: "moving fast" and "weakest" are places in it, not properties of the coin.
   const others = run.rows.filter((r) => r.coin !== c.coin);
   const row = flagRows([...others, measured], settings)[others.length];
@@ -645,8 +665,15 @@ async function run(nowFn: () => number, ai = false): Promise<ScreenerRun> {
     const breadth = breadthOf(cryptoOnly.map(([, s]) => ratioSeries(s["1d"], btc["1d"])));
 
     const volume = await volumeCtx(ctxs, t0);
+    // Stocks and indices are measured against the stock index this run read, not against BTC.
+    const picks = pickIndexBenchmarks(alts.filter((c) => measured.has(c.coin)).map((c) => ({ coin: c.coin, volume: c.dayNtlVlm })));
+    const benchOf = (coin: string) => {
+      const b = benchmarkCoin(coin, picks);
+      const series = b === "BTC" ? null : measured.get(b);
+      return series ? { coin: b, series } : null;
+    };
     const rows: ScreenerRow[] = alts.map((c) =>
-      measureRow(c, measured.get(c.coin), { btc, eth, basket, dayPartial, snaps: { h1: snap1h, h4: snap4h, d1: snap1d }, pinned: pinned.has(c.coin), error: failed.get(c.coin) ?? null, volume }),
+      measureRow(c, measured.get(c.coin), { btc, bench: benchOf(c.coin), eth, basket, dayPartial, snaps: { h1: snap1h, h4: snap4h, d1: snap1d }, pinned: pinned.has(c.coin), error: failed.get(c.coin) ?? null, volume }),
     );
     // Binance's flow through the relay, then Hyperliquid's liquidation map. Each pass's failure is its own.
     const readable = rows.filter((r) => !r.error).map((r) => ({ coin: r.coin, mark: r.mark, fundingHourly: r.fundingHourly }));

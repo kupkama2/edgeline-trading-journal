@@ -87,6 +87,8 @@ export interface TfFlags {
 
 export interface ScreenerRow {
   coin: string;
+  /** What its strength is measured against: a stock or an index against the venue's broad stock index. Absent means BTC. */
+  benchmark?: string;
   /** Added by hand from the search: read whatever its volume. */
   pinned?: boolean;
   /** The venue's mark price at the run. */
@@ -407,11 +409,16 @@ export function flagRows(rows: ScreenerRow[], settings: Pick<ScreenerSettings, "
    * no index would ever be "moving fast" and every one would sit in the
    * middle of the ratings, while the funding decile would be the alts'.
    */
-  const crypto = rows.filter((r) => assetClassOf(r.coin) === "crypto");
-  if (crypto.length === rows.length || crypto.length === 0) return flagGroup(rows, settings);
+  // And within the other markets, by what they are measured against: a rank among stocks measured against
+  // the stock index, and another among the metals, oils and currencies measured against BTC.
+  const groupOf = (r: ScreenerRow) => (assetClassOf(r.coin) === "crypto" ? "crypto" : benchmarkKindOf(r.coin));
+  const groups = new Map<string, ScreenerRow[]>();
+  for (const r of rows) groups.set(groupOf(r), [...(groups.get(groupOf(r)) ?? []), r]);
+  if (groups.size <= 1) return flagGroup(rows, settings);
   const done = new Map<string, ScreenerRow>();
-  for (const r of flagGroup(crypto, settings)) done.set(r.coin, r);
-  for (const r of flagGroup(rows.filter((r) => assetClassOf(r.coin) !== "crypto"), settings)) done.set(r.coin, r);
+  groups.forEach((g) => {
+    for (const r of flagGroup(g, settings)) done.set(r.coin, r);
+  });
   return rows.map((r) => done.get(r.coin)!);
 }
 
@@ -536,7 +543,7 @@ export const NOT_AN_ALT = /^(BTC|USDC|USDT|USDE|USDH|USD1|USDD|USDS|USR|DAI|FDUS
 /* ------------------------------- the other readings ------------------------------- */
 
 import { cvdFor, type FlowReadings, type LiqMap, type SpotFlow, type TopAccounts } from "./flow";
-import { assetClassOf } from "./sectors";
+import { assetClassOf, benchmarkKindOf } from "./sectors";
 
 /**
  * Price readings on a timeframe's blocks, so the table can say whether

@@ -1,3 +1,4 @@
+import { BiasBoard } from "@/components/screener/bias";
 import { ScreenerScanCard } from "@/components/screener/scan";
 import { useEffect, useMemo, useState } from "react";
 import { Loader2, Pin, RefreshCw, Search, Settings2, X } from "lucide-react";
@@ -14,7 +15,7 @@ import { ScreenerInsights } from "@/components/screener/insights";
 import { ScreenerTrackCard } from "@/components/screener/track";
 import { Fold } from "@/components/fold";
 import { useIsDemo } from "@/components/admin-only";
-import { ASSET_CLASSES, ASSET_CLASS_LABEL, assetClassOf, sectorOf, type AssetClass } from "@shared/sectors";
+import { ASSET_CLASSES, ASSET_CLASS_LABEL, assetClassOf, benchmarkLabel, sectorOf, type AssetClass } from "@shared/sectors";
 import { fmtPct, fmtPrague, usePinScreenerCoin, useSaveScreenerSettings, useScreener, useScreenerLines, useScreenerLookup, useScreenerRefresh, useScreenerStatus } from "@/lib/screener";
 import { sectorTable, TIMEFRAMES, type ScreenerRow, type Timeframe } from "@shared/screener";
 import { parseLooseNumber } from "@shared/loose-number";
@@ -103,6 +104,16 @@ export default function ScreenerPage() {
   // A kind with nothing in this run shows everything rather than an empty page.
   const shownUniverse: Universe = universe !== "all" && !classCounts[universe] ? "all" : universe;
   const rows = useMemo(() => (shownUniverse === "all" ? allRows : allRows.filter((r) => assetClassOf(r.coin) === shownUniverse)), [allRows, shownUniverse]);
+  // What the rows on screen are measured against: one name when they share it, and a line saying which is which when they do not.
+  const yards = useMemo(() => Array.from(new Set(rows.map((r) => benchmarkLabel(r.benchmark)))), [rows]);
+  const yardstick = yards.length === 1 ? yards[0] : "its benchmark";
+  const stockYard = useMemo(() => benchmarkLabel(allRows.find((r) => r.benchmark && assetClassOf(r.coin) === "equity")?.benchmark ?? null), [allRows]);
+  const yardNote =
+    yards.length > 1
+      ? `Crypto, metals, oil and currencies are measured against BTC; stocks and indices against the ${stockYard === "BTC" ? "stock index" : stockYard}. Each group is ranked within itself.`
+      : yards[0] && yards[0] !== "BTC"
+        ? `These are measured against the ${yards[0]}, not BTC: a stock is strong when it beats the stock market.`
+        : null;
   const charted = useMemo(() => {
     if (picked && pickedFor === tf) return picked;
     return new Set(defaultSet(rows, tf));
@@ -377,10 +388,20 @@ export default function ScreenerPage() {
         </div>
       )}
 
-      <Fold id="screener.chart" title="Chart" hint="relative strength against BTC">
+      <Fold id="screener.bias" title="Daily bias" hint="which way BTC, the indices and the metals lean today">
+        <BiasBoard />
+      </Fold>
+
+      {yardNote && (
+        <p className="text-[11px] text-muted-foreground" data-testid="screener-yardstick">
+          {yardNote}
+        </p>
+      )}
+
+      <Fold id="screener.chart" title="Chart" hint="relative strength against each market's benchmark">
       <Card className="border-card-border bg-card p-3 sm:p-4">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
-          <h2 className="text-sm font-semibold">Relative strength vs BTC · {tf}{shownUniverse !== "all" ? ` · ${ASSET_CLASS_LABEL[shownUniverse]}` : ""}</h2>
+          <h2 className="text-sm font-semibold">Relative strength vs {yardstick} · {tf}{shownUniverse !== "all" ? ` · ${ASSET_CLASS_LABEL[shownUniverse]}` : ""}</h2>
           <Button size="sm" variant="outline" className="h-7 px-2.5 text-[11px]" onClick={resetChart} title="Back to the top 8 and bottom 3, zoomed to fit" data-testid="screener-chart-reset">
             <RefreshCw className="mr-1 h-3 w-3" /> Reset
           </Button>

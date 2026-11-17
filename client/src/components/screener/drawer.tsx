@@ -1,3 +1,4 @@
+import { benchmarkLabel } from "@shared/sectors";
 import { parseLooseNumber } from "@shared/loose-number";
 import { useEffect, useRef, useState } from "react";
 import { CandlestickSeries, ColorType, createChart, CrosshairMode, HistogramSeries, LineSeries, LineStyle, type IChartApi, type IPriceLine, type ISeriesApi, type UTCTimestamp } from "lightweight-charts";
@@ -489,7 +490,7 @@ export function CoinDrawer({
               Price · {tf} · bars to {new Date(d.barsTo).toISOString().slice(11, 16)}Z
             </p>
             <PriceChart data={d.price} stop={plan?.structureStop ?? null} />
-            <p className="mt-3 text-[10px] uppercase tracking-wider text-muted-foreground">RS ratio vs BTC · {tf} · volume below</p>
+            <p className="mt-3 text-[10px] uppercase tracking-wider text-muted-foreground">RS ratio vs {benchmarkLabel(d.benchmark)} · {tf} · volume below</p>
             <RatioChart data={d.ratio} invalidation={plan?.rsInvalidation ?? null} />
           </>
         )}

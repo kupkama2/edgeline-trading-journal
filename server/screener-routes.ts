@@ -44,7 +44,7 @@ const COIN = /^[A-Za-z0-9:_-]{1,24}$/;
  * two track records. Nothing that asks the venue (the one-market scan, the
  * search's lookup), nothing that starts a run, and nothing that writes.
  */
-const DEMO_READS = /^\/(status|settings|series|ai|ai\/track|track|coin\/[A-Za-z0-9:_%-]{1,40})?\/?$/;
+const DEMO_READS = /^\/(status|settings|series|bias|ai|ai\/track|track|coin\/[A-Za-z0-9:_%-]{1,40})?\/?$/;
 
 /** The owner passes; a demo visitor passes for the reads above; to everyone else the screener is not there. */
 export function screenerGate(req: Request, res: Response, next: NextFunction): void {
@@ -124,6 +124,12 @@ export function registerScreenerRoutes(app: Express): void {
     res.json(await saveScreenerSettings(body.data));
   });
 
+  /** The day's bias for BTC, the stock indices and the metals: read from stored daily candles, so a demo visitor may see it too. */
+  app.get("/api/screener/bias", async (req, res) => {
+    const { biasBoard } = await import("./screener-bias");
+    res.json(await biasBoard({ askVenue: (req as any).session?.demo !== true }));
+  });
+
   /** The lines: each coin's RS ratio rebased to 0% at the window's start, on the timeframe's base series as measured. */
   app.get("/api/screener/series", async (req, res) => {
     const tf = tfParam(req.query.tf);
@@ -138,10 +144,18 @@ export function registerScreenerRoutes(app: Express): void {
     const btc = measuredSeries(await storedSeries("BTC"), to);
     const now = Math.max(0, ...btc[base].map((c) => c.t));
     const lines: Record<string, { t: number; pct: number }[]> = {};
+    // Each line against what its row was measured against: a stock's against the index, not BTC.
+    const yards = new Map<string, ReturnType<typeof measuredSeries>>([["BTC", btc]]);
+    const yardOf = async (name: string) => {
+      if (!yards.has(name)) yards.set(name, measuredSeries(await storedSeries(name), to));
+      const y = yards.get(name)!;
+      return y[base].length ? y : btc;
+    };
     for (const coin of coins) {
       const alt = measuredSeries(await storedSeries(coin), to);
       if (alt[base].length === 0) continue;
-      lines[coin] = rebasedLine(ratioSeries(alt[base], btc[base]), CHART_WINDOW_MS[tf], now);
+      const yard = await yardOf(run?.rows.find((r) => r.coin === coin)?.benchmark ?? "BTC");
+      lines[coin] = rebasedLine(ratioSeries(alt[base], yard[base]), CHART_WINDOW_MS[tf], now);
     }
     res.json({ tf, now, lines });
   });
@@ -238,11 +252,13 @@ export function registerScreenerRoutes(app: Express): void {
     const coin = String(req.params.coin);
     if (!COIN.test(coin)) return res.status(400).json({ message: "No such coin" });
     const tf = tfParam(req.query.tf);
-    const [run, settings, altStored, btcStored] = await Promise.all([latestScreenerRun(), screenerSettings(), storedSeries(coin), storedSeries("BTC")]);
+    const [run, settings, altStored] = await Promise.all([latestScreenerRun(), screenerSettings(), storedSeries(coin)]);
     const to = run?.barsTo ?? Date.now();
     const alt = measuredSeries(altStored, to);
-    const btc = measuredSeries(btcStored, to);
     const row = run?.rows.find((r) => r.coin === coin) ?? null;
+    // The ratio is against what the row was measured against: BTC, or for a stock the index the run used.
+    const benchmark = row?.benchmark ?? "BTC";
+    const btc = measuredSeries(await storedSeries(benchmark), to);
     const base = TF_SPEC[tf].base;
     const L = TF_SPEC[tf].bars;
     const ratio = ratioSeries(alt[base], btc[base]);
@@ -276,6 +292,7 @@ export function registerScreenerRoutes(app: Express): void {
       coin,
       tf,
       barsTo: to,
+      benchmark,
       row,
       mark,
       stopLookback: settings.stopLookback,

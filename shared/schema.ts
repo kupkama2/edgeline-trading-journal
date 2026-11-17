@@ -866,6 +866,8 @@ export const hyperliquidSymbols = pgTable(
     maxLeverage: integer("max_leverage"),
     delisted: boolean("delisted").notNull().default(false),
     fetchedAt: text("fetched_at").notNull(),
+    /** Where the venue listed it: a table has no order of its own, and the picker shows the venue's. */
+    pos: integer("pos").notNull().default(0),
   },
   (t) => ({ pk: primaryKey({ columns: [t.name, t.dex] }) }),
 );
