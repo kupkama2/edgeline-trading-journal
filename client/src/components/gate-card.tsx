@@ -63,13 +63,17 @@ export function GateRecordCard({ trade }: { trade: TradeWithTags }) {
             The gate <span className="ml-1 text-[11px] font-normal text-muted-foreground">{g.signal ? "marked" : "asked"} {where}, {new Date(g.at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span>
           </span>
           <span className={`font-mono text-[10px] uppercase tracking-wider ${g.signal ? "text-sky-400" : reds.length ? "text-red-400" : "text-emerald-400"}`} data-testid="text-gate-verdict">
-            {g.signal ? `signal · ${g.signal.from}` : g.skipped ? "skipped · counts as red" : reds.length ? `${reds.length} red` : "green"}
+            {g.signal ? `signal · ${g.signal.from}${reds.length ? ` · ${reds.length} red` : ""}` : g.skipped ? "skipped · counts as red" : reds.length ? `${reds.length} red` : "green"}
           </span>
         </summary>
-      {g.signal && <p className="mt-2 text-[12px] text-muted-foreground">Taken from a signal by {g.signal.from}. The questions were not asked.</p>}
-      {!g.skipped && !g.signal && (
+      {g.signal && (
+        <p className="mt-2 text-[12px] text-muted-foreground">
+          Taken from a signal by {g.signal.from}. {Object.keys(g.answers).length ? "The questions were optional; these were marked:" : "No question was marked."}
+        </p>
+      )}
+      {!g.skipped && (
         <ul className="mt-2 divide-y divide-border/50 text-[12px]">
-          {prefs.gate.questions.map((q) => {
+          {prefs.gate.questions.filter((q) => !g.signal || g.answers[q.id] != null).map((q) => {
             const a = g.answers[q.id];
             const red = a != null && a !== q.good;
             return (
@@ -178,7 +182,7 @@ export function TrackedGateBanner({ trades }: { trades: TradeWithTags[] }) {
     try {
       await update.mutateAsync({ id: first.id, gate: record });
       const reds = redAnswers(prefs.gate.questions, record);
-      if (record.signal) return void toast({ title: `${first.symbol}: from a signal`, description: `Marked as ${record.signal.from}'s call.` });
+      if (record.signal) return void toast({ title: `${first.symbol}: from a signal`, description: `Marked as ${record.signal.from}'s call${reds.length ? `, with ${reds.length} red ${reds.length === 1 ? "answer" : "answers"} noted` : ""}.` });
       toast({
         title: reds.length ? `${first.symbol}: entered with ${reds.length === 1 ? "a red answer" : "red answers"}` : `${first.symbol}: every answer green`,
         description: reds.length ? `${reds.length} red ${reds.length === 1 ? "answer" : "answers"} on the record.` : "Every answer green, on the record.",

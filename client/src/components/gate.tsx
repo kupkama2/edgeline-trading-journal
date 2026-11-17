@@ -74,7 +74,8 @@ export function GateQuestions({
     const name = signalFrom(raw);
     if (!name || !onSignal) return;
     rememberSource(name);
-    onSignal({ at: new Date().toISOString(), answers: {}, where, signal: { from: name } });
+    // Whatever was answered goes with it; nothing has to be.
+    onSignal({ at: new Date().toISOString(), answers, where, signal: { from: name } });
   };
   const left = afterTheFact ? gateUnanswered(questions, answers) : gateLeft(questions, answers);
   const reds = questions.filter((q) => answers[q.id] != null && answers[q.id] !== q.good).length;
@@ -83,7 +84,8 @@ export function GateQuestions({
   const answer = (q: GateQuestion, a: "yes" | "no") => {
     const next = { ...answers, [q.id]: a };
     setAnswers(next);
-    if (gateLeft(questions, next) === 0) record(next);
+    // Marked as a signal: the answers wait for Continue, so the source goes on with them.
+    if (!signalOpen && gateLeft(questions, next) === 0) record(next);
   };
   const ready = afterTheFact && left === 0 && anyRed;
   const said = blurb ?? `${countWord(questions.length)} before every entry. Any red answer, no trade.`;
@@ -96,7 +98,7 @@ export function GateQuestions({
           {!signalOpen ? (
             <button type="button" onClick={() => setSignalOpen(true)} className="flex w-full items-center justify-between gap-2 text-left text-[12px] font-medium text-sky-400" data-testid={`${testId}-signal-open`}>
               <span>This was from a signal</span>
-              <span className="text-[10px] font-normal text-muted-foreground">skips the questions, names the source</span>
+              <span className="text-[10px] font-normal text-muted-foreground">names the source, questions optional</span>
             </button>
           ) : (
             <form
@@ -117,12 +119,13 @@ export function GateQuestions({
               {sources.length > 0 && (
                 <div className="mt-1.5 flex flex-wrap gap-1">
                   {sources.map((name) => (
-                    <button key={name} type="button" onClick={() => sendSignal(name)} className="rounded-full border border-border px-2 py-0.5 text-[10px] text-foreground/90 hover:border-sky-500/50" data-testid={`${testId}-signal-recent`}>
+                    <button key={name} type="button" onClick={() => setFrom(name)} aria-pressed={from === name} className="rounded-full border border-border px-2 py-0.5 text-[10px] text-foreground/90 hover:border-sky-500/50" data-testid={`${testId}-signal-recent`}>
                       {name}
                     </button>
                   ))}
                 </div>
               )}
+              <p className="mt-1.5 text-[10px] text-muted-foreground">Answer any question below that is worth noting; what you mark is kept, none is required.</p>
             </form>
           )}
         </div>
@@ -169,13 +172,28 @@ export function GateQuestions({
           className={`rounded-md border px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider ${left === 0 && !anyRed ? "border-emerald-500/60 text-emerald-400" : ready ? "border-red-500/60 text-red-400" : "border-border text-muted-foreground"}`}
           data-testid={`${testId}-state`}
         >
-          {left === 0 && !anyRed ? "open" : ready ? `${reds} red` : "shut"}
+          {signalOpen ? "signal" : left === 0 && !anyRed ? "open" : ready ? `${reds} red` : "shut"}
         </span>
         <span className="text-muted-foreground" data-testid={`${testId}-left`}>
-          {left === 0 && !anyRed ? "Every answer green." : ready ? "Every question answered." : afterTheFact ? `${left} to answer.` : `${left} left.`}
+          {signalOpen
+            ? signalFrom(from)
+              ? `From ${signalFrom(from)}. ${Object.keys(answers).length} marked, none required.`
+              : "Say who it was from. Questions are optional."
+            : left === 0 && !anyRed
+              ? "Every answer green."
+              : ready
+                ? "Every question answered."
+                : afterTheFact
+                  ? `${left} to answer.`
+                  : `${left} left.`}
         </span>
         <span className="ml-auto flex items-center gap-1">
-          {ready && (
+          {signalOpen && (
+            <Button size="sm" className="h-7 px-2.5 text-[11px]" disabled={!signalFrom(from)} onClick={() => sendSignal(from)} data-testid={`${testId}-signal-continue`}>
+              Continue as signal
+            </Button>
+          )}
+          {ready && !signalOpen && (
             <Button size="sm" variant="destructive" className="h-7 px-2.5 text-[11px]" onClick={() => record(answers)} data-testid={`${testId}-record`}>
               Put {reds} red on the record
             </Button>
@@ -185,7 +203,11 @@ export function GateQuestions({
               Skip (counts as red)
             </Button>
           )}
-          <Button size="sm" variant="outline" className="h-7 px-2 text-[11px]" onClick={() => setAnswers({})} data-testid={`${testId}-reset`}>
+          <Button size="sm" variant="outline" className="h-7 px-2 text-[11px]" onClick={() => {
+              setAnswers({});
+              setSignalOpen(false);
+              setFrom("");
+            }} data-testid={`${testId}-reset`}>
             Reset
           </Button>
         </span>

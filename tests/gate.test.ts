@@ -68,13 +68,17 @@ describe("the gate's rules", () => {
     expect(rec?.signal).toEqual({ from: "Severin" });
     expect(redAnswers(Q, rec)).toEqual([]);
     expect(gatePassed(Q, rec)).toBe(false);
+    // What was marked anyway is kept: a signal against the bias says so, and the rest stays unanswered.
+    const noted = parseGate(formatGate({ at: "x", answers: { bias: "no", calm: "yes" }, where: "entry-card", signal: { from: "Severin" } }));
+    expect(noted?.answers).toEqual({ bias: "no", calm: "yes" });
+    expect(redAnswers(Q, noted)).toEqual(["bias"]);
     // A name is required, and kept to a name's length.
     expect(parseGate(JSON.stringify({ at: "x", answers: {}, where: "entry-card", signal: { from: "  " } }))).toBeNull();
     expect(signalFrom("  the   desk \n chat ")).toBe("the desk chat");
     expect(signalFrom("x".repeat(200))).toHaveLength(60);
     const r = gateReport(Q, [
       { status: "closed", r: 2, gate: signal("Severin") },
-      { status: "closed", r: -1, gate: signal("severin") },
+      { status: "closed", r: -1, gate: formatGate({ at: "x", answers: { bias: "no" }, where: "entry-card", signal: { from: "severin" } }) },
       { status: "closed", r: 3, gate: signal("Desk chat") },
       { status: "closed", r: 1, gate: formatGate({ at: "x", answers: { ...green }, where: "entry-card" }) },
       { status: "open", r: null, gate: signal("Severin") },
@@ -82,6 +86,8 @@ describe("the gate's rules", () => {
     expect(r.passed).toEqual({ n: 1, avgR: 1 });
     expect(r.failed.n).toBe(0);
     expect(r.unanswered).toBe(0);
+    // A red note on a signal stays with the signals: not a failed gate, not a red count.
+    expect(r.red).toEqual([]);
     expect(r.signals.n).toBe(3);
     expect(r.signals.avgR).toBeCloseTo(4 / 3, 6);
     expect(r.signals.from).toEqual([
@@ -163,10 +169,11 @@ describe.skipIf(!DB)("the gate on the record", () => {
     const sig = await send("POST", "/api/trades", {
       trade: { symbol: "SOL", direction: "long", size: 1, sizeUnit: "base", entryPrice: 100, initialStop: 90, initialTarget: 120, entryTime: new Date().toISOString(), status: "open" },
     }).then((x) => x.json());
-    const sigGate = await send("POST", `/api/trades/${sig.id}/gate`, { gate: { at: new Date().toISOString(), answers: {}, where: "tracked", signal: { from: "Severin" } } });
+    const sigGate = await send("POST", `/api/trades/${sig.id}/gate`, { gate: { at: new Date().toISOString(), answers: { bias: "no" }, where: "tracked", signal: { from: "Severin" } } });
     expect(sigGate.status).toBe(200);
     const sigRow = await send("GET", `/api/trades/${sig.id}`).then((x) => x.json());
     expect(parseGate(sigRow.gate)?.signal).toEqual({ from: "Severin" });
+    expect(parseGate(sigRow.gate)?.answers).toEqual({ bias: "no" });
     expect(sigRow.tradedPoorly).toBe(false);
     expect((await send("POST", `/api/trades/${sig.id}/gate`, { gate: { at: "x", answers: {}, where: "tracked", signal: { from: "" } } })).status).toBe(400);
     // Green all the way through leaves the mark alone.

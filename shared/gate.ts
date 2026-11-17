@@ -101,8 +101,9 @@ export interface GateRecord {
   where: "entry-card" | "terminal" | "tracked";
   /**
    * Taken from someone else's call rather than the trader's own read. The
-   * questions are about one's own plan and do not apply, so none is asked:
-   * the record is neither green nor red, and names whose call it was.
+   * questions are about one's own plan, so none has to be answered; whatever
+   * was answered anyway is kept ("a signal, but against my bias"). The trade
+   * is counted with the signals, not with the green or the red.
    */
   signal?: { from: string };
 }
@@ -132,7 +133,7 @@ export const formatGate = (g: GateRecord) => JSON.stringify(g);
 
 /** The questions answered red, by id. A skipped gate is red on all of them. */
 export function redAnswers(questions: GateQuestion[], g: GateRecord | null): string[] {
-  if (!g || g.signal) return [];
+  if (!g) return [];
   if (g.skipped) return questions.map((q) => q.id);
   return questions.filter((q) => g.answers[q.id] != null && g.answers[q.id] !== q.good).map((q) => q.id);
 }
