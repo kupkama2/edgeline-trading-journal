@@ -23,6 +23,7 @@
  *   on it still has to be recognised as a Hyperliquid perp; it is flagged, so
  *   the picker can leave it out of what it offers for a NEW trade.
  */
+import { inVenueOrder } from "./fill-order";
 import type { Candle } from "./binance";
 
 export interface HyperliquidPerp {
@@ -433,8 +434,8 @@ export function tradesFromFills(
   const trades: HlTrade[] = [];
   const unreconstructed: { coin: string; fills: number }[] = [];
 
-  for (const [coin, list] of Array.from(byCoin.entries())) {
-    list.sort((a, b) => a.time - b.time || a.tid - b.tid);
+  for (const [coin, unordered] of Array.from(byCoin.entries())) {
+    const list = inVenueOrder(unordered);
     let current: HlTrade | null = null;
     let expectedBefore: number | null = null;
     let lost = 0;
