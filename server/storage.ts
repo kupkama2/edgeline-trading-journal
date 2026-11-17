@@ -691,6 +691,8 @@ ALTER TABLE hyperliquid_symbols ADD COLUMN IF NOT EXISTS dex TEXT NOT NULL DEFAU
 ALTER TABLE hyperliquid_symbols DROP CONSTRAINT IF EXISTS hyperliquid_symbols_pkey;
 ALTER TABLE hyperliquid_symbols ADD CONSTRAINT hyperliquid_symbols_pkey
   PRIMARY KEY (name, dex);
+-- The venue's order, kept: rows come back from a table in no order at all.
+ALTER TABLE hyperliquid_symbols ADD COLUMN IF NOT EXISTS pos INTEGER NOT NULL DEFAULT 0;
 -- Drop a catalogue fetched before this column existed, once.
 --
 -- The universe refreshes only when the cache is a day old, so code that
@@ -1624,7 +1626,7 @@ export const hyperliquid = {
   async list(): Promise<
     { name: string; maxLeverage: number | null; delisted: boolean; dex: string | null }[]
   > {
-    const rows = await db.select().from(hyperliquidSymbols);
+    const rows = await db.select().from(hyperliquidSymbols).orderBy(hyperliquidSymbols.pos, hyperliquidSymbols.dex, hyperliquidSymbols.name);
     // Back to null at the door: '' is a storage detail forced by the key, and
     // every reader above this asks "is there a dex" rather than "is it empty".
     return rows.map((r) => ({
@@ -1653,7 +1655,8 @@ export const hyperliquid = {
       await tx.delete(hyperliquidSymbols);
       for (let i = 0; i < perps.length; i += 500) {
         await tx.insert(hyperliquidSymbols).values(
-          perps.slice(i, i + 500).map((p) => ({
+          perps.slice(i, i + 500).map((p, j) => ({
+            pos: i + j,
             name: p.name,
             maxLeverage: p.maxLeverage,
             delisted: p.delisted,
