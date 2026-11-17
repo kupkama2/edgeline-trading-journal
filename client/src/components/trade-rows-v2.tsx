@@ -36,6 +36,7 @@ import { computeMetrics, fmtAmount, fmtFees, fmtMoney, fmtR } from "@shared/metr
 import { tradeVerdict, isWin, type Verdict } from "@shared/verdict";
 import { markWhen, num } from "@/components/trade-shared";
 import { maskIfQuote } from "@shared/redact";
+import { bookedSoFar } from "@shared/fills";
 import { outcomeUnknown } from "@shared/aftermath";
 import { MANAGED_LABEL, type ManagedWhy } from "@shared/managed";
 import { MajorityOutButton } from "@/components/majority-out";
@@ -411,6 +412,8 @@ export function OpenTradeRowV2({
   const left = riskLeft(t);
   const locked = lockedIn(t);
   const moved = stopWasMoved(t);
+  // Taken off already: what that banked, and how much of the position is still on.
+  const booked = bookedSoFar(t);
 
   return (
     <div
@@ -470,6 +473,17 @@ export function OpenTradeRowV2({
               ? "risk nothing"
               : `risk ${fmtAmount(left)}`}
       </span>
+
+      {booked && (
+        <span
+          className={`shrink-0 font-mono text-[11px] ${booked.booked >= 0 ? "text-emerald-400/90" : "text-primary/90"}`}
+          title={`${booked.partials} ${booked.partials === 1 ? "take" : "takes"} so far banked ${fmtMoney(booked.booked)}; ${Math.round(booked.leftPct)}% of the position is still on.`}
+          data-testid={`row-v2-booked-${t.id}`}
+        >
+          booked {fmtMoney(booked.booked)}
+          <span className="text-muted-foreground"> · {Math.round(booked.leftPct)}% left</span>
+        </span>
+      )}
 
       {managed && (
         <span
