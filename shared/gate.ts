@@ -99,13 +99,24 @@ export interface GateRecord {
   skipped?: boolean;
   /** Where it was answered. */
   where: "entry-card" | "terminal" | "tracked";
+  /**
+   * Taken from someone else's call rather than the trader's own read. The
+   * questions are about one's own plan, so none has to be answered; whatever
+   * was answered anyway is kept ("a signal, but against my bias"). The trade
+   * is counted with the signals, not with the green or the red.
+   */
+  signal?: { from: string };
 }
+
+/** Whose call it was, tidied: one line, no longer than a name needs. */
+export const signalFrom = (raw: string) => raw.replace(/\s+/g, " ").trim().slice(0, 60);
 
 export const gateRecordSchema = z.object({
   at: z.string(),
   answers: z.record(z.string(), z.enum(["yes", "no"])),
   skipped: z.boolean().optional(),
   where: z.enum(["entry-card", "terminal", "tracked"]),
+  signal: z.object({ from: z.string().trim().min(1).max(60) }).optional(),
 });
 
 export function parseGate(raw: string | null | undefined): GateRecord | null {
@@ -129,7 +140,7 @@ export function redAnswers(questions: GateQuestion[], g: GateRecord | null): str
 
 /** Green: every question answered, and every answer the good one. */
 export function gatePassed(questions: GateQuestion[], g: GateRecord | null): boolean {
-  if (!g || g.skipped) return false;
+  if (!g || g.skipped || g.signal) return false;
   return questions.every((q) => g.answers[q.id] === q.good);
 }
 
@@ -150,16 +161,33 @@ export function gateLeft(questions: GateQuestion[], answers: Record<string, "yes
 export function gateReport(
   questions: GateQuestion[],
   trades: { gate?: string | null; status: string; r: number | null }[],
-): { passed: { n: number; avgR: number | null }; failed: { n: number; avgR: number | null }; unanswered: number; red: { id: string; text: string; n: number }[] } {
+): {
+  passed: { n: number; avgR: number | null };
+  failed: { n: number; avgR: number | null };
+  /** Trades taken from a signal: outside green and red, with each source's own record. */
+  signals: { n: number; avgR: number | null; from: { name: string; n: number; avgR: number | null }[] };
+  unanswered: number;
+  red: { id: string; text: string; n: number }[];
+} {
   const passed: number[] = [];
   const failed: number[] = [];
   let unanswered = 0;
   const redCount = new Map<string, number>();
+  const bySource = new Map<string, { name: string; n: number; rs: number[] }>();
   for (const t of trades) {
     if (t.status !== "closed") continue;
     const g = parseGate(t.gate);
     if (!g) {
       unanswered += 1;
+      continue;
+    }
+    if (g.signal) {
+      // One source however it was typed: "Severin" and "severin " are the same person.
+      const key = g.signal.from.toLowerCase();
+      const row = bySource.get(key) ?? { name: g.signal.from, n: 0, rs: [] };
+      row.n += 1;
+      if (t.r != null) row.rs.push(t.r);
+      bySource.set(key, row);
       continue;
     }
     const reds = redAnswers(questions, g);
@@ -168,7 +196,13 @@ export function gateReport(
     (reds.length === 0 ? passed : failed).push(t.r);
   }
   const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
+  const sources = Array.from(bySource.values());
   return {
+    signals: {
+      n: sources.reduce((a, x) => a + x.n, 0),
+      avgR: avg(sources.flatMap((x) => x.rs)),
+      from: sources.map((x) => ({ name: x.name, n: x.n, avgR: avg(x.rs) })).sort((a, b) => b.n - a.n),
+    },
     passed: { n: passed.length, avgR: avg(passed) },
     failed: { n: failed.length, avgR: avg(failed) },
     unanswered,

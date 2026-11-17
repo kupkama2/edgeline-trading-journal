@@ -1842,7 +1842,8 @@ export async function registerRoutes(
     if (!t) return res.status(404).json({ message: "Trade not found" });
     // Strict: one red answer, or a skip, and the trade is marked traded poorly — the gate said no and it went in anyway.
     const prefs = await accounts.prefs(req.userId!);
-    const red = redAnswers(prefs.gate.questions, parsed.data).length > 0;
+    // A signal's questions are optional notes: a red one is kept on the record, not held against the trade.
+    const red = !parsed.data.signal && redAnswers(prefs.gate.questions, parsed.data).length > 0;
     const after = await store(req).updateTrade(t.id, { gate: formatGate(parsed.data), ...(red ? { tradedPoorly: true } : {}) } as any);
     res.json(after ?? t);
   });
