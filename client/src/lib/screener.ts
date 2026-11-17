@@ -103,6 +103,8 @@ export interface ScreenerAudit {
 
 export interface ScreenerCoin {
   coin: string;
+  /** What the ratio is against: BTC, or the stock index for a stock. */
+  benchmark?: string;
   tf: Timeframe;
   barsTo: number;
   audit: ScreenerAudit | null;

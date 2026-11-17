@@ -1,3 +1,4 @@
+import { benchmarkLabel } from "@shared/sectors";
 import { useState } from "react";
 import { Loader2, ScanSearch, X } from "lucide-react";
 import { Card } from "@/components/ui/card";
@@ -112,7 +113,7 @@ function ScanBody({ s, onOpen }: { s: ScreenerScan; onOpen: (coin: string) => vo
       },
     },
     {
-      label: "RS vs BTC",
+      label: `RS vs ${benchmarkLabel(r.benchmark)}`,
       cell: (tf) => (
         <span className="rounded px-0.5 font-mono sm:px-1" style={{ background: heat(r.tf[tf].rs) }}>
           {fmtPct(r.tf[tf].rs)}

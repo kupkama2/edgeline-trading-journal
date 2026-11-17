@@ -612,13 +612,44 @@ describe.skipIf(!DB)("the screener's run", () => {
       screenerGate({ method, path, account: { isOwner: !!who.owner }, session: { demo: !!who.demo } } as any, { status: (s: number) => ((status = s), { json: () => {} }) } as any, () => (passed = true));
       return passed ? "ok" : status;
     };
-    for (const path of ["/", "/status", "/settings", "/series", "/ai", "/ai/track", "/track", "/coin/SOL", "/coin/xyz:XYZ100", "/coin/xyz%3AXYZ100"]) expect([path, ask("GET", path, { demo: true })]).toEqual([path, "ok"]);
+    for (const path of ["/", "/status", "/settings", "/series", "/bias", "/ai", "/ai/track", "/track", "/coin/SOL", "/coin/xyz:XYZ100", "/coin/xyz%3AXYZ100"]) expect([path, ask("GET", path, { demo: true })]).toEqual([path, "ok"]);
     // The scan and the lookup read the venue; a coin's AI summary costs a request; a run, the settings and a pin change things.
     for (const path of ["/scan/SOL", "/lookup/SOL", "/coin/SOL/../../run", "/cron", "/coin/SOL/summary"]) expect([path, ask("GET", path, { demo: true })]).toEqual([path, 404]);
     for (const [m, path] of [["POST", "/run"], ["PUT", "/settings"], ["POST", "/ai"], ["POST", "/pin/SOL"], ["DELETE", "/pin/SOL"], ["POST", "/news/SOL"]]) expect([path, ask(m, path, { demo: true })]).toEqual([path, 404]);
     // The owner as before; anyone else, nothing.
     expect(ask("POST", "/run", { owner: true })).toBe("ok");
     expect(ask("GET", "/", {})).toBe(404);
+  });
+
+  it("measures a stock against the stock index, and the index against the other one", async () => {
+    const { benchmarkCoin } = await import("../server/screener");
+    const both = { main: "xyz:SP500", other: "xyz:XYZ100" };
+    expect(benchmarkCoin("SOL", both)).toBe("BTC");
+    expect(benchmarkCoin("xyz:GOLD", both)).toBe("BTC");
+    expect(benchmarkCoin("xyz:NVDA", both)).toBe("xyz:SP500");
+    expect(benchmarkCoin("xyz:XYZ100", both)).toBe("xyz:SP500");
+    // The yardstick is not measured against itself.
+    expect(benchmarkCoin("xyz:SP500", both)).toBe("xyz:XYZ100");
+    expect(benchmarkCoin("xyz:SP500", { main: "xyz:SP500", other: null })).toBe("BTC");
+    // No index listed: everything falls back to BTC.
+    expect(benchmarkCoin("xyz:NVDA", { main: null, other: null })).toBe("BTC");
+  });
+
+  it("gives the day's bias for BTC, the indices and the metals from stored candles", async () => {
+    const r = await fetch(`${base}/api/screener/bias`);
+    expect(r.status).toBe(200);
+    const b = await r.json();
+    expect(b.markets.map((m: any) => m.group)).toEqual(["Crypto", "Crypto", "TradFi", "TradFi", "Metals", "Metals"]);
+    expect(b.markets[0].coin).toBe("BTC");
+    // The run read BTC: its bias is a reading, with its votes and yesterday's levels.
+    const btc = b.markets[0];
+    expect(btc.error).toBeNull();
+    expect(btc.bias.votes.map((v: any) => v.id)).toEqual(["trend", "yesterday", "close", "structure", "week"]);
+    expect(["bullish", "bearish", "neutral"]).toContain(btc.bias.side);
+    expect(btc.bias.levels.prevHigh).toBeGreaterThanOrEqual(btc.bias.levels.prevLow);
+    // With no index in the run, the venue's main ones are named.
+    expect(b.markets.slice(2).map((m: any) => m.label)).toEqual(["S&P 500", "Nasdaq-100", "Gold", "Silver"]);
+    expect((await fetch(`${base}/api/screener/bias`, { headers: { "x-not-owner": "1" } })).status).toBe(404);
   });
 
   it("writes a coin's summary once per run, and says why when it cannot", async () => {
@@ -692,7 +723,8 @@ describe.skipIf(!DB)("the screener's run", () => {
     // Run one: the universe, BTC twice, SOL and ETH twice, DOGE once (its hourly read failed).
     // Run two: the universe, BTC, SOL and ETH once each (the hours since the last bar), DOGE twice.
     // And each run asks once for the builder books (none here).
-    expect(infoCalls).toBe(8 + 6 + 1 + 2);
+    // The bias board asked the venue for the daily candles of the two indices and two metals the runs did not read.
+    expect(infoCalls).toBe(8 + 6 + 1 + 2 + 4);
   });
 
   it("pins a coin found by the search under the volume line: on the chart now, in every run after, until unpinned", async () => {
