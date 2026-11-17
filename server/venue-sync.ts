@@ -21,6 +21,7 @@
  *      created is a trade, not a draft to confirm.
  */
 import { findClaim, type VenueTrade } from "@shared/claim";
+import { parseTerminalRef } from "@shared/terminal";
 import { entryTypeOf } from "@shared/entry-type";
 import type { HlTrade, MarketSeen } from "@shared/hyperliquid";
 import type { InsertTrade, TradeWithTags } from "@shared/schema";
@@ -302,8 +303,9 @@ export async function writeVenueTrades(
   // The hand-logged trades on this account, fetched once: candidates for a
   // claim are every unstamped trade here, and a sync of forty positions must
   // not read the journal forty times to find them.
+  // A trade the tracker or the terminal follows is theirs: never a candidate here.
   const candidates = (await store.listTrades()).filter(
-    (t) => (t.account ?? "") === row.account && !t.externalId,
+    (t) => (t.account ?? "") === row.account && !t.externalId && !parseTerminalRef(t.terminal),
   );
   const claimedIds = new Set<number>();
 
@@ -313,6 +315,17 @@ export async function writeVenueTrades(
     const pair = opts.pairFor?.(t) ?? null;
 
     const existing = await store.tradeByExternalId(t.externalId);
+    /*
+     * Followed live by the tracker or sent from the terminal: the read-back
+     * owns it. Its adds and takes are rows in the ledger, so the sync writing
+     * the venue's total size on top counted every add twice, doubling the
+     * P&L, and left more on than the closing fills could take off, so it
+     * never closed.
+     */
+    if (existing && parseTerminalRef(existing.terminal)) {
+      row.unchanged += 1;
+      continue;
+    }
     if (existing) {
       const patch = { ...closingPatch(existing, t, levels), ...renamePatch(existing, t, symbol, pair) };
       if (Object.keys(patch).length) {

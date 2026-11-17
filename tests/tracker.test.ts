@@ -697,4 +697,87 @@ describe.skipIf(!DB)("the journal following an account on its venue", () => {
     expect(out.accounts.map((a) => a.account)).toEqual([HL]);
     expect(await tradesOf("XRP", BN)).toHaveLength(1);
   });
+
+  it("NVDA-style: a market entry in pieces, an add, closed by a market order in pieces — closes once, at the right size", async () => {
+    const C = "xyz:NVDA";
+    const T = Date.now() - 40 * MIN;
+    const f = (tid: number, oid: number, side: "B" | "A", px: string, sz: string, start: string, at: number, pnl = "0") =>
+      ({ coin: C, px, sz, side, time: at, startPosition: start, dir: side === "B" ? "Open Long" : "Close Long", closedPnl: pnl, fee: "0.05", tid, oid, crossed: true });
+    const keepX = xyzPositions.filter((p) => p.position.coin !== C);
+    // Entry: one market order, two fills on one stamp. Then an add, one fill.
+    hlFills.push(f(9801, 1801, "B", "180.00", "1", "0", T), f(9802, 1801, "B", "180.10", "2", "1", T));
+    xyzPositions = [...keepX, { position: { coin: C, szi: "3", entryPx: "180.07", liquidationPx: "100", unrealizedPnl: "0", leverage: { type: "cross", value: 5 } } }];
+    xyzOrders = [{ coin: C, oid: 1890, side: "A", limitPx: "178", sz: "3", isTrigger: true, triggerPx: "178", orderType: "Stop Market", reduceOnly: true, isPositionTpsl: true, timestamp: T }];
+    await run();
+    hlFills.push(f(9803, 1802, "B", "181.00", "2", "3", T + 5 * MIN));
+    xyzPositions = [...keepX, { position: { coin: C, szi: "5", entryPx: "180.44", liquidationPx: "100", unrealizedPnl: "0", leverage: { type: "cross", value: 5 } } }];
+    await run();
+    let t = (await tradesOf("NVDA", HL)).find((x: any) => x.externalId === "hl:xyz:NVDA:9801");
+    // Closed by one market order: three fills on one stamp, ids against their order.
+    hlFills.push(
+      f(9806, 1803, "A", "179.90", "1.5", "5", T + 10 * MIN, "-0.8"),
+      f(9805, 1803, "A", "179.85", "2", "3.5", T + 10 * MIN, "-1.2"),
+      f(9804, 1803, "A", "179.80", "1.5", "1.5", T + 10 * MIN, "-1.0"),
+    );
+    xyzPositions = keepX;
+    xyzOrders = [];
+    await run();
+    t = await get(`/api/trades/${t.id}`);
+    const { computeMetrics } = await import("../shared/metrics");
+    const m = computeMetrics(t);
+    expect(t.status).toBe("closed");
+    // Entered 1 @ 180 + 2 @ 180.10, added 2 @ 181, out 1.5 @ 179.90, 2 @ 179.85, 1.5 @ 179.80.
+    expect(m.grossPnL).toBeCloseTo(-2.95, 6);
+  });
+
+  it("claims a trade logged by hand on the entry card for the position, rather than writing a second one beside it", async () => {
+    const C = "xyz:AMD";
+    const T = Date.now() - 30 * MIN;
+    const keepX = xyzPositions.filter((p) => p.position.coin !== C);
+    // Logged by hand a minute after the fill, with no account picked, the stop and target typed in.
+    const hand = await store.createTrade({ symbol: "AMD", direction: "long", size: 4, sizeUnit: "base", pointValue: 1, entryPrice: 150, initialStop: 148, initialTarget: 155, entryTime: new Date(T + 60_000).toISOString(), status: "open", account: "" });
+    hlFills.push({ coin: C, px: "150.02", sz: "4", side: "B", time: T, startPosition: "0", dir: "Open Long", closedPnl: "0", fee: "0.05", tid: 9901, oid: 1901, crossed: true });
+    xyzPositions = [...keepX, { position: { coin: C, szi: "4", entryPx: "150.02", liquidationPx: "100", unrealizedPnl: "0", leverage: { type: "cross", value: 5 } } }];
+    await run();
+    const amd = (await get("/api/trades")).filter((t: any) => t.symbol === "AMD");
+    expect(amd).toHaveLength(1);
+    expect(amd[0]).toMatchObject({ id: hand.id, account: HL, externalId: "hl:xyz:AMD:9901", initialStop: 148, initialTarget: 155, pricePair: "hyperliquid:xyz:AMD" });
+    expect(ref(amd[0])).toMatchObject({ tracked: true, symbol: C });
+    // And it closes with the venue, so nothing is left open to count twice.
+    hlFills.push({ coin: C, px: "149", sz: "4", side: "A", time: T + 10 * MIN, startPosition: "4", dir: "Close Long", closedPnl: "-4.08", fee: "0.05", tid: 9902, oid: 1902, crossed: true });
+    xyzPositions = keepX;
+    await run();
+    const after = (await get("/api/trades")).filter((t: any) => t.symbol === "AMD");
+    expect(after).toHaveLength(1);
+    expect(after[0]).toMatchObject({ status: "closed", exitPrice: 149 });
+  });
+
+  it("the sync leaves a tracked trade to the tracker: an add is counted once, and the trade still closes", async () => {
+    const C = "xyz:TSLA";
+    const T = Date.now() - 30 * MIN;
+    const f = (tid: number, oid: number, side: "B" | "A", px: string, sz: string, start: string, at: number, pnl = "0") =>
+      ({ coin: C, px, sz, side, time: at, startPosition: start, dir: "x", closedPnl: pnl, fee: "0.05", tid, oid, crossed: true });
+    const keepX = xyzPositions.filter((p) => p.position.coin !== C);
+    hlFills.push(f(9911, 1911, "B", "400", "1", "0", T));
+    xyzPositions = [...keepX, { position: { coin: C, szi: "1", entryPx: "400", liquidationPx: "100", unrealizedPnl: "0", leverage: { type: "cross", value: 5 } } }];
+    xyzOrders = [{ coin: C, oid: 1990, side: "A", limitPx: "390", sz: "1", isTrigger: true, triggerPx: "390", orderType: "Stop Market", reduceOnly: true, isPositionTpsl: true, timestamp: T }];
+    await run();
+    hlFills.push(f(9912, 1912, "B", "402", "1", "1", T + 2 * MIN));
+    xyzPositions = [...keepX, { position: { coin: C, szi: "2", entryPx: "401", liquidationPx: "100", unrealizedPnl: "0", leverage: { type: "cross", value: 5 } } }];
+    await run();
+    expect((await send("POST", "/api/hyperliquid/sync", { account: HL })).status).toBe(200);
+    let t = (await get("/api/trades")).find((x: any) => x.externalId === "hl:xyz:TSLA:9911");
+    t = await get(`/api/trades/${t.id}`);
+    // The entry stays the entry; the add is the one row in the ledger, not folded into the size as well.
+    expect(t.size).toBe(1);
+    expect(t.fills.filter((x: any) => x.kind === "add").map((x: any) => x.size)).toEqual([1]);
+    hlFills.push(f(9913, 1913, "A", "395", "2", "2", T + 5 * MIN, "-12"));
+    xyzPositions = keepX;
+    xyzOrders = [];
+    await run();
+    t = await get(`/api/trades/${t.id}`);
+    const { computeMetrics } = await import("../shared/metrics");
+    expect(t.status).toBe("closed");
+    expect(computeMetrics(t).grossPnL).toBeCloseTo(-12, 6);
+  });
 });

@@ -33,6 +33,7 @@ import { relayConnected } from "./relay";
 import { fillsSince, positions, rulesFor, type Venue } from "./binance-trade";
 import { fetchAllMids, fetchClearinghouseState, fetchFrontendOpenOrders, fetchUserFillsSince } from "./hyperliquid";
 import { asInsert, oneAtATime } from "./venue-sync";
+import { findClaim } from "@shared/claim";
 import { applySnapshot, newTag, noteFullRead, reconcileOne, refOf, restingOnStream, type PassMode } from "./terminal";
 
 /** How far back the fills are read to find a position's opening. Binance serves seven days of userTrades. */
@@ -274,6 +275,64 @@ async function openTracked(s: DatabaseStorage, o: Opening): Promise<TradeWithTag
     ok: true,
   });
   return trade;
+}
+
+/**
+ * The trade a person logged by hand for this position, if there is one.
+ *
+ * Logged on the entry card before the tracker saw the position, it has no
+ * venue id, so looking it up by id found nothing and a second trade was
+ * written beside it: the tracked one followed the venue and closed, the hand
+ * one stayed open for good, and the day counted the loss twice. It is found
+ * the way the sync finds one (shared/claim.ts): same symbol and direction,
+ * entered within two hours, the price or the size agreeing. On this account,
+ * or on none, since the entry card does not always say which.
+ */
+async function handLogged(s: DatabaseStorage, o: Opening, heldSize: number): Promise<TradeWithTags | null> {
+  const candidates = (await s.listTrades()).filter(
+    (t) => t.status === "open" && !t.externalId && !parseTerminalRef(t.terminal) && (!t.account || t.account === o.account),
+  );
+  if (!candidates.length) return null;
+  return findClaim(
+    {
+      symbol: o.journalSymbol,
+      direction: o.positionSide === "LONG" ? "long" : "short",
+      entryTime: o.entryTime,
+      entryPrice: o.entryPrice,
+      size: heldSize,
+      status: "open",
+      exitTime: null,
+      closedPnl: 0,
+    },
+    candidates,
+    (x) => x.toUpperCase(),
+  );
+}
+
+/** The trade for this position: one already written by the sync or by hand, taken under watch, or a new one. */
+async function trackPosition(s: DatabaseStorage, o: Opening, heldSize: number): Promise<TradeWithTags> {
+  const existing = o.externalId ? await s.tradeByExternalId(o.externalId) : undefined;
+  if (existing) return parseTerminalRef(existing.terminal) ? existing : adoptExisting(s, existing, o);
+  const hand = await handLogged(s, o, heldSize);
+  if (hand) {
+    // Claimed as the sync claims: the venue's id on it, and the account and book where it said none.
+    const stamped =
+      (await s.updateTrade(hand.id, {
+        externalId: o.externalId,
+        claimedAt: new Date().toISOString(),
+        /*
+         * The time it filled, where the fills say it: a person logs when they
+         * get to it, and the read-back takes the fills from the entry on, so
+         * an entry typed a minute late hid the opening fill and the trade
+         * never saw itself go flat.
+         */
+        ...(o.externalId ? { entryTime: new Date(o.entryTime).toISOString() } : {}),
+        ...(hand.account ? {} : { account: o.account }),
+        ...(!hand.pricePair && o.pricePair ? { pricePair: o.pricePair } : {}),
+      } as any)) ?? hand;
+    return adoptExisting(s, stamped, o);
+  }
+  return openTracked(s, o);
 }
 
 /** A sync-written or hand-logged trade for the same position, taken under watch instead of written twice. */
@@ -548,8 +607,7 @@ async function trackBinance(s: DatabaseStorage, acct: AccountSettings): Promise<
       paper: v.env === "testnet",
     };
     // The same position already written by the sync or by hand: taken under watch, not written twice.
-    const existing = opening.externalId ? await s.tradeByExternalId(opening.externalId) : undefined;
-    const made = existing && !parseTerminalRef(existing.terminal) ? await adoptExisting(s, existing, opening) : existing ? existing : await openTracked(s, opening);
+    const made = await trackPosition(s, opening, Math.abs(p.amt));
     out.opened.push(made.id);
     tracked.push({ t: made, ref: refOf(made) });
   }
@@ -688,8 +746,7 @@ async function trackHyperliquid(s: DatabaseStorage, acct: AccountSettings): Prom
       brackets,
       paper: false,
     };
-    const existing = opening.externalId ? await s.tradeByExternalId(opening.externalId) : undefined;
-    const made = existing && !parseTerminalRef(existing.terminal) ? await adoptExisting(s, existing, opening) : existing ? existing : await openTracked(s, opening);
+    const made = await trackPosition(s, opening, Math.abs(p.szi));
     out.opened.push(made.id);
     tracked.push({ t: made, ref: refOf(made) });
   }
