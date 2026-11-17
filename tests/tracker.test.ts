@@ -780,4 +780,56 @@ describe.skipIf(!DB)("the journal following an account on its venue", () => {
     expect(t.status).toBe("closed");
     expect(computeMetrics(t).grossPnL).toBeCloseTo(-12, 6);
   });
+
+  it("a position met before its fills learns its entry from them once they arrive: right size, and it closes", async () => {
+    const { computeMetrics } = await import("../shared/metrics");
+    // The fill arriving just after the position is seen, and one dated well before it.
+    for (const [C, lag, base] of [["xyz:META", 2_000, 9920], ["xyz:MSFT", 60_000, 9930]] as const) {
+      const keepX = xyzPositions.filter((p) => p.position.coin !== C);
+      const name = C.split(":")[1];
+      xyzPositions = [...keepX, { position: { coin: C, szi: "3", entryPx: "500", liquidationPx: "100", unrealizedPnl: "0", leverage: { type: "cross", value: 5 } } }];
+      await run();
+      let t = (await get("/api/trades")).find((x: any) => x.symbol === name && x.status === "open");
+      expect(ref(t).entryOrderId).toBeNull();
+      const T = new Date(t.entryTime).getTime() - lag;
+      const f = (tid: number, side: "B" | "A", px: string, start: string, at: number, pnl = "0") =>
+        ({ coin: C, px, sz: "3", side, time: at, startPosition: start, dir: "x", closedPnl: pnl, fee: "0.05", tid, oid: tid, crossed: true });
+      hlFills.push(f(base + 1, "B", "500", "0", T));
+      await run();
+      t = await get(`/api/trades/${t.id}`);
+      // Not an add on top of the position: the entry.
+      expect(t.size).toBe(3);
+      expect(t.fills ?? []).toEqual([]);
+      expect(ref(t).entryOrderId).toBe(base + 1);
+      expect(t.externalId).toBe(`hl:${C}:${base + 1}`);
+      hlFills.push(f(base + 2, "A", "498", "3", Date.now() - 1000, "-6"));
+      xyzPositions = keepX;
+      await run();
+      t = await get(`/api/trades/${t.id}`);
+      expect(t).toMatchObject({ status: "closed", size: 3, exitPrice: 498 });
+      expect(computeMetrics(t).grossPnL).toBeCloseTo(-6, 6);
+    }
+  });
+
+  it("repairs a trade already stuck that way: the opening fill in the ledger as an add, the close as a take", async () => {
+    const C = "xyz:NFLX";
+    const T = Date.now() - 20 * MIN;
+    const seen = T + 2_000;
+    const keepX = xyzPositions.filter((p) => p.position.coin !== C);
+    const stuckRef = { venue: "hyperliquid", env: "live", account: HL, symbol: C, positionSide: "LONG", tag: "trk-stuck", leverage: 5, qty: 2, entryOrderId: null, stopOrderId: null, targetOrderIds: [], closeOrderIds: [], addOrderIds: [9941], tracked: true, idea: { entry: 100, stop: null, targets: [], qty: 2, riskDollars: null, at: new Date(seen).toISOString() } };
+    const stuck = await store.createTrade({ symbol: "NFLX", pricePair: "hyperliquid:xyz:NFLX", direction: "long", size: 2, sizeUnit: "base", pointValue: 1, entryPrice: 100, entryTime: new Date(seen).toISOString(), status: "open", account: HL, terminal: JSON.stringify(stuckRef) });
+    await store.addFill(stuck.id, { kind: "add", price: 100, size: 2, time: new Date(T).toISOString(), note: "terminal · add 9941" });
+    await store.addFill(stuck.id, { kind: "partial", price: 99, size: 2, time: new Date(T + 5 * MIN).toISOString(), note: "terminal · fill 9942" });
+    hlFills.push(
+      { coin: C, px: "100", sz: "2", side: "B", time: T, startPosition: "0", dir: "Open Long", closedPnl: "0", fee: "0.05", tid: 9941, oid: 9941, crossed: true },
+      { coin: C, px: "99", sz: "2", side: "A", time: T + 5 * MIN, startPosition: "2", dir: "Close Long", closedPnl: "-2", fee: "0.05", tid: 9942, oid: 9942, crossed: true },
+    );
+    xyzPositions = keepX;
+    await run();
+    const t = await get(`/api/trades/${stuck.id}`);
+    const { computeMetrics } = await import("../shared/metrics");
+    expect(t).toMatchObject({ status: "closed", size: 2, exitPrice: 99 });
+    expect(t.fills ?? []).toEqual([]);
+    expect(computeMetrics(t).grossPnL).toBeCloseTo(-2, 6);
+  });
 });

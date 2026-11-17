@@ -677,6 +677,61 @@ function hlNames(coin: string): { journalSymbol: string; pricePair: string | nul
   };
 }
 
+/**
+ * A trade the tracker met as a position, before the venue had its opening
+ * fills on record, and the fills have since arrived.
+ *
+ * It was written from the position: the size held, the time it was seen, no
+ * entry order. Read back like that, the opening fill counted as an add on top
+ * of a size that already held it, so the trade stood at twice the position,
+ * its P&L doubled, and the close took off half and left it open; or, the
+ * opening being before the time it was seen, the close was read as nothing at
+ * all. So once the fills hold the round trip the position belongs to, the
+ * entry is taken from them: the entry order and its legs, the adds beyond it,
+ * the time and price it filled, the venue's id. What the read-back already
+ * wrote into the ledger from those fills comes out, and the pass rewrites it
+ * on the right footing.
+ */
+async function learnEntry(
+  s: DatabaseStorage,
+  t: TradeWithTags,
+  ref: TerminalRef,
+  fills: HlFill[],
+): Promise<{ t: TradeWithTags; ref: TerminalRef } | null> {
+  const seenAt = new Date(t.entryTime).getTime();
+  const dir = ref.positionSide === "LONG" ? "long" : "short";
+  const coinFills = fills.filter((f) => f.coin === ref.symbol);
+  const round = tradesFromFills(coinFills, "hl")
+    .trades.filter((r) => r.direction === dir && r.entryTime <= seenAt + 5_000 && (r.exitTime == null || r.exitTime >= seenAt - 5_000))
+    .pop();
+  if (!round) return null;
+  const entry = entryOf(round, (tid) => coinFills.find((f) => f.tid === tid)?.oid || null, { size: t.size, price: t.entryPrice, time: seenAt });
+  if (entry.entryOrderId == null) return null;
+  const mine = new Set([...round.opens, ...round.closes].map((l) => l.tid));
+  for (const f of t.fills ?? []) {
+    const m = /^terminal · (fill|add) (\d+)$/.exec(f.note ?? "");
+    if (m && mine.has(Number(m[2]))) await s.deleteFill(f.id);
+  }
+  const nextRef: TerminalRef = {
+    ...ref,
+    entryOrderId: entry.entryOrderId,
+    addOrderIds: Array.from(new Set([...(ref.addOrderIds ?? []), ...entry.addOrderIds])),
+    qty: entry.size,
+    ...(ref.idea ? { idea: { ...ref.idea, entry: entry.entryPrice, qty: entry.size, at: new Date(entry.entryTime).toISOString() } } : {}),
+  };
+  const idFree = !t.externalId && round.externalId && !(await s.tradeByExternalId(round.externalId));
+  const after = await s.updateTrade(t.id, {
+    entryTime: new Date(entry.entryTime).toISOString(),
+    entryPrice: entry.entryPrice,
+    size: entry.size,
+    ...(idFree ? { externalId: round.externalId } : {}),
+    ...(t.entryType == null && entry.entryType ? { entryType: entry.entryType } : {}),
+    terminal: formatTerminalRef(nextRef),
+  } as any);
+  const fresh = (await s.getTrade(t.id)) ?? after ?? t;
+  return { t: fresh as TradeWithTags, ref: nextRef };
+}
+
 async function trackHyperliquid(s: DatabaseStorage, acct: AccountSettings): Promise<TrackSummary> {
   const out: TrackSummary = { account: acct.name, venue: "hyperliquid", opened: [], read: 0, caughtUp: [] };
   const address = acct.wallet!;
@@ -762,15 +817,19 @@ async function trackHyperliquid(s: DatabaseStorage, acct: AccountSettings): Prom
   const freed = new Map<string, number>();
   const span = (coin: string, from: number, to: number) => spans.set(coin, [...(spans.get(coin) ?? []), { from, to }]);
 
-  for (const { t: tIn, ref } of tracked) {
-    const book = splitHlAsset(ref.symbol).dex;
+  for (const { t: tWas, ref: refWas } of tracked) {
+    const book = splitHlAsset(refWas.symbol).dex;
     if (book && unread.has(book)) continue;
+    // Met as a position before its fills were on record: the entry is learned from them once they are.
+    const learned = refWas.entryOrderId == null ? await learnEntry(s, tWas, refWas, fills) : null;
+    const tIn = learned?.t ?? tWas;
+    const ref = learned?.ref ?? refWas;
     const long = ref.positionSide === "LONG";
     const p = held.find((x) => x.coin === ref.symbol && (x.szi > 0) === long) ?? null;
     const entryAt = new Date(tIn.entryTime).getTime();
     const openSide = long ? "B" : "A";
     // This trade's fills: from the entry, up to where the position first went flat, by the venue's own count.
-    const own = cutAtVenueFlat(fills.filter((f) => f.coin === ref.symbol && f.time >= entryAt - 5_000).map((f) => ({ ...f, qty: f.sz })), long);
+    const own = cutAtVenueFlat(fills.filter((f) => f.coin === ref.symbol && f.time >= entryAt - 5_000).map((f) => ({ ...f, qty: f.sz })), long, ref.entryOrderId == null);
     const coinFills = own.fills;
     const cutAt = own.cut && coinFills.length ? coinFills[coinFills.length - 1].time : null;
     span(ref.symbol, entryAt - 5_000, cutAt ?? Infinity);
