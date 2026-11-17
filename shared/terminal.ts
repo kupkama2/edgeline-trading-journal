@@ -13,6 +13,7 @@
  * The other direction is here too: what the venue says about the orders it
  * was sent, turned into what the journal should now say about the trade.
  */
+import { inVenueOrder } from "./fill-order";
 import type { KeyRestrictions } from "./binance-account";
 
 /* ------------------------------ the rules ------------------------------ */
@@ -702,7 +703,8 @@ export function cutAtVenueFlat<F extends { time: number; tid: number; side: stri
   fills: F[],
   long: boolean,
 ): { fills: F[]; cut: boolean } {
-  const sorted = [...fills].sort((a, b) => a.time - b.time || a.tid - b.tid);
+  // In the order they happened: a stop going off is many fills on one stamp, and their ids are no order.
+  const sorted = inVenueOrder(fills);
   const dir = long ? 1 : -1;
   const out: F[] = [];
   let wasOn = false;
